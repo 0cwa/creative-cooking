@@ -2,7 +2,32 @@ import { Platform } from 'react-native';
 import { setOpenRouterKey } from '@/storage/credentialVault';
 
 const SHARE_SESSION_KEY = 'creative-cooking-openrouter-share-v1';
-const OPENROUTER_PREFIX = 'sk-or-v1-';
+const PREFIX = 'sk-or-v1-';
+const HEX_64 = /^[0-9a-f]{64}$/i;
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = '';
+  bytes.forEach((byte) => (binary += String.fromCharCode(byte)));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 function reverse(value: string): string {
   return Array.from(value).reverse().join('');
@@ -10,24 +35,32 @@ function reverse(value: string): string {
 
 export function obfuscateOpenRouterKey(apiKey: string): string {
   const key = apiKey.trim();
-  if (!key.startsWith(OPENROUTER_PREFIX)) {
-    throw new Error('Only standard OpenRouter keys can be shared this way.');
+  if (!key.startsWith(PREFIX)) throw new Error('Only standard OpenRouter keys can be shared this way.');
+
+  const body = key.slice(PREFIX.length);
+
+  if (HEX_64.test(body)) {
+    return `x${base64UrlEncode(hexToBytes(body))}`;
   }
 
-  // This is intentionally only obfuscation, not encryption. Stripping the known
-  // prefix makes the URL shorter; reversing the high-entropy body prevents naive
-  // scrapers that look for "sk-or-" from recognizing it.
-  return reverse(key.slice(OPENROUTER_PREFIX.length));
+  return `r${reverse(body)}`;
 }
 
 export function deobfuscateOpenRouterKey(payload: string): string {
   const value = payload.trim();
   if (!value) throw new Error('This OpenRouter share link is empty.');
 
-  // Keep compatibility with old/manual links containing the complete key.
   if (value.startsWith('sk-or-')) return value;
 
-  return `${OPENROUTER_PREFIX}${reverse(value)}`;
+  if (value.startsWith('x')) {
+    const bytes = base64UrlDecode(value.slice(1));
+    if (bytes.length !== 32) throw new Error('This compact OpenRouter share link is invalid.');
+    return `${PREFIX}${bytesToHex(bytes)}`;
+  }
+
+  if (value.startsWith('r')) return `${PREFIX}${reverse(value.slice(1))}`;
+
+  return `${PREFIX}${reverse(value)}`;
 }
 
 export async function createOpenRouterShareLink(apiKey: string): Promise<string> {
@@ -48,11 +81,6 @@ export async function importSharedOpenRouterKey(): Promise<boolean> {
   if (!payload) return false;
   window.sessionStorage.removeItem(SHARE_SESSION_KEY);
 
-  const apiKey = deobfuscateOpenRouterKey(payload);
-  if (!apiKey.startsWith('sk-or-')) {
-    throw new Error('The shared credential did not contain a valid OpenRouter key.');
-  }
-
-  await setOpenRouterKey(apiKey);
+  await setOpenRouterKey(deobfuscateOpenRouterKey(payload));
   return true;
 }
