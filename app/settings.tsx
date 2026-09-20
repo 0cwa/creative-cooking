@@ -156,7 +156,7 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
+        <Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.backText}>←</Text></Pressable>
         <Text style={styles.title}>Settings</Text>
         <View style={{ width: 42 }} />
       </View>
@@ -274,7 +274,7 @@ function Section({ title, subtitle, children }: { title: string; subtitle: strin
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, backgroundColor: '#f8fafc' },
   back: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: 34, lineHeight: 35, color: '#475569' },
+  backText: { fontSize: 20, lineHeight: 20, color: '#475569', textAlign: 'center', includeFontPadding: false },
   title: { fontSize: 22, fontWeight: '800', color: '#172033' },
   content: { padding: 16, paddingBottom: 60, gap: 16, maxWidth: 760, width: '100%', alignSelf: 'center' },
   section: { backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 20, padding: 18 },
