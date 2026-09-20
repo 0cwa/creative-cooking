@@ -3,6 +3,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
+import { SettingsGlyph } from '@/components/SettingsGlyph';
 import type { Recipe } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
 
@@ -15,7 +16,7 @@ export default function RecipesScreen() {
     <Screen>
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
-        <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><Text style={styles.settingsText}>⚙︎</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
       </View>
 
       <FlashList
@@ -63,7 +64,6 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 32, lineHeight: 38, fontWeight: '800', color: '#172033' },
   settings: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  settingsText: { fontSize: 18, lineHeight: 18, textAlign: 'center', includeFontPadding: false },
   card: { marginHorizontal: 16, marginVertical: 6, padding: 17, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72 },
   cardTitle: { color: '#172033', fontWeight: '700', fontSize: 18 },
   cardDescription: { color: '#64748b', marginTop: 5, lineHeight: 19 },
