@@ -51,7 +51,7 @@ The app manifest, 192/512 icons, service worker, and generated static navigation
 
 ## Sharing a provider key
 
-In Settings, a connected OpenRouter key can generate a friend link. Generated links use a single `?ort=` query parameter. For normal OpenRouter keys the app removes the fixed `sk-or-v1-` prefix and reverses the remaining token body. This makes the URL slightly shorter and prevents only very naive scrapers from recognizing an OpenRouter key. It is intentionally obfuscation, not encryption. The app captures and removes `?ort=` from the visible URL before the React bundle starts.
+In Settings, a connected OpenRouter key can generate a friend link. Generated links use a single `?ort=` query parameter. OpenRouter v1 keys currently use a 64-character hexadecimal body. The app removes the fixed `sk-or-v1-` prefix, packs the 64 hex characters into their 32 raw bytes, then base64url-encodes those bytes. That reduces the key body to 43 URL-safe characters while also hiding the obvious OpenRouter prefix. It is compact encoding/obfuscation, not encryption. The app captures and removes `?ort=` from the visible URL before the React bundle starts.
 
 Anyone who has the complete link can use that API key, so treat it like a capability token. Prefer a dedicated OpenRouter key with a spending limit and revoke it when you no longer want the link to work.
 
