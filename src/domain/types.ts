@@ -1,0 +1,65 @@
+export type IngredientPreference = 1 | 2 | 3 | 4 | 5;
+
+export type PantryItem = {
+  id: string;
+  name: string;
+  preference: IngredientPreference;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RecipeIngredient = {
+  name: string;
+  amount?: string;
+  needsShopping?: boolean;
+};
+
+export type Recipe = {
+  id: string;
+  title: string;
+  description?: string;
+  portions: number;
+  ingredients: RecipeIngredient[];
+  steps: string[];
+  notes?: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+};
+
+export type CookEnergy = 'low' | 'medium' | 'high';
+
+export type MealContext = {
+  willingToShop: boolean;
+  portions: number;
+  cooks: CookEnergy[];
+};
+
+export type AppSettings = {
+  systemPrompt: string;
+  allergies: string[];
+  sendLocalTime: boolean;
+  city: string;
+  providerId: 'openrouter';
+  model: string;
+};
+
+export type PersistedState = {
+  pantry: PantryItem[];
+  recipes: Recipe[];
+  chatMessages: ChatMessage[];
+  mealContext: MealContext;
+  settings: AppSettings;
+};
+
+export type UiQuestion = {
+  id: string;
+  prompt: string;
+  options: string[];
+};
