@@ -43,6 +43,11 @@ test('compiles pantry, allergies, meal context, and optional location determinis
   assert.match(prompt, /Willing to shop: yes\nPortions: 4\nCooks: 2\nEnergy: Cook 1: low, Cook 2: high/);
   assert.match(prompt, /Local time: 2026-09-20 18:30\nTime zone: Europe\/Stockholm/);
   assert.match(prompt, /City: Stockholm/);
+  assert.match(prompt, /provided pantry tools/);
+  assert.match(prompt, /recipe_save tool/);
+  assert.ok(prompt.indexOf('INTERNAL CHEF INSTRUCTIONS') < prompt.indexOf('APPLICATION CONTEXT'));
+  assert.ok(prompt.indexOf('APPLICATION CONTEXT') < prompt.indexOf('MASTER INSTRUCTIONS'));
+  assert.ok(prompt.indexOf('MASTER INSTRUCTIONS') < prompt.indexOf('Cook creatively.'));
 });
 
 test('does not leak time or city when sharing is disabled or blank', () => {

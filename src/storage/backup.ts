@@ -1,4 +1,4 @@
-import { DEFAULT_STATE } from '@/domain/defaults';
+import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import type { PersistedState } from '@/domain/types';
 import { freshStateFromDefaults, parseBackupEnvelope, serializeBackupEnvelope } from './backupFormat';
 
@@ -7,7 +7,14 @@ export function serializeBackup(state: PersistedState): string {
 }
 
 export function parseBackup(raw: string): PersistedState {
-  return parseBackupEnvelope(raw, DEFAULT_STATE);
+  const state = parseBackupEnvelope(raw, DEFAULT_STATE);
+  return {
+    ...state,
+    settings: {
+      ...state.settings,
+      systemPrompt: migrateLegacySystemPrompt(state.settings.systemPrompt)
+    }
+  };
 }
 
 export function freshDefaultState(): PersistedState {

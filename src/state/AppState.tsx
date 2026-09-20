@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
-import { DEFAULT_STATE } from '@/domain/defaults';
+import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
 import type {
   AppSettings,
@@ -19,7 +19,11 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
     ...DEFAULT_STATE,
     ...saved,
     mealContext: { ...DEFAULT_STATE.mealContext, ...(saved.mealContext ?? {}) },
-    settings: { ...DEFAULT_STATE.settings, ...(saved.settings ?? {}) }
+    settings: {
+      ...DEFAULT_STATE.settings,
+      ...(saved.settings ?? {}),
+      systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
+    }
   };
 }
 
