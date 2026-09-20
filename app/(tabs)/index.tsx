@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
+import { SettingsGlyph } from '@/components/SettingsGlyph';
 import { PantryRow } from '@/components/PantryRow';
 import { normalizeIngredientName } from '@/domain/pantry';
 import { useAppState } from '@/state/AppState';
@@ -29,7 +30,7 @@ export default function PantryScreen() {
           <Text style={styles.title}>Pantry</Text>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settingsButton}>
-          <Text style={styles.settingsIcon}>⚙︎</Text>
+          <SettingsGlyph />
         </Pressable>
       </View>
 
@@ -85,7 +86,6 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   settingsButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  settingsIcon: { fontSize: 18, lineHeight: 18, textAlign: 'center', includeFontPadding: false },
   listWrap: { flex: 1 },
   composer: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12, gap: 8 },
   composerHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 17, textAlign: 'center' },
