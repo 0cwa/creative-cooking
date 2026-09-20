@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import { setOpenRouterKey } from '@/storage/credentialVault';
 
 const VERIFIER_KEY = 'creative-cooking-openrouter-pkce-verifier';
+const STATE_KEY = 'creative-cooking-openrouter-oauth-state';
 
 function base64Url(bytes: Uint8Array): string {
   let binary = '';
@@ -26,14 +27,17 @@ export async function beginOpenRouterOAuth(): Promise<void> {
   }
 
   const verifier = randomVerifier();
+  const state = randomVerifier();
   const challenge = await challengeFor(verifier);
   window.sessionStorage.setItem(VERIFIER_KEY, verifier);
+  window.sessionStorage.setItem(STATE_KEY, state);
   const base = process.env.EXPO_PUBLIC_BASE_URL ?? '';
   const callback = `${window.location.origin}${base || ''}/`;
   const url = new URL('https://openrouter.ai/auth');
   url.searchParams.set('callback_url', callback);
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('code_challenge_method', 'S256');
+  url.searchParams.set('state', state);
   window.location.assign(url.toString());
 }
 
@@ -42,6 +46,11 @@ export async function finishOpenRouterOAuthFromLocation(): Promise<boolean> {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
   if (!code) return false;
+  const returnedState = params.get('state');
+  const expectedState = window.sessionStorage.getItem(STATE_KEY);
+  if (!returnedState || !expectedState || returnedState !== expectedState) {
+    throw new Error('OpenRouter sign-in state did not match. Please connect again.');
+  }
   const verifier = window.sessionStorage.getItem(VERIFIER_KEY);
   if (!verifier) throw new Error('OpenRouter sign-in verifier was lost. Please connect again.');
 
@@ -58,6 +67,7 @@ export async function finishOpenRouterOAuthFromLocation(): Promise<boolean> {
   if (!response.ok || !data.key) throw new Error(data.error?.message ?? 'Could not finish OpenRouter sign-in.');
   await setOpenRouterKey(data.key);
   window.sessionStorage.removeItem(VERIFIER_KEY);
+  window.sessionStorage.removeItem(STATE_KEY);
   window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}`);
   return true;
 }
