@@ -45,7 +45,7 @@ export const CHEF_TOOLS = [
     type: 'function',
     function: {
       name: 'recipe_save',
-      description: 'Save a complete recipe to the user recipe collection.',
+      description: 'Save a complete recipe to the user recipe collection. Application-level allergy validation may reject ingredients that match or plausibly contain a configured allergen; if rejected, revise the recipe before presenting it as saved.',
       parameters: {
         type: 'object',
         properties: {
