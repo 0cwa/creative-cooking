@@ -10,7 +10,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "node --experimental-strip-types --test src/domain/allergyValidation.test.mjs",
+    "test": "node --experimental-strip-types --test src/domain/allergyValidation.test.mjs src/llm/openrouter/streaming.test.mjs",
     "typecheck": "tsc --noEmit",
     "build:web": "expo export -p web",
     "check": "npm run test && npm run typecheck && npm run build:web"
