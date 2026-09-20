@@ -46,11 +46,11 @@ export function PantryRow({
 
 const styles = StyleSheet.create({
   shell: { marginHorizontal: 16, marginVertical: 5, borderRadius: 16, overflow: 'hidden' },
-  deleteBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#b91c1c', alignItems: 'flex-end', justifyContent: 'center', paddingRight: 22 },
+  deleteBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: '#b91c1c', alignItems: 'flex-end', justifyContent: 'center', paddingRight: 22 },
   deleteBackdropText: { color: 'white', fontWeight: '700' },
   row: { minHeight: 72, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, paddingLeft: 16, flexDirection: 'row', alignItems: 'center' },
   textWrap: { flex: 1, gap: 3 },
-  name: { color: '#172033', fontSize: 17, fontWeight: '650' },
+  name: { color: '#172033', fontSize: 17, fontWeight: '600' },
   removeButton: { width: 52, height: 52, marginRight: 4, alignItems: 'center', justifyContent: 'center' },
   removeText: { fontSize: 28, color: '#94a3b8', lineHeight: 30 }
 });

@@ -78,10 +78,10 @@ const styles = StyleSheet.create({
   addCard: { marginHorizontal: 16, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: 'white', padding: 10, borderRadius: 18, borderWidth: 1, borderColor: '#e2e8f0' },
   input: { flex: 1, minHeight: 44, maxHeight: 90, color: '#172033', paddingHorizontal: 8, fontSize: 16 },
   addButton: { backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 18, paddingVertical: 13 },
-  addButtonText: { color: 'white', fontWeight: '750' },
+  addButtonText: { color: 'white', fontWeight: '700' },
   hint: { color: '#64748b', fontSize: 12, marginHorizontal: 20, marginTop: 8, marginBottom: 5 },
   empty: { alignItems: 'center', paddingHorizontal: 38, paddingTop: 64 },
   emptyEmoji: { fontSize: 44 },
-  emptyTitle: { marginTop: 14, fontSize: 20, fontWeight: '750', color: '#334155' },
+  emptyTitle: { marginTop: 14, fontSize: 20, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 8, color: '#64748b', textAlign: 'center', lineHeight: 21 }
 });
