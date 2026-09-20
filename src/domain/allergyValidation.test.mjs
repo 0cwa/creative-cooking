@@ -29,6 +29,11 @@ test('flags likely derived-food matches rather than accepting them', () => {
   assert.equal(result.matches[0]?.kind, 'possible');
 });
 
+test('treats broad nuts wording conservatively without conflating tree nuts and peanuts', () => {
+  assert.equal(check('Peanut butter', ['nuts']).ok, false);
+  assert.equal(check('Peanut butter', ['tree nuts']).ok, true);
+});
+
 test('does not use unsafe substring matching', () => {
   assert.equal(check('Eggplant', ['egg']).ok, true);
   assert.equal(check('Buckwheat flour', ['wheat']).ok, true);
