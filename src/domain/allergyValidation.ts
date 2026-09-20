@@ -36,7 +36,7 @@ const ALIAS_GROUPS: AliasGroup[] = [
 
 const CATEGORY_RULES: CategoryRule[] = [
   {
-    allergies: ['tree nut', 'nuts', 'nut'],
+    allergies: ['tree nut'],
     ingredients: [
       'almond',
       'brazil nut',
@@ -48,6 +48,22 @@ const CATEGORY_RULES: CategoryRule[] = [
       'walnut'
     ],
     kind: 'alias'
+  },
+  {
+    allergies: ['nuts', 'nut'],
+    ingredients: [
+      'almond',
+      'brazil nut',
+      'cashew',
+      'groundnut',
+      'hazelnut',
+      'macadamia',
+      'peanut',
+      'pecan',
+      'pistachio',
+      'walnut'
+    ],
+    kind: 'possible'
   },
   {
     allergies: ['shellfish'],
