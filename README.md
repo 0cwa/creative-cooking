@@ -4,7 +4,7 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 
 ## MVP
 
-- Pantry powered by FlashList: paste/type/dictate simple ingredient names, rate each 1–5 stars, swipe to remove.
+- Pantry powered by FlashList: manually add simple ingredient names one at a time from a bottom composer, rate each 1–5 stars, swipe to remove; bulk dictation goes through Chef.
 - Chef chat: pantry preferences, allergies, shopping willingness, portions, cooks, energy, optional city/time context.
 - Chef can add/remove/rate pantry items and save structured recipes via tool calls.
 - Saved recipe collection.
@@ -51,11 +51,11 @@ The app manifest, 192/512 icons, service worker, and generated static navigation
 
 ## Sharing a provider key
 
-In Settings, a connected OpenRouter key can generate a friend link. Generated links place AES-GCM ciphertext in the `?ort=` query parameter and the decryption key in the URL fragment. The app captures and removes both values from the visible URL before the React bundle starts.
+In Settings, a connected OpenRouter key can generate a friend link. Generated links use a single `?ort=` query parameter. For normal OpenRouter keys the app removes the fixed `sk-or-v1-` prefix and reverses the remaining token body. This makes the URL slightly shorter and prevents only very naive scrapers from recognizing an OpenRouter key. It is intentionally obfuscation, not encryption. The app captures and removes `?ort=` from the visible URL before the React bundle starts.
 
 Anyone who has the complete link can use that API key, so treat it like a capability token. Prefer a dedicated OpenRouter key with a spending limit and revoke it when you no longer want the link to work.
 
-For compatibility, manually constructed plain `?ort=sk-or-...` links are accepted, but they expose the raw key in the initial HTTP request and should not be preferred.
+For compatibility, manually constructed plain `?ort=sk-or-...` links are also accepted. Either form is a bearer capability: anyone with the link can recover/use the token, so a dedicated spending-limited key is recommended.
 
 ## Local data and backups
 

@@ -19,7 +19,7 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 ## Phase 2 — pantry
 
 - [x] FlashList ingredient list.
-- [x] Add one ingredient or many names separated by commas/newlines/semicolons.
+- [x] Add a single ingredient by name from the Pantry bottom composer; bulk dictation goes through Chef.
 - [x] Default new ingredients to 3/5 preference.
 - [x] 1–5 star preference editing.
 - [x] Swipe left to remove plus an accessible visible remove action.
@@ -70,4 +70,4 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [ ] Provider error/retry UX and rate-limit messaging.
 - [x] Data export/import and explicit local-data reset.
 - [x] Request persistent browser storage and expose status/retry in Settings.
-- [x] Encrypted OpenRouter friend links with ?ort= ciphertext and URL-fragment decryption key.
+- [x] Single-parameter OpenRouter friend links using short, explicitly non-secure obfuscation to avoid obvious token-prefix scraping.

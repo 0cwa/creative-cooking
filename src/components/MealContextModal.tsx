@@ -79,8 +79,8 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' },
   title: { fontSize: 24, fontWeight: '700', color: '#172033' },
   subtitle: { color: '#64748b', marginTop: 4 },
-  done: { backgroundColor: '#172033', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 9 },
-  doneText: { color: 'white', fontWeight: '700' },
+  done: { minHeight: 40, backgroundColor: '#172033', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
+  doneText: { color: 'white', fontWeight: '700', textAlign: 'center' },
   counterRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   label: { color: '#334155', fontSize: 16, fontWeight: '600' },
   counter: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -89,8 +89,8 @@ const styles = StyleSheet.create({
   counterValue: { minWidth: 24, textAlign: 'center', fontSize: 18, fontWeight: '700' },
   energyRow: { gap: 10 },
   pills: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  pill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, backgroundColor: '#f1f5f9' },
+  pill: { minHeight: 38, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   pillActive: { backgroundColor: '#172033' },
-  pillText: { color: '#475569', fontWeight: '600' },
+  pillText: { color: '#475569', fontWeight: '600', textAlign: 'center' },
   pillTextActive: { color: 'white' }
 });

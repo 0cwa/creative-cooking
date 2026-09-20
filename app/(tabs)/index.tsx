@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { PantryRow } from '@/components/PantryRow';
-import { parseIngredientInput } from '@/domain/pantry';
+import { normalizeIngredientName } from '@/domain/pantry';
 import { useAppState } from '@/state/AppState';
 
 export default function PantryScreen() {
@@ -13,9 +13,9 @@ export default function PantryScreen() {
   const [input, setInput] = useState('');
 
   const add = () => {
-    const names = parseIngredientInput(input);
-    if (!names.length) return;
-    addPantryItems(names, 3);
+    const name = normalizeIngredientName(input);
+    if (!name) return;
+    addPantryItems([name], 3);
     setInput('');
   };
 
@@ -31,40 +31,46 @@ export default function PantryScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.addCard}>
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          onSubmitEditing={add}
-          placeholder="Type or dictate: onions, leeks, carrots…"
-          placeholderTextColor="#94a3b8"
-          returnKeyType="done"
-          style={styles.input}
-          multiline
+      <View style={styles.listWrap}>
+        <FlashList
+          data={pantry}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <PantryRow
+              item={item}
+              onDelete={() => removePantryItem(item.id)}
+              onPreference={(preference) => setPantryPreference(item.id, preference)}
+            />
+          )}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={styles.emptyEmoji}>🧺</Text>
+              <Text style={styles.emptyTitle}>What’s in the kitchen?</Text>
+              <Text style={styles.emptyText}>Add ingredients one at a time below, or tell Chef everything you have in one message.</Text>
+            </View>
+          }
+          contentContainerStyle={{ paddingBottom: 16 }}
         />
-        <Pressable onPress={add} style={styles.addButton}><Text style={styles.addButtonText}>Add</Text></Pressable>
       </View>
-      <Text style={styles.hint}>Names are enough. New ingredients start at ★★★ (open to eating).</Text>
 
-      <FlashList
-        data={pantry}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <PantryRow
-            item={item}
-            onDelete={() => removePantryItem(item.id)}
-            onPreference={(preference) => setPantryPreference(item.id, preference)}
+      <View style={styles.composer}>
+        <Text style={styles.composerHelp}>Manually add ingredients 1-by-1 here. To dictate all at once, you can tell the chef.</Text>
+        <View style={styles.composerRow}>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            onSubmitEditing={add}
+            placeholder="Ingredient name"
+            placeholderTextColor="#94a3b8"
+            returnKeyType="done"
+            style={styles.input}
+            multiline={false}
           />
-        )}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyEmoji}>🧺</Text>
-            <Text style={styles.emptyTitle}>What’s in the kitchen?</Text>
-            <Text style={styles.emptyText}>Add ingredients above. You can paste a comma-separated list and refine preferences later.</Text>
-          </View>
-        }
-        contentContainerStyle={{ paddingBottom: 28 }}
-      />
+          <Pressable accessibilityRole="button" accessibilityLabel="Add ingredient" onPress={add} style={styles.addButton}>
+            <Text style={styles.addButtonText}>Add</Text>
+          </Pressable>
+        </View>
+      </View>
     </Screen>
   );
 }
@@ -74,14 +80,16 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   settingsButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  settingsIcon: { fontSize: 21 },
-  addCard: { marginHorizontal: 16, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: 'white', padding: 10, borderRadius: 18, borderWidth: 1, borderColor: '#e2e8f0' },
-  input: { flex: 1, minHeight: 44, maxHeight: 90, color: '#172033', paddingHorizontal: 8, fontSize: 16 },
-  addButton: { backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 18, paddingVertical: 13 },
-  addButtonText: { color: 'white', fontWeight: '700' },
-  hint: { color: '#64748b', fontSize: 12, marginHorizontal: 20, marginTop: 8, marginBottom: 5 },
+  settingsIcon: { fontSize: 21, textAlign: 'center' },
+  listWrap: { flex: 1 },
+  composer: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12, gap: 8 },
+  composerHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 17, textAlign: 'center' },
+  composerRow: { flexDirection: 'row', gap: 9, alignItems: 'center' },
+  input: { flex: 1, height: 44, borderRadius: 13, backgroundColor: '#f1f5f9', color: '#172033', paddingHorizontal: 13, fontSize: 16 },
+  addButton: { minWidth: 68, height: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  addButtonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
   empty: { alignItems: 'center', paddingHorizontal: 38, paddingTop: 64 },
   emptyEmoji: { fontSize: 44 },
-  emptyTitle: { marginTop: 14, fontSize: 20, fontWeight: '700', color: '#334155' },
+  emptyTitle: { marginTop: 14, fontSize: 20, fontWeight: '700', color: '#334155', textAlign: 'center' },
   emptyText: { marginTop: 8, color: '#64748b', textAlign: 'center', lineHeight: 21 }
 });

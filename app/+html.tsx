@@ -9,13 +9,9 @@ export default function Root({ children }: PropsWithChildren) {
       var url = new URL(window.location.href);
       var payload = url.searchParams.get('ort');
       if (!payload) return;
-      var hash = new URLSearchParams(url.hash.slice(1));
-      var key = hash.get('ortk');
-      window.sessionStorage.setItem('creative-cooking-openrouter-share-v1', JSON.stringify({ payload: payload, key: key }));
+      window.sessionStorage.setItem('creative-cooking-openrouter-share-v1', payload);
       url.searchParams.delete('ort');
-      hash.delete('ortk');
-      var remainingHash = hash.toString();
-      window.history.replaceState({}, document.title, url.pathname + url.search + (remainingHash ? '#' + remainingHash : ''));
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
     } catch (error) {
       console.warn('Could not capture shared provider credential', error);
     }

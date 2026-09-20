@@ -180,7 +180,7 @@ export default function SettingsScreen() {
             <>
               {Platform.OS === 'web' && (
                 <Pressable onPress={() => void makeShareLink()} style={styles.shareButton}>
-                  <Text style={styles.shareButtonText}>🔗 Create encrypted friend link</Text>
+                  <Text style={styles.shareButtonText}>🔗 Create friend link</Text>
                 </Pressable>
               )}
               {!!shareLink && (
@@ -189,7 +189,7 @@ export default function SettingsScreen() {
                   <TextInput value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
                   <Pressable onPress={() => void copyShareLink()} style={styles.smallButton}><Text style={styles.smallButtonText}>Copy link</Text></Pressable>
                   <Text style={styles.warning}>
-                    Anyone with the complete link can spend through this key until you revoke it. Prefer a dedicated OpenRouter key with a spending limit. The token itself is AES-GCM encrypted: ciphertext is in ?ort= and the decryption key is in the URL fragment.
+                    Anyone with this link can spend through this key until you revoke it. Prefer a dedicated OpenRouter key with a spending limit. The ?ort= value is only lightly obfuscated to hide the obvious sk-or-v1- prefix from dumb scrapers; it is not encryption.
                   </Text>
                 </View>
               )}
@@ -288,12 +288,12 @@ const styles = StyleSheet.create({
   buttonRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   input: { flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
   prompt: { minHeight: 210 },
-  primaryButton: { backgroundColor: '#172033', borderRadius: 13, padding: 13, alignItems: 'center' },
-  primaryButtonText: { color: 'white', fontWeight: '700' },
-  smallButton: { backgroundColor: '#e2e8f0', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 12, alignItems: 'center' },
-  smallButtonText: { color: '#334155', fontWeight: '700' },
-  shareButton: { backgroundColor: '#ecfdf5', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#a7f3d0', alignItems: 'center' },
-  shareButtonText: { color: '#166534', fontWeight: '700' },
+  primaryButton: { minHeight: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 15, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  primaryButtonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
+  smallButton: { minHeight: 44, backgroundColor: '#e2e8f0', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  smallButtonText: { color: '#334155', fontWeight: '700', textAlign: 'center' },
+  shareButton: { minHeight: 44, backgroundColor: '#ecfdf5', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 10, borderWidth: 1, borderColor: '#a7f3d0', alignItems: 'center', justifyContent: 'center' },
+  shareButtonText: { color: '#166534', fontWeight: '700', textAlign: 'center' },
   shareBox: { backgroundColor: '#fffbeb', borderRadius: 12, padding: 12, gap: 9, borderWidth: 1, borderColor: '#fde68a' },
   shareLink: { maxHeight: 104, fontSize: 12 },
   or: { color: '#94a3b8', textAlign: 'center', fontSize: 12 },
