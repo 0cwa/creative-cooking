@@ -77,6 +77,7 @@ export default function ChefScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamingTextRef = useRef('');
+  const discardCancelledRef = useRef(false);
 
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
@@ -91,6 +92,7 @@ export default function ChefScreen() {
     setRunError(null);
     setStreamingText('');
     streamingTextRef.current = '';
+    discardCancelledRef.current = false;
     setBusy(true);
 
     const controller = new AbortController();
@@ -128,7 +130,9 @@ export default function ChefScreen() {
       const partialText = streamingTextRef.current.trim();
 
       if (normalized.kind === 'cancelled') {
-        if (partialText) app.appendChatMessage(makeChatMessage('assistant', partialText));
+        if (!discardCancelledRef.current && partialText) {
+          app.appendChatMessage(makeChatMessage('assistant', partialText));
+        }
       } else {
         setRunError({ error: normalized, messages, partialText });
       }
@@ -168,6 +172,7 @@ export default function ChefScreen() {
         text: 'New chat',
         style: 'destructive',
         onPress: () => {
+          discardCancelledRef.current = true;
           abortRef.current?.abort();
           app.newChat();
           setQuestion(null);
