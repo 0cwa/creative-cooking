@@ -11,7 +11,8 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] Add installable PWA manifest and service worker.
 - [x] Add CI for type checking and production web export.
 - [x] Add Gitleaks v3 secret scanning.
-- [x] Add GitHub Pages deployment workflow.\n- [ ] One-time repository admin setup: Settings → Pages → Source → GitHub Actions.
+- [x] Add GitHub Pages deployment workflow.
+- [x] One-time repository admin setup: Settings → Pages → Source → GitHub Actions.
 - [x] Keep application data local-first; no account required.
 - [x] Keep provider credentials outside normal app state (SecureStore on native, browser-local credential vault on web).
 
@@ -60,9 +61,13 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 
 ## Phase 6 — quality and hardening
 
-- [ ] Unit tests for pantry parsing/grouping, tool payload validation, recipe persistence, and prompt compilation.\n- [x] CI verifies TypeScript and the production static export; Gitleaks passes.\n- [x] Inspect the generated Pages artifact for manifest, service worker, install icons, static routes, and correct `/creative-cooking` asset paths.
+- [ ] Unit tests for pantry parsing/grouping, tool payload validation, recipe persistence, and prompt compilation.
+- [x] CI verifies TypeScript and the production static export; Gitleaks passes.
+- [x] Inspect the generated Pages artifact for manifest, service worker, install icons, static routes, and correct `/creative-cooking` asset paths.
 - [ ] End-to-end smoke test for Pages PWA installation and offline pantry/recipe access.
 - [ ] Deterministic post-generation allergy validation against structured recipe ingredients.
 - [ ] Accessibility pass: keyboard, screen reader labels, contrast, non-swipe deletion path.
 - [ ] Provider error/retry UX and rate-limit messaging.
-- [ ] Data export/import and explicit local-data reset.
+- [x] Data export/import and explicit local-data reset.
+- [x] Request persistent browser storage and expose status/retry in Settings.
+- [x] Encrypted OpenRouter friend links with ?ort= ciphertext and URL-fragment decryption key.

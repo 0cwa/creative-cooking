@@ -37,6 +37,7 @@ type AppStateApi = PersistedState & {
   updateMealContext(patch: Partial<MealContext>): void;
   updateCookEnergy(index: number, energy: CookEnergy): void;
   updateSettings(patch: Partial<AppSettings>): void;
+  restoreState(state: PersistedState): void;
 };
 
 const AppStateContext = createContext<AppStateApi | null>(null);
@@ -153,6 +154,10 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     setState((current) => ({ ...current, settings: { ...current.settings, ...patch } }));
   }, []);
 
+  const restoreState = useCallback((next: PersistedState) => {
+    setState(next);
+  }, []);
+
   const value = useMemo<AppStateApi>(
     () => ({
       ...state,
@@ -169,7 +174,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       newChat,
       updateMealContext,
       updateCookEnergy,
-      updateSettings
+      updateSettings,
+      restoreState
     }),
     [
       state,
@@ -186,7 +192,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       newChat,
       updateMealContext,
       updateCookEnergy,
-      updateSettings
+      updateSettings,
+      restoreState
     ]
   );
 

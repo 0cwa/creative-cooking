@@ -4,6 +4,22 @@ import type { PropsWithChildren } from 'react';
 const base = process.env.EXPO_PUBLIC_BASE_URL ?? '';
 
 export default function Root({ children }: PropsWithChildren) {
+  const shareCaptureScript = `(function () {
+    try {
+      var url = new URL(window.location.href);
+      var payload = url.searchParams.get('ort');
+      if (!payload) return;
+      var hash = new URLSearchParams(url.hash.slice(1));
+      var key = hash.get('ortk');
+      window.sessionStorage.setItem('creative-cooking-openrouter-share-v1', JSON.stringify({ payload: payload, key: key }));
+      url.searchParams.delete('ort');
+      hash.delete('ortk');
+      var remainingHash = hash.toString();
+      window.history.replaceState({}, document.title, url.pathname + url.search + (remainingHash ? '#' + remainingHash : ''));
+    } catch (error) {
+      console.warn('Could not capture shared provider credential', error);
+    }
+  })();`;
   const serviceWorkerScript = `if ('serviceWorker' in navigator) { window.addEventListener('load', function () { navigator.serviceWorker.register('${base}/sw.js', { scope: '${base || ''}/' }).catch(function (error) { console.warn('Service worker registration failed', error); }); }); }`;
 
   return (
@@ -12,8 +28,10 @@ export default function Root({ children }: PropsWithChildren) {
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
+        <meta name="referrer" content="no-referrer" />
         <meta name="theme-color" content="#172033" />
         <meta name="description" content="A local-first creative cooking assistant for your pantry." />
+        <script dangerouslySetInnerHTML={{ __html: shareCaptureScript }} />
         <link rel="manifest" href={`${base}/manifest.json`} />
         <link rel="apple-touch-icon" href={`${base}/icon-192.png`} />
         <ScrollViewStyleReset />

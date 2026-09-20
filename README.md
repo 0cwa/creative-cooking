@@ -49,6 +49,20 @@ After that, production is served from `https://0cwa.github.io/creative-cooking/`
 
 The app manifest, 192/512 icons, service worker, and generated static navigation are all emitted with the correct project base path.
 
+## Sharing a provider key
+
+In Settings, a connected OpenRouter key can generate a friend link. Generated links place AES-GCM ciphertext in the `?ort=` query parameter and the decryption key in the URL fragment. The app captures and removes both values from the visible URL before the React bundle starts.
+
+Anyone who has the complete link can use that API key, so treat it like a capability token. Prefer a dedicated OpenRouter key with a spending limit and revoke it when you no longer want the link to work.
+
+For compatibility, manually constructed plain `?ort=sk-or-...` links are accepted, but they expose the raw key in the initial HTTP request and should not be preferred.
+
+## Local data and backups
+
+The PWA requests durable browser storage once and shows the current status in Settings. Browser behavior differs: some browsers ask the user while others grant or deny persistence silently.
+
+Settings also supports versioned JSON export/restore for pantry, recipes, chats, meal context and settings. Provider API keys are deliberately excluded from backups.
+
 ## Provider credentials
 
 No project-owned LLM secret is committed or bundled. Users connect their own OpenRouter account/key. Native builds store the key with Expo SecureStore. The web/PWA stores it in browser-local storage because browsers do not provide an equivalent native keychain.
