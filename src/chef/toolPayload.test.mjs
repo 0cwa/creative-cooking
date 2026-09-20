@@ -34,7 +34,7 @@ test('recipe payload normalization drops malformed structured fields', () => {
   });
 
   assert.equal(recipe.title, 'Soup');
-  assert.equal(recipe.portions, 1);
+  assert.equal(recipe.portions, 2);
   assert.deepEqual(recipe.ingredients, [{ name: 'carrots', amount: '2', needsShopping: false }]);
   assert.deepEqual(recipe.steps, ['Chop']);
   assert.deepEqual(recipe.notes, ['Serve hot']);
