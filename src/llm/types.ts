@@ -21,5 +21,7 @@ export type LlmProvider = {
     systemPrompt: string;
     messages: ChatMessage[];
     tools: ToolExecutor;
+    signal?: AbortSignal;
+    onTextDelta?: (delta: string) => void;
   }): Promise<ChefRunResult>;
 };

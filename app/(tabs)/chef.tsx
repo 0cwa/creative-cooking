@@ -4,19 +4,80 @@ import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { MealContextModal } from '@/components/MealContextModal';
 import { buildChefSystemPrompt } from '@/chef/context';
-import type { IngredientPreference, UiQuestion } from '@/domain/types';
+import type { ChatMessage, IngredientPreference, UiQuestion } from '@/domain/types';
+import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { openRouterProvider } from '@/llm/openrouter/provider';
 import { getOpenRouterKey } from '@/storage/credentialVault';
 import { makeChatMessage, useAppState } from '@/state/AppState';
+
+type RunErrorState = {
+  error: LlmRequestError;
+  messages: ChatMessage[];
+  partialText: string;
+};
+
+function errorPresentation(error: LlmRequestError): { title: string; message: string; showSettings: boolean } {
+  switch (error.kind) {
+    case 'network':
+      return {
+        title: 'No connection to Chef',
+        message: 'I could not reach OpenRouter. Check your connection and try again.',
+        showSettings: false
+      };
+    case 'rate_limit':
+      return {
+        title: 'Chef is being rate-limited',
+        message: 'OpenRouter is temporarily limiting requests. Retry in a moment.',
+        showSettings: false
+      };
+    case 'credits':
+      return {
+        title: 'OpenRouter credits unavailable',
+        message: 'This key has no usable credits or has reached its budget. Add credits or connect another key.',
+        showSettings: true
+      };
+    case 'auth':
+      return {
+        title: 'OpenRouter key rejected',
+        message: 'Reconnect OpenRouter or paste a valid API key in Settings.',
+        showSettings: true
+      };
+    case 'model_unavailable':
+      return {
+        title: 'Model unavailable',
+        message: 'The selected model is unavailable or not allowed for this key. Choose another model in Settings.',
+        showSettings: true
+      };
+    case 'invalid_request':
+      return {
+        title: 'Request rejected',
+        message: error.message || 'OpenRouter rejected this request. Check the selected model and settings.',
+        showSettings: true
+      };
+    default:
+      return {
+        title: 'Chef could not finish',
+        message: error.retryable
+          ? 'OpenRouter or the selected model had a temporary problem. You can retry this turn.'
+          : error.message || 'The provider could not complete this turn.',
+        showSettings: false
+      };
+  }
+}
 
 export default function ChefScreen() {
   const router = useRouter();
   const app = useAppState();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
+  const [runError, setRunError] = useState<RunErrorState | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [question, setQuestion] = useState<UiQuestion | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const streamingTextRef = useRef('');
+  const discardCancelledRef = useRef(false);
 
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
@@ -26,15 +87,16 @@ export default function ChefScreen() {
     settings: app.settings
   }), [app.pantry, app.recipes, app.chatMessages, app.mealContext, app.settings]);
 
-  const send = async (override?: string) => {
-    const text = (override ?? input).trim();
-    if (!text || busy) return;
-    setInput('');
+  const runChef = async (messages: ChatMessage[]) => {
     setQuestion(null);
-    const userMessage = makeChatMessage('user', text);
-    const messages = [...app.chatMessages, userMessage];
-    app.appendChatMessage(userMessage);
+    setRunError(null);
+    setStreamingText('');
+    streamingTextRef.current = '';
+    discardCancelledRef.current = false;
     setBusy(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const apiKey = await getOpenRouterKey();
@@ -48,6 +110,11 @@ export default function ChefScreen() {
         model: app.settings.model,
         systemPrompt: buildChefSystemPrompt({ ...stateSnapshot, chatMessages: messages }),
         messages,
+        signal: controller.signal,
+        onTextDelta: (delta) => {
+          streamingTextRef.current += delta;
+          setStreamingText(streamingTextRef.current);
+        },
         tools: {
           addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
           removePantry: app.removePantryByName,
@@ -59,19 +126,63 @@ export default function ChefScreen() {
       if (result.text.trim()) app.appendChatMessage(makeChatMessage('assistant', result.text.trim()));
       if (result.question) setQuestion(result.question);
     } catch (error) {
-      app.appendChatMessage(makeChatMessage('assistant', `I hit a provider error: ${error instanceof Error ? error.message : 'Unknown error'}`));
+      const normalized = normalizeLlmError(error);
+      const partialText = streamingTextRef.current.trim();
+
+      if (normalized.kind === 'cancelled') {
+        if (!discardCancelledRef.current && partialText) {
+          app.appendChatMessage(makeChatMessage('assistant', partialText));
+        }
+      } else {
+        setRunError({ error: normalized, messages, partialText });
+      }
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      streamingTextRef.current = '';
+      setStreamingText('');
       setBusy(false);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
     }
   };
 
+  const send = async (override?: string) => {
+    const text = (override ?? input).trim();
+    if (!text || busy) return;
+
+    setInput('');
+    const userMessage = makeChatMessage('user', text);
+    const messages = [...app.chatMessages, userMessage];
+    app.appendChatMessage(userMessage);
+    await runChef(messages);
+  };
+
+  const retry = () => {
+    if (!runError?.error.retryable || busy) return;
+    void runChef(runError.messages);
+  };
+
+  const stop = () => {
+    abortRef.current?.abort();
+  };
+
   const reset = () => {
     Alert.alert('Start a new chat?', 'Your pantry and saved recipes stay as they are.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'New chat', style: 'destructive', onPress: () => { app.newChat(); setQuestion(null); } }
+      {
+        text: 'New chat',
+        style: 'destructive',
+        onPress: () => {
+          discardCancelledRef.current = true;
+          abortRef.current?.abort();
+          app.newChat();
+          setQuestion(null);
+          setRunError(null);
+        }
+      }
     ]);
   };
+
+  const errorUi = runError ? errorPresentation(runError.error) : null;
 
   return (
     <Screen>
@@ -83,7 +194,7 @@ export default function ChefScreen() {
           </View>
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={reset} style={styles.newChatButton}><Text style={styles.newChatText}>New chat</Text></Pressable>
-            <Pressable onPress={() => router.push('/settings')} style={styles.iconButton}><Text style={styles.iconText}>⚙︎</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.iconButton}><Text style={styles.iconText}>⚙︎</Text></Pressable>
           </View>
         </View>
 
@@ -112,7 +223,34 @@ export default function ChefScreen() {
               <Text style={[styles.bubbleText, message.role === 'user' && styles.userBubbleText]}>{message.content}</Text>
             </View>
           ))}
-          {busy && <View style={[styles.bubble, styles.chefBubble]}><Text style={styles.typing}>Chef is thinking…</Text></View>}
+          {busy && (
+            <View style={[styles.bubble, styles.chefBubble]}>
+              <Text style={streamingText ? styles.bubbleText : styles.typing}>{streamingText || 'Chef is thinking…'}</Text>
+            </View>
+          )}
+          {runError?.partialText ? (
+            <View style={[styles.bubble, styles.chefBubble]}>
+              <Text style={styles.bubbleText}>{runError.partialText}</Text>
+            </View>
+          ) : null}
+          {runError && errorUi && (
+            <View style={styles.errorCard}>
+              <Text style={styles.errorTitle}>{errorUi.title}</Text>
+              <Text style={styles.errorText}>{errorUi.message}</Text>
+              <View style={styles.errorActions}>
+                {runError.error.retryable && (
+                  <Pressable accessibilityRole="button" accessibilityLabel="Retry Chef response" onPress={retry} style={styles.errorPrimaryButton}>
+                    <Text style={styles.errorPrimaryText}>Retry</Text>
+                  </Pressable>
+                )}
+                {errorUi.showSettings && (
+                  <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.errorSecondaryButton}>
+                    <Text style={styles.errorSecondaryText}>Settings</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          )}
           {question && (
             <View style={styles.questionCard}>
               <Text style={styles.questionTitle}>{question.prompt}</Text>
@@ -140,16 +278,20 @@ export default function ChefScreen() {
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Send message"
-            disabled={!input.trim() || busy}
-            onPress={() => void send()}
-            style={[styles.send, (!input.trim() || busy) && styles.sendDisabled]}
+            accessibilityLabel={busy ? 'Stop Chef response' : 'Send message'}
+            disabled={!busy && !input.trim()}
+            onPress={busy ? stop : () => void send()}
+            style={[styles.send, (!busy && !input.trim()) && styles.sendDisabled]}
           >
-            <View style={styles.sendGlyph}>
-              <View style={styles.sendShaft} />
-              <View style={styles.sendHeadLeft} />
-              <View style={styles.sendHeadRight} />
-            </View>
+            {busy ? (
+              <View style={styles.stopGlyph} />
+            ) : (
+              <View style={styles.sendGlyph}>
+                <View style={styles.sendShaft} />
+                <View style={styles.sendHeadLeft} />
+                <View style={styles.sendHeadRight} />
+              </View>
+            )}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -190,6 +332,14 @@ const styles = StyleSheet.create({
   bubbleText: { color: '#334155', fontSize: 15.5, lineHeight: 22 },
   userBubbleText: { color: 'white' },
   typing: { color: '#64748b', fontStyle: 'italic' },
+  errorCard: { backgroundColor: '#fff7ed', borderColor: '#fed7aa', borderWidth: 1, borderRadius: 18, padding: 15, gap: 8 },
+  errorTitle: { color: '#9a3412', fontSize: 16, fontWeight: '800' },
+  errorText: { color: '#7c2d12', fontSize: 14, lineHeight: 20 },
+  errorActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 4 },
+  errorPrimaryButton: { minHeight: 42, borderRadius: 12, backgroundColor: '#9a3412', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  errorPrimaryText: { color: 'white', fontWeight: '800' },
+  errorSecondaryButton: { minHeight: 42, borderRadius: 12, backgroundColor: 'white', borderWidth: 1, borderColor: '#fed7aa', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  errorSecondaryText: { color: '#9a3412', fontWeight: '800' },
   questionCard: { backgroundColor: '#fff7ed', borderColor: '#fed7aa', borderWidth: 1, borderRadius: 18, padding: 15, gap: 12 },
   questionTitle: { color: '#7c2d12', fontWeight: '700', fontSize: 16 },
   questionOptions: { gap: 8 },
@@ -204,5 +354,6 @@ const styles = StyleSheet.create({
   sendGlyph: { width: 18, height: 20, position: 'relative' },
   sendShaft: { position: 'absolute', left: 8, top: 4, bottom: 2, width: 2, borderRadius: 1, backgroundColor: 'white' },
   sendHeadLeft: { position: 'absolute', left: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '-45deg' }] },
-  sendHeadRight: { position: 'absolute', right: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '45deg' }] }
+  sendHeadRight: { position: 'absolute', right: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '45deg' }] },
+  stopGlyph: { width: 11, height: 11, borderRadius: 2, backgroundColor: 'white' }
 });
