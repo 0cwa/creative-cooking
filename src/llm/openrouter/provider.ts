@@ -1,4 +1,5 @@
 import { CHEF_TOOLS } from '@/chef/tools';
+import { RecipeAllergyError } from '@/domain/allergyValidation';
 import type { IngredientPreference, Recipe, UiQuestion } from '@/domain/types';
 import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
 
@@ -68,15 +69,30 @@ function executeTool(call: OpenRouterToolCall, tools: ToolExecutor): { result: s
         : [];
       const steps = Array.isArray(args.steps) ? args.steps.filter((x): x is string => typeof x === 'string') : [];
       const notes = Array.isArray(args.notes) ? args.notes.filter((x): x is string => typeof x === 'string') : undefined;
-      const recipe = tools.saveRecipe({
-        title,
-        description: typeof args.description === 'string' ? args.description : undefined,
-        portions,
-        ingredients,
-        steps,
-        notes
-      } as Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>);
-      return { result: JSON.stringify({ ok: true, recipeId: recipe.id }) };
+
+      try {
+        const recipe = tools.saveRecipe({
+          title,
+          description: typeof args.description === 'string' ? args.description : undefined,
+          portions,
+          ingredients,
+          steps,
+          notes
+        } as Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>);
+        return { result: JSON.stringify({ ok: true, recipeId: recipe.id }) };
+      } catch (error) {
+        if (error instanceof RecipeAllergyError) {
+          return {
+            result: JSON.stringify({
+              ok: false,
+              error: 'allergy_validation_failed',
+              message: error.message,
+              matches: error.matches
+            })
+          };
+        }
+        throw error;
+      }
     }
     case 'ask_user': {
       const prompt = typeof args.prompt === 'string' ? args.prompt : 'Which option do you prefer?';

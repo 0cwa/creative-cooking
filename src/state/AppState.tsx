@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
+import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
 import type {
@@ -111,6 +112,9 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, []);
 
   const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
+    if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+
     const now = new Date().toISOString();
     const recipe: Recipe = {
       ...input,
@@ -120,7 +124,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     };
     setState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, []);
+  }, [state.settings.allergies]);
 
   const deleteRecipe = useCallback((id: string) => {
     setState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
