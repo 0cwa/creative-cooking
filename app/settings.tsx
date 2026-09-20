@@ -189,7 +189,7 @@ export default function SettingsScreen() {
                   <TextInput value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
                   <Pressable onPress={() => void copyShareLink()} style={styles.smallButton}><Text style={styles.smallButtonText}>Copy link</Text></Pressable>
                   <Text style={styles.warning}>
-                    Anyone with this link can spend through this key until you revoke it. Prefer a dedicated OpenRouter key with a spending limit. The ?ort= value is only lightly obfuscated to hide the obvious sk-or-v1- prefix from dumb scrapers; it is not encryption.
+                    Anyone with this link can spend through this key until you revoke it. Prefer a dedicated OpenRouter key with a spending limit. The ?ort= value packs the standard 64-character hexadecimal key body into 32 raw bytes and base64url, making the shared value about one-third shorter while hiding the obvious sk-or-v1- prefix from dumb scrapers. It is not encryption.
                   </Text>
                 </View>
               )}
