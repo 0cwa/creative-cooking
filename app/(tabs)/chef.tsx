@@ -138,8 +138,18 @@ export default function ChefScreen() {
             multiline
             onSubmitEditing={() => void send()}
           />
-          <Pressable disabled={!input.trim() || busy} onPress={() => void send()} style={[styles.send, (!input.trim() || busy) && styles.sendDisabled]}>
-            <Text style={styles.sendText}>↑</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            disabled={!input.trim() || busy}
+            onPress={() => void send()}
+            style={[styles.send, (!input.trim() || busy) && styles.sendDisabled]}
+          >
+            <View style={styles.sendGlyph}>
+              <View style={styles.sendShaft} />
+              <View style={styles.sendHeadLeft} />
+              <View style={styles.sendHeadRight} />
+            </View>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -191,5 +201,8 @@ const styles = StyleSheet.create({
   composer: { flex: 1, maxHeight: 120, minHeight: 42, borderRadius: 18, backgroundColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10, color: '#172033', fontSize: 15.5 },
   send: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
   sendDisabled: { opacity: 0.35 },
-  sendText: { color: 'white', fontSize: 22, fontWeight: '800' }
+  sendGlyph: { width: 18, height: 20, position: 'relative' },
+  sendShaft: { position: 'absolute', left: 8, top: 4, bottom: 2, width: 2, borderRadius: 1, backgroundColor: 'white' },
+  sendHeadLeft: { position: 'absolute', left: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '-45deg' }] },
+  sendHeadRight: { position: 'absolute', right: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '45deg' }] }
 });
