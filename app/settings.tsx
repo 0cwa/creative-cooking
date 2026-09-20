@@ -169,12 +169,12 @@ export default function SettingsScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Section title="Allergies" subtitle="These are hard constraints and are sent with meal requests.">
           <View style={styles.inline}>
-            <TextInput value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
-            <Pressable onPress={addAllergies} style={styles.smallButton}><Text style={styles.smallButtonText}>Add</Text></Pressable>
+            <TextInput accessibilityLabel="Add allergies" value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
+            <Pressable accessibilityRole="button" accessibilityLabel="Add allergies" onPress={addAllergies} style={styles.smallButton}><Text style={styles.smallButtonText}>Add</Text></Pressable>
           </View>
           <View style={styles.tags}>
             {app.settings.allergies.map((allergy) => (
-              <Pressable key={allergy} onPress={() => app.updateSettings({ allergies: app.settings.allergies.filter((x) => x !== allergy) })} style={styles.tag}>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Remove allergy ${allergy}`} key={allergy} onPress={() => app.updateSettings({ allergies: app.settings.allergies.filter((x) => x !== allergy) })} style={styles.tag}>
                 <Text style={styles.tagText}>{allergy} ×</Text>
               </Pressable>
             ))}
@@ -187,10 +187,10 @@ export default function SettingsScreen() {
               <Text style={styles.label}>Send local time & time zone</Text>
               <Text style={styles.help}>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown zone'}</Text>
             </View>
-            <Switch value={app.settings.sendLocalTime} onValueChange={(sendLocalTime) => app.updateSettings({ sendLocalTime })} />
+            <Switch accessibilityLabel="Send local time and time zone" value={app.settings.sendLocalTime} onValueChange={(sendLocalTime) => app.updateSettings({ sendLocalTime })} />
           </View>
           <Text style={styles.label}>City</Text>
-          <TextInput value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
+          <TextInput accessibilityLabel="City" value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
           <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
         </Section>
 
@@ -205,7 +205,7 @@ export default function SettingsScreen() {
             <Text style={[styles.status, persistence?.persistent && styles.statusConnected]}>{persistenceLabel}</Text>
           </View>
           {Platform.OS === 'web' && persistence?.supported && !persistence.persistent && (
-            <Pressable onPress={() => void requestDurableStorage()} style={styles.primaryButton}>
+            <Pressable accessibilityRole="button" onPress={() => void requestDurableStorage()} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Request durable storage</Text>
             </Pressable>
           )}
@@ -213,14 +213,14 @@ export default function SettingsScreen() {
             Browsers may approve or deny durable storage silently. The app also requests it once automatically; backups remain the safest portable copy.
           </Text>
           <View style={styles.buttonRow}>
-            <Pressable onPress={exportData} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
-            <Pressable onPress={importData} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={exportData} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={importData} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
           </View>
-          <Pressable onPress={resetData}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
+          <Pressable accessibilityRole="button" onPress={resetData} style={styles.textButton}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
         </Section>
 
         <Section title="Chef system prompt" subtitle="Customize Chef’s style and priorities. Core tool and allergy rules are added by the app separately.">
-          <TextInput value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
+          <TextInput accessibilityLabel="Chef system prompt" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
         </Section>
 
         <Section title="Chef provider" subtitle="OpenRouter gives the app one login/API surface across many model providers.">
@@ -229,39 +229,39 @@ export default function SettingsScreen() {
             <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Connected' : 'Not connected'}</Text>
           </View>
           {Platform.OS === 'web' && (
-            <Pressable onPress={() => void beginOpenRouterOAuth().catch((error) => Alert.alert('Could not connect', String(error)))} style={styles.primaryButton}>
+            <Pressable accessibilityRole="button" onPress={() => void beginOpenRouterOAuth().catch((error) => Alert.alert('Could not connect', String(error)))} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Connect OpenRouter</Text>
             </Pressable>
           )}
           <Text style={styles.or}>or paste an OpenRouter API key</Text>
           <View style={styles.inline}>
-            <TextInput secureTextEntry value={apiKey} onChangeText={setApiKey} placeholder="sk-or-v1-…" placeholderTextColor="#94a3b8" style={styles.input} />
-            <Pressable onPress={() => void saveKey()} style={styles.smallButton}><Text style={styles.smallButtonText}>Save</Text></Pressable>
+            <TextInput accessibilityLabel="OpenRouter API key" secureTextEntry value={apiKey} onChangeText={setApiKey} placeholder="sk-or-v1-…" placeholderTextColor="#94a3b8" style={styles.input} />
+            <Pressable accessibilityRole="button" accessibilityLabel="Save OpenRouter API key" onPress={() => void saveKey()} style={styles.smallButton}><Text style={styles.smallButtonText}>Save</Text></Pressable>
           </View>
           {hasKey && (
             <>
               {Platform.OS === 'web' && (
-                <Pressable onPress={() => void makeShareLink()} style={styles.shareButton}>
+                <Pressable accessibilityRole="button" onPress={() => void makeShareLink()} style={styles.shareButton}>
                   <Text style={styles.shareButtonText}>🔗 Create friend link</Text>
                 </Pressable>
               )}
               {!!shareLink && (
                 <View style={styles.shareBox}>
                   <Text style={styles.label}>Friend link</Text>
-                  <TextInput value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
-                  <Pressable onPress={() => void copyShareLink()} style={styles.smallButton}><Text style={styles.smallButtonText}>Copy link</Text></Pressable>
+                  <TextInput accessibilityLabel="Friend link" value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
+                  <Pressable accessibilityRole="button" onPress={() => void copyShareLink()} style={styles.smallButton}><Text style={styles.smallButtonText}>Copy link</Text></Pressable>
                   <Text style={styles.warning}>
                     Anyone with this link can spend through this key until you revoke it. Prefer a dedicated OpenRouter key with a spending limit. The ?ort= value packs the standard 64-character hexadecimal key body into 32 raw bytes and base64url, making the shared value about one-third shorter while hiding the obvious sk-or-v1- prefix from dumb scrapers. It is not encryption.
                   </Text>
                 </View>
               )}
-              <Pressable onPress={() => void clearOpenRouterKey().then(() => { setHasKey(false); setShareLink(''); })}>
+              <Pressable accessibilityRole="button" onPress={() => void clearOpenRouterKey().then(() => { setHasKey(false); setShareLink(''); })} style={styles.textButton}>
                 <Text style={styles.dangerLink}>Disconnect provider</Text>
               </Pressable>
             </>
           )}
           <Text style={styles.label}>Model</Text>
-          <TextInput value={app.settings.model} onChangeText={(model) => app.updateSettings({ model })} autoCapitalize="none" style={styles.input} placeholder="openrouter/free" />
+          <TextInput accessibilityLabel="OpenRouter model" value={app.settings.model} onChangeText={(model) => app.updateSettings({ model })} autoCapitalize="none" style={styles.input} placeholder="openrouter/free" />
           <Text style={styles.help}>Default is openrouter/free. You can paste any OpenRouter model slug here.</Text>
         </Section>
 
@@ -274,7 +274,7 @@ export default function SettingsScreen() {
 }
 
 function Section({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
-  return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionSubtitle}>{subtitle}</Text><View style={styles.sectionBody}>{children}</View></View>;
+  return <View style={styles.section}><Text accessibilityRole="header" style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionSubtitle}>{subtitle}</Text><View style={styles.sectionBody}>{children}</View></View>;
 }
 
 const styles = StyleSheet.create({
@@ -293,9 +293,9 @@ const styles = StyleSheet.create({
   label: { color: '#334155', fontWeight: '700' },
   help: { color: '#64748b', fontSize: 12.5, lineHeight: 18 },
   warning: { color: '#92400e', fontSize: 12.5, lineHeight: 18 },
-  inline: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  inline: { flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   buttonRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  input: { flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
+  input: { flex: 1, minWidth: 200, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
   prompt: { minHeight: 210 },
   primaryButton: { minHeight: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 15, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   primaryButtonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
@@ -309,6 +309,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
   status: { color: '#b45309', fontWeight: '700' },
   statusConnected: { color: '#166534' },
+  textButton: { minHeight: 44, alignSelf: 'flex-start', justifyContent: 'center' },
   dangerLink: { color: '#b91c1c', fontWeight: '600' },
   tags: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   tag: { backgroundColor: '#fee2e2', borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
