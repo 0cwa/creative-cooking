@@ -156,11 +156,73 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.backText}>←</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => router.back()} style={styles.back}>
+          <View style={styles.backGlyph}>
+            <View style={styles.backShaft} />
+            <View style={styles.backHeadTop} />
+            <View style={styles.backHeadBottom} />
+          </View>
+        </Pressable>
         <Text style={styles.title}>Settings</Text>
         <View style={{ width: 42 }} />
       </View>
       <ScrollView contentContainerStyle={styles.content}>
+        <Section title="Allergies" subtitle="These are hard constraints and are sent with meal requests.">
+          <View style={styles.inline}>
+            <TextInput value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
+            <Pressable onPress={addAllergies} style={styles.smallButton}><Text style={styles.smallButtonText}>Add</Text></Pressable>
+          </View>
+          <View style={styles.tags}>
+            {app.settings.allergies.map((allergy) => (
+              <Pressable key={allergy} onPress={() => app.updateSettings({ allergies: app.settings.allergies.filter((x) => x !== allergy) })} style={styles.tag}>
+                <Text style={styles.tagText}>{allergy} ×</Text>
+              </Pressable>
+            ))}
+          </View>
+        </Section>
+
+        <Section title="Context" subtitle="Optional context for meal timing and seasonal/regional suggestions.">
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Send local time & time zone</Text>
+              <Text style={styles.help}>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown zone'}</Text>
+            </View>
+            <Switch value={app.settings.sendLocalTime} onValueChange={(sendLocalTime) => app.updateSettings({ sendLocalTime })} />
+          </View>
+          <Text style={styles.label}>City</Text>
+          <TextInput value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
+          <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
+        </Section>
+
+        <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
+          <View style={styles.statusRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Browser storage</Text>
+              {Platform.OS === 'web' && persistence && (
+                <Text style={styles.help}>{formatBytes(persistence.usage)} used · {formatBytes(persistence.quota)} quota</Text>
+              )}
+            </View>
+            <Text style={[styles.status, persistence?.persistent && styles.statusConnected]}>{persistenceLabel}</Text>
+          </View>
+          {Platform.OS === 'web' && persistence?.supported && !persistence.persistent && (
+            <Pressable onPress={() => void requestDurableStorage()} style={styles.primaryButton}>
+              <Text style={styles.primaryButtonText}>Request durable storage</Text>
+            </Pressable>
+          )}
+          <Text style={styles.help}>
+            Browsers may approve or deny durable storage silently. The app also requests it once automatically; backups remain the safest portable copy.
+          </Text>
+          <View style={styles.buttonRow}>
+            <Pressable onPress={exportData} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
+            <Pressable onPress={importData} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
+          </View>
+          <Pressable onPress={resetData}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
+        </Section>
+
+        <Section title="Chef system prompt" subtitle="Customize Chef’s style and priorities. Core tool and allergy rules are added by the app separately.">
+          <TextInput value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
+        </Section>
+
         <Section title="Chef provider" subtitle="OpenRouter gives the app one login/API surface across many model providers.">
           <View style={styles.statusRow}>
             <Text style={styles.label}>Connection</Text>
@@ -203,62 +265,6 @@ export default function SettingsScreen() {
           <Text style={styles.help}>Default is openrouter/free. You can paste any OpenRouter model slug here.</Text>
         </Section>
 
-        <Section title="Data & storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
-          <View style={styles.statusRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Browser storage</Text>
-              {Platform.OS === 'web' && persistence && (
-                <Text style={styles.help}>{formatBytes(persistence.usage)} used · {formatBytes(persistence.quota)} quota</Text>
-              )}
-            </View>
-            <Text style={[styles.status, persistence?.persistent && styles.statusConnected]}>{persistenceLabel}</Text>
-          </View>
-          {Platform.OS === 'web' && persistence?.supported && !persistence.persistent && (
-            <Pressable onPress={() => void requestDurableStorage()} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Request durable storage</Text>
-            </Pressable>
-          )}
-          <Text style={styles.help}>
-            Browsers may approve or deny durable storage silently. The app also requests it once automatically; backups remain the safest portable copy.
-          </Text>
-          <View style={styles.buttonRow}>
-            <Pressable onPress={exportData} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
-            <Pressable onPress={importData} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
-          </View>
-          <Pressable onPress={resetData}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
-        </Section>
-
-        <Section title="Allergies" subtitle="These are hard constraints and are sent with meal requests.">
-          <View style={styles.inline}>
-            <TextInput value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
-            <Pressable onPress={addAllergies} style={styles.smallButton}><Text style={styles.smallButtonText}>Add</Text></Pressable>
-          </View>
-          <View style={styles.tags}>
-            {app.settings.allergies.map((allergy) => (
-              <Pressable key={allergy} onPress={() => app.updateSettings({ allergies: app.settings.allergies.filter((x) => x !== allergy) })} style={styles.tag}>
-                <Text style={styles.tagText}>{allergy} ×</Text>
-              </Pressable>
-            ))}
-          </View>
-        </Section>
-
-        <Section title="Context" subtitle="Optional context for meal timing and seasonal/regional suggestions.">
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Send local time & time zone</Text>
-              <Text style={styles.help}>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown zone'}</Text>
-            </View>
-            <Switch value={app.settings.sendLocalTime} onValueChange={(sendLocalTime) => app.updateSettings({ sendLocalTime })} />
-          </View>
-          <Text style={styles.label}>City</Text>
-          <TextInput value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
-          <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
-        </Section>
-
-        <Section title="Chef system prompt" subtitle="Customize Chef’s style and priorities. Core tool and allergy rules are added by the app separately.">
-          <TextInput value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
-        </Section>
-
         <Section title="Local models" subtitle="Architecture is ready for a WebLLM/on-device provider adapter, but it is intentionally not in the MVP critical path.">
           <View style={styles.comingSoon}><Text style={styles.comingSoonText}>Experimental local Chef — planned for the final phase</Text></View>
         </Section>
@@ -274,7 +280,10 @@ function Section({ title, subtitle, children }: { title: string; subtitle: strin
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, backgroundColor: '#f8fafc' },
   back: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: 20, lineHeight: 20, color: '#475569', textAlign: 'center', includeFontPadding: false },
+  backGlyph: { width: 20, height: 16, position: 'relative' },
+  backShaft: { position: 'absolute', left: 3, right: 1, top: 7, height: 2, borderRadius: 1, backgroundColor: '#475569' },
+  backHeadTop: { position: 'absolute', left: 2, top: 4, width: 9, height: 2, borderRadius: 1, backgroundColor: '#475569', transform: [{ rotate: '-45deg' }] },
+  backHeadBottom: { position: 'absolute', left: 2, bottom: 4, width: 9, height: 2, borderRadius: 1, backgroundColor: '#475569', transform: [{ rotate: '45deg' }] },
   title: { fontSize: 22, fontWeight: '800', color: '#172033' },
   content: { padding: 16, paddingBottom: 60, gap: 16, maxWidth: 760, width: '100%', alignSelf: 'center' },
   section: { backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 20, padding: 18 },
