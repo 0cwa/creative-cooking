@@ -10,6 +10,7 @@ CI must pass all of the following:
 - TypeScript type checking;
 - production web export with `EXPO_PUBLIC_BASE_URL=/creative-cooking`;
 - exported-PWA smoke verification for the manifest, 192/512 icons, scoped service-worker registration, navigation fallback behavior, and Pantry/Chef/Recipes/Settings static routes;
+- a Chromium E2E that adds pantry state, visits Recipes, switches offline, and reloads both routes through the service worker;
 - Gitleaks.
 
 ## Install and offline smoke
