@@ -22,12 +22,12 @@ export function MealContextModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+      <Pressable accessible={false} style={styles.backdrop} onPress={onClose} />
       <View style={styles.sheet}>
         <ScrollView contentContainerStyle={styles.content}>
           <View style={styles.header}>
-            <View><Text style={styles.title}>Meal context</Text><Text style={styles.subtitle}>Chef will use this for the next suggestion.</Text></View>
-            <Pressable onPress={onClose} style={styles.done}><Text style={styles.doneText}>Done</Text></Pressable>
+            <View><Text accessibilityRole="header" style={styles.title}>Meal context</Text><Text style={styles.subtitle}>Chef will use this for the next suggestion.</Text></View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close meal context" onPress={onClose} style={styles.done}><Text style={styles.doneText}>Done</Text></Pressable>
           </View>
 
           <Counter label="Portions" value={value.portions} onChange={(portions) => onChange({ ...value, portions: Math.max(1, portions) })} />
@@ -40,6 +40,9 @@ export function MealContextModal({
                 {energyOptions.map((option) => (
                   <Pressable
                     key={option}
+                    accessibilityRole="radio"
+                    accessibilityLabel={`Cook ${index + 1} energy: ${option === 'medium' ? 'Okay' : option}`}
+                    accessibilityState={{ checked: energy === option }}
                     onPress={() => {
                       const cooks = [...value.cooks];
                       cooks[index] = option;
@@ -64,9 +67,9 @@ function Counter({ label, value, onChange }: { label: string; value: number; onC
     <View style={styles.counterRow}>
       <Text style={styles.label}>{label}</Text>
       <View style={styles.counter}>
-        <Pressable onPress={() => onChange(value - 1)} style={styles.counterButton}><Text style={styles.counterButtonText}>−</Text></Pressable>
-        <Text style={styles.counterValue}>{value}</Text>
-        <Pressable onPress={() => onChange(value + 1)} style={styles.counterButton}><Text style={styles.counterButtonText}>+</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Decrease ${label}`} onPress={() => onChange(value - 1)} style={styles.counterButton}><Text style={styles.counterButtonText}>−</Text></Pressable>
+        <Text accessibilityLabel={`${label}: ${value}`} style={styles.counterValue}>{value}</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Increase ${label}`} onPress={() => onChange(value + 1)} style={styles.counterButton}><Text style={styles.counterButtonText}>+</Text></Pressable>
       </View>
     </View>
   );
