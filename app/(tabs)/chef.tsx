@@ -82,7 +82,7 @@ export default function ChefScreen() {
             <Text style={styles.title}>Chef</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable onPress={reset} style={styles.iconButton}><Text style={styles.iconText}>＋</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={reset} style={styles.newChatButton}><Text style={styles.newChatText}>New chat</Text></Pressable>
             <Pressable onPress={() => router.push('/settings')} style={styles.iconButton}><Text style={styles.iconText}>⚙</Text></Pressable>
           </View>
         </View>
@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   headerActions: { flexDirection: 'row', gap: 8 },
-  iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  newChatButton: { height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },\n  newChatText: { fontSize: 13, color: '#334155', fontWeight: '700' },\n  iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   iconText: { fontSize: 20, color: '#334155' },
   contextStrip: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 8, flexWrap: 'wrap' },
   contextChip: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#e2e8f0' },

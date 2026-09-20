@@ -35,6 +35,20 @@ For a local production-like GitHub Pages subpath build:
 EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web
 ```
 
+## GitHub Pages
+
+The production workflow builds the app at the project subpath `/creative-cooking` and deploys a PWA artifact.
+
+One repository setting must be enabled once by a repository administrator:
+
+1. Open **Settings → Pages**.
+2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Re-run **Deploy GitHub Pages** (or push any commit).
+
+After that, production is served from `https://0cwa.github.io/creative-cooking/`.
+
+The app manifest, 192/512 icons, service worker, and generated static navigation are all emitted with the correct project base path.
+
 ## Provider credentials
 
 No project-owned LLM secret is committed or bundled. Users connect their own OpenRouter account/key. Native builds store the key with Expo SecureStore. The web/PWA stores it in browser-local storage because browsers do not provide an equivalent native keychain.
