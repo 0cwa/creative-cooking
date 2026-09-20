@@ -38,7 +38,7 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] OpenRouter provider adapter with tool calling.
 - [x] Web/PWA OpenRouter OAuth PKCE and manual API key fallback.
 - [x] Chef tools: pantry add/remove/preference, recipe save, inline multiple choice question.
-- [ ] Streaming token rendering after core behavior is stable.
+- [x] Streaming token rendering with cancel support through the provider abstraction.
 - [ ] Additional direct BYOK provider adapters (Gemini, Mistral, OpenAI, Anthropic) behind the same interface.
 
 ## Phase 4 — saved recipes
@@ -62,12 +62,12 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 ## Phase 6 — quality and hardening
 
 - [ ] Unit tests for pantry parsing/grouping, tool payload validation, recipe persistence, and prompt compilation.
-- [x] CI verifies allergy-validator tests, TypeScript and the production static export; Gitleaks passes.
+- [x] CI verifies allergy/streaming tests, TypeScript and the production static export; Gitleaks passes.
 - [x] Inspect the generated Pages artifact for manifest, service worker, install icons, static routes, and correct `/creative-cooking` asset paths.
 - [ ] End-to-end smoke test for Pages PWA installation and offline pantry/recipe access.
 - [x] Deterministic post-generation allergy validation against structured recipe ingredients.
 - [ ] Accessibility pass: keyboard, screen reader labels, contrast, non-swipe deletion path.
-- [ ] Provider error/retry UX and rate-limit messaging.
+- [x] Provider error/retry UX and rate-limit messaging.
 - [x] Data export/import and explicit local-data reset.
 - [x] Request persistent browser storage and expose status/retry in Settings.
 - [x] Single-parameter OpenRouter friend links using short, explicitly non-secure obfuscation to avoid obvious token-prefix scraping.
