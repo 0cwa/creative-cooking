@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
+import { SettingsGlyph } from '@/components/SettingsGlyph';
 import { MealContextModal } from '@/components/MealContextModal';
 import { buildChefSystemPrompt } from '@/chef/context';
 import type { ChatMessage, IngredientPreference, UiQuestion } from '@/domain/types';
@@ -194,7 +195,7 @@ export default function ChefScreen() {
           </View>
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={reset} style={styles.newChatButton}><Text style={styles.newChatText}>New chat</Text></Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.iconButton}><Text style={styles.iconText}>⚙︎</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.iconButton}><SettingsGlyph /></Pressable>
           </View>
         </View>
 
@@ -318,7 +319,6 @@ const styles = StyleSheet.create({
   newChatButton: { height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
   newChatText: { fontSize: 13, color: '#334155', fontWeight: '700' },
   iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  iconText: { fontSize: 18, lineHeight: 18, color: '#334155', textAlign: 'center', includeFontPadding: false },
   contextStrip: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 8, flexWrap: 'wrap' },
   contextChip: { minHeight: 38, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   contextChipActive: { backgroundColor: '#14532d' },
