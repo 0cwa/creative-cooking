@@ -1,0 +1,10 @@
+title = "Creative Cooking gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Example placeholders only"
+paths = [
+  '''\.env\.example$'''
+]
