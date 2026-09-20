@@ -345,7 +345,15 @@ export const openRouterProvider: LlmProvider = {
 
     try {
       for (let round = 0; round < 5; round += 1) {
-        const assistant = await completion(apiKey, model, working, { signal, onTextDelta });
+        let roundTextStarted = false;
+        const assistant = await completion(apiKey, model, working, {
+          signal,
+          onTextDelta: (delta) => {
+            if (!roundTextStarted && collectedText) onTextDelta?.('\n\n');
+            roundTextStarted = true;
+            onTextDelta?.(delta);
+          }
+        });
         if (assistant.content) collectedText = [collectedText, assistant.content].filter(Boolean).join('\n\n');
         working.push(assistant);
 
