@@ -4,6 +4,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppStateProvider } from '@/state/AppState';
+import { FirstOpenLoadingAnimation } from '@/components/FirstOpenLoadingAnimation';
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
 import { requestPersistentStorageOnce } from '@/storage/persistence';
@@ -50,6 +51,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="settings" />
         </Stack>
+        <FirstOpenLoadingAnimation />
       </AppStateProvider>
     </SafeAreaProvider>
   );
