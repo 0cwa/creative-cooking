@@ -10,10 +10,11 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "node --experimental-strip-types --test src/domain/allergyValidation.test.mjs src/llm/openrouter/streaming.test.mjs",
+    "test": "node --experimental-strip-types --test src/domain/*.test.mjs src/chef/*.test.mjs src/storage/*.test.mjs src/llm/openrouter/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "build:web": "expo export -p web",
-    "check": "npm run test && npm run typecheck && npm run build:web"
+    "verify:pwa": "node scripts/verify-pwa.mjs",
+    "check": "npm run test && npm run typecheck && EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web && npm run verify:pwa"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
