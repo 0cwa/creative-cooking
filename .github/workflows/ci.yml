@@ -21,7 +21,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   verify:
-    name: Test, typecheck and web export
+    name: Test, typecheck and PWA export
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -33,3 +33,4 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web
+      - run: npm run verify:pwa
