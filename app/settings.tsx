@@ -219,8 +219,8 @@ export default function SettingsScreen() {
           <Pressable accessibilityRole="button" onPress={resetData} style={styles.textButton}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
         </Section>
 
-        <Section title="Chef system prompt" subtitle="Customize Chef’s style and priorities. Core tool and allergy rules are added by the app separately.">
-          <TextInput accessibilityLabel="Chef system prompt" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
+        <Section title="Master instructions" subtitle="Customize Chef’s style and priorities. Tool behavior, safety constraints, and app mechanics are managed separately and cannot be edited here.">
+          <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
         </Section>
 
         <Section title="Chef provider" subtitle="OpenRouter gives the app one login/API surface across many model providers.">
