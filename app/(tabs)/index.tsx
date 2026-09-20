@@ -60,6 +60,7 @@ export default function PantryScreen() {
         <View style={styles.composerRow}>
           <TextInput
             ref={inputRef}
+            accessibilityLabel="Ingredient name"
             value={input}
             onChangeText={setInput}
             onSubmitEditing={add}
@@ -70,7 +71,7 @@ export default function PantryScreen() {
             style={styles.input}
             multiline={false}
           />
-          <Pressable accessibilityRole="button" accessibilityLabel="Add ingredient" onPress={add} style={styles.addButton}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Add ingredient" accessibilityState={{ disabled: !input.trim() }} disabled={!input.trim()} onPress={add} style={[styles.addButton, !input.trim() && styles.addButtonDisabled]}>
             <Text style={styles.addButtonText}>Add</Text>
           </Pressable>
         </View>
@@ -88,9 +89,10 @@ const styles = StyleSheet.create({
   listWrap: { flex: 1 },
   composer: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12, gap: 8 },
   composerHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 17, textAlign: 'center' },
-  composerRow: { flexDirection: 'row', gap: 9, alignItems: 'center' },
-  input: { flex: 1, height: 44, borderRadius: 13, backgroundColor: '#f1f5f9', color: '#172033', paddingHorizontal: 13, fontSize: 16 },
-  addButton: { minWidth: 68, height: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  composerRow: { flexDirection: 'row', gap: 9, alignItems: 'center', flexWrap: 'wrap' },
+  input: { flex: 1, minWidth: 160, minHeight: 44, borderRadius: 13, backgroundColor: '#f1f5f9', color: '#172033', paddingHorizontal: 13, paddingVertical: 10, fontSize: 16 },
+  addButton: { minWidth: 68, minHeight: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  addButtonDisabled: { opacity: 0.4 },
   addButtonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
   empty: { alignItems: 'center', paddingHorizontal: 38, paddingTop: 64 },
   emptyEmoji: { fontSize: 44 },

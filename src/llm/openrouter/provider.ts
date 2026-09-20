@@ -1,6 +1,13 @@
 import { CHEF_TOOLS } from '@/chef/tools';
+import {
+  pantryNamesFromToolArgs,
+  parseToolArguments,
+  preferenceFromToolValue,
+  questionFromToolArgs,
+  recipeFromToolArgs
+} from '@/chef/toolPayload';
 import { RecipeAllergyError } from '@/domain/allergyValidation';
-import type { IngredientPreference, Recipe, UiQuestion } from '@/domain/types';
+import type { UiQuestion } from '@/domain/types';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
 import { OpenRouterStreamAccumulator, SseDataParser } from './streaming';
@@ -25,27 +32,13 @@ type OpenRouterStreamError = {
   };
 };
 
-function parseArgs(raw: string): Record<string, unknown> {
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-function asPreference(value: unknown): IngredientPreference {
-  const numeric = Number(value);
-  if (numeric >= 1 && numeric <= 5) return numeric as IngredientPreference;
-  return 3;
-}
-
 function executeTool(call: OpenRouterToolCall, tools: ToolExecutor): { result: string; question?: UiQuestion } {
-  const args = parseArgs(call.function.arguments);
+  const args = parseToolArguments(call.function.arguments);
 
   switch (call.function.name) {
     case 'pantry_add': {
-      const names = Array.isArray(args.names) ? args.names.filter((x): x is string => typeof x === 'string') : [];
-      tools.addPantry(names, asPreference(args.preference));
+      const names = pantryNamesFromToolArgs(args);
+      tools.addPantry(names, preferenceFromToolValue(args.preference));
       return { result: JSON.stringify({ ok: true, added: names }) };
     }
     case 'pantry_remove': {
@@ -55,34 +48,12 @@ function executeTool(call: OpenRouterToolCall, tools: ToolExecutor): { result: s
     }
     case 'pantry_set_preference': {
       const name = typeof args.name === 'string' ? args.name : '';
-      const updated = tools.setPantryPreference(name, asPreference(args.preference));
+      const updated = tools.setPantryPreference(name, preferenceFromToolValue(args.preference));
       return { result: JSON.stringify({ ok: updated, name }) };
     }
     case 'recipe_save': {
-      const title = typeof args.title === 'string' ? args.title.trim() : 'Untitled recipe';
-      const portions = Math.max(1, Number(args.portions) || 2);
-      const ingredients = Array.isArray(args.ingredients)
-        ? args.ingredients
-            .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-            .map((item) => ({
-              name: typeof item.name === 'string' ? item.name : '',
-              amount: typeof item.amount === 'string' ? item.amount : undefined,
-              needsShopping: typeof item.needsShopping === 'boolean' ? item.needsShopping : undefined
-            }))
-            .filter((item) => item.name)
-        : [];
-      const steps = Array.isArray(args.steps) ? args.steps.filter((x): x is string => typeof x === 'string') : [];
-      const notes = Array.isArray(args.notes) ? args.notes.filter((x): x is string => typeof x === 'string') : undefined;
-
       try {
-        const recipe = tools.saveRecipe({
-          title,
-          description: typeof args.description === 'string' ? args.description : undefined,
-          portions,
-          ingredients,
-          steps,
-          notes
-        } as Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>);
+        const recipe = tools.saveRecipe(recipeFromToolArgs(args));
         return { result: JSON.stringify({ ok: true, recipeId: recipe.id }) };
       } catch (error) {
         if (error instanceof RecipeAllergyError) {
@@ -99,15 +70,9 @@ function executeTool(call: OpenRouterToolCall, tools: ToolExecutor): { result: s
       }
     }
     case 'ask_user': {
-      const prompt = typeof args.prompt === 'string' ? args.prompt : 'Which option do you prefer?';
-      const options = Array.isArray(args.options) ? args.options.filter((x): x is string => typeof x === 'string').slice(0, 5) : [];
       return {
         result: JSON.stringify({ awaiting_user: true }),
-        question: {
-          id: call.id,
-          prompt,
-          options: options.length >= 2 ? options : ['First option', 'Second option']
-        }
+        question: questionFromToolArgs(args, call.id)
       };
     }
     default:

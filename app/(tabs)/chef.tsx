@@ -200,12 +200,15 @@ export default function ChefScreen() {
 
         <View style={styles.contextStrip}>
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={app.mealContext.willingToShop ? 'Shopping allowed' : 'Pantry only'}
+            accessibilityState={{ selected: app.mealContext.willingToShop }}
             onPress={() => app.updateMealContext({ willingToShop: !app.mealContext.willingToShop })}
             style={[styles.contextChip, app.mealContext.willingToShop && styles.contextChipActive]}
           >
             <Text style={[styles.contextChipText, app.mealContext.willingToShop && styles.contextChipTextActive]}>🛒 {app.mealContext.willingToShop ? 'Can shop' : 'Pantry only'}</Text>
           </Pressable>
-          <Pressable onPress={() => setContextOpen(true)} style={styles.contextChip}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Edit meal context, ${app.mealContext.portions} portions, ${app.mealContext.cooks.length} cooks`} onPress={() => setContextOpen(true)} style={styles.contextChip}>
             <Text style={styles.contextChipText}>{app.mealContext.portions} portions · {app.mealContext.cooks.length} cook{app.mealContext.cooks.length === 1 ? '' : 's'}</Text>
           </Pressable>
         </View>
@@ -224,7 +227,7 @@ export default function ChefScreen() {
             </View>
           ))}
           {busy && (
-            <View style={[styles.bubble, styles.chefBubble]}>
+            <View accessibilityLiveRegion="polite" style={[styles.bubble, styles.chefBubble]}>
               <Text style={streamingText ? styles.bubbleText : styles.typing}>{streamingText || 'Chef is thinking…'}</Text>
             </View>
           )}
@@ -234,7 +237,7 @@ export default function ChefScreen() {
             </View>
           ) : null}
           {runError && errorUi && (
-            <View style={styles.errorCard}>
+            <View accessibilityLiveRegion="polite" style={styles.errorCard}>
               <Text style={styles.errorTitle}>{errorUi.title}</Text>
               <Text style={styles.errorText}>{errorUi.message}</Text>
               <View style={styles.errorActions}>
@@ -256,7 +259,7 @@ export default function ChefScreen() {
               <Text style={styles.questionTitle}>{question.prompt}</Text>
               <View style={styles.questionOptions}>
                 {question.options.map((option) => (
-                  <Pressable key={option} onPress={() => void send(`For your question “${question.prompt}”, I choose: ${option}`)} style={styles.questionOption}>
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Choose ${option}`} key={option} onPress={() => void send(`For your question “${question.prompt}”, I choose: ${option}`)} style={styles.questionOption}>
                     <Text style={styles.questionOptionText}>{option}</Text>
                   </Pressable>
                 ))}
@@ -266,8 +269,9 @@ export default function ChefScreen() {
         </ScrollView>
 
         <View style={styles.composerWrap}>
-          <Pressable onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>
           <TextInput
+            accessibilityLabel="Message Chef"
             value={input}
             onChangeText={setInput}
             placeholder="Type or dictate to Chef…"
@@ -345,10 +349,10 @@ const styles = StyleSheet.create({
   questionOptions: { gap: 8 },
   questionOption: { minHeight: 44, backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: '#fed7aa', justifyContent: 'center' },
   questionOptionText: { color: '#9a3412', fontWeight: '600' },
-  composerWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white' },
+  composerWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', flexWrap: 'wrap' },
   plus: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   plusText: { fontSize: 24, color: '#475569' },
-  composer: { flex: 1, maxHeight: 120, minHeight: 42, borderRadius: 18, backgroundColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10, color: '#172033', fontSize: 15.5 },
+  composer: { flex: 1, minWidth: 140, maxHeight: 160, minHeight: 42, borderRadius: 18, backgroundColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10, color: '#172033', fontSize: 15.5 },
   send: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
   sendDisabled: { opacity: 0.35 },
   sendGlyph: { width: 18, height: 20, position: 'relative' },

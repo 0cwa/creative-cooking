@@ -9,6 +9,8 @@ export function StarRating({ value, onChange }: { value: IngredientPreference; o
           key={star}
           accessibilityRole="button"
           accessibilityLabel={`Set preference to ${star} out of 5`}
+          accessibilityState={{ selected: star === value }}
+          accessibilityHint="Sets how much you want to eat this ingredient"
           hitSlop={6}
           onPress={() => onChange(star as IngredientPreference)}
           style={styles.button}
@@ -21,7 +23,7 @@ export function StarRating({ value, onChange }: { value: IngredientPreference; o
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center' },
+  row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
   button: { paddingHorizontal: 2, paddingVertical: 4 },
   star: { fontSize: 20 },
   active: { color: '#d97706' },

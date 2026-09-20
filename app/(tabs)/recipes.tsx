@@ -15,20 +15,20 @@ export default function RecipesScreen() {
     <Screen>
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
-        <Pressable onPress={() => router.push('/settings')} style={styles.settings}><Text style={styles.settingsText}>⚙︎</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><Text style={styles.settingsText}>⚙︎</Text></Pressable>
       </View>
 
       <FlashList
         data={recipes}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <Pressable onPress={() => setSelected(item)} style={styles.card}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Open recipe ${item.title}`} onPress={() => setSelected(item)} style={styles.card}>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>{item.title}</Text>
               {!!item.description && <Text numberOfLines={2} style={styles.cardDescription}>{item.description}</Text>}
               <Text style={styles.cardMeta}>{item.portions} portions · {item.ingredients.length} ingredients</Text>
             </View>
-            <Text style={styles.chevron}>›</Text>
+            <Text accessible={false} style={styles.chevron}>›</Text>
           </Pressable>
         )}
         ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyEmoji}>📖</Text><Text style={styles.emptyTitle}>No saved recipes yet</Text><Text style={styles.emptyText}>Ask Chef to save one when you find something worth making again.</Text></View>}
@@ -37,10 +37,10 @@ export default function RecipesScreen() {
 
       <Modal visible={Boolean(selected)} animationType="slide" onRequestClose={() => setSelected(null)}>
         {selected && (
-          <ScrollView contentContainerStyle={styles.recipeDetail}>
+          <ScrollView accessibilityViewIsModal contentContainerStyle={styles.recipeDetail}>
             <View style={styles.detailHeader}>
-              <Pressable onPress={() => setSelected(null)}><Text style={styles.close}>Close</Text></Pressable>
-              <Pressable onPress={() => { deleteRecipe(selected.id); setSelected(null); }}><Text style={styles.delete}>Delete</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close recipe" onPress={() => setSelected(null)} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Delete recipe ${selected.title}`} onPress={() => { deleteRecipe(selected.id); setSelected(null); }} style={styles.detailAction}><Text style={styles.delete}>Delete</Text></Pressable>
             </View>
             <Text style={styles.detailTitle}>{selected.title}</Text>
             {!!selected.description && <Text style={styles.detailDescription}>{selected.description}</Text>}
@@ -64,7 +64,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 32, lineHeight: 38, fontWeight: '800', color: '#172033' },
   settings: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   settingsText: { fontSize: 18, lineHeight: 18, textAlign: 'center', includeFontPadding: false },
-  card: { marginHorizontal: 16, marginVertical: 6, padding: 17, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 12 },
+  card: { marginHorizontal: 16, marginVertical: 6, padding: 17, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72 },
   cardTitle: { color: '#172033', fontWeight: '700', fontSize: 18 },
   cardDescription: { color: '#64748b', marginTop: 5, lineHeight: 19 },
   cardMeta: { color: '#94a3b8', fontSize: 12, marginTop: 8, fontWeight: '600' },
@@ -74,7 +74,8 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#334155', marginTop: 13 },
   emptyText: { textAlign: 'center', color: '#64748b', lineHeight: 21, marginTop: 8 },
   recipeDetail: { padding: 22, paddingBottom: 60, maxWidth: 760, width: '100%', alignSelf: 'center' },
-  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 28 },
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 28, gap: 12, flexWrap: 'wrap' },
+  detailAction: { minHeight: 44, minWidth: 64, justifyContent: 'center' },
   close: { color: '#334155', fontWeight: '700' },
   delete: { color: '#b91c1c', fontWeight: '700' },
   detailTitle: { fontSize: 34, fontWeight: '800', color: '#172033' },
