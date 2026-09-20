@@ -61,12 +61,12 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 
 ## Phase 6 — quality and hardening
 
-- [ ] Unit tests for pantry parsing/grouping, tool payload validation, recipe persistence, and prompt compilation.
-- [x] CI verifies allergy/streaming tests, TypeScript and the production static export; Gitleaks passes.
-- [x] Inspect the generated Pages artifact for manifest, service worker, install icons, static routes, and correct `/creative-cooking` asset paths.
-- [ ] End-to-end smoke test for Pages PWA installation and offline pantry/recipe access.
+- [x] Unit tests for pantry parsing/grouping, tool payload validation, backup migration/round-trips, share payload round-trips, allergy validation, streaming, and prompt compilation.
+- [x] CI verifies core unit tests, TypeScript, the production PWA artifact, an offline Chromium smoke, and Gitleaks.
+- [x] Automatically inspect the generated Pages artifact for manifest, service worker, install icons, static routes, and correct `/creative-cooking` asset paths.
+- [x] End-to-end Chromium smoke for the Pages base path and offline Pantry/Recipes reload with persisted local data.
 - [x] Deterministic post-generation allergy validation against structured recipe ingredients.
-- [ ] Accessibility pass: keyboard, screen reader labels, contrast, non-swipe deletion path.
+- [x] Accessibility pass: keyboard/screen-reader labels and states, visible non-swipe deletion, large-text wrapping, plus a repeatable release checklist.
 - [x] Provider error/retry UX and rate-limit messaging.
 - [x] Data export/import and explicit local-data reset.
 - [x] Request persistent browser storage and expose status/retry in Settings.
