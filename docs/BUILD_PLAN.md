@@ -70,4 +70,5 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] Provider error/retry UX and rate-limit messaging.
 - [x] Data export/import and explicit local-data reset.
 - [x] Request persistent browser storage and expose status/retry in Settings.
+- [x] Migrate web/PWA app state from localStorage-backed AsyncStorage to IndexedDB with idempotent migration and visible write-failure recovery.
 - [x] Single-parameter OpenRouter friend links using short, explicitly non-secure obfuscation to avoid obvious token-prefix scraping.
