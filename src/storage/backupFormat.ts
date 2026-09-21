@@ -1,3 +1,4 @@
+import { isProviderId } from '../domain/types';
 import type { AppSettings, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
 
 type BackupEnvelope = {
@@ -45,6 +46,9 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
+    providerId: isProviderId(settingsRecord.providerId)
+      ? settingsRecord.providerId
+      : defaults.settings.providerId,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]
