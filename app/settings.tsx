@@ -121,7 +121,7 @@ export default function SettingsScreen() {
       if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
       await navigator.clipboard.writeText(shareLink);
     } else {
-      await Clipboard.setStringAsync(shareLink, { android: { isSensitive: true } });
+      await Clipboard.setStringAsync(shareLink);
     }
 
     Alert.alert('Copied', 'Share link copied to the clipboard.');
