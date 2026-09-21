@@ -52,6 +52,22 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   page.once('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: 'Add checked to Pantry' }).click();
 
+  await expect.poll(async () => page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('creative-cooking', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const transaction = database.transaction('app-state', 'readonly');
+      const request = transaction.objectStore('app-state').get('creative-cooking-state-v1');
+      request.onsuccess = () => resolve(request.result ?? '');
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return raw;
+  })).toContain('Bright lentil bowl');
+
   await page.getByLabel('Close recipe').click();
   await page.goto('./');
   await expect(page.getByText('lemon', { exact: true })).toBeVisible();
