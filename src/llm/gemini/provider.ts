@@ -17,8 +17,8 @@ type GeminiFunctionResponse = {
 };
 
 type GeminiPart =
-  | { text: string }
-  | { functionCall: GeminiFunctionCall }
+  | { text: string; thoughtSignature?: string }
+  | { functionCall: GeminiFunctionCall; thoughtSignature?: string }
   | { functionResponse: GeminiFunctionResponse };
 
 type GeminiContent = {
@@ -117,8 +117,35 @@ async function generateOnce(
   }
 
   const parser = new SseDataParser();
-  let text = '';
-  const calls: GeminiFunctionCall[] = [];
+  const assembledParts: GeminiPart[] = [];
+
+  const appendTextPart = (text: string, thoughtSignature?: string) => {
+    if (!text && !thoughtSignature) return;
+    const previous = assembledParts.at(-1);
+    if ('text' in (previous ?? {}) && !thoughtSignature && !(previous as { thoughtSignature?: string }).thoughtSignature) {
+      (previous as { text: string }).text += text;
+    } else {
+      assembledParts.push({ text, ...(thoughtSignature ? { thoughtSignature } : {}) });
+    }
+    if (text) options.onTextDelta?.(text);
+  };
+
+  const appendFunctionCallPart = (rawPart: any) => {
+    const call = rawPart.functionCall as GeminiFunctionCall;
+    const identity = call.id || JSON.stringify([call.name, call.args ?? {}]);
+    const existing = assembledParts.find((part) => (
+      'functionCall' in part
+      && (part.functionCall.id || JSON.stringify([part.functionCall.name, part.functionCall.args ?? {}])) === identity
+    ));
+    if (existing && 'functionCall' in existing) {
+      if (rawPart.thoughtSignature && !existing.thoughtSignature) existing.thoughtSignature = rawPart.thoughtSignature;
+      return;
+    }
+    assembledParts.push({
+      functionCall: call,
+      ...(typeof rawPart.thoughtSignature === 'string' ? { thoughtSignature: rawPart.thoughtSignature } : {})
+    });
+  };
 
   const consume = (event: string) => {
     let payload: any;
@@ -134,16 +161,14 @@ async function generateOnce(
     if (!Array.isArray(parts)) return;
 
     for (const part of parts) {
-      if (typeof part?.text === 'string' && part.text) {
-        text += part.text;
-        options.onTextDelta?.(part.text);
+      if (typeof part?.text === 'string') {
+        appendTextPart(
+          part.text,
+          typeof part.thoughtSignature === 'string' ? part.thoughtSignature : undefined
+        );
       }
       if (part?.functionCall && typeof part.functionCall.name === 'string') {
-        const raw = part.functionCall as GeminiFunctionCall;
-        const signature = JSON.stringify([raw.id ?? '', raw.name, raw.args ?? {}]);
-        if (!calls.some((call) => JSON.stringify([call.id ?? '', call.name, call.args ?? {}]) === signature)) {
-          calls.push(raw);
-        }
+        appendFunctionCallPart(part);
       }
     }
   };
@@ -169,14 +194,11 @@ async function generateOnce(
     throw normalizeLlmError(error);
   }
 
-  const parts: GeminiPart[] = [];
-  if (text) parts.push({ text });
-  for (const call of calls) parts.push({ functionCall: call });
-  if (!parts.length) {
+  if (!assembledParts.length) {
     throw new LlmRequestError('Gemini returned no message.', { kind: 'provider', retryable: true });
   }
 
-  return { role: 'model', parts };
+  return { role: 'model', parts: assembledParts };
 }
 
 async function generate(
