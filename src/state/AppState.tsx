@@ -178,8 +178,18 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, [state.settings.allergies]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
-    if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+    const existing = state.recipes.find((recipe) => recipe.id === id);
+    const ingredientNamesChanged = !existing
+      || existing.ingredients.length !== input.ingredients.length
+      || existing.ingredients.some((ingredient, index) => (
+        normalizeIngredientName(ingredient.name).toLocaleLowerCase()
+        !== normalizeIngredientName(input.ingredients[index]?.name ?? '').toLocaleLowerCase()
+      ));
+
+    if (ingredientNamesChanged) {
+      const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
+      if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+    }
 
     setState((current) => ({
       ...current,
@@ -189,7 +199,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
           : recipe
       ))
     }));
-  }, [state.settings.allergies]);
+  }, [state.recipes, state.settings.allergies]);
 
   const deleteRecipe = useCallback((id: string) => {
     setState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
