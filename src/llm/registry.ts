@@ -1,4 +1,4 @@
-import type { ProviderId } from '@/domain/types';
+import { PROVIDER_IDS as DOMAIN_PROVIDER_IDS, type ProviderId } from '@/domain/types';
 
 export type CapabilitySupport = boolean | 'unknown';
 
@@ -126,7 +126,7 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
   }
 };
 
-export const PROVIDER_IDS = Object.keys(PROVIDER_REGISTRY) as ProviderId[];
+export const PROVIDER_IDS = [...DOMAIN_PROVIDER_IDS];
 
 export function providerMetadata(providerId: ProviderId): ProviderMetadata {
   return PROVIDER_REGISTRY[providerId];
