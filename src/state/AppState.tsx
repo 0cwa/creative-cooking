@@ -37,6 +37,7 @@ type AppStateApi = PersistedState & {
   setPantryPreference(id: string, preference: IngredientPreference): void;
   setPantryPreferenceByName(name: string, preference: IngredientPreference): boolean;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
+  updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
   setChatMessages(messages: ChatMessage[]): void;
   appendChatMessage(message: ChatMessage): void;
@@ -176,6 +177,30 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     return recipe;
   }, [state.settings.allergies]);
 
+  const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const existing = state.recipes.find((recipe) => recipe.id === id);
+    const ingredientNamesChanged = !existing
+      || existing.ingredients.length !== input.ingredients.length
+      || existing.ingredients.some((ingredient, index) => (
+        normalizeIngredientName(ingredient.name).toLocaleLowerCase()
+        !== normalizeIngredientName(input.ingredients[index]?.name ?? '').toLocaleLowerCase()
+      ));
+
+    if (ingredientNamesChanged) {
+      const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
+      if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+    }
+
+    setState((current) => ({
+      ...current,
+      recipes: current.recipes.map((recipe) => (
+        recipe.id === id
+          ? { ...recipe, ...input, updatedAt: new Date().toISOString() }
+          : recipe
+      ))
+    }));
+  }, [state.recipes, state.settings.allergies]);
+
   const deleteRecipe = useCallback((id: string) => {
     setState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
   }, []);
@@ -224,6 +249,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       setPantryPreference,
       setPantryPreferenceByName,
       saveRecipe,
+      updateRecipe,
       deleteRecipe,
       setChatMessages,
       appendChatMessage,
@@ -244,6 +270,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       setPantryPreference,
       setPantryPreferenceByName,
       saveRecipe,
+      updateRecipe,
       deleteRecipe,
       setChatMessages,
       appendChatMessage,
