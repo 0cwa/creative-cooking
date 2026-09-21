@@ -52,9 +52,10 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 
 ## Phase 5 — local-model experiments
 
-- [ ] Add a capability registry for local inference.
-- [ ] PWA: WebLLM adapter behind an explicit Experimental setting and WebGPU/storage checks.
+- [x] Add a capability registry for local inference.
+- [x] PWA: WebLLM adapter behind an explicit Experimental setting and WebGPU/storage checks.
 - [ ] Use worker/service-worker model lifecycle with recovery after browser worker eviction.
+- [x] Require explicit local-model download, expose cache/download/cancel/delete controls, and fail closed when the cached model is missing.
 - [ ] Native: prototype Gemma 4 E2B-class models via LiteRT-LM and/or MLC runtime.
 - [ ] Implement small-model pipeline: deterministic context compiler → low-temperature planner → creative candidate generator → deterministic allergy/constraint validator → presenter.
 - [ ] Benchmark tool adherence, latency, peak RAM, battery usage, and recipe quality on representative phones before promoting local mode.

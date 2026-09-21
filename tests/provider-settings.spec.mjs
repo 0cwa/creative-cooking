@@ -58,3 +58,32 @@ test('OpenRouter friend links activate OpenRouter after persisted provider setti
     window.localStorage.getItem('creative-cooking-openrouter-key') ?? ''
   ))).toMatch(/^sk-or-v1-/);
 });
+
+
+test('local Chef requires an explicit cached model before it can be selected', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: { requestAdapter: async () => ({}) }
+    });
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        estimate: async () => ({ usage: 0, quota: 3 * 1024 * 1024 * 1024 }),
+        persisted: async () => true
+      }
+    });
+  });
+
+  await page.goto('./settings');
+
+  await expect(page.getByText('WebGPU', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Not downloaded', { exact: true })).toBeVisible();
+
+  const download = page.getByLabel('Download local model');
+  await expect(download).toBeEnabled();
+  await expect(page.getByLabel('Use experimental local Chef')).toBeDisabled();
+
+  await expect(page.getByText(/will not start a hidden download/i)).toBeVisible();
+});
