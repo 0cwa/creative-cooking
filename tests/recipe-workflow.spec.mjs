@@ -41,7 +41,7 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   await page.getByLabel('Increase portions').click();
   await expect(page.getByLabel('3 portions')).toBeVisible();
   await expect(page.getByText(/1 1\/2 cup lentils/)).toBeVisible();
-  await expect(page.getByText(/3\/4 lemon/)).toBeVisible();
+  await expect(page.getByText(/3\/4 lemon/).first()).toBeVisible();
 
   await page.getByLabel('Edit recipe Lentil bowl').click();
   await page.getByLabel('Recipe title').fill('Bright lentil bowl');
@@ -63,5 +63,6 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();
+  await page.getByLabel('Open recipe Bright lentil bowl').click();
   await expect(page.getByLabel('3 portions')).toBeVisible();
 });
