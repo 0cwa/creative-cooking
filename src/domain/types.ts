@@ -1,5 +1,7 @@
 export type IngredientPreference = 1 | 2 | 3 | 4 | 5;
 
+export type ProviderId = 'openrouter' | 'openai' | 'anthropic' | 'gemini' | 'mistral';
+
 export type PantryItem = {
   id: string;
   name: string;
@@ -46,7 +48,7 @@ export type AppSettings = {
   allergies: string[];
   sendLocalTime: boolean;
   city: string;
-  providerId: 'openrouter';
+  providerId: ProviderId;
   model: string;
 };
 
