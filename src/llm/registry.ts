@@ -1,4 +1,4 @@
-import { PROVIDER_IDS as DOMAIN_PROVIDER_IDS, type ProviderId } from '@/domain/types';
+import { PROVIDER_IDS as DOMAIN_PROVIDER_IDS, type ProviderId } from '../domain/types.ts';
 
 export type CapabilitySupport = boolean | 'unknown';
 
