@@ -2,7 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
-import { isProviderId, type AppSettings,
+import { isProviderId } from '@/domain/types';
+import type {
+  AppSettings,
   ChatMessage,
   CookEnergy,
   IngredientPreference,
