@@ -5,42 +5,14 @@ import type {
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import type { ChefRunResult, LlmProvider } from '@/llm/types';
 import { getLocalInferenceCapabilities } from './capabilities';
+import { isLocalModelCached } from './modelCache';
+import { ensureWebLlmEngine, resetWebLlmEngine } from './runtime';
 
-let worker: Worker | null = null;
-let enginePromise: Promise<MLCEngineInterface> | null = null;
-let loadedModel: string | null = null;
-
-function resetEngine(): void {
-  worker?.terminate();
-  worker = null;
-  enginePromise = null;
-  loadedModel = null;
-}
-
-async function getEngine(model: string, onStatus?: (status: string) => void): Promise<MLCEngineInterface> {
-  if (enginePromise && loadedModel === model) return enginePromise;
-
-  resetEngine();
-  loadedModel = model;
-
-  enginePromise = (async () => {
-    const webllm = await import('@mlc-ai/web-llm');
-    worker = new Worker(new URL('./webllm.worker', window.location.href));
-
-    return webllm.CreateWebWorkerMLCEngine(worker, model, {
-      initProgressCallback: (report) => {
-        onStatus?.(report.text || `Loading local model… ${Math.round(report.progress * 100)}%`);
-      },
-      logLevel: 'WARN'
-    });
-  })();
-
-  try {
-    return await enginePromise;
-  } catch (error) {
-    resetEngine();
-    throw error;
-  }
+function missingCacheError(): LlmRequestError {
+  return new LlmRequestError(
+    'The local model is not downloaded on this device. Open Settings → Local models to download it before using local Chef.',
+    { kind: 'model_unavailable' }
+  );
 }
 
 export const webLlmProvider: LlmProvider = {
@@ -52,29 +24,31 @@ export const webLlmProvider: LlmProvider = {
       throw new LlmRequestError(capability.reasons.join(' '), { kind: 'model_unavailable' });
     }
 
+    if (!(await isLocalModelCached(model))) {
+      throw missingCacheError();
+    }
+
     if (signal?.aborted) {
       throw new LlmRequestError('The request was cancelled.', { kind: 'cancelled' });
     }
 
-    onStatus?.('Preparing local model…');
+    onStatus?.('Opening downloaded local model…');
 
     let engine: MLCEngineInterface;
-    const onAbortDuringLoad = () => {
-      resetEngine();
-    };
-    signal?.addEventListener('abort', onAbortDuringLoad, { once: true });
     try {
-      engine = await getEngine(model, onStatus);
+      engine = await ensureWebLlmEngine(model, onStatus, signal);
     } catch (error) {
       if (signal?.aborted) {
         throw new LlmRequestError('The request was cancelled.', { kind: 'cancelled' });
       }
+
+      const stillCached = await isLocalModelCached(model).catch(() => false);
+      if (!stillCached) throw missingCacheError();
+
       throw new LlmRequestError(
-        error instanceof Error ? error.message : 'The local model could not be loaded.',
+        error instanceof Error ? error.message : 'The downloaded local model could not be opened.',
         { kind: 'provider', retryable: true }
       );
-    } finally {
-      signal?.removeEventListener('abort', onAbortDuringLoad);
     }
 
     if (signal?.aborted) {
@@ -118,7 +92,7 @@ export const webLlmProvider: LlmProvider = {
         throw new LlmRequestError('The request was cancelled.', { kind: 'cancelled' });
       }
 
-      resetEngine();
+      resetWebLlmEngine();
       throw normalizeLlmError(error);
     } finally {
       signal?.removeEventListener('abort', onAbort);
