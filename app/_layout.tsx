@@ -1,13 +1,33 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { AppStateProvider } from '@/state/AppState';
+import { AppStateProvider, useAppState } from '@/state/AppState';
 import { FirstOpenLoadingAnimation } from '@/components/FirstOpenLoadingAnimation';
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
 import { requestPersistentStorageOnce } from '@/storage/persistence';
+
+function StorageFailureAlert() {
+  const { storageError } = useAppState();
+  const shownError = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!storageError) {
+      shownError.current = null;
+      return;
+    }
+    if (shownError.current === storageError) return;
+    shownError.current = storageError;
+    Alert.alert(
+      'Local data is not being saved',
+      `${storageError}\n\nYour current changes remain open in this session. Open Settings → Data & Storage to retry or export a backup.`
+    );
+  }, [storageError]);
+
+  return null;
+}
 
 function BootTasks() {
   useEffect(() => {
@@ -46,6 +66,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AppStateProvider>
         <BootTasks />
+        <StorageFailureAlert />
         <StatusBar style="auto" />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
