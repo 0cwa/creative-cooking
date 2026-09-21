@@ -47,8 +47,8 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] Saved-recipe list and recipe detail view.
 - [x] Delete saved recipe.
 - [x] Chef can save recipes through a typed tool call.
-- [ ] Add recipe editing and portion scaling.
-- [ ] Add shopping-list generation from saved recipes.
+- [x] Add recipe editing and portion scaling.
+- [x] Add shopping-list generation from saved recipes.
 
 ## Phase 5 — local-model experiments
 
