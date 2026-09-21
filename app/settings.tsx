@@ -445,6 +445,9 @@ export default function SettingsScreen() {
             <Text style={styles.help}>Model: {WEBLLM_MODEL_ID}</Text>
             <Text style={styles.help}>Estimated model VRAM requirement: about {Math.round(WEBLLM_MODEL_VRAM_MB)} MB. At least 1.5 GB of free browser storage is recommended before the first download.</Text>
             <Text style={styles.warning}>Experimental local mode is text-only for now. It cannot change Pantry or save recipes until the deterministic local tool pipeline is finished and benchmarked.</Text>
+            {app.settings.allergies.length > 0 && (
+              <Text style={styles.warning}>Local Chef is disabled while allergies are configured. Deterministic local allergy validation is not finished yet.</Text>
+            )}
           </View>
 
           {localCapability ? (
@@ -483,13 +486,13 @@ export default function SettingsScreen() {
                   accessibilityLabel="Use experimental local Chef"
                   accessibilityState={{
                     selected: app.settings.providerId === 'webllm',
-                    disabled: !localCapability.available
+                    disabled: !localCapability.available || app.settings.allergies.length > 0
                   }}
-                  disabled={!localCapability.available}
+                  disabled={!localCapability.available || app.settings.allergies.length > 0}
                   onPress={() => selectProvider('webllm')}
                   style={[
                     styles.primaryButton,
-                    !localCapability.available && styles.disabledButton
+                    (!localCapability.available || app.settings.allergies.length > 0) && styles.disabledButton
                   ]}
                 >
                   <Text style={styles.primaryButtonText}>
