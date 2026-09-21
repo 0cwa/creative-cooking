@@ -23,5 +23,6 @@ export type LlmProvider = {
     tools?: ToolExecutor;
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
+    onStatus?: (status: string) => void;
   }): Promise<ChefRunResult>;
 };
