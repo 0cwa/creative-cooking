@@ -60,7 +60,9 @@ test('backup parsing sanitizes unknown provider IDs while preserving known direc
     exportedAt: '2026-09-21T12:00:00.000Z',
     state: { settings: { providerId: 'future-provider', model: 'future-model' } }
   });
-  assert.equal(parseBackupEnvelope(unknown, defaults).settings.providerId, 'openrouter');
+  const unknownRestored = parseBackupEnvelope(unknown, defaults);
+  assert.equal(unknownRestored.settings.providerId, 'openrouter');
+  assert.equal(unknownRestored.settings.model, 'openrouter/free');
 
   const known = JSON.stringify({
     format: 'creative-cooking-backup',
@@ -71,6 +73,19 @@ test('backup parsing sanitizes unknown provider IDs while preserving known direc
   const restored = parseBackupEnvelope(known, defaults);
   assert.equal(restored.settings.providerId, 'gemini');
   assert.equal(restored.settings.model, 'gemini-3.8-flash');
+});
+
+test('legacy backups without providerId preserve their OpenRouter model', () => {
+  const raw = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-21T12:00:00.000Z',
+    state: { settings: { model: 'openai/gpt-oss-120b:free' } }
+  });
+
+  const restored = parseBackupEnvelope(raw, defaults);
+  assert.equal(restored.settings.providerId, 'openrouter');
+  assert.equal(restored.settings.model, 'openai/gpt-oss-120b:free');
 });
 
 test('unsupported backup formats fail closed', () => {
