@@ -8,7 +8,7 @@ import {
 } from './registry.ts';
 
 test('registry exposes every supported cloud provider with a default model', () => {
-  assert.deepEqual(PROVIDER_IDS, ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral']);
+  assert.deepEqual(PROVIDER_IDS, ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral', 'webllm']);
   for (const id of PROVIDER_IDS) {
     assert.equal(providerMetadata(id).id, id);
     assert.ok(providerMetadata(id).defaultModel);
@@ -19,6 +19,14 @@ test('known model capability metadata is explicit', () => {
   assert.equal(modelCapabilities('openai', 'gpt-5.6-terra').toolCalling, true);
   assert.equal(modelCapabilities('gemini', 'gemini-3.8-flash').freeTier, true);
   assert.equal(modelCapabilities('anthropic', 'claude-sonnet-5').location, 'cloud');
+});
+
+test('experimental local provider is credential-free and text-only', () => {
+  const local = providerMetadata('webllm');
+  assert.equal(local.credentialRequired, false);
+  assert.equal(local.experimental, true);
+  assert.equal(modelCapabilities('webllm', local.defaultModel).toolCalling, false);
+  assert.equal(modelCapabilities('webllm', local.defaultModel).location, 'local');
 });
 
 test('unknown model slugs remain usable without guessed capability claims', () => {
