@@ -6,7 +6,13 @@ import { Screen } from '@/components/Screen';
 import type { ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
 import { createOpenRouterShareLink } from '@/llm/openrouter/share';
-import { modelCapabilities, PROVIDER_IDS, providerMetadata } from '@/llm/registry';
+import { CLOUD_PROVIDER_IDS, modelCapabilities, providerMetadata } from '@/llm/registry';
+import { getLocalInferenceCapabilities } from '@/llm/webllm/capabilities';
+import {
+  WEBLLM_MODEL_ID,
+  WEBLLM_MODEL_VRAM_MB,
+  type LocalCapabilityResult
+} from '@/llm/webllm/capabilityPolicy';
 import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
 import {
   clearProviderKey,
@@ -37,6 +43,7 @@ export default function SettingsScreen() {
   const [hasKey, setHasKey] = useState(false);
   const [shareLink, setShareLink] = useState('');
   const [persistence, setPersistence] = useState<PersistenceInfo | null>(null);
+  const [localCapability, setLocalCapability] = useState<LocalCapabilityResult | null>(null);
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
@@ -53,8 +60,13 @@ export default function SettingsScreen() {
     };
   }, [app.settings.providerId]);
 
+  const refreshLocalCapability = async () => {
+    setLocalCapability(await getLocalInferenceCapabilities());
+  };
+
   useEffect(() => {
     void getPersistenceInfo().then(setPersistence);
+    void refreshLocalCapability();
   }, []);
 
   const snapshot = () => ({
@@ -311,7 +323,7 @@ export default function SettingsScreen() {
         <Section title="Chef provider" subtitle="Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.">
           <Text style={styles.label}>Provider</Text>
           <View style={styles.providerGrid}>
-            {PROVIDER_IDS.map((providerId) => {
+            {CLOUD_PROVIDER_IDS.map((providerId) => {
               const option = providerMetadata(providerId);
               const selected = app.settings.providerId === providerId;
               return (
@@ -329,6 +341,8 @@ export default function SettingsScreen() {
             })}
           </View>
 
+          {provider.credentialRequired ? (
+            <>
           <View style={styles.statusRow}>
             <Text style={styles.label}>{provider.name} connection</Text>
             <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Connected' : 'Not connected'}</Text>
@@ -416,10 +430,77 @@ export default function SettingsScreen() {
               <Text style={styles.help}>Tool support is unknown for this custom model ID. Chef will attempt the standard provider tool protocol.</Text>
             )}
           </View>
+            </>
+          ) : (
+            <View style={styles.capabilityBox}>
+              <Text style={styles.capabilityTitle}>Experimental local Chef is active</Text>
+              <Text style={styles.help}>Select a cloud provider above to switch back to a hosted model.</Text>
+            </View>
+          )}
         </Section>
 
-        <Section title="Local models" subtitle="Architecture is ready for a WebLLM/on-device provider adapter, but it is intentionally not in the MVP critical path.">
-          <View style={styles.comingSoon}><Text style={styles.comingSoonText}>Experimental local Chef — planned for the final phase</Text></View>
+        <Section title="Local models" subtitle="Experimental in-browser inference. The model runs on this device and does not require an API key.">
+          <View style={styles.capabilityBox}>
+            <Text style={styles.capabilityTitle}>WebLLM · Llama 3.2 1B</Text>
+            <Text style={styles.help}>Model: {WEBLLM_MODEL_ID}</Text>
+            <Text style={styles.help}>Estimated model VRAM requirement: about {Math.round(WEBLLM_MODEL_VRAM_MB)} MB. At least 1.5 GB of free browser storage is recommended before the first download.</Text>
+            <Text style={styles.warning}>Experimental local mode is text-only for now. It cannot change Pantry or save recipes until the deterministic local tool pipeline is finished and benchmarked.</Text>
+          </View>
+
+          {localCapability ? (
+            <>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>WebGPU</Text>
+                <Text style={[styles.status, localCapability.webGpu && styles.statusConnected]}>{localCapability.webGpu ? 'Available' : 'Unavailable'}</Text>
+              </View>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Web Worker</Text>
+                <Text style={[styles.status, localCapability.worker && styles.statusConnected]}>{localCapability.worker ? 'Available' : 'Unavailable'}</Text>
+              </View>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Free browser storage</Text>
+                <Text style={[styles.status, localCapability.available && styles.statusConnected]}>
+                  {localCapability.freeBytes === undefined ? 'Unknown' : formatBytes(localCapability.freeBytes)}
+                </Text>
+              </View>
+              {Platform.OS === 'web' && (
+                <Text style={styles.help}>Durable browser storage: {localCapability.persistent ? 'enabled' : 'not guaranteed'}</Text>
+              )}
+              {localCapability.reasons.map((reason) => (
+                <Text key={reason} style={styles.warning}>• {reason}</Text>
+              ))}
+              <View style={styles.buttonRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh local model compatibility"
+                  onPress={() => void refreshLocalCapability()}
+                  style={styles.smallButton}
+                >
+                  <Text style={styles.smallButtonText}>Refresh compatibility</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Use experimental local Chef"
+                  accessibilityState={{
+                    selected: app.settings.providerId === 'webllm',
+                    disabled: !localCapability.available
+                  }}
+                  disabled={!localCapability.available}
+                  onPress={() => selectProvider('webllm')}
+                  style={[
+                    styles.primaryButton,
+                    !localCapability.available && styles.disabledButton
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {app.settings.providerId === 'webllm' ? 'Using local Chef' : 'Use local Chef'}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <Text style={styles.help}>Checking WebGPU and browser storage…</Text>
+          )}
         </Section>
       </ScrollView>
     </Screen>
@@ -461,6 +542,7 @@ const styles = StyleSheet.create({
   prompt: { minHeight: 210 },
   primaryButton: { minHeight: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 15, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   primaryButtonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
+  disabledButton: { opacity: 0.4 },
   smallButton: { minHeight: 44, backgroundColor: '#e2e8f0', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   smallButtonText: { color: '#334155', fontWeight: '700', textAlign: 'center' },
   shareButton: { minHeight: 44, backgroundColor: '#ecfdf5', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 10, borderWidth: 1, borderColor: '#a7f3d0', alignItems: 'center', justifyContent: 'center' },
