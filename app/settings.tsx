@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/components/Screen';
 import type { ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
@@ -95,8 +96,8 @@ export default function SettingsScreen() {
       const key = await getOpenRouterKey();
       if (!key) throw new Error('Connect an OpenRouter key first.');
       const link = await createOpenRouterShareLink(key);
+      setShareLink(link);
       if (Platform.OS === 'web') {
-        setShareLink(link);
         if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(link);
           Alert.alert('Share link copied', 'Send it only to someone you trust. The complete link grants use of this OpenRouter key.');
@@ -114,8 +115,15 @@ export default function SettingsScreen() {
   };
 
   const copyShareLink = async () => {
-    if (!shareLink || typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
-    await navigator.clipboard.writeText(shareLink);
+    if (!shareLink) return;
+
+    if (Platform.OS === 'web') {
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(shareLink);
+    } else {
+      await Clipboard.setStringAsync(shareLink, { android: { isSensitive: true } });
+    }
+
     Alert.alert('Copied', 'Share link copied to the clipboard.');
   };
 
@@ -361,7 +369,7 @@ export default function SettingsScreen() {
                   <Text style={styles.shareButtonText}>{Platform.OS === 'web' ? '🔗 Create friend link' : '🔗 Share friend link'}</Text>
                 </Pressable>
               )}
-              {!!shareLink && app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
+              {!!shareLink && app.settings.providerId === 'openrouter' && (
                 <View style={styles.shareBox}>
                   <Text style={styles.label}>Friend link</Text>
                   <TextInput accessibilityLabel="Friend link" value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
