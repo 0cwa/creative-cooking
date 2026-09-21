@@ -33,3 +33,28 @@ test('provider and model selection persist and defaults follow the selected prov
   await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
   await expect(page.getByText('OpenRouter connection', { exact: true })).toBeVisible();
 });
+
+
+test('OpenRouter friend links activate OpenRouter after persisted provider settings hydrate', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('creative-cooking-state-v1', JSON.stringify({
+      settings: {
+        providerId: 'anthropic',
+        model: 'claude-sonnet-5'
+      }
+    }));
+  });
+
+  page.on('dialog', (dialog) => void dialog.accept());
+  const compactPayload = `x${'A'.repeat(43)}`;
+  await page.goto(`./settings?ort=${compactPayload}`);
+
+  await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
+  await expect(page.getByText('OpenRouter connection', { exact: true })).toBeVisible();
+  await expect(page.getByText('Connected', { exact: true })).toBeVisible();
+  expect(page.url()).not.toContain('ort=');
+
+  await expect.poll(async () => page.evaluate(() => (
+    window.localStorage.getItem('creative-cooking-openrouter-key') ?? ''
+  ))).toMatch(/^sk-or-v1-/);
+});
