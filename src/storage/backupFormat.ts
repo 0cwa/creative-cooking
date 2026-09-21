@@ -48,12 +48,20 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
   } as MealContext;
 
   const settingsRecord = isRecord(state.settings) ? state.settings : {};
+  const providerId = isProviderId(settingsRecord.providerId)
+    ? settingsRecord.providerId
+    : defaults.settings.providerId;
+  const providerWasInvalid = settingsRecord.providerId !== undefined && !isProviderId(settingsRecord.providerId);
+  const model = providerWasInvalid
+    ? defaults.settings.model
+    : typeof settingsRecord.model === 'string'
+      ? settingsRecord.model
+      : defaults.settings.model;
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
-    providerId: isProviderId(settingsRecord.providerId)
-      ? settingsRecord.providerId
-      : defaults.settings.providerId,
+    providerId,
+    model,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]
