@@ -4,6 +4,7 @@ import { geminiProvider } from '@/llm/gemini/provider';
 import { mistralProvider } from '@/llm/mistral/provider';
 import { openAiProvider } from '@/llm/openai/provider';
 import { openRouterProvider } from '@/llm/openrouter/provider';
+import { webLlmProvider } from '@/llm/webllm/provider';
 import type { LlmProvider } from '@/llm/types';
 
 export const LLM_PROVIDERS: Record<ProviderId, LlmProvider> = {
@@ -11,7 +12,8 @@ export const LLM_PROVIDERS: Record<ProviderId, LlmProvider> = {
   openai: openAiProvider,
   anthropic: anthropicProvider,
   gemini: geminiProvider,
-  mistral: mistralProvider
+  mistral: mistralProvider,
+  webllm: webLlmProvider
 };
 
 export function providerForId(providerId: ProviderId): LlmProvider {
