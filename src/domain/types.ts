@@ -1,6 +1,11 @@
 export type IngredientPreference = 1 | 2 | 3 | 4 | 5;
 
-export type ProviderId = 'openrouter' | 'openai' | 'anthropic' | 'gemini' | 'mistral';
+export const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral'] as const;
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
+}
 
 export type PantryItem = {
   id: string;
