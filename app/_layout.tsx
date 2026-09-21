@@ -33,6 +33,8 @@ function BootTasks() {
   const app = useAppState();
 
   useEffect(() => {
+    if (!app.hydrated) return;
+
     void (async () => {
       try {
         const imported = await importSharedOpenRouterKey();
@@ -63,7 +65,7 @@ function BootTasks() {
         // Persistence is a best-effort browser capability; backup/restore remains available.
       }
     })();
-  }, []);
+  }, [app.hydrated]);
   return null;
 }
 
