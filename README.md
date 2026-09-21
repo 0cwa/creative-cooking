@@ -59,7 +59,7 @@ For compatibility, manually constructed plain `?ort=sk-or-...` links are also ac
 
 ## Local data and backups
 
-The PWA requests durable browser storage once and shows the current status in Settings. Browser behavior differs: some browsers ask the user while others grant or deny persistence silently.
+The PWA stores ordinary app state in IndexedDB, requests durable browser storage once, and shows the current status in Settings. Existing `creative-cooking-state-v1` data from the previous localStorage-backed storage path is migrated automatically after upgrade. Browser persistence behavior differs: some browsers ask the user while others grant or deny persistence silently.
 
 Settings also supports versioned JSON export/restore for pantry, recipes, chats, meal context and settings. Provider API keys are deliberately excluded from backups.
 
