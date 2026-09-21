@@ -56,18 +56,42 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'openai',
     name: 'OpenAI',
     apiKeyLabel: 'OpenAI API key',
-    defaultModel: 'gpt-5',
-    knownModels: [{
-      id: 'gpt-5',
-      label: 'GPT-5',
-      capabilities: {
-        toolCalling: true,
-        structuredOutput: true,
-        streaming: true,
-        location: 'cloud',
-        freeTier: false
+    defaultModel: 'gpt-5.6-terra',
+    knownModels: [
+      {
+        id: 'gpt-5.6-sol',
+        label: 'GPT-5.6 Sol',
+        capabilities: {
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          location: 'cloud',
+          freeTier: false
+        }
+      },
+      {
+        id: 'gpt-5.6-terra',
+        label: 'GPT-5.6 Terra',
+        capabilities: {
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          location: 'cloud',
+          freeTier: false
+        }
+      },
+      {
+        id: 'gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        capabilities: {
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          location: 'cloud',
+          freeTier: false
+        }
       }
-    }],
+    ],
     unknownModelCapabilities: CLOUD_UNKNOWN
   },
   anthropic: {
@@ -119,7 +143,7 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
         structuredOutput: true,
         streaming: true,
         location: 'cloud',
-        freeTier: true
+        freeTier: 'unknown'
       }
     }],
     unknownModelCapabilities: CLOUD_UNKNOWN
