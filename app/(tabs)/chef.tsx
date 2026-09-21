@@ -106,6 +106,15 @@ export default function ChefScreen() {
     try {
       const provider = providerForId(app.settings.providerId);
       const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
+
+      if (capabilities.location === 'local' && app.settings.allergies.length > 0) {
+        app.appendChatMessage(makeChatMessage(
+          'assistant',
+          'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'
+        ));
+        return;
+      }
+
       const apiKey = activeProvider.credentialRequired
         ? await getProviderKey(app.settings.providerId)
         : '';
