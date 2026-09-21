@@ -10,7 +10,11 @@ export async function downloadLocalModel(
   onStatus?: (status: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  await ensureWebLlmEngine(model, onStatus, signal);
+  try {
+    await ensureWebLlmEngine(model, onStatus, signal);
+  } finally {
+    resetWebLlmEngine();
+  }
 }
 
 export async function deleteLocalModel(model: string): Promise<void> {
