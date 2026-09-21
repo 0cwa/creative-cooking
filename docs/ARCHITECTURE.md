@@ -56,7 +56,9 @@ Production web export uses `EXPO_PUBLIC_BASE_URL=/creative-cooking`. `app/+html.
 
 ## Local models
 
-Local inference is an adapter, not a separate app. Small models should use a multi-stage pipeline rather than being trusted as a monolithic autonomous agent:
+Local inference is an adapter, not a separate app. The PWA has an explicit Experimental WebLLM provider gated by a usable WebGPU adapter, Web Workers, and browser-storage capacity. Model weights are never downloaded implicitly from Chef: Settings owns explicit download/cancel/delete controls, and the provider fails closed with a Settings recovery path if the browser cache is missing or has been evicted. The pinned WebLLM runtime uses a worker so inference does not block the UI; deleting the model also terminates the in-memory engine.
+
+Small models should use a multi-stage pipeline rather than being trusted as a monolithic autonomous agent:
 
 1. deterministic context compiler;
 2. constrained planner / clarify decision;
