@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -13,6 +13,11 @@ import {
   WEBLLM_MODEL_VRAM_MB,
   type LocalCapabilityResult
 } from '@/llm/webllm/capabilityPolicy';
+import {
+  deleteLocalModel,
+  downloadLocalModel,
+  isLocalModelCached
+} from '@/llm/webllm/modelCache';
 import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
 import {
   clearProviderKey,
@@ -44,6 +49,10 @@ export default function SettingsScreen() {
   const [shareLink, setShareLink] = useState('');
   const [persistence, setPersistence] = useState<PersistenceInfo | null>(null);
   const [localCapability, setLocalCapability] = useState<LocalCapabilityResult | null>(null);
+  const [localModelCached, setLocalModelCached] = useState<boolean | null>(null);
+  const [localModelBusy, setLocalModelBusy] = useState(false);
+  const [localModelStatus, setLocalModelStatus] = useState('');
+  const localDownloadController = useRef<AbortController | null>(null);
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
@@ -60,14 +69,103 @@ export default function SettingsScreen() {
     };
   }, [app.settings.providerId]);
 
-  const refreshLocalCapability = async () => {
-    setLocalCapability(await getLocalInferenceCapabilities());
+  const refreshLocalState = async () => {
+    const [capability, cached] = await Promise.all([
+      getLocalInferenceCapabilities(),
+      isLocalModelCached(WEBLLM_MODEL_ID).catch(() => false)
+    ]);
+    setLocalCapability(capability);
+    setLocalModelCached(cached);
   };
 
   useEffect(() => {
     void getPersistenceInfo().then(setPersistence);
-    void refreshLocalCapability();
+    void refreshLocalState();
+
+    return () => {
+      localDownloadController.current?.abort();
+    };
   }, []);
+
+  const downloadModel = async () => {
+    if (!localCapability?.available || localModelBusy) return;
+
+    const controller = new AbortController();
+    localDownloadController.current = controller;
+    setLocalModelBusy(true);
+    setLocalModelStatus('Starting local model download…');
+
+    try {
+      await downloadLocalModel(
+        WEBLLM_MODEL_ID,
+        (status) => setLocalModelStatus(status),
+        controller.signal
+      );
+      setLocalModelCached(true);
+      setLocalModelStatus('Local model downloaded and ready.');
+      await refreshLocalState();
+      Alert.alert('Local model ready', 'The experimental local Chef can now run without an API key.');
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await deleteLocalModel(WEBLLM_MODEL_ID).catch(() => undefined);
+        setLocalModelCached(false);
+        setLocalModelStatus('');
+      } else {
+        setLocalModelStatus('');
+        Alert.alert(
+          'Local model download failed',
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+        await refreshLocalState();
+      }
+    } finally {
+      if (localDownloadController.current === controller) localDownloadController.current = null;
+      setLocalModelBusy(false);
+    }
+  };
+
+  const cancelModelDownload = () => {
+    localDownloadController.current?.abort();
+    setLocalModelStatus('Canceling local model download…');
+  };
+
+  const deleteDownloadedModel = () => {
+    Alert.alert(
+      'Delete downloaded local model?',
+      'This frees the WebLLM model cache. Your pantry, recipes, chats, and provider credentials are not affected.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete model',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setLocalModelBusy(true);
+              setLocalModelStatus('Deleting local model…');
+              try {
+                await deleteLocalModel(WEBLLM_MODEL_ID);
+                setLocalModelCached(false);
+                setLocalModelStatus('');
+                if (app.settings.providerId === 'webllm') {
+                  const fallback = providerMetadata('openrouter');
+                  app.updateSettings({ providerId: 'openrouter', model: fallback.defaultModel });
+                }
+                await refreshLocalState();
+              } catch (error) {
+                setLocalModelStatus('');
+                Alert.alert(
+                  'Could not delete local model',
+                  error instanceof Error ? error.message : 'Unknown error'
+                );
+              } finally {
+                setLocalModelBusy(false);
+              }
+            })();
+          }
+        }
+      ]
+    );
+  };
 
   const snapshot = () => ({
     pantry: app.pantry,
@@ -472,27 +570,62 @@ export default function SettingsScreen() {
               {localCapability.reasons.map((reason) => (
                 <Text key={reason} style={styles.warning}>• {reason}</Text>
               ))}
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Model cache</Text>
+                <Text style={[styles.status, localModelCached && styles.statusConnected]}>
+                  {localModelCached === null ? 'Checking…' : localModelCached ? 'Downloaded' : 'Not downloaded'}
+                </Text>
+              </View>
+              {!!localModelStatus && <Text accessibilityLiveRegion="polite" style={styles.help}>{localModelStatus}</Text>}
+              {localModelCached === false && (
+                <Text style={styles.help}>Download the model explicitly here before selecting local Chef. Chef will not start a hidden download from the chat screen.</Text>
+              )}
               <View style={styles.buttonRow}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Refresh local model compatibility"
-                  onPress={() => void refreshLocalCapability()}
-                  style={styles.smallButton}
+                  disabled={localModelBusy}
+                  onPress={() => void refreshLocalState()}
+                  style={[styles.smallButton, localModelBusy && styles.disabledButton]}
                 >
                   <Text style={styles.smallButtonText}>Refresh compatibility</Text>
                 </Pressable>
+                {localModelCached === false && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={localModelBusy ? 'Cancel local model download' : 'Download local model'}
+                    disabled={!localCapability.available && !localModelBusy}
+                    onPress={localModelBusy ? cancelModelDownload : () => void downloadModel()}
+                    style={[
+                      styles.smallButton,
+                      (!localCapability.available && !localModelBusy) && styles.disabledButton
+                    ]}
+                  >
+                    <Text style={styles.smallButtonText}>{localModelBusy ? 'Cancel download' : 'Download model'}</Text>
+                  </Pressable>
+                )}
+                {localModelCached === true && !localModelBusy && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete downloaded local model"
+                    onPress={deleteDownloadedModel}
+                    style={styles.textButton}
+                  >
+                    <Text style={styles.dangerLink}>Delete downloaded model</Text>
+                  </Pressable>
+                )}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Use experimental local Chef"
                   accessibilityState={{
                     selected: app.settings.providerId === 'webllm',
-                    disabled: !localCapability.available || app.settings.allergies.length > 0
+                    disabled: !localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0
                   }}
-                  disabled={!localCapability.available || app.settings.allergies.length > 0}
+                  disabled={!localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0}
                   onPress={() => selectProvider('webllm')}
                   style={[
                     styles.primaryButton,
-                    (!localCapability.available || app.settings.allergies.length > 0) && styles.disabledButton
+                    (!localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0) && styles.disabledButton
                   ]}
                 >
                   <Text style={styles.primaryButtonText}>
