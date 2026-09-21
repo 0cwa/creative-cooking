@@ -29,6 +29,8 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
 
 type AppStateApi = PersistedState & {
   hydrated: boolean;
+  storageError: string | null;
+  retryStorage(): Promise<boolean>;
   addPantryItems(names: string[], preference?: IngredientPreference): void;
   removePantryItem(id: string): void;
   removePantryByName(name: string): boolean;
@@ -50,17 +52,61 @@ const AppStateContext = createContext<AppStateApi | null>(null);
 export function AppStateProvider({ children }: PropsWithChildren) {
   const [state, setState] = useState<PersistedState>(DEFAULT_STATE);
   const [hydrated, setHydrated] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [storageWritable, setStorageWritable] = useState(true);
+
+  const describeStorageError = useCallback((error: unknown) => (
+    error instanceof Error ? error.message : 'Creative Cooking could not save local data.'
+  ), []);
 
   useEffect(() => {
+    let active = true;
     loadState()
-      .then((saved) => setState(mergeState(saved)))
-      .finally(() => setHydrated(true));
-  }, []);
+      .then((saved) => {
+        if (active) setState(mergeState(saved));
+      })
+      .catch((error) => {
+        if (!active) return;
+        setStorageError(describeStorageError(error));
+        setStorageWritable(false);
+      })
+      .finally(() => {
+        if (active) setHydrated(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [describeStorageError]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    void saveState(state);
-  }, [hydrated, state]);
+    if (!hydrated || !storageWritable) return;
+    let active = true;
+    void saveState(state)
+      .then(() => {
+        if (active) setStorageError(null);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setStorageError(describeStorageError(error));
+        setStorageWritable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [describeStorageError, hydrated, state, storageWritable]);
+
+  const retryStorage = useCallback(async () => {
+    try {
+      await saveState(state);
+      setStorageWritable(true);
+      setStorageError(null);
+      return true;
+    } catch (error) {
+      setStorageWritable(false);
+      setStorageError(describeStorageError(error));
+      return false;
+    }
+  }, [describeStorageError, state]);
 
   const addPantryItems = useCallback((names: string[], preference: IngredientPreference = 3) => {
     setState((current) => {
@@ -170,6 +216,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     () => ({
       ...state,
       hydrated,
+      storageError,
+      retryStorage,
       addPantryItems,
       removePantryItem,
       removePantryByName,
@@ -188,6 +236,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     [
       state,
       hydrated,
+      storageError,
+      retryStorage,
       addPantryItems,
       removePantryItem,
       removePantryByName,

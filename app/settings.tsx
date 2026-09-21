@@ -92,6 +92,16 @@ export default function SettingsScreen() {
     }
   };
 
+  const retryLocalStorage = async () => {
+    const ok = await app.retryStorage();
+    if (ok) {
+      setPersistence(await getPersistenceInfo());
+      Alert.alert('Local storage working', 'Creative Cooking can save changes on this device again.');
+    } else {
+      Alert.alert('Storage retry failed', app.storageError ?? 'Creative Cooking still cannot save local data.');
+    }
+  };
+
   const exportData = () => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') {
       Alert.alert('Web/PWA only for now', 'File backup export is currently implemented for the web/PWA build.');
@@ -197,13 +207,22 @@ export default function SettingsScreen() {
         <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Browser storage</Text>
+              <Text style={styles.label}>{Platform.OS === 'web' ? 'Browser storage · IndexedDB' : 'Device storage'}</Text>
               {Platform.OS === 'web' && persistence && (
                 <Text style={styles.help}>{formatBytes(persistence.usage)} used · {formatBytes(persistence.quota)} quota</Text>
               )}
             </View>
             <Text style={[styles.status, persistence?.persistent && styles.statusConnected]}>{persistenceLabel}</Text>
           </View>
+          {!!app.storageError && (
+            <View style={styles.storageErrorBox}>
+              <Text style={styles.storageErrorTitle}>Local data is not being saved</Text>
+              <Text style={styles.warning}>{app.storageError}</Text>
+              <Pressable accessibilityRole="button" onPress={() => void retryLocalStorage()} style={styles.smallButton}>
+                <Text style={styles.smallButtonText}>Retry local storage</Text>
+              </Pressable>
+            </View>
+          )}
           {Platform.OS === 'web' && persistence?.supported && !persistence.persistent && (
             <Pressable accessibilityRole="button" onPress={() => void requestDurableStorage()} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Request durable storage</Text>
@@ -293,6 +312,8 @@ const styles = StyleSheet.create({
   label: { color: '#334155', fontWeight: '700' },
   help: { color: '#64748b', fontSize: 12.5, lineHeight: 18 },
   warning: { color: '#92400e', fontSize: 12.5, lineHeight: 18 },
+  storageErrorBox: { backgroundColor: '#fff7ed', borderRadius: 12, padding: 12, gap: 9, borderWidth: 1, borderColor: '#fdba74' },
+  storageErrorTitle: { color: '#9a3412', fontWeight: '800' },
   inline: { flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   buttonRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   input: { flex: 1, minWidth: 200, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
