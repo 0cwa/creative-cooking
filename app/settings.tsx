@@ -14,7 +14,7 @@ import {
   getProviderKey,
   setProviderKey
 } from '@/storage/credentialVault';
-import { pickNativeBackup, shareNativeBackup } from '@/storage/nativeBackupTransfer';
+import { pickNativeBackup, shareNativeBackup } from '@/storage/backupTransfer';
 import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
 
