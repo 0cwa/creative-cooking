@@ -8,7 +8,7 @@ Creative Cooking is a local-first cooking application with interchangeable AI en
 2. **Domain/state** — pantry names/preferences, structured recipes, chat messages, meal context, settings.
 3. **Chef orchestration** — prompt/context compiler and a small typed tool set.
 4. **LLM adapters** — currently OpenRouter; future cloud/local providers implement the same interface.
-5. **Storage adapters** — AsyncStorage for ordinary app state; credential vault for provider secrets.
+5. **Storage adapters** — IndexedDB for ordinary web/PWA app state, AsyncStorage on native, and a separate credential vault for provider secrets.
 
 ## Pantry model
 
@@ -43,6 +43,12 @@ This keeps state integrity independent of provider/model quality.
 The primary MVP provider is OpenRouter because its OAuth PKCE flow works from a static browser application and returns a user-controlled API key. Manual OpenRouter API-key entry is also supported. Provider credentials never enter the persisted domain-state object.
 
 On native, credentials use Expo SecureStore. On web there is no browser equivalent to a native keychain, so the credential vault uses browser-local storage; the UI and documentation must be explicit about that limitation.
+
+## App-state persistence
+
+On web/PWA, ordinary application state is stored in IndexedDB. On first load after the migration, the adapter imports the existing `creative-cooking-state-v1` value from the previous localStorage-backed AsyncStorage path, commits it to IndexedDB, and only then removes the legacy value. The migration is idempotent because IndexedDB is authoritative once a record exists. Native builds continue to use AsyncStorage.
+
+Persistence failures are surfaced immediately and remain visible in Settings with a retry action; the app does not silently fall back to localStorage for ordinary state. Versioned JSON backup/restore remains independent of the storage backend.
 
 ## Static PWA / GitHub Pages
 
