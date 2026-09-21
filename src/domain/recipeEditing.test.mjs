@@ -32,7 +32,7 @@ test('scales recipe ingredient amounts without changing ingredient metadata', ()
   ]);
 });
 
-test('returns only ingredients marked for shopping', () => {
+test('returns explicitly marked shopping ingredients when pantry context is not supplied', () => {
   assert.deepEqual(
     shoppingIngredients([
       { name: 'carrots', needsShopping: true },
@@ -40,5 +40,30 @@ test('returns only ingredients marked for shopping', () => {
       { name: 'lemon', needsShopping: false }
     ]),
     [{ name: 'carrots', needsShopping: true }]
+  );
+});
+
+test('shopping list also includes recipe ingredients missing from Pantry', () => {
+  assert.deepEqual(
+    shoppingIngredients(
+      [
+        { name: 'Carrots', needsShopping: false },
+        { name: 'sea salt' },
+        { name: 'Lemon', needsShopping: true }
+      ],
+      ['carrots', 'SEA   SALT']
+    ),
+    [{ name: 'Lemon', needsShopping: true }]
+  );
+
+  assert.deepEqual(
+    shoppingIngredients(
+      [
+        { name: 'carrots' },
+        { name: 'lemon' }
+      ],
+      ['carrots']
+    ),
+    [{ name: 'lemon' }]
   );
 });
