@@ -1,5 +1,8 @@
-import { normalizeIngredientName } from './pantry';
 import type { RecipeIngredient } from './types';
+
+function normalizeIngredientName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
 
 const FRACTIONS: Array<[number, string]> = [
   [1 / 8, '1/8'],
