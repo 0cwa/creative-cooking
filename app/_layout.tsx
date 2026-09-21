@@ -30,11 +30,16 @@ function StorageFailureAlert() {
 }
 
 function BootTasks() {
+  const app = useAppState();
+
   useEffect(() => {
+    if (!app.hydrated) return;
+
     void (async () => {
       try {
         const imported = await importSharedOpenRouterKey();
         if (imported) {
+          app.updateSettings({ providerId: 'openrouter', model: 'openrouter/free' });
           Alert.alert(
             'Shared OpenRouter key connected',
             'This browser can now use the shared provider key. Anyone with the complete share link can use that key until it is revoked.'
@@ -46,7 +51,10 @@ function BootTasks() {
 
       try {
         const connected = await finishOpenRouterOAuthFromLocation();
-        if (connected) Alert.alert('OpenRouter connected', 'The Chef can now use your OpenRouter account.');
+        if (connected) {
+          app.updateSettings({ providerId: 'openrouter', model: 'openrouter/free' });
+          Alert.alert('OpenRouter connected', 'The Chef can now use your OpenRouter account.');
+        }
       } catch (error) {
         Alert.alert('OpenRouter sign-in failed', error instanceof Error ? error.message : 'Unknown error');
       }
@@ -57,7 +65,7 @@ function BootTasks() {
         // Persistence is a best-effort browser capability; backup/restore remains available.
       }
     })();
-  }, []);
+  }, [app.hydrated]);
   return null;
 }
 

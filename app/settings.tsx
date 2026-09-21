@@ -2,10 +2,17 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
+import type { ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
 import { createOpenRouterShareLink } from '@/llm/openrouter/share';
+import { modelCapabilities, PROVIDER_IDS, providerMetadata } from '@/llm/registry';
 import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
-import { clearOpenRouterKey, getOpenRouterKey, setOpenRouterKey } from '@/storage/credentialVault';
+import {
+  clearProviderKey,
+  getOpenRouterKey,
+  getProviderKey,
+  setProviderKey
+} from '@/storage/credentialVault';
 import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
 
@@ -14,6 +21,10 @@ function formatBytes(value?: number): string {
   const units = ['B', 'KB', 'MB', 'GB'];
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
   return `${(value / 1024 ** index).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
+}
+
+function supportLabel(value: boolean | 'unknown'): string {
+  return value === 'unknown' ? 'Unknown' : value ? 'Yes' : 'No';
 }
 
 export default function SettingsScreen() {
@@ -25,8 +36,22 @@ export default function SettingsScreen() {
   const [shareLink, setShareLink] = useState('');
   const [persistence, setPersistence] = useState<PersistenceInfo | null>(null);
 
+  const provider = providerMetadata(app.settings.providerId);
+  const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
+
   useEffect(() => {
-    void getOpenRouterKey().then((value) => setHasKey(Boolean(value)));
+    let active = true;
+    void getProviderKey(app.settings.providerId).then((value) => {
+      if (active) setHasKey(Boolean(value));
+    });
+    setApiKey('');
+    setShareLink('');
+    return () => {
+      active = false;
+    };
+  }, [app.settings.providerId]);
+
+  useEffect(() => {
     void getPersistenceInfo().then(setPersistence);
   }, []);
 
@@ -48,12 +73,20 @@ export default function SettingsScreen() {
     setAllergyInput('');
   };
 
+  const selectProvider = (providerId: ProviderId) => {
+    const next = providerMetadata(providerId);
+    app.updateSettings({ providerId, model: next.defaultModel });
+  };
+
   const saveKey = async () => {
     if (!apiKey.trim()) return;
-    await setOpenRouterKey(apiKey.trim());
+    await setProviderKey(app.settings.providerId, apiKey.trim());
     setApiKey('');
     setHasKey(true);
-    Alert.alert('API key saved', Platform.OS === 'web' ? 'Stored only in this browser.' : 'Stored in the device secure store.');
+    Alert.alert(
+      `${provider.name} key saved`,
+      Platform.OS === 'web' ? 'Stored only in this browser.' : 'Stored in the device secure store.'
+    );
   };
 
   const makeShareLink = async () => {
@@ -242,29 +275,68 @@ export default function SettingsScreen() {
           <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
         </Section>
 
-        <Section title="Chef provider" subtitle="OpenRouter gives the app one login/API surface across many model providers.">
+        <Section title="Chef provider" subtitle="Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.">
+          <Text style={styles.label}>Provider</Text>
+          <View style={styles.providerGrid}>
+            {PROVIDER_IDS.map((providerId) => {
+              const option = providerMetadata(providerId);
+              const selected = app.settings.providerId === providerId;
+              return (
+                <Pressable
+                  key={providerId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${option.name} provider`}
+                  accessibilityState={{ selected }}
+                  onPress={() => selectProvider(providerId)}
+                  style={[styles.providerButton, selected && styles.providerButtonActive]}
+                >
+                  <Text style={[styles.providerButtonText, selected && styles.providerButtonTextActive]}>{option.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
           <View style={styles.statusRow}>
-            <Text style={styles.label}>Connection</Text>
+            <Text style={styles.label}>{provider.name} connection</Text>
             <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Connected' : 'Not connected'}</Text>
           </View>
-          {Platform.OS === 'web' && (
+
+          {app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
             <Pressable accessibilityRole="button" onPress={() => void beginOpenRouterOAuth().catch((error) => Alert.alert('Could not connect', String(error)))} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Connect OpenRouter</Text>
             </Pressable>
           )}
-          <Text style={styles.or}>or paste an OpenRouter API key</Text>
+
+          <Text style={styles.or}>
+            {app.settings.providerId === 'openrouter' && Platform.OS === 'web'
+              ? 'or paste an API key'
+              : `Paste your ${provider.name} API key`}
+          </Text>
           <View style={styles.inline}>
-            <TextInput accessibilityLabel="OpenRouter API key" secureTextEntry value={apiKey} onChangeText={setApiKey} placeholder="sk-or-v1-…" placeholderTextColor="#94a3b8" style={styles.input} />
-            <Pressable accessibilityRole="button" accessibilityLabel="Save OpenRouter API key" onPress={() => void saveKey()} style={styles.smallButton}><Text style={styles.smallButtonText}>Save</Text></Pressable>
+            <TextInput
+              accessibilityLabel={provider.apiKeyLabel}
+              secureTextEntry
+              value={apiKey}
+              onChangeText={setApiKey}
+              placeholder="API key"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.input}
+            />
+            <Pressable accessibilityRole="button" accessibilityLabel={`Save ${provider.name} API key`} onPress={() => void saveKey()} style={styles.smallButton}>
+              <Text style={styles.smallButtonText}>Save</Text>
+            </Pressable>
           </View>
+
           {hasKey && (
             <>
-              {Platform.OS === 'web' && (
+              {app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
                 <Pressable accessibilityRole="button" onPress={() => void makeShareLink()} style={styles.shareButton}>
                   <Text style={styles.shareButtonText}>🔗 Create friend link</Text>
                 </Pressable>
               )}
-              {!!shareLink && (
+              {!!shareLink && app.settings.providerId === 'openrouter' && (
                 <View style={styles.shareBox}>
                   <Text style={styles.label}>Friend link</Text>
                   <TextInput accessibilityLabel="Friend link" value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
@@ -274,14 +346,43 @@ export default function SettingsScreen() {
                   </Text>
                 </View>
               )}
-              <Pressable accessibilityRole="button" onPress={() => void clearOpenRouterKey().then(() => { setHasKey(false); setShareLink(''); })} style={styles.textButton}>
-                <Text style={styles.dangerLink}>Disconnect provider</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void clearProviderKey(app.settings.providerId).then(() => {
+                  setHasKey(false);
+                  setShareLink('');
+                })}
+                style={styles.textButton}
+              >
+                <Text style={styles.dangerLink}>Disconnect {provider.name}</Text>
               </Pressable>
             </>
           )}
+
           <Text style={styles.label}>Model</Text>
-          <TextInput accessibilityLabel="OpenRouter model" value={app.settings.model} onChangeText={(model) => app.updateSettings({ model })} autoCapitalize="none" style={styles.input} placeholder="openrouter/free" />
-          <Text style={styles.help}>Default is openrouter/free. You can paste any OpenRouter model slug here.</Text>
+          <TextInput
+            accessibilityLabel={`${provider.name} model`}
+            value={app.settings.model}
+            onChangeText={(model) => app.updateSettings({ model })}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.input}
+            placeholder={provider.defaultModel}
+          />
+          <Text style={styles.help}>
+            Default: {provider.defaultModel}. You can paste another model ID; unknown models are allowed without guessing their capabilities.
+          </Text>
+
+          <View style={styles.capabilityBox}>
+            <Text style={styles.capabilityTitle}>Model capabilities</Text>
+            <Text style={styles.help}>Tool calling: {supportLabel(capabilities.toolCalling)} · Streaming: {supportLabel(capabilities.streaming)} · Structured output: {supportLabel(capabilities.structuredOutput)} · Free/free-tier: {supportLabel(capabilities.freeTier)}</Text>
+            {capabilities.toolCalling === false && (
+              <Text style={styles.warning}>Chef will use this model for text only and will not claim to change Pantry or save recipes.</Text>
+            )}
+            {capabilities.toolCalling === 'unknown' && (
+              <Text style={styles.help}>Tool support is unknown for this custom model ID. Chef will attempt the standard provider tool protocol.</Text>
+            )}
+          </View>
         </Section>
 
         <Section title="Local models" subtitle="Architecture is ready for a WebLLM/on-device provider adapter, but it is intentionally not in the MVP critical path.">
@@ -315,6 +416,13 @@ const styles = StyleSheet.create({
   storageErrorBox: { backgroundColor: '#fff7ed', borderRadius: 12, padding: 12, gap: 9, borderWidth: 1, borderColor: '#fdba74' },
   storageErrorTitle: { color: '#9a3412', fontWeight: '800' },
   inline: { flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  providerGrid: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  providerButton: { minHeight: 42, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 9, backgroundColor: '#e2e8f0', justifyContent: 'center' },
+  providerButtonActive: { backgroundColor: '#172033' },
+  providerButtonText: { color: '#475569', fontWeight: '700' },
+  providerButtonTextActive: { color: 'white' },
+  capabilityBox: { backgroundColor: '#f8fafc', borderRadius: 12, padding: 12, gap: 6, borderWidth: 1, borderColor: '#e2e8f0' },
+  capabilityTitle: { color: '#334155', fontWeight: '800' },
   buttonRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   input: { flex: 1, minWidth: 200, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
   prompt: { minHeight: 210 },

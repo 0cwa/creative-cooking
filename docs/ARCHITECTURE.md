@@ -7,7 +7,7 @@ Creative Cooking is a local-first cooking application with interchangeable AI en
 1. **Expo Router screens/components** — Pantry, Chef, Recipes, Settings.
 2. **Domain/state** — pantry names/preferences, structured recipes, chat messages, meal context, settings.
 3. **Chef orchestration** — prompt/context compiler and a small typed tool set.
-4. **LLM adapters** — currently OpenRouter; future cloud/local providers implement the same interface.
+4. **LLM adapters** — OpenRouter plus direct OpenAI, Anthropic, Gemini, and Mistral BYOK adapters implement the same interface; future local providers use the same boundary.
 5. **Storage adapters** — IndexedDB for ordinary web/PWA app state, AsyncStorage on native, and a separate credential vault for provider secrets.
 
 ## Pantry model
@@ -40,7 +40,7 @@ This keeps state integrity independent of provider/model quality.
 
 ## Provider authentication
 
-The primary MVP provider is OpenRouter because its OAuth PKCE flow works from a static browser application and returns a user-controlled API key. Manual OpenRouter API-key entry is also supported. Provider credentials never enter the persisted domain-state object.
+OpenRouter remains the default because its OAuth PKCE flow works from a static browser application, while direct OpenAI, Anthropic, Gemini, and Mistral BYOK connections are also available. Provider/model selection is ordinary app state, but provider credentials never enter the persisted domain-state object or backups. A centralized model registry describes tool calling, structured output, streaming, cloud/local status, and known free-tier status. Unknown model IDs remain usable without inventing capability claims.
 
 On native, credentials use Expo SecureStore. On web there is no browser equivalent to a native keychain, so the credential vault uses browser-local storage; the UI and documentation must be explicit about that limitation.
 

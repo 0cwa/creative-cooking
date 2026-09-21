@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
+import { isProviderId } from '@/domain/types';
 import type {
   AppSettings,
   ChatMessage,
@@ -15,6 +16,19 @@ import { loadState, saveState } from '@/storage/appStorage';
 
 function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   if (!saved) return DEFAULT_STATE;
+
+  const savedProviderId = saved.settings?.providerId;
+  const providerId = isProviderId(savedProviderId)
+    ? savedProviderId
+    : DEFAULT_STATE.settings.providerId;
+  const providerWasInvalid = savedProviderId !== undefined && !isProviderId(savedProviderId);
+  const savedModel = saved.settings?.model;
+  const model = providerWasInvalid
+    ? DEFAULT_STATE.settings.model
+    : typeof savedModel === 'string'
+      ? savedModel
+      : DEFAULT_STATE.settings.model;
+
   return {
     ...DEFAULT_STATE,
     ...saved,
@@ -22,6 +36,8 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
     settings: {
       ...DEFAULT_STATE.settings,
       ...(saved.settings ?? {}),
+      providerId,
+      model,
       systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
     }
   };

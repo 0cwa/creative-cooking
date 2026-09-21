@@ -8,7 +8,7 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 - Chef chat: pantry preferences, allergies, shopping willingness, portions, cooks, energy, optional city/time context.
 - Chef can add/remove/rate pantry items and save structured recipes via tool calls.
 - Saved recipe collection with editing, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
-- OpenRouter OAuth PKCE on web/PWA plus API-key fallback.
+- OpenRouter OAuth PKCE plus direct BYOK connections for OpenAI, Anthropic, Gemini, and Mistral, all behind the same Chef provider interface.
 - Installable GitHub Pages PWA with local-first app state.
 - CI, Gitleaks v3, and Pages deployment.
 
@@ -65,7 +65,7 @@ Settings also supports versioned JSON export/restore for pantry, recipes, chats,
 
 ## Provider credentials
 
-No project-owned LLM secret is committed or bundled. Users connect their own OpenRouter account/key. Native builds store the key with Expo SecureStore. The web/PWA stores it in browser-local storage because browsers do not provide an equivalent native keychain.
+No project-owned LLM secret is committed or bundled. Users connect their own OpenRouter, OpenAI, Anthropic, Gemini, or Mistral credentials. Native builds store provider keys with Expo SecureStore. The web/PWA stores them in browser-local storage because browsers do not provide an equivalent native keychain. Provider credentials remain excluded from ordinary app backups.
 
 ## Project docs
 

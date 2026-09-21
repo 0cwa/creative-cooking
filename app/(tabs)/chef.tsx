@@ -7,8 +7,9 @@ import { MealContextModal } from '@/components/MealContextModal';
 import { buildChefSystemPrompt } from '@/chef/context';
 import type { ChatMessage, IngredientPreference, UiQuestion } from '@/domain/types';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
-import { openRouterProvider } from '@/llm/openrouter/provider';
-import { getOpenRouterKey } from '@/storage/credentialVault';
+import { providerForId } from '@/llm/providers';
+import { modelCapabilities, providerMetadata } from '@/llm/registry';
+import { getProviderKey } from '@/storage/credentialVault';
 import { makeChatMessage, useAppState } from '@/state/AppState';
 
 type RunErrorState = {
@@ -17,30 +18,30 @@ type RunErrorState = {
   partialText: string;
 };
 
-function errorPresentation(error: LlmRequestError): { title: string; message: string; showSettings: boolean } {
+function errorPresentation(error: LlmRequestError, providerName: string): { title: string; message: string; showSettings: boolean } {
   switch (error.kind) {
     case 'network':
       return {
         title: 'No connection to Chef',
-        message: 'I could not reach OpenRouter. Check your connection and try again.',
+        message: `I could not reach ${providerName}. Check your connection and try again.`,
         showSettings: false
       };
     case 'rate_limit':
       return {
         title: 'Chef is being rate-limited',
-        message: 'OpenRouter is temporarily limiting requests. Retry in a moment.',
+        message: `${providerName} is temporarily limiting requests. Retry in a moment.`,
         showSettings: false
       };
     case 'credits':
       return {
-        title: 'OpenRouter credits unavailable',
+        title: `${providerName} credits unavailable`,
         message: 'This key has no usable credits or has reached its budget. Add credits or connect another key.',
         showSettings: true
       };
     case 'auth':
       return {
-        title: 'OpenRouter key rejected',
-        message: 'Reconnect OpenRouter or paste a valid API key in Settings.',
+        title: `${providerName} key rejected`,
+        message: `Reconnect ${providerName} or paste a valid API key in Settings.`,
         showSettings: true
       };
     case 'model_unavailable':
@@ -52,14 +53,14 @@ function errorPresentation(error: LlmRequestError): { title: string; message: st
     case 'invalid_request':
       return {
         title: 'Request rejected',
-        message: error.message || 'OpenRouter rejected this request. Check the selected model and settings.',
+        message: error.message || `${providerName} rejected this request. Check the selected model and settings.`,
         showSettings: true
       };
     default:
       return {
         title: 'Chef could not finish',
         message: error.retryable
-          ? 'OpenRouter or the selected model had a temporary problem. You can retry this turn.'
+          ? `${providerName} or the selected model had a temporary problem. You can retry this turn.`
           : error.message || 'The provider could not complete this turn.',
         showSettings: false
       };
@@ -79,6 +80,7 @@ export default function ChefScreen() {
   const abortRef = useRef<AbortController | null>(null);
   const streamingTextRef = useRef('');
   const discardCancelledRef = useRef(false);
+  const activeProvider = providerMetadata(app.settings.providerId);
 
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
@@ -100,23 +102,33 @@ export default function ChefScreen() {
     abortRef.current = controller;
 
     try {
-      const apiKey = await getOpenRouterKey();
+      const provider = providerForId(app.settings.providerId);
+      const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
+      const apiKey = await getProviderKey(app.settings.providerId);
       if (!apiKey) {
-        app.appendChatMessage(makeChatMessage('assistant', 'Connect OpenRouter or paste an API key in Settings, then I can cook with you.'));
+        app.appendChatMessage(makeChatMessage(
+          'assistant',
+          `Connect ${activeProvider.name} or paste an API key in Settings, then I can cook with you.`
+        ));
         return;
       }
 
-      const result = await openRouterProvider.run({
+      const compiledPrompt = buildChefSystemPrompt({ ...stateSnapshot, chatMessages: messages });
+      const systemPrompt = capabilities.toolCalling === false
+        ? `${compiledPrompt}\n\nMODEL CAPABILITY NOTE\nThis selected model does not support application tools. Do not claim to have changed Pantry or saved a recipe; explain what the user can do manually instead.`
+        : compiledPrompt;
+
+      const result = await provider.run({
         apiKey,
         model: app.settings.model,
-        systemPrompt: buildChefSystemPrompt({ ...stateSnapshot, chatMessages: messages }),
+        systemPrompt,
         messages,
         signal: controller.signal,
         onTextDelta: (delta) => {
           streamingTextRef.current += delta;
           setStreamingText(streamingTextRef.current);
         },
-        tools: {
+        tools: capabilities.toolCalling === false ? undefined : {
           addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
           removePantry: app.removePantryByName,
           setPantryPreference: app.setPantryPreferenceByName,
@@ -183,7 +195,7 @@ export default function ChefScreen() {
     ]);
   };
 
-  const errorUi = runError ? errorPresentation(runError.error) : null;
+  const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
 
   return (
     <Screen>

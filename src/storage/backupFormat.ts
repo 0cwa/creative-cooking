@@ -11,6 +11,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral'] as const;
+
+function isProviderId(value: unknown): value is AppSettings['providerId'] {
+  return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
 export function serializeBackupEnvelope(state: PersistedState, exportedAt: string): string {
   const envelope: BackupEnvelope = {
     format: 'creative-cooking-backup',
@@ -42,9 +48,20 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
   } as MealContext;
 
   const settingsRecord = isRecord(state.settings) ? state.settings : {};
+  const providerId = isProviderId(settingsRecord.providerId)
+    ? settingsRecord.providerId
+    : defaults.settings.providerId;
+  const providerWasInvalid = settingsRecord.providerId !== undefined && !isProviderId(settingsRecord.providerId);
+  const model = providerWasInvalid
+    ? defaults.settings.model
+    : typeof settingsRecord.model === 'string'
+      ? settingsRecord.model
+      : defaults.settings.model;
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
+    providerId,
+    model,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]
