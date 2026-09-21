@@ -47,7 +47,7 @@ function errorPresentation(error: LlmRequestError, providerName: string): { titl
     case 'model_unavailable':
       return {
         title: 'Model unavailable',
-        message: 'The selected model is unavailable or not allowed for this key. Choose another model in Settings.',
+        message: error.message || 'The selected model is unavailable or not allowed for this provider. Choose another model in Settings.',
         showSettings: true
       };
     case 'invalid_request':
