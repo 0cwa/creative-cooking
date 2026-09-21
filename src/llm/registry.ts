@@ -20,6 +20,8 @@ export type ProviderMetadata = {
   id: ProviderId;
   name: string;
   apiKeyLabel: string;
+  credentialRequired: boolean;
+  experimental: boolean;
   defaultModel: string;
   knownModels: ModelMetadata[];
   unknownModelCapabilities: ModelCapabilities;
@@ -38,6 +40,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'openrouter',
     name: 'OpenRouter',
     apiKeyLabel: 'OpenRouter API key',
+    credentialRequired: true,
+    experimental: false,
     defaultModel: 'openrouter/free',
     knownModels: [{
       id: 'openrouter/free',
@@ -56,6 +60,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'openai',
     name: 'OpenAI',
     apiKeyLabel: 'OpenAI API key',
+    credentialRequired: true,
+    experimental: false,
     defaultModel: 'gpt-5.6-terra',
     knownModels: [
       {
@@ -98,6 +104,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'anthropic',
     name: 'Anthropic',
     apiKeyLabel: 'Anthropic API key',
+    credentialRequired: true,
+    experimental: false,
     defaultModel: 'claude-sonnet-5',
     knownModels: [{
       id: 'claude-sonnet-5',
@@ -116,6 +124,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'gemini',
     name: 'Google Gemini',
     apiKeyLabel: 'Gemini API key',
+    credentialRequired: true,
+    experimental: false,
     defaultModel: 'gemini-3.8-flash',
     knownModels: [{
       id: 'gemini-3.8-flash',
@@ -134,6 +144,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'mistral',
     name: 'Mistral',
     apiKeyLabel: 'Mistral API key',
+    credentialRequired: true,
+    experimental: false,
     defaultModel: 'mistral-large-latest',
     knownModels: [{
       id: 'mistral-large-latest',
@@ -147,10 +159,37 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
       }
     }],
     unknownModelCapabilities: CLOUD_UNKNOWN
+  },
+  webllm: {
+    id: 'webllm',
+    name: 'Experimental local Chef',
+    apiKeyLabel: 'No API key required',
+    credentialRequired: false,
+    experimental: true,
+    defaultModel: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+    knownModels: [{
+      id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+      label: 'Llama 3.2 1B · q4f16',
+      capabilities: {
+        toolCalling: false,
+        structuredOutput: false,
+        streaming: true,
+        location: 'local',
+        freeTier: true
+      }
+    }],
+    unknownModelCapabilities: {
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: 'unknown',
+      location: 'local',
+      freeTier: true
+    }
   }
 };
 
-export const PROVIDER_IDS: ProviderId[] = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral'];
+export const PROVIDER_IDS: ProviderId[] = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral', 'webllm'];
+export const CLOUD_PROVIDER_IDS: ProviderId[] = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral'];
 
 export function providerMetadata(providerId: ProviderId): ProviderMetadata {
   return PROVIDER_REGISTRY[providerId];
