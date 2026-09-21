@@ -72,3 +72,4 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] Request persistent browser storage and expose status/retry in Settings.
 - [x] Migrate web/PWA app state from localStorage-backed AsyncStorage to IndexedDB with idempotent migration and visible write-failure recovery.
 - [x] Single-parameter OpenRouter friend links using short, explicitly non-secure obfuscation to avoid obvious token-prefix scraping.
+- [x] Native iOS/Android backup import/export and share-sheet parity using the same versioned backup format, with native OpenRouter friend-link share/copy support.
