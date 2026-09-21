@@ -2,8 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
-import type {
-  AppSettings,
+import { isProviderId, type AppSettings,
   ChatMessage,
   CookEnergy,
   IngredientPreference,
@@ -22,6 +21,9 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
     settings: {
       ...DEFAULT_STATE.settings,
       ...(saved.settings ?? {}),
+      providerId: isProviderId(saved.settings?.providerId)
+        ? saved.settings.providerId
+        : DEFAULT_STATE.settings.providerId,
       systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
     }
   };
