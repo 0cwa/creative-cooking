@@ -7,7 +7,7 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 - Pantry powered by FlashList: manually add simple ingredient names one at a time from a bottom composer, rate each 1–5 stars, swipe to remove; bulk dictation goes through Chef.
 - Chef chat: pantry preferences, allergies, shopping willingness, portions, cooks, energy, optional city/time context.
 - Chef can add/remove/rate pantry items and save structured recipes via tool calls.
-- Saved recipe collection.
+- Saved recipe collection with editing, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
 - OpenRouter OAuth PKCE on web/PWA plus API-key fallback.
 - Installable GitHub Pages PWA with local-first app state.
 - CI, Gitleaks v3, and Pages deployment.
