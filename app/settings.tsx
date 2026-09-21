@@ -2,10 +2,17 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
+import type { ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
 import { createOpenRouterShareLink } from '@/llm/openrouter/share';
+import { modelCapabilities, PROVIDER_IDS, providerMetadata } from '@/llm/registry';
 import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
-import { clearOpenRouterKey, getOpenRouterKey, setOpenRouterKey } from '@/storage/credentialVault';
+import {
+  clearProviderKey,
+  getOpenRouterKey,
+  getProviderKey,
+  setProviderKey
+} from '@/storage/credentialVault';
 import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
 
@@ -25,8 +32,22 @@ export default function SettingsScreen() {
   const [shareLink, setShareLink] = useState('');
   const [persistence, setPersistence] = useState<PersistenceInfo | null>(null);
 
+  const provider = providerMetadata(app.settings.providerId);
+  const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
+
   useEffect(() => {
-    void getOpenRouterKey().then((value) => setHasKey(Boolean(value)));
+    let active = true;
+    void getProviderKey(app.settings.providerId).then((value) => {
+      if (active) setHasKey(Boolean(value));
+    });
+    setApiKey('');
+    setShareLink('');
+    return () => {
+      active = false;
+    };
+  }, [app.settings.providerId]);
+
+  useEffect(() => {
     void getPersistenceInfo().then(setPersistence);
   }, []);
 
@@ -48,12 +69,20 @@ export default function SettingsScreen() {
     setAllergyInput('');
   };
 
+  const selectProvider = (providerId: ProviderId) => {
+    const next = providerMetadata(providerId);
+    app.updateSettings({ providerId, model: next.defaultModel });
+  };
+
   const saveKey = async () => {
     if (!apiKey.trim()) return;
-    await setOpenRouterKey(apiKey.trim());
+    await setProviderKey(app.settings.providerId, apiKey.trim());
     setApiKey('');
     setHasKey(true);
-    Alert.alert('API key saved', Platform.OS === 'web' ? 'Stored only in this browser.' : 'Stored in the device secure store.');
+    Alert.alert(
+      `${provider.name} key saved`,
+      Platform.OS === 'web' ? 'Stored only in this browser.' : 'Stored in the device secure store.'
+    );
   };
 
   const makeShareLink = async () => {
