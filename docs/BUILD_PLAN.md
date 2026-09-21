@@ -39,7 +39,7 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] Web/PWA OpenRouter OAuth PKCE and manual API key fallback.
 - [x] Chef tools: pantry add/remove/preference, recipe save, inline multiple choice question.
 - [x] Streaming token rendering with cancel support through the provider abstraction.
-- [ ] Additional direct BYOK provider adapters (Gemini, Mistral, OpenAI, Anthropic) behind the same interface.
+- [x] Additional direct BYOK provider adapters (Gemini, Mistral, OpenAI, Anthropic) behind the same interface, with centralized model capabilities and text-only degradation when tools are unavailable.
 
 ## Phase 4 — saved recipes
 
