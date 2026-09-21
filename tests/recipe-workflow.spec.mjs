@@ -46,7 +46,7 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   await page.getByLabel('Edit recipe Lentil bowl').click();
   await page.getByLabel('Recipe title').fill('Bright lentil bowl');
   await page.getByLabel('Save recipe changes').click();
-  await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('Bright lentil bowl', { exact: true })).toBeVisible();
 
   await page.getByLabel('lemon purchased').click();
   page.once('dialog', (dialog) => void dialog.accept());
