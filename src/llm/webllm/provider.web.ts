@@ -28,10 +28,6 @@ async function getEngine(model: string, onStatus?: (status: string) => void): Pr
     worker = new Worker(new URL('./webllm.worker', window.location.href));
 
     return webllm.CreateWebWorkerMLCEngine(worker, model, {
-      appConfig: {
-        ...webllm.prebuiltAppConfig,
-        cacheBackend: 'cache'
-      },
       initProgressCallback: (report) => {
         onStatus?.(report.text || `Loading local model… ${Math.round(report.progress * 100)}%`);
       },
@@ -63,13 +59,22 @@ export const webLlmProvider: LlmProvider = {
     onStatus?.('Preparing local model…');
 
     let engine: MLCEngineInterface;
+    const onAbortDuringLoad = () => {
+      resetEngine();
+    };
+    signal?.addEventListener('abort', onAbortDuringLoad, { once: true });
     try {
       engine = await getEngine(model, onStatus);
     } catch (error) {
+      if (signal?.aborted) {
+        throw new LlmRequestError('The request was cancelled.', { kind: 'cancelled' });
+      }
       throw new LlmRequestError(
         error instanceof Error ? error.message : 'The local model could not be loaded.',
         { kind: 'provider', retryable: true }
       );
+    } finally {
+      signal?.removeEventListener('abort', onAbortDuringLoad);
     }
 
     if (signal?.aborted) {
