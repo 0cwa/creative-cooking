@@ -73,6 +73,7 @@ export default function ChefScreen() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [providerStatus, setProviderStatus] = useState('');
   const [runError, setRunError] = useState<RunErrorState | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [question, setQuestion] = useState<UiQuestion | null>(null);
@@ -94,6 +95,7 @@ export default function ChefScreen() {
     setQuestion(null);
     setRunError(null);
     setStreamingText('');
+    setProviderStatus('');
     streamingTextRef.current = '';
     discardCancelledRef.current = false;
     setBusy(true);
@@ -104,8 +106,10 @@ export default function ChefScreen() {
     try {
       const provider = providerForId(app.settings.providerId);
       const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
-      const apiKey = await getProviderKey(app.settings.providerId);
-      if (!apiKey) {
+      const apiKey = activeProvider.credentialRequired
+        ? await getProviderKey(app.settings.providerId)
+        : '';
+      if (activeProvider.credentialRequired && !apiKey) {
         app.appendChatMessage(makeChatMessage(
           'assistant',
           `Connect ${activeProvider.name} or paste an API key in Settings, then I can cook with you.`
@@ -128,6 +132,7 @@ export default function ChefScreen() {
           streamingTextRef.current += delta;
           setStreamingText(streamingTextRef.current);
         },
+        onStatus: setProviderStatus,
         tools: capabilities.toolCalling === false ? undefined : {
           addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
           removePantry: app.removePantryByName,
@@ -153,6 +158,7 @@ export default function ChefScreen() {
       if (abortRef.current === controller) abortRef.current = null;
       streamingTextRef.current = '';
       setStreamingText('');
+      setProviderStatus('');
       setBusy(false);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
     }
@@ -241,7 +247,7 @@ export default function ChefScreen() {
           ))}
           {busy && (
             <View accessibilityLiveRegion="polite" style={[styles.bubble, styles.chefBubble]}>
-              <Text style={streamingText ? styles.bubbleText : styles.typing}>{streamingText || 'Chef is thinking…'}</Text>
+              <Text style={streamingText ? styles.bubbleText : styles.typing}>{streamingText || providerStatus || 'Chef is thinking…'}</Text>
             </View>
           )}
           {runError?.partialText ? (
