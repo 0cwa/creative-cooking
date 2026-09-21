@@ -11,7 +11,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral'] as const;
+const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral', 'webllm'] as const;
 
 function isProviderId(value: unknown): value is AppSettings['providerId'] {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
