@@ -132,7 +132,7 @@ export default function ChefScreen() {
         : compiledPrompt;
 
       const result = await provider.run({
-        apiKey,
+        apiKey: apiKey ?? '',
         model: app.settings.model,
         systemPrompt,
         messages,
