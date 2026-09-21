@@ -10,6 +10,7 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 - Saved recipe collection with editing, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
 - OpenRouter OAuth PKCE plus direct BYOK connections for OpenAI, Anthropic, Gemini, and Mistral, all behind the same Chef provider interface.
 - Installable GitHub Pages PWA with local-first app state.
+- Experimental WebLLM local Chef on compatible WebGPU browsers, with explicit model download/cache/delete controls and no hidden model download from chat.
 - CI, Gitleaks v3, and Pages deployment.
 
 Ingredient names are intentionally sufficient. You do **not** have to maintain quantities or detailed inventory.
