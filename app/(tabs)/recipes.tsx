@@ -76,6 +76,7 @@ export default function RecipesScreen() {
 
   const startEditing = () => {
     if (!selected) return;
+    setCheckedShopping(new Set());
     setDraft(toRecipeDraft(selected));
   };
 
@@ -98,6 +99,7 @@ export default function RecipesScreen() {
 
     try {
       updateRecipe(selected.id, cleaned);
+      setCheckedShopping(new Set());
       setDraft(null);
     } catch (error) {
       Alert.alert('Could not save recipe', error instanceof Error ? error.message : 'Unknown error');
