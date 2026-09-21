@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import type { ProviderId } from '@/domain/types';
@@ -13,6 +13,7 @@ import {
   getProviderKey,
   setProviderKey
 } from '@/storage/credentialVault';
+import { pickNativeBackup, shareNativeBackup } from '@/storage/nativeBackupTransfer';
 import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
 
@@ -94,10 +95,18 @@ export default function SettingsScreen() {
       const key = await getOpenRouterKey();
       if (!key) throw new Error('Connect an OpenRouter key first.');
       const link = await createOpenRouterShareLink(key);
-      setShareLink(link);
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(link);
-        Alert.alert('Share link copied', 'Send it only to someone you trust. The complete link grants use of this OpenRouter key.');
+      if (Platform.OS === 'web') {
+        setShareLink(link);
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(link);
+          Alert.alert('Share link copied', 'Send it only to someone you trust. The complete link grants use of this OpenRouter key.');
+        }
+      } else {
+        await Share.share({
+          title: 'Creative Cooking OpenRouter friend link',
+          message: `Creative Cooking OpenRouter friend link:\n${link}`,
+          url: link
+        });
       }
     } catch (error) {
       Alert.alert('Could not create share link', error instanceof Error ? error.message : 'Unknown error');
@@ -135,52 +144,66 @@ export default function SettingsScreen() {
     }
   };
 
-  const exportData = () => {
-    if (Platform.OS !== 'web' || typeof document === 'undefined') {
-      Alert.alert('Web/PWA only for now', 'File backup export is currently implemented for the web/PWA build.');
-      return;
+  const exportData = async () => {
+    try {
+      const json = serializeBackup(snapshot());
+
+      if (Platform.OS !== 'web') {
+        await shareNativeBackup(json);
+        return;
+      }
+
+      if (typeof document === 'undefined') throw new Error('Browser download APIs are unavailable.');
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `creative-cooking-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      Alert.alert('Could not export backup', error instanceof Error ? error.message : 'Unknown error');
     }
-    const json = serializeBackup(snapshot());
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `creative-cooking-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
   };
 
-  const importData = () => {
-    if (Platform.OS !== 'web' || typeof document === 'undefined') {
-      Alert.alert('Web/PWA only for now', 'File backup restore is currently implemented for the web/PWA build.');
-      return;
-    }
+  const importData = async () => {
+    try {
+      if (Platform.OS !== 'web') {
+        const raw = await pickNativeBackup();
+        if (raw === null) return;
+        app.restoreState(parseBackup(raw));
+        Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
+        return;
+      }
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,application/json';
-    input.onchange = () => {
-      void (async () => {
-        try {
-          const file = input.files?.[0];
-          if (!file) return;
-          const restored = parseBackup(await file.text());
-          app.restoreState(restored);
-          Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
-        } catch (error) {
-          Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
-        }
-      })();
-    };
-    input.click();
+      if (typeof document === 'undefined') throw new Error('Browser file picker APIs are unavailable.');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.onchange = () => {
+        void (async () => {
+          try {
+            const file = input.files?.[0];
+            if (!file) return;
+            app.restoreState(parseBackup(await file.text()));
+            Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
+          } catch (error) {
+            Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
+          }
+        })();
+      };
+      input.click();
+    } catch (error) {
+      Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
+    }
   };
 
   const resetData = () => {
     Alert.alert(
       'Reset Creative Cooking data?',
-      'This clears pantry, recipes, chats, and settings on this device. Your OpenRouter key stays connected.',
+      'This clears pantry, recipes, chats, and settings on this device. Provider API keys stay connected.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Reset', style: 'destructive', onPress: () => app.restoreState(freshDefaultState()) }
@@ -262,11 +285,13 @@ export default function SettingsScreen() {
             </Pressable>
           )}
           <Text style={styles.help}>
-            Browsers may approve or deny durable storage silently. The app also requests it once automatically; backups remain the safest portable copy.
+            {Platform.OS === 'web'
+              ? 'Browsers may approve or deny durable storage silently. The app also requests it once automatically; backups remain the safest portable copy.'
+              : 'Backups use the system file picker and share sheet, and can be moved between native and web builds.'}
           </Text>
           <View style={styles.buttonRow}>
-            <Pressable accessibilityRole="button" onPress={exportData} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
-            <Pressable accessibilityRole="button" onPress={importData} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={() => void exportData()} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={() => void importData()} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
           </View>
           <Pressable accessibilityRole="button" onPress={resetData} style={styles.textButton}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
         </Section>
@@ -331,12 +356,12 @@ export default function SettingsScreen() {
 
           {hasKey && (
             <>
-              {app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
+              {app.settings.providerId === 'openrouter' && (
                 <Pressable accessibilityRole="button" onPress={() => void makeShareLink()} style={styles.shareButton}>
-                  <Text style={styles.shareButtonText}>🔗 Create friend link</Text>
+                  <Text style={styles.shareButtonText}>{Platform.OS === 'web' ? '🔗 Create friend link' : '🔗 Share friend link'}</Text>
                 </Pressable>
               )}
-              {!!shareLink && app.settings.providerId === 'openrouter' && (
+              {!!shareLink && app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
                 <View style={styles.shareBox}>
                   <Text style={styles.label}>Friend link</Text>
                   <TextInput accessibilityLabel="Friend link" value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
