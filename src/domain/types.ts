@@ -1,5 +1,12 @@
 export type IngredientPreference = 1 | 2 | 3 | 4 | 5;
 
+export const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral'] as const;
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
 export type PantryItem = {
   id: string;
   name: string;
@@ -46,7 +53,7 @@ export type AppSettings = {
   allergies: string[];
   sendLocalTime: boolean;
   city: string;
-  providerId: 'openrouter';
+  providerId: ProviderId;
   model: string;
 };
 
