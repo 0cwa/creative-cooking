@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { SettingsGlyph } from '@/components/SettingsGlyph';
-import { scaleRecipeIngredients } from '@/domain/recipeEditing';
+import { scaleRecipeIngredients, shoppingIngredients } from '@/domain/recipeEditing';
 import type { Recipe, RecipeIngredient } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
 
@@ -46,6 +46,7 @@ function cleanRecipeDraft(draft: RecipeDraft): RecipeDraft {
 export default function RecipesScreen() {
   const router = useRouter();
   const {
+    pantry,
     recipes,
     addPantryItems,
     updateRecipe,
@@ -57,9 +58,12 @@ export default function RecipesScreen() {
 
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? null;
   const shoppingRows = selected
-    ? selected.ingredients
-      .map((ingredient, index) => ({ ingredient, index }))
-      .filter(({ ingredient }) => ingredient.needsShopping)
+    ? (() => {
+        const shopping = new Set(shoppingIngredients(selected.ingredients, pantry.map((item) => item.name)));
+        return selected.ingredients
+          .map((ingredient, index) => ({ ingredient, index }))
+          .filter(({ ingredient }) => shopping.has(ingredient));
+      })()
     : [];
 
   const openRecipe = (recipe: Recipe) => {
@@ -439,7 +443,7 @@ export default function RecipesScreen() {
                 {!!shoppingRows.length && (
                   <View style={styles.shoppingSection}>
                     <Text style={styles.sectionTitle}>Shopping list</Text>
-                    <Text style={styles.shoppingHelp}>Check things off as you buy them, then add the checked ingredients back to Pantry.</Text>
+                    <Text style={styles.shoppingHelp}>Ingredients marked “Need to buy” or missing from Pantry appear here. Check things off as you buy them, then add the checked ingredients back to Pantry.</Text>
                     {shoppingRows.map(({ ingredient, index }) => {
                       const checked = checkedShopping.has(index);
                       return (
