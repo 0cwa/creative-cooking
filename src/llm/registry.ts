@@ -74,10 +74,10 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderMetadata> = {
     id: 'anthropic',
     name: 'Anthropic',
     apiKeyLabel: 'Anthropic API key',
-    defaultModel: 'claude-opus-5',
+    defaultModel: 'claude-sonnet-5',
     knownModels: [{
-      id: 'claude-opus-5',
-      label: 'Claude Opus 5',
+      id: 'claude-sonnet-5',
+      label: 'Claude Sonnet 5',
       capabilities: {
         toolCalling: true,
         structuredOutput: true,
