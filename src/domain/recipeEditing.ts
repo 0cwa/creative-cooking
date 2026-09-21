@@ -1,3 +1,4 @@
+import { normalizeIngredientName } from './pantry';
 import type { RecipeIngredient } from './types';
 
 const FRACTIONS: Array<[number, string]> = [
@@ -98,6 +99,16 @@ export function scaleRecipeIngredients(
   }));
 }
 
-export function shoppingIngredients(ingredients: RecipeIngredient[]): RecipeIngredient[] {
-  return ingredients.filter((ingredient) => ingredient.needsShopping);
+export function shoppingIngredients(
+  ingredients: RecipeIngredient[],
+  pantryNames?: string[]
+): RecipeIngredient[] {
+  const pantry = pantryNames === undefined
+    ? null
+    : new Set(pantryNames.map((name) => normalizeIngredientName(name).toLocaleLowerCase()));
+
+  return ingredients.filter((ingredient) => (
+    Boolean(ingredient.needsShopping)
+    || Boolean(pantry && !pantry.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase()))
+  ));
 }
