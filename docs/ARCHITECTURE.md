@@ -48,7 +48,7 @@ On native, credentials use Expo SecureStore. On web there is no browser equivale
 
 On web/PWA, ordinary application state is stored in IndexedDB. On first load after the migration, the adapter imports the existing `creative-cooking-state-v1` value from the previous localStorage-backed AsyncStorage path, commits it to IndexedDB, and only then removes the legacy value. The migration is idempotent because IndexedDB is authoritative once a record exists. Native builds continue to use AsyncStorage.
 
-Persistence failures are surfaced immediately and remain visible in Settings with a retry action; the app does not silently fall back to localStorage for ordinary state. Versioned JSON backup/restore remains independent of the storage backend.
+Persistence failures are surfaced immediately and remain visible in Settings with a retry action; the app does not silently fall back to localStorage for ordinary state. Versioned JSON backup/restore remains independent of the storage backend. Web exports use browser downloads/file input; native builds write the same JSON envelope to a temporary file, share it through the OS share sheet, and restore through the system document picker. Provider credentials stay excluded on every platform.
 
 ## Static PWA / GitHub Pages
 

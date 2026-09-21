@@ -51,7 +51,7 @@ The app manifest, 192/512 icons, service worker, and generated static navigation
 
 ## Sharing a provider key
 
-In Settings, a connected OpenRouter key can generate a friend link. Generated links use a single `?ort=` query parameter. OpenRouter v1 keys currently use a 64-character hexadecimal body. The app removes the fixed `sk-or-v1-` prefix, packs the 64 hex characters into their 32 raw bytes, then base64url-encodes those bytes. That reduces the key body to 43 URL-safe characters while also hiding the obvious OpenRouter prefix. It is compact encoding/obfuscation, not encryption. The app captures and removes `?ort=` from the visible URL before the React bundle starts.
+In Settings, a connected OpenRouter key can generate a friend link. On native builds it can be shared through the OS share sheet or copied directly. Generated links use a single `?ort=` query parameter. OpenRouter v1 keys currently use a 64-character hexadecimal body. The app removes the fixed `sk-or-v1-` prefix, packs the 64 hex characters into their 32 raw bytes, then base64url-encodes those bytes. That reduces the key body to 43 URL-safe characters while also hiding the obvious OpenRouter prefix. It is compact encoding/obfuscation, not encryption. The app captures and removes `?ort=` from the visible URL before the React bundle starts.
 
 Anyone who has the complete link can use that API key, so treat it like a capability token. Prefer a dedicated OpenRouter key with a spending limit and revoke it when you no longer want the link to work.
 
@@ -61,7 +61,7 @@ For compatibility, manually constructed plain `?ort=sk-or-...` links are also ac
 
 The PWA stores ordinary app state in IndexedDB, requests durable browser storage once, and shows the current status in Settings. Existing `creative-cooking-state-v1` data from the previous localStorage-backed storage path is migrated automatically after upgrade. Browser persistence behavior differs: some browsers ask the user while others grant or deny persistence silently.
 
-Settings also supports versioned JSON export/restore for pantry, recipes, chats, meal context and settings. Provider API keys are deliberately excluded from backups.
+Settings supports the same versioned JSON backup format on web, iOS, and Android for pantry, recipes, chats, meal context, and settings. Web uses browser download/restore; native builds use the system document picker and share sheet. Provider API keys are deliberately excluded from backups.
 
 ## Provider credentials
 

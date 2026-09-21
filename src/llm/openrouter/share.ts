@@ -7,14 +7,16 @@ export { deobfuscateOpenRouterKey, obfuscateOpenRouterKey } from './sharePayload
 const SHARE_SESSION_KEY = 'creative-cooking-openrouter-share-v1';
 
 export async function createOpenRouterShareLink(apiKey: string): Promise<string> {
-  if (Platform.OS !== 'web' || typeof window === 'undefined') {
-    throw new Error('Provider share links are currently available in the web/PWA build.');
+  const payload = obfuscateOpenRouterKey(apiKey);
+
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const base = process.env.EXPO_PUBLIC_BASE_URL ?? '';
+    const url = new URL(`${window.location.origin}${base || ''}/`);
+    url.searchParams.set('ort', payload);
+    return url.toString();
   }
 
-  const base = process.env.EXPO_PUBLIC_BASE_URL ?? '';
-  const url = new URL(`${window.location.origin}${base || ''}/`);
-  url.searchParams.set('ort', obfuscateOpenRouterKey(apiKey));
-  return url.toString();
+  return `https://0cwa.github.io/creative-cooking/?ort=${encodeURIComponent(payload)}`;
 }
 
 export async function importSharedOpenRouterKey(): Promise<boolean> {
