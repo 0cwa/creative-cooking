@@ -20,7 +20,7 @@ export type LlmProvider = {
     model: string;
     systemPrompt: string;
     messages: ChatMessage[];
-    tools: ToolExecutor;
+    tools?: ToolExecutor;
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
   }): Promise<ChefRunResult>;
