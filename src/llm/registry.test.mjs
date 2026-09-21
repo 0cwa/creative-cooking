@@ -16,7 +16,7 @@ test('registry exposes every supported cloud provider with a default model', () 
 });
 
 test('known model capability metadata is explicit', () => {
-  assert.equal(modelCapabilities('openai', 'gpt-5').toolCalling, true);
+  assert.equal(modelCapabilities('openai', 'gpt-5.6-terra').toolCalling, true);
   assert.equal(modelCapabilities('gemini', 'gemini-3.8-flash').freeTier, true);
   assert.equal(modelCapabilities('anthropic', 'claude-sonnet-5').location, 'cloud');
 });
