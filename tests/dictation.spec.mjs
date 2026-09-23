@@ -77,3 +77,40 @@ test('on-device dictation stays active across browser ends until the user presse
   await composer.fill('tomatoes and basil, please');
   await expect(composer).toHaveValue('tomatoes and basil, please');
 });
+
+
+test('compact mic stays beside the composer and explains unavailable dictation', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'SpeechRecognition', {
+      configurable: true,
+      value: undefined
+    });
+  });
+
+  await page.goto('./chef');
+
+  const plus = page.getByLabel('Edit meal context');
+  const mic = page.getByLabel('Start dictation');
+  const composer = page.getByLabel('Message Chef');
+  await expect(mic).toBeVisible();
+  await expect(page.getByLabel('Use browser dictation engine')).toHaveCount(0);
+
+  const [plusBox, micBox, composerBox] = await Promise.all([
+    plus.boundingBox(),
+    mic.boundingBox(),
+    composer.boundingBox()
+  ]);
+  expect(plusBox).not.toBeNull();
+  expect(micBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(plusBox.x + plusBox.width).toBeLessThan(micBox.x);
+  expect(micBox.x + micBox.width).toBeLessThan(composerBox.x);
+
+  await mic.click();
+  await expect(page.getByText('Browser dictation unavailable')).toBeVisible();
+  await expect(page.getByText(/switch to Whisper/i)).toBeVisible();
+
+  await page.getByLabel('Open dictation settings').click();
+  await expect(page.getByLabel('Use browser dictation engine')).toBeVisible();
+  await expect(page.getByLabel('Use Whisper dictation engine')).toBeVisible();
+});
