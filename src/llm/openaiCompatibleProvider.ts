@@ -1,6 +1,6 @@
 import { CHEF_TOOLS } from '@/chef/tools';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
-import { executeChefTool, toolHasSideEffects } from '@/llm/toolExecution';
+import { executeChefTool } from '@/llm/toolExecution';
 import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
 import { OpenRouterStreamAccumulator, SseDataParser } from '@/llm/openrouter/streaming';
 
@@ -296,7 +296,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 
           for (const call of assistant.tool_calls) {
             const outcome = executeCompatibleTool(call, tools);
-            if (toolHasSideEffects(call.function.name)) executedSideEffect = true;
+            if (outcome.sideEffectApplied) executedSideEffect = true;
             if (outcome.question) {
               return { text: collectedText, question: outcome.question };
             }
