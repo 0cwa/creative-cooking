@@ -48,6 +48,7 @@ test('offers installation only after engagement and captures the CTA screenshot'
 
 test('remembers when the user dismisses the install tip', async ({ page }) => {
   await page.goto('./');
+  await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
   await offerInstall(page);
 
   const ingredient = page.getByLabel('Ingredient name');
