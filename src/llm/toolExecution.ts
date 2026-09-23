@@ -4,10 +4,10 @@ import {
   preferenceFromToolValue,
   questionFromToolArgs,
   recipeFromToolArgs
-} from '@/chef/toolPayload';
-import { RecipeAllergyError } from '@/domain/allergyValidation';
-import type { ChefToolProposal, UiQuestion } from '@/domain/types';
-import type { ToolExecutor } from '@/llm/types';
+} from '../chef/toolPayload.ts';
+import { RecipeAllergyError } from '../domain/allergyValidation.ts';
+import type { ChefToolProposal, UiQuestion } from '../domain/types';
+import type { ToolExecutor } from './types';
 
 export type ChefToolCall = {
   id: string;
