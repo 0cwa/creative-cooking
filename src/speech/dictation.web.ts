@@ -129,9 +129,10 @@ function speechRecognitionConstructor(): SpeechRecognitionConstructorLike | null
   return value;
 }
 
-function browserLanguage(): string {
-  if (typeof navigator === 'undefined') return 'en-US';
-  return navigator.language || 'en-US';
+const ENGLISH_LANGUAGE_FALLBACKS = ['en-US', 'en-GB', 'en-AU', 'en-CA', 'en'] as const;
+
+function englishLanguageCandidates(): string[] {
+  return [...ENGLISH_LANGUAGE_FALLBACKS];
 }
 
 function recognitionErrorMessage(error: SpeechRecognitionErrorEventLike, lang: string): string {
@@ -143,7 +144,7 @@ function recognitionErrorMessage(error: SpeechRecognitionErrorEventLike, lang: s
       return 'No microphone is available. Check your microphone and browser permissions, then try again.';
     case 'language-not-supported':
     case 'language-unavailable':
-      return `On-device dictation for ${lang} is not available in this browser.`;
+      return `On-device English dictation is not available in this browser (${lang} failed).`;
     default:
       return error.message?.trim() || 'On-device dictation stopped unexpectedly. Try again.';
   }
@@ -200,7 +201,7 @@ export class WebSpeechDictationController implements DictationController {
     if (this.disposed || this.desiredActive) return;
 
     this.clearRestart();
-    this.lang = options.lang || this.lang || 'en-US';
+    this.lang = 'en-US';
     this.onChange = options.onChange;
     this.finalText = '';
     this.interimText = '';
@@ -208,37 +209,39 @@ export class WebSpeechDictationController implements DictationController {
     this.emit('checking');
 
     try {
-      const availability = await withDictationQuality(
-        (speechOptions) => this.Recognition.available(speechOptions),
-        this.lang
-      );
-      if (!this.desiredActive || this.disposed) {
-        this.emit('idle');
-        return;
-      }
-
-      if (availability === 'unavailable') {
-        this.fail(`On-device dictation for ${this.lang} is not available in this browser.`);
-        return;
-      }
-
-      if (availability !== 'available') {
-        this.emit('installing-language');
-        const installed = await withDictationQuality(
-          (speechOptions) => this.Recognition.install(speechOptions),
-          this.lang
-        );
+      for (const candidate of englishLanguageCandidates()) {
         if (!this.desiredActive || this.disposed) {
           this.emit('idle');
           return;
         }
-        if (!installed) {
-          this.fail(`The on-device speech pack for ${this.lang} could not be installed.`);
+
+        const availability = await withDictationQuality(
+          (speechOptions) => this.Recognition.available(speechOptions),
+          candidate
+        );
+
+        if (availability === 'unavailable') continue;
+
+        this.lang = candidate;
+        if (availability !== 'available') {
+          this.emit('installing-language');
+          const installed = await withDictationQuality(
+            (speechOptions) => this.Recognition.install(speechOptions),
+            candidate
+          );
+          if (!installed) continue;
+        }
+
+        if (!this.desiredActive || this.disposed) {
+          this.emit('idle');
           return;
         }
+
+        this.startSession();
+        return;
       }
 
-      this.startSession();
+      this.fail('On-device English dictation is not available in this browser. Try the downloaded Whisper engine instead.');
     } catch (error) {
       if (!this.desiredActive || this.disposed) return;
       this.fail(error instanceof Error && error.message
@@ -379,35 +382,42 @@ export class WebSpeechDictationController implements DictationController {
   }
 }
 
-export function getOnDeviceDictationSupport(): OnDeviceDictationSupport {
-  if (speechRecognitionConstructor()) {
-    return { available: true, backend: 'web-speech' };
+export function getOnDeviceDictationSupport(
+  engine: 'browser' | 'whisper' = 'browser'
+): OnDeviceDictationSupport {
+  if (engine === 'browser') {
+    return speechRecognitionConstructor()
+      ? { available: true, backend: 'browser' }
+      : {
+        available: false,
+        backend: 'browser',
+        reason: 'Browser on-device speech is unavailable. Use the downloaded Whisper engine instead.'
+      };
   }
 
   const whisper = whisperFallbackSupport();
-  if (whisper.available) {
-    return {
-      available: true,
+  return whisper.available
+    ? { available: true, backend: 'whisper' }
+    : {
+      available: false,
       backend: 'whisper',
-      reason: 'Browser-native on-device speech is unavailable, so Creative Cooking can use the optional downloaded local voice model.'
+      reason: whisper.reason ?? 'The local Whisper dictation engine is unavailable in this browser.'
     };
-  }
-
-  return {
-    available: false,
-    backend: 'none',
-    reason: whisper.reason ?? 'On-device dictation is not supported by this browser yet. You can keep typing normally.'
-  };
 }
 
 export function getPreferredDictationLanguage(): string {
-  return browserLanguage();
+  return 'en-US';
 }
 
-export function createDictationController(): DictationController {
-  const Recognition = speechRecognitionConstructor();
-  if (Recognition) {
-    return new WebSpeechDictationController(Recognition, browserLanguage());
+export function createDictationController(
+  engine: 'browser' | 'whisper' = 'browser'
+): DictationController {
+  if (engine === 'browser') {
+    const Recognition = speechRecognitionConstructor();
+    if (!Recognition) {
+      throw new Error('Browser on-device speech is unavailable. Use the downloaded Whisper engine instead.');
+    }
+    return new WebSpeechDictationController(Recognition, 'en-US');
   }
 
   const whisper = whisperFallbackSupport();
@@ -415,5 +425,5 @@ export function createDictationController(): DictationController {
     return new LazyWhisperDictationController();
   }
 
-  throw new Error(whisper.reason ?? 'On-device dictation is not supported by this browser.');
+  throw new Error(whisper.reason ?? 'The local Whisper dictation engine is unavailable in this browser.');
 }
