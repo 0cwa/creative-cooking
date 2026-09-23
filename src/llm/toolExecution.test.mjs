@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { RecipeAllergyError } from '../domain/allergyValidation.ts';
 import { applyChefProposal, executeChefTool } from './toolExecution.ts';
 
 function createExecutor() {
@@ -102,4 +103,36 @@ test('recipe proposals stay unsaved until accepted', () => {
   applyChefProposal(state.proposals[0], tools);
   assert.equal(state.recipes.length, 1);
   assert.equal(state.recipes[0].title, 'Crispy chickpeas');
+});
+
+
+test('unsafe recipe proposals are rejected before a preview is emitted', () => {
+  const { state, tools } = createExecutor();
+  tools.validateRecipe = () => {
+    throw new RecipeAllergyError([{
+      allergy: 'peanuts',
+      ingredient: 'peanut butter',
+      matchedTerm: 'peanut',
+      kind: 'direct'
+    }]);
+  };
+
+  const outcome = executeChefTool({
+    id: 'call-allergy',
+    name: 'recipe_save',
+    arguments: JSON.stringify({
+      title: 'Peanut noodles',
+      portions: 2,
+      ingredients: [{ name: 'peanut butter' }],
+      steps: ['Mix.'],
+      propose: true
+    })
+  }, tools);
+
+  const result = JSON.parse(outcome.result);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'allergy_validation_failed');
+  assert.equal(outcome.sideEffectApplied, false);
+  assert.equal(state.proposals.length, 0);
+  assert.equal(state.recipes.length, 0);
 });
