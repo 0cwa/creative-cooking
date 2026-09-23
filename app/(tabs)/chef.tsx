@@ -143,9 +143,11 @@ export default function ChefScreen() {
     pantry: app.pantry,
     recipes: app.recipes,
     chatMessages: app.chatMessages,
+    chatHistory: app.chatHistory,
+    activeConversationId: app.activeConversationId,
     mealContext: app.mealContext,
     settings: app.settings
-  }), [app.pantry, app.recipes, app.chatMessages, app.mealContext, app.settings]);
+  }), [app.pantry, app.recipes, app.chatMessages, app.chatHistory, app.activeConversationId, app.mealContext, app.settings]);
 
   const showDictationRecovery = (reason?: string) => {
     const detail = reason?.trim() ?? '';
