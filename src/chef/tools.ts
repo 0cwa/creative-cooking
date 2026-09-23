@@ -3,7 +3,7 @@ export const CHEF_TOOLS = [
     type: 'function',
     function: {
       name: 'pantry_add',
-      description: 'Add one or more simple ingredient names to the pantry. Quantity details are not required.',
+      description: 'Add one or more concise ingredient descriptions to the pantry. Preserve useful known details such as dried, fresh, frozen, cooked, pickled, ground, or refrigerated in the description; quantities are not required.',
       parameters: {
         type: 'object',
         properties: {
@@ -11,6 +11,21 @@ export const CHEF_TOOLS = [
           preference: { type: 'integer', minimum: 1, maximum: 5, default: 3 }
         },
         required: ['names']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'pantry_update',
+      description: 'Refine the description of an existing pantry item without changing its star preference. Use this when the user clarifies form, condition, preparation, or storage, for example mint → mint (dried) or okra → okra (frozen).',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          newName: { type: 'string' }
+        },
+        required: ['name', 'newName']
       }
     }
   },
