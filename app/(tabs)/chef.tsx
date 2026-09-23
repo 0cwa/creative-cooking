@@ -12,6 +12,7 @@ import { modelCapabilities, providerMetadata } from '@/llm/registry';
 import { createDictationController, getOnDeviceDictationSupport, getPreferredDictationLanguage } from '@/speech/dictation';
 import { appendDictationToDraft, joinDictation } from '@/speech/transcript';
 import type { DictationController, DictationSnapshot, DictationStatus } from '@/speech/dictationTypes';
+import { isWhisperModelCached, WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB } from '@/speech/whisperModel';
 import { getProviderKey } from '@/storage/credentialVault';
 import { makeChatMessage, useAppState } from '@/state/AppState';
 
@@ -73,6 +74,7 @@ function errorPresentation(error: LlmRequestError, providerName: string): { titl
 function isDictationActive(status: DictationStatus): boolean {
   return status === 'checking'
     || status === 'installing-language'
+    || status === 'loading-model'
     || status === 'listening'
     || status === 'stopping';
 }
@@ -83,6 +85,8 @@ function dictationStatusText(status: DictationStatus, lang: string, error: strin
       return `Checking the on-device speech pack for ${lang}…`;
     case 'installing-language':
       return `Installing the on-device speech pack for ${lang}…`;
+    case 'loading-model':
+      return 'Opening the downloaded local voice model…';
     case 'listening':
       return 'Listening on device. Pauses are okay — press Stop when finished.';
     case 'stopping':
@@ -106,6 +110,7 @@ export default function ChefScreen() {
   const [question, setQuestion] = useState<UiQuestion | null>(null);
   const [dictationStatus, setDictationStatus] = useState<DictationStatus>('idle');
   const [dictationError, setDictationError] = useState('');
+  const [whisperModelCached, setWhisperModelCached] = useState<boolean | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamingTextRef = useRef('');
@@ -116,10 +121,25 @@ export default function ChefScreen() {
   const dictationSupport = useMemo(() => getOnDeviceDictationSupport(), []);
   const dictationLang = useMemo(() => getPreferredDictationLanguage(), []);
   const dictationActive = isDictationActive(dictationStatus);
+  const whisperNeedsSetup = dictationSupport.backend === 'whisper' && whisperModelCached !== true;
 
-  useEffect(() => () => {
-    dictationControllerRef.current?.dispose();
-  }, []);
+  useEffect(() => {
+    let active = true;
+    if (dictationSupport.backend === 'whisper') {
+      void isWhisperModelCached()
+        .then((cached) => {
+          if (active) setWhisperModelCached(cached);
+        })
+        .catch(() => {
+          if (active) setWhisperModelCached(false);
+        });
+    }
+
+    return () => {
+      active = false;
+      dictationControllerRef.current?.dispose();
+    };
+  }, [dictationSupport.backend]);
 
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
@@ -138,6 +158,10 @@ export default function ChefScreen() {
 
   const startDictation = () => {
     if (!dictationSupport.available || dictationActive) return;
+    if (whisperNeedsSetup) {
+      router.push('/settings');
+      return;
+    }
 
     dictationBaseRef.current = input;
     setDictationError('');
@@ -285,9 +309,15 @@ export default function ChefScreen() {
   };
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
-  const dictationCopy = dictationSupport.available
-    ? dictationStatusText(dictationStatus, dictationLang, dictationError)
-    : dictationSupport.reason ?? 'On-device dictation is unavailable in this browser.';
+  const dictationCopy = !dictationSupport.available
+    ? dictationSupport.reason ?? 'On-device dictation is unavailable in this browser.'
+    : dictationSupport.backend === 'whisper' && whisperModelCached === null
+      ? 'Checking the downloaded local voice model…'
+      : whisperNeedsSetup
+        ? `Browser-native speech is unavailable here. Download the optional local voice model (~${WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB} MB) in Settings once to enable private dictation.`
+        : dictationStatus === 'idle' && dictationSupport.backend === 'whisper'
+          ? 'Using the downloaded local voice model. Speech stays on this device; pauses are okay.'
+          : dictationStatusText(dictationStatus, dictationLang, dictationError);
 
   return (
     <Screen>
@@ -390,17 +420,19 @@ export default function ChefScreen() {
               {dictationSupport.available && (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={dictationActive ? 'Stop dictation' : 'Start dictation'}
-                  accessibilityState={{ disabled: dictationStatus === 'stopping' }}
-                  disabled={dictationStatus === 'stopping'}
+                  accessibilityLabel={dictationActive ? 'Stop dictation' : whisperNeedsSetup ? 'Set up local dictation' : 'Start dictation'}
+                  accessibilityState={{ disabled: dictationStatus === 'stopping' || (dictationSupport.backend === 'whisper' && whisperModelCached === null) }}
+                  disabled={dictationStatus === 'stopping' || (dictationSupport.backend === 'whisper' && whisperModelCached === null)}
                   onPress={dictationActive ? stopDictation : startDictation}
                   style={[
                     styles.dictationButton,
                     dictationActive && styles.dictationStopButton,
-                    dictationStatus === 'stopping' && styles.dictationButtonDisabled
+                    (dictationStatus === 'stopping' || (dictationSupport.backend === 'whisper' && whisperModelCached === null)) && styles.dictationButtonDisabled
                   ]}
                 >
-                  <Text style={styles.dictationButtonText}>{dictationActive ? 'Stop dictation' : 'Start dictation'}</Text>
+                  <Text style={styles.dictationButtonText}>
+                    {dictationActive ? 'Stop dictation' : whisperNeedsSetup ? 'Set up dictation' : 'Start dictation'}
+                  </Text>
                 </Pressable>
               )}
             </View>
