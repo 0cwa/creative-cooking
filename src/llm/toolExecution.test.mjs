@@ -9,7 +9,8 @@ function createExecutor() {
     removed: [],
     preferences: [],
     recipes: [],
-    proposals: []
+    proposals: [],
+    validations: []
   };
 
   const tools = {
@@ -31,6 +32,9 @@ function createExecutor() {
     saveRecipe(recipe) {
       state.recipes.push(recipe);
       return { ...recipe, id: 'recipe-1', createdAt: 'now', updatedAt: 'now' };
+    },
+    validateRecipe(recipe) {
+      state.validations.push(recipe);
     },
     propose(proposal) {
       state.proposals.push(proposal);
@@ -92,6 +96,7 @@ test('recipe proposals stay unsaved until accepted', () => {
   }, tools);
 
   assert.equal(state.recipes.length, 0);
+  assert.equal(state.validations.length, 1);
   assert.equal(state.proposals.length, 1);
 
   applyChefProposal(state.proposals[0], tools);
