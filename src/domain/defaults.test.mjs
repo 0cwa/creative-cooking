@@ -3,11 +3,14 @@ import test from 'node:test';
 import {
   DEFAULT_SYSTEM_PROMPT,
   LEGACY_DEFAULT_SYSTEM_PROMPT,
+  PREVIOUS_DEFAULT_SYSTEM_PROMPT,
   migrateLegacySystemPrompt
 } from './defaults.ts';
 
 test('legacy untouched Chef prompt migrates to user-facing master instructions', () => {
   assert.equal(migrateLegacySystemPrompt(LEGACY_DEFAULT_SYSTEM_PROMPT), DEFAULT_SYSTEM_PROMPT);
+  assert.equal(migrateLegacySystemPrompt(PREVIOUS_DEFAULT_SYSTEM_PROMPT), DEFAULT_SYSTEM_PROMPT);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /perishable/i);
   assert.doesNotMatch(DEFAULT_SYSTEM_PROMPT, /ask_user|recipe_save|provided tools|listed allergen/i);
 });
 
