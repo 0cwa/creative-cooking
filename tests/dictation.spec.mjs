@@ -113,4 +113,5 @@ test('compact mic stays beside the composer and explains unavailable dictation',
   await page.getByLabel('Open dictation settings').click();
   await expect(page.getByLabel('Use browser dictation engine')).toBeVisible();
   await expect(page.getByLabel('Use Whisper dictation engine')).toBeVisible();
+  await expect(page.getByText('Dictation', { exact: true })).toBeInViewport();
 });
