@@ -171,7 +171,7 @@ export function InstallAppPrompt() {
           <Text style={styles.eyebrow}>APP TIP</Text>
           <Text style={styles.title}>Install Creative Cooking</Text>
           <Text style={styles.body}>
-            Open it like an app for quicker access. Your pantry, chats, and saved recipes stay available offline.
+            Open it like an app for quicker access. Your pantry and saved recipes stay available offline.
           </Text>
           {showInstructions ? <Text style={styles.instructions}>{instruction}</Text> : null}
         </View>
