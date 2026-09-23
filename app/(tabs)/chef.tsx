@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { SettingsGlyph } from '@/components/SettingsGlyph';
 import { MealContextModal } from '@/components/MealContextModal';
 import { buildChefSystemPrompt } from '@/chef/context';
-import type { ChatMessage, DictationEngine, IngredientPreference, UiQuestion } from '@/domain/types';
+import type { ChatMessage, IngredientPreference, UiQuestion } from '@/domain/types';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { providerForId } from '@/llm/providers';
 import { modelCapabilities, providerMetadata } from '@/llm/registry';
@@ -20,6 +20,11 @@ type RunErrorState = {
   error: LlmRequestError;
   messages: ChatMessage[];
   partialText: string;
+};
+
+type DictationDialogState = {
+  title: string;
+  message: string;
 };
 
 function errorPresentation(error: LlmRequestError, providerName: string): { title: string; message: string; showSettings: boolean } {
@@ -79,25 +84,6 @@ function isDictationActive(status: DictationStatus): boolean {
     || status === 'stopping';
 }
 
-function dictationStatusText(status: DictationStatus, error: string): string {
-  switch (status) {
-    case 'checking':
-      return 'Checking on-device English speech…';
-    case 'installing-language':
-      return 'Installing on-device English speech…';
-    case 'loading-model':
-      return 'Opening the downloaded local voice model…';
-    case 'listening':
-      return 'Listening on device. Pauses are okay — press Stop when finished.';
-    case 'stopping':
-      return 'Finishing your last words…';
-    case 'error':
-      return error || 'On-device dictation stopped. Try again when you are ready.';
-    default:
-      return 'Speech stays on this device. Press Start, then Stop when you are finished.';
-  }
-}
-
 export default function ChefScreen() {
   const router = useRouter();
   const app = useAppState();
@@ -109,7 +95,7 @@ export default function ChefScreen() {
   const [contextOpen, setContextOpen] = useState(false);
   const [question, setQuestion] = useState<UiQuestion | null>(null);
   const [dictationStatus, setDictationStatus] = useState<DictationStatus>('idle');
-  const [dictationError, setDictationError] = useState('');
+  const [dictationDialog, setDictationDialog] = useState<DictationDialogState | null>(null);
   const [whisperModelCached, setWhisperModelCached] = useState<boolean | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -118,10 +104,8 @@ export default function ChefScreen() {
   const dictationControllerRef = useRef<DictationController | null>(null);
   const dictationBaseRef = useRef('');
   const activeProvider = providerMetadata(app.settings.providerId);
-  const browserDictationSupport = useMemo(() => getOnDeviceDictationSupport('browser'), []);
-  const whisperDictationSupport = useMemo(() => getOnDeviceDictationSupport('whisper'), []);
   const dictationEngine = app.settings.dictationEngine;
-  const dictationSupport = dictationEngine === 'whisper' ? whisperDictationSupport : browserDictationSupport;
+  const dictationSupport = useMemo(() => getOnDeviceDictationSupport(dictationEngine), [dictationEngine]);
   const dictationLang = useMemo(() => getPreferredDictationLanguage(), []);
   const dictationActive = isDictationActive(dictationStatus);
   const whisperNeedsSetup = dictationEngine === 'whisper' && whisperModelCached !== true;
@@ -144,6 +128,12 @@ export default function ChefScreen() {
     dictationControllerRef.current?.dispose();
   }, []);
 
+  useEffect(() => {
+    dictationControllerRef.current?.dispose();
+    dictationControllerRef.current = null;
+    setDictationStatus('idle');
+  }, [dictationEngine]);
+
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
     recipes: app.recipes,
@@ -152,31 +142,68 @@ export default function ChefScreen() {
     settings: app.settings
   }), [app.pantry, app.recipes, app.chatMessages, app.mealContext, app.settings]);
 
+  const showDictationRecovery = (reason?: string) => {
+    const detail = reason?.trim() ?? '';
+
+    if (/microphone permission|microphone access|no microphone|audio-capture/i.test(detail)) {
+      setDictationDialog({
+        title: 'Microphone access needed',
+        message: 'Creative Cooking could not use your microphone. Check this site’s microphone permission in your browser, then try again. Dictation settings also lets you choose a different on-device engine.'
+      });
+      return;
+    }
+
+    if (dictationEngine === 'browser') {
+      setDictationDialog({
+        title: 'Browser dictation unavailable',
+        message: 'This browser’s built-in on-device dictation is not available here. Open Dictation settings to switch to Whisper; if Whisper is not downloaded yet, you can download it there.'
+      });
+      return;
+    }
+
+    if (whisperModelCached !== true) {
+      setDictationDialog({
+        title: 'Whisper needs a download',
+        message: `Whisper runs locally, but its voice model is not ready on this device. Open Dictation settings to download it once (about ${WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB} MB), then try the mic again.`
+      });
+      return;
+    }
+
+    setDictationDialog({
+      title: 'Dictation could not start',
+      message: 'Whisper could not start on this device. Open Dictation settings to switch engines or check whether the local voice model is supported here.'
+    });
+  };
+
   const handleDictationSnapshot = (snapshot: DictationSnapshot) => {
     setDictationStatus(snapshot.status);
-    setDictationError(snapshot.error ?? '');
+    if (snapshot.status === 'error') showDictationRecovery(snapshot.error);
     const dictated = joinDictation(snapshot.finalText, snapshot.interimText);
     setInput(appendDictationToDraft(dictationBaseRef.current, dictated));
   };
 
-  const selectDictationEngine = (engine: DictationEngine) => {
-    if (dictationActive || engine === dictationEngine) return;
-    dictationControllerRef.current?.dispose();
-    dictationControllerRef.current = null;
-    setDictationStatus('idle');
-    setDictationError('');
-    app.updateSettings({ dictationEngine: engine });
-  };
-
   const startDictation = () => {
-    if (!dictationSupport.available || dictationActive) return;
+    if (dictationActive) return;
+
+    if (!dictationSupport.available) {
+      showDictationRecovery(dictationSupport.reason);
+      return;
+    }
+
+    if (dictationEngine === 'whisper' && whisperModelCached === null) {
+      setDictationDialog({
+        title: 'Checking Whisper',
+        message: 'Creative Cooking is still checking whether the local Whisper model is downloaded. Open Dictation settings to see its status, or try the mic again in a moment.'
+      });
+      return;
+    }
+
     if (whisperNeedsSetup) {
-      router.push('/settings');
+      showDictationRecovery();
       return;
     }
 
     dictationBaseRef.current = input;
-    setDictationError('');
 
     try {
       const controller = dictationControllerRef.current ?? createDictationController(dictationEngine);
@@ -184,10 +211,13 @@ export default function ChefScreen() {
       void controller.start({
         lang: dictationLang,
         onChange: handleDictationSnapshot
+      }).catch((error) => {
+        setDictationStatus('error');
+        showDictationRecovery(error instanceof Error ? error.message : undefined);
       });
     } catch (error) {
       setDictationStatus('error');
-      setDictationError(error instanceof Error ? error.message : 'On-device dictation could not start.');
+      showDictationRecovery(error instanceof Error ? error.message : undefined);
     }
   };
 
@@ -305,7 +335,7 @@ export default function ChefScreen() {
     dictationControllerRef.current = null;
     dictationBaseRef.current = '';
     setDictationStatus('idle');
-    setDictationError('');
+    setDictationDialog(null);
     setInput('');
     app.newChat();
     setQuestion(null);
@@ -333,17 +363,6 @@ export default function ChefScreen() {
   };
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
-  const dictationCopy = !dictationSupport.available
-    ? dictationSupport.reason ?? 'This dictation engine is unavailable in this browser.'
-    : dictationEngine === 'whisper' && whisperModelCached === null
-      ? 'Checking the downloaded local voice model…'
-      : whisperNeedsSetup
-        ? `Download Whisper Tiny (~${WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB} MB) in Settings once, then use it here whenever you prefer.`
-        : dictationStatus === 'idle' && dictationEngine === 'whisper'
-          ? 'Whisper Tiny · English · fully on-device. Pauses are okay — you decide when to stop.'
-          : dictationStatus === 'idle'
-            ? 'Browser speech · English · on-device. Regional browser locale will not change the dictation language.'
-            : dictationStatusText(dictationStatus, dictationError);
 
   return (
     <Screen>
@@ -430,82 +449,32 @@ export default function ChefScreen() {
         </ScrollView>
 
         <View style={styles.composerArea}>
-          {Platform.OS === 'web' && (
-            <View style={styles.dictationBar}>
-              <View style={styles.dictationInfo}>
-                <View style={[styles.dictationBadge, dictationStatus === 'listening' && styles.dictationBadgeListening]}>
-                  <Text style={[styles.dictationBadgeText, dictationStatus === 'listening' && styles.dictationBadgeTextListening]}>
-                    {dictationEngine === 'whisper' ? 'WHISPER' : 'BROWSER'}
-                  </Text>
-                </View>
-                <Text
-                  accessibilityLiveRegion="polite"
-                  style={[styles.dictationHelp, dictationStatus === 'error' && styles.dictationErrorText]}
-                >
-                  {dictationCopy}
-                </Text>
-              </View>
-              <View style={styles.dictationControls}>
-                <View accessibilityRole="radiogroup" style={styles.dictationEngineSwitch}>
-                  <Pressable
-                    accessibilityRole="radio"
-                    accessibilityLabel="Use browser dictation engine"
-                    aria-checked={dictationEngine === 'browser'}
-                    aria-disabled={dictationActive || !browserDictationSupport.available}
-                    accessibilityState={{ checked: dictationEngine === 'browser', disabled: dictationActive || !browserDictationSupport.available }}
-                    disabled={dictationActive || !browserDictationSupport.available}
-                    onPress={() => selectDictationEngine('browser')}
-                    style={[
-                      styles.dictationEngineOption,
-                      dictationEngine === 'browser' && styles.dictationEngineOptionActive,
-                      !browserDictationSupport.available && styles.dictationEngineOptionDisabled
-                    ]}
-                  >
-                    <Text style={[styles.dictationEngineText, dictationEngine === 'browser' && styles.dictationEngineTextActive]}>Browser</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="radio"
-                    accessibilityLabel="Use Whisper dictation engine"
-                    aria-checked={dictationEngine === 'whisper'}
-                    aria-disabled={dictationActive || !whisperDictationSupport.available}
-                    accessibilityState={{ checked: dictationEngine === 'whisper', disabled: dictationActive || !whisperDictationSupport.available }}
-                    disabled={dictationActive || !whisperDictationSupport.available}
-                    onPress={() => selectDictationEngine('whisper')}
-                    style={[
-                      styles.dictationEngineOption,
-                      dictationEngine === 'whisper' && styles.dictationEngineOptionActive,
-                      !whisperDictationSupport.available && styles.dictationEngineOptionDisabled
-                    ]}
-                  >
-                    <Text style={[styles.dictationEngineText, dictationEngine === 'whisper' && styles.dictationEngineTextActive]}>
-                      Whisper{whisperModelCached ? ' ✓' : ''}
-                    </Text>
-                  </Pressable>
-                </View>
-                {dictationSupport.available && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={dictationActive ? 'Stop dictation' : whisperNeedsSetup ? 'Set up local dictation' : 'Start dictation'}
-                    accessibilityState={{ disabled: dictationStatus === 'stopping' || (dictationEngine === 'whisper' && whisperModelCached === null) }}
-                    disabled={dictationStatus === 'stopping' || (dictationEngine === 'whisper' && whisperModelCached === null)}
-                    onPress={dictationActive ? stopDictation : startDictation}
-                    style={[
-                      styles.dictationButton,
-                      dictationActive && styles.dictationStopButton,
-                      (dictationStatus === 'stopping' || (dictationEngine === 'whisper' && whisperModelCached === null)) && styles.dictationButtonDisabled
-                    ]}
-                  >
-                    <Text style={styles.dictationButtonText}>
-                      {dictationActive ? 'Stop dictation' : whisperNeedsSetup ? 'Set up dictation' : 'Start dictation'}
-                    </Text>
-                  </Pressable>
-                )}
-              </View>
-            </View>
-          )}
-
           <View style={styles.composerWrap}>
             <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>
+            {Platform.OS === 'web' && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={dictationActive ? 'Stop dictation' : 'Start dictation'}
+                accessibilityHint={dictationEngine === 'whisper'
+                  ? 'Uses the downloaded Whisper model. Change dictation engine in Settings.'
+                  : 'Uses browser on-device speech. Change dictation engine in Settings.'}
+                accessibilityState={{ disabled: dictationStatus === 'stopping' }}
+                disabled={dictationStatus === 'stopping'}
+                onPress={dictationActive ? stopDictation : startDictation}
+                style={[
+                  styles.dictationIconButton,
+                  dictationActive && styles.dictationIconButtonActive,
+                  dictationStatus === 'stopping' && styles.dictationIconButtonDisabled
+                ]}
+              >
+                <View style={styles.micGlyph}>
+                  <View style={[styles.micBody, dictationActive && styles.micStrokeActive]} />
+                  <View style={[styles.micArc, dictationActive && styles.micStrokeActive]} />
+                  <View style={[styles.micStem, dictationActive && styles.micFillActive]} />
+                  <View style={[styles.micBase, dictationActive && styles.micFillActive]} />
+                </View>
+              </Pressable>
+            )}
             <TextInput
               accessibilityLabel="Message Chef"
               accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : undefined}
@@ -547,6 +516,47 @@ export default function ChefScreen() {
         onClose={() => setContextOpen(false)}
         onChange={(mealContext) => app.updateMealContext(mealContext)}
       />
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={Boolean(dictationDialog)}
+        onRequestClose={() => setDictationDialog(null)}
+      >
+        <View style={styles.dictationDialogBackdrop}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss dictation message"
+            onPress={() => setDictationDialog(null)}
+            style={styles.dictationDialogDismissArea}
+          />
+          <View accessibilityLiveRegion="assertive" style={styles.dictationDialogCard}>
+            <Text style={styles.dictationDialogTitle}>{dictationDialog?.title}</Text>
+            <Text style={styles.dictationDialogMessage}>{dictationDialog?.message}</Text>
+            <View style={styles.dictationDialogActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close dictation message"
+                onPress={() => setDictationDialog(null)}
+                style={styles.dictationDialogSecondary}
+              >
+                <Text style={styles.dictationDialogSecondaryText}>Not now</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open dictation settings"
+                onPress={() => {
+                  setDictationDialog(null);
+                  router.push('/settings?focus=dictation');
+                }}
+                style={styles.dictationDialogPrimary}
+              >
+                <Text style={styles.dictationDialogPrimaryText}>Dictation settings</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -590,28 +600,19 @@ const styles = StyleSheet.create({
   questionOption: { minHeight: 44, backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: '#fed7aa', justifyContent: 'center' },
   questionOptionText: { color: '#9a3412', fontWeight: '600' },
   composerArea: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingTop: 8 },
-  dictationBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', paddingHorizontal: 12, paddingBottom: 8 },
-  dictationInfo: { flex: 1, minWidth: 220, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  dictationControls: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  dictationEngineSwitch: { flexDirection: 'row', borderRadius: 999, padding: 3, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0' },
-  dictationEngineOption: { minHeight: 32, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
-  dictationEngineOptionActive: { backgroundColor: '#172033' },
-  dictationEngineOptionDisabled: { opacity: 0.35 },
-  dictationEngineText: { color: '#64748b', fontSize: 12.5, fontWeight: '700' },
-  dictationEngineTextActive: { color: 'white' },
-  dictationBadge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: '#e2e8f0' },
-  dictationBadgeListening: { backgroundColor: '#dcfce7' },
-  dictationBadgeText: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 0.7 },
-  dictationBadgeTextListening: { color: '#166534' },
-  dictationHelp: { flex: 1, color: '#64748b', fontSize: 12.5, lineHeight: 17 },
-  dictationErrorText: { color: '#9a3412' },
-  dictationButton: { minHeight: 38, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#14532d', alignItems: 'center', justifyContent: 'center' },
-  dictationStopButton: { backgroundColor: '#991b1b' },
-  dictationButtonDisabled: { opacity: 0.55 },
-  dictationButtonText: { color: 'white', fontSize: 13, fontWeight: '800' },
   composerWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingBottom: 10, backgroundColor: 'white', flexWrap: 'wrap' },
   plus: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   plusText: { fontSize: 24, color: '#475569' },
+  dictationIconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
+  dictationIconButtonActive: { backgroundColor: '#fee2e2' },
+  dictationIconButtonDisabled: { opacity: 0.55 },
+  micGlyph: { width: 20, height: 22, position: 'relative' },
+  micBody: { position: 'absolute', left: 6, top: 1, width: 8, height: 13, borderWidth: 2, borderColor: '#475569', borderRadius: 6 },
+  micArc: { position: 'absolute', left: 3, top: 8, width: 14, height: 9, borderLeftWidth: 2, borderRightWidth: 2, borderBottomWidth: 2, borderColor: '#475569', borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
+  micStem: { position: 'absolute', left: 9, top: 16, width: 2, height: 4, borderRadius: 1, backgroundColor: '#475569' },
+  micBase: { position: 'absolute', left: 5, top: 20, width: 10, height: 2, borderRadius: 1, backgroundColor: '#475569' },
+  micStrokeActive: { borderColor: '#b91c1c' },
+  micFillActive: { backgroundColor: '#b91c1c' },
   composer: { flex: 1, minWidth: 140, maxHeight: 160, minHeight: 42, borderRadius: 18, backgroundColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10, color: '#172033', fontSize: 15.5 },
   composerDictating: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0' },
   send: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
@@ -620,5 +621,15 @@ const styles = StyleSheet.create({
   sendShaft: { position: 'absolute', left: 8, top: 4, bottom: 2, width: 2, borderRadius: 1, backgroundColor: 'white' },
   sendHeadLeft: { position: 'absolute', left: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '-45deg' }] },
   sendHeadRight: { position: 'absolute', right: 3, top: 4, width: 8, height: 2, borderRadius: 1, backgroundColor: 'white', transform: [{ rotate: '45deg' }] },
-  stopGlyph: { width: 11, height: 11, borderRadius: 2, backgroundColor: 'white' }
+  stopGlyph: { width: 11, height: 11, borderRadius: 2, backgroundColor: 'white' },
+  dictationDialogBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.35)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  dictationDialogDismissArea: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  dictationDialogCard: { width: '100%', maxWidth: 420, borderRadius: 20, backgroundColor: 'white', padding: 18, gap: 10, borderWidth: 1, borderColor: '#e2e8f0' },
+  dictationDialogTitle: { color: '#172033', fontSize: 18, fontWeight: '800' },
+  dictationDialogMessage: { color: '#475569', fontSize: 14, lineHeight: 20 },
+  dictationDialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', marginTop: 4 },
+  dictationDialogSecondary: { minHeight: 42, borderRadius: 12, backgroundColor: '#f1f5f9', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  dictationDialogSecondaryText: { color: '#475569', fontWeight: '700' },
+  dictationDialogPrimary: { minHeight: 42, borderRadius: 12, backgroundColor: '#172033', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  dictationDialogPrimaryText: { color: 'white', fontWeight: '800' }
 });
