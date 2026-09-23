@@ -4,9 +4,12 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { SettingsGlyph } from '@/components/SettingsGlyph';
 import { MealContextModal } from '@/components/MealContextModal';
+import { ToolProposalCard } from '@/components/ToolProposalCard';
 import { buildChefSystemPrompt } from '@/chef/context';
-import type { ChatMessage, DictationEngine, IngredientPreference, UiQuestion } from '@/domain/types';
+import { proposalFingerprint } from '@/chef/proposals';
+import type { ChatMessage, ChefToolProposal, DictationEngine, IngredientPreference, UiQuestion } from '@/domain/types';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
+import { applyChefProposal } from '@/llm/toolExecution';
 import { providerForId } from '@/llm/providers';
 import { modelCapabilities, providerMetadata } from '@/llm/registry';
 import { createDictationController, getOnDeviceDictationSupport, getPreferredDictationLanguage } from '@/speech/dictation';
@@ -204,6 +207,8 @@ export default function ChefScreen() {
     discardCancelledRef.current = false;
     setBusy(true);
 
+    const proposedChanges: ChefToolProposal[] = [];
+    const proposalKeys = new Set<string>();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -251,11 +256,24 @@ export default function ChefScreen() {
           updatePantry: app.updatePantryByName,
           removePantry: app.removePantryByName,
           setPantryPreference: app.setPantryPreferenceByName,
-          saveRecipe: app.saveRecipe
+          saveRecipe: app.saveRecipe,
+          propose: (proposal) => {
+            const key = proposalFingerprint(proposal);
+            if (proposalKeys.has(key)) return;
+            proposalKeys.add(key);
+            proposedChanges.push(proposal);
+          }
         }
       });
 
-      if (result.text.trim()) app.appendChatMessage(makeChatMessage('assistant', result.text.trim()));
+      const responseText = result.text.trim();
+      if (responseText || proposedChanges.length) {
+        app.appendChatMessage(makeChatMessage(
+          'assistant',
+          responseText || 'I have a suggested change for you.',
+          proposedChanges
+        ));
+      }
       if (result.question) setQuestion(result.question);
     } catch (error) {
       const normalized = normalizeLlmError(error);
@@ -275,6 +293,35 @@ export default function ChefScreen() {
       setProviderStatus('');
       setBusy(false);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+    }
+  };
+
+  const applyProposal = (messageId: string, proposal: ChefToolProposal) => {
+    try {
+      const outcome = applyChefProposal(proposal, {
+        addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
+        updatePantry: app.updatePantryByName,
+        removePantry: app.removePantryByName,
+        setPantryPreference: app.setPantryPreferenceByName,
+        saveRecipe: app.saveRecipe
+      });
+
+      let result: { ok?: boolean; message?: string; error?: string } = {};
+      try {
+        result = JSON.parse(outcome.result) as typeof result;
+      } catch {
+        throw new Error('Chef returned an unreadable change result.');
+      }
+      if (result.ok !== true) {
+        throw new Error(result.message || result.error || 'That change could not be applied.');
+      }
+
+      app.setChatProposalStatus(messageId, proposal.id, 'applied');
+    } catch (error) {
+      Alert.alert(
+        'Could not apply change',
+        error instanceof Error ? error.message : 'That suggested change could not be applied.'
+      );
     }
   };
 
@@ -372,8 +419,21 @@ export default function ChefScreen() {
             </View>
           )}
           {app.chatMessages.map((message) => (
-            <View key={message.id} style={[styles.bubble, message.role === 'user' ? styles.userBubble : styles.chefBubble]}>
-              <Text style={[styles.bubbleText, message.role === 'user' && styles.userBubbleText]}>{message.content}</Text>
+            <View key={message.id} style={styles.messageGroup}>
+              <View style={[styles.bubble, message.role === 'user' ? styles.userBubble : styles.chefBubble]}>
+                <Text style={[styles.bubbleText, message.role === 'user' && styles.userBubbleText]}>{message.content}</Text>
+              </View>
+              {message.role === 'assistant' && message.proposals?.length ? (
+                <View style={styles.proposalList}>
+                  {message.proposals.map((proposal) => (
+                    <ToolProposalCard
+                      key={proposal.id}
+                      proposal={proposal}
+                      onApply={() => applyProposal(message.id, proposal)}
+                    />
+                  ))}
+                </View>
+              ) : null}
             </View>
           ))}
           {busy && (
@@ -555,6 +615,8 @@ const styles = StyleSheet.create({
   contextChipTextActive: { color: 'white' },
   messages: { flex: 1 },
   messagesContent: { padding: 16, gap: 10, paddingBottom: 28 },
+  messageGroup: { width: '100%', gap: 8 },
+  proposalList: { gap: 8 },
   welcome: { alignItems: 'center', paddingTop: 46, paddingHorizontal: 24, paddingBottom: 30 },
   welcomeEmoji: { fontSize: 46 },
   welcomeTitle: { fontSize: 23, fontWeight: '800', color: '#172033', marginTop: 12 },
