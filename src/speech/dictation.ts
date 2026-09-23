@@ -7,6 +7,10 @@ export function getOnDeviceDictationSupport(): OnDeviceDictationSupport {
   };
 }
 
-export function getPreferredDictationLanguage(): string {\n  return 'en-US';\n}\n\nexport function createDictationController(): DictationController {
+export function getPreferredDictationLanguage(): string {
+  return 'en-US';
+}
+
+export function createDictationController(): DictationController {
   throw new Error('On-device dictation is not available on this platform.');
 }
