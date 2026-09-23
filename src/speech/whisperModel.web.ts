@@ -93,8 +93,8 @@ export async function getWhisperModelCapabilities(): Promise<WhisperCapabilityRe
   const worker = typeof Worker !== 'undefined';
   const audioContext = Boolean(audioContextConstructor());
   const browserCache = typeof caches !== 'undefined';
-  const estimate = typeof navigator !== 'undefined' && navigator.storage?.estimate
-    ? await navigator.storage.estimate().catch(() => ({}))
+  const estimate: StorageEstimate = typeof navigator !== 'undefined' && navigator.storage?.estimate
+    ? await navigator.storage.estimate().catch(() => ({} as StorageEstimate))
     : {};
   const freeBytes = typeof estimate.quota === 'number' && typeof estimate.usage === 'number'
     ? Math.max(0, estimate.quota - estimate.usage)
