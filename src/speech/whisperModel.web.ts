@@ -153,7 +153,8 @@ export async function deleteWhisperModel(): Promise<void> {
 }
 
 function createWhisperWorker(): Worker {
-  return new Worker(new URL('./whisper.worker', window.location.href));
+  const base = (process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/$/, '');
+  return new Worker(`${base}/whisper-worker.js`, { type: 'module' });
 }
 
 export async function downloadWhisperModel(
