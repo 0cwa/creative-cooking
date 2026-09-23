@@ -5,11 +5,12 @@ import type { ChefToolProposal } from '@/domain/types';
 
 type Props = {
   proposal: ChefToolProposal;
-  onApply(): void;
+  onApply(): boolean;
 };
 
 export function ToolProposalCard({ proposal, onApply }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [applying, setApplying] = useState(false);
   const presentation = useMemo(() => proposalPresentation(proposal), [proposal]);
   const applied = proposal.status === 'applied';
   const recipe = presentation.recipe;
@@ -80,13 +81,17 @@ export function ToolProposalCard({ proposal, onApply }: Props) {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={applied ? `${presentation.actionLabel} applied` : presentation.actionLabel}
-          accessibilityState={{ disabled: applied }}
-          disabled={applied}
-          onPress={onApply}
-          style={[styles.actionButton, actionStyle, applied && styles.actionDisabled]}
+          accessibilityState={{ disabled: applied || applying }}
+          disabled={applied || applying}
+          onPress={() => {
+            if (applying || applied) return;
+            setApplying(true);
+            if (!onApply()) setApplying(false);
+          }}
+          style={[styles.actionButton, actionStyle, (applied || applying) && styles.actionDisabled]}
         >
           <Text style={styles.actionButtonText}>
-            {applied ? '✓ Applied' : presentation.actionTone === 'positive' ? `＋ ${presentation.actionLabel}` : presentation.actionLabel}
+            {applied ? '✓ Applied' : applying ? 'Applying…' : presentation.actionTone === 'positive' ? `＋ ${presentation.actionLabel}` : presentation.actionLabel}
           </Text>
         </Pressable>
       </View>
