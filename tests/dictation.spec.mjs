@@ -89,7 +89,7 @@ test('compact mic stays beside the composer and explains unavailable dictation',
 
   await page.goto('./chef');
 
-  const plus = page.getByLabel('Edit meal context');
+  const plus = page.getByLabel('Edit meal context', { exact: true });
   const mic = page.getByLabel('Start dictation');
   const composer = page.getByLabel('Message Chef');
   await expect(mic).toBeVisible();
