@@ -40,14 +40,20 @@ export async function isWhisperModelCached(): Promise<boolean> {
   return false;
 }
 
-export async function downloadWhisperModel(): Promise<void> {
+export async function downloadWhisperModel(
+  _onStatus?: (status: string) => void,
+  _signal?: AbortSignal
+): Promise<void> {
   throw new Error('Local voice-model dictation is not available on this platform.');
 }
 
 export async function deleteWhisperModel(): Promise<void> {}
 
 export class WhisperDictationController implements DictationController {
-  async start(): Promise<void> {
+  async start(_options: {
+    lang: string;
+    onChange: (snapshot: import('./dictationTypes').DictationSnapshot) => void;
+  }): Promise<void> {
     throw new Error('Local voice-model dictation is not available on this platform.');
   }
   stop(): void {}
