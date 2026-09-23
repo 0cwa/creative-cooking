@@ -1,4 +1,4 @@
-import type { ChatMessage, IngredientPreference, Recipe, UiQuestion } from '@/domain/types';
+import type { ChatMessage, ChefToolProposal, IngredientPreference, Recipe, UiQuestion } from '@/domain/types';
 
 export type ToolExecutor = {
   addPantry(names: string[], preference?: IngredientPreference): void;
@@ -6,6 +6,8 @@ export type ToolExecutor = {
   removePantry(name: string): boolean;
   setPantryPreference(name: string, preference: IngredientPreference): boolean;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
+  propose?(proposal: ChefToolProposal): void;
+  forceProposals?: boolean;
 };
 
 export type ChefRunResult = {
