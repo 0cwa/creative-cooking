@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
+import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversations';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
 import { isDictationEngine, isProviderId } from '@/domain/types';
@@ -33,10 +34,20 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   const dictationEngine = isDictationEngine(saved.settings?.dictationEngine)
     ? saved.settings.dictationEngine
     : DEFAULT_STATE.settings.dictationEngine;
+  const chatMessages = Array.isArray(saved.chatMessages) ? saved.chatMessages : [];
+  const chatHistory = Array.isArray(saved.chatHistory) ? saved.chatHistory : [];
+  const activeConversationId = typeof saved.activeConversationId === 'string'
+    ? saved.activeConversationId
+    : chatMessages.length
+      ? `chat-${chatMessages[0]?.id ?? 'legacy'}`
+      : null;
 
   return {
     ...DEFAULT_STATE,
     ...saved,
+    chatMessages,
+    chatHistory: sortChatHistory(chatHistory),
+    activeConversationId,
     mealContext: { ...DEFAULT_STATE.mealContext, ...(saved.mealContext ?? {}) },
     settings: {
       ...DEFAULT_STATE.settings,
@@ -47,6 +58,17 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
       systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
     }
   };
+}
+
+function archiveActiveChat(current: PersistedState): PersistedState['chatHistory'] {
+  if (!current.chatMessages.length) return current.chatHistory;
+  const id = current.activeConversationId ?? `chat-${current.chatMessages[0]?.id ?? Date.now()}`;
+  const conversation = chatConversationFromMessages(id, current.chatMessages);
+  if (!conversation) return current.chatHistory;
+  return sortChatHistory([
+    conversation,
+    ...current.chatHistory.filter((item) => item.id !== conversation.id)
+  ]);
 }
 
 type AppStateApi = PersistedState & {
@@ -67,6 +89,8 @@ type AppStateApi = PersistedState & {
   appendChatMessage(message: ChatMessage): void;
   setChatProposalStatus(messageId: string, proposalId: string, status: ChefToolProposalStatus): void;
   newChat(): void;
+  openChatConversation(id: string): void;
+  deleteChatConversation(id: string): void;
   updateMealContext(patch: Partial<MealContext>): void;
   updateCookEnergy(index: number, energy: CookEnergy): void;
   updateSettings(patch: Partial<AppSettings>): void;
@@ -250,11 +274,21 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, []);
 
   const setChatMessages = useCallback((messages: ChatMessage[]) => {
-    setState((current) => ({ ...current, chatMessages: messages }));
+    setState((current) => ({
+      ...current,
+      chatMessages: messages,
+      activeConversationId: messages.length
+        ? current.activeConversationId ?? `chat-${messages[0]?.id ?? Date.now()}`
+        : null
+    }));
   }, []);
 
   const appendChatMessage = useCallback((message: ChatMessage) => {
-    setState((current) => ({ ...current, chatMessages: [...current.chatMessages, message] }));
+    setState((current) => ({
+      ...current,
+      chatMessages: [...current.chatMessages, message],
+      activeConversationId: current.activeConversationId ?? `chat-${message.id}`
+    }));
   }, []);
 
   const setChatProposalStatus = useCallback((
@@ -278,7 +312,32 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, []);
 
   const newChat = useCallback(() => {
-    setState((current) => ({ ...current, chatMessages: [] }));
+    setState((current) => ({
+      ...current,
+      chatHistory: archiveActiveChat(current),
+      chatMessages: [],
+      activeConversationId: null
+    }));
+  }, []);
+
+  const openChatConversation = useCallback((id: string) => {
+    setState((current) => {
+      const target = current.chatHistory.find((conversation) => conversation.id === id);
+      if (!target) return current;
+      return {
+        ...current,
+        chatHistory: archiveActiveChat(current).filter((conversation) => conversation.id !== id),
+        chatMessages: target.messages,
+        activeConversationId: target.id
+      };
+    });
+  }, []);
+
+  const deleteChatConversation = useCallback((id: string) => {
+    setState((current) => ({
+      ...current,
+      chatHistory: current.chatHistory.filter((conversation) => conversation.id !== id)
+    }));
   }, []);
 
   const updateMealContext = useCallback((patch: Partial<MealContext>) => {
@@ -321,6 +380,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       appendChatMessage,
       setChatProposalStatus,
       newChat,
+      openChatConversation,
+      deleteChatConversation,
       updateMealContext,
       updateCookEnergy,
       updateSettings,
@@ -345,6 +406,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       appendChatMessage,
       setChatProposalStatus,
       newChat,
+      openChatConversation,
+      deleteChatConversation,
       updateMealContext,
       updateCookEnergy,
       updateSettings,
