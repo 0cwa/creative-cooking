@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/components/Screen';
 import { DEFAULT_SYSTEM_PROMPT } from '@/domain/defaults';
-import type { ProviderId } from '@/domain/types';
+import type { DictationEngine, ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
 import { createOpenRouterShareLink } from '@/llm/openrouter/share';
 import { CLOUD_PROVIDER_IDS, modelCapabilities, providerMetadata } from '@/llm/registry';
@@ -19,6 +19,7 @@ import {
   downloadLocalModel,
   isLocalModelCached
 } from '@/llm/webllm/modelCache';
+import { getOnDeviceDictationSupport } from '@/speech/dictation';
 import {
   deleteWhisperModel,
   downloadWhisperModel,
@@ -53,6 +54,7 @@ function supportLabel(value: boolean | 'unknown'): string {
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ focus?: string }>();
   const app = useAppState();
   const [allergyInput, setAllergyInput] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -70,9 +72,13 @@ export default function SettingsScreen() {
   const [whisperDownloadProgress, setWhisperDownloadProgress] = useState<WhisperDownloadProgress | null>(null);
   const localDownloadController = useRef<AbortController | null>(null);
   const whisperDownloadController = useRef<AbortController | null>(null);
+  const settingsScrollRef = useRef<ScrollView>(null);
+  const dictationFocusHandledRef = useRef(false);
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
+  const browserDictationSupport = getOnDeviceDictationSupport('browser');
+  const whisperDictationReady = whisperCapability?.available === true && whisperModelCached === true;
 
   useEffect(() => {
     let active = true;
@@ -297,6 +303,10 @@ export default function SettingsScreen() {
     app.updateSettings({ providerId, model: next.defaultModel });
   };
 
+  const selectDictationEngine = (dictationEngine: DictationEngine) => {
+    app.updateSettings({ dictationEngine });
+  };
+
   const saveKey = async () => {
     if (!apiKey.trim()) return;
     await setProviderKey(app.settings.providerId, apiKey.trim());
@@ -472,7 +482,7 @@ export default function SettingsScreen() {
         <Text style={styles.title}>Settings</Text>
         <View style={{ width: 42 }} />
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={settingsScrollRef} contentContainerStyle={styles.content}>
         <Section title="Allergies" subtitle="These are hard constraints and are sent with meal requests.">
           <View style={styles.inline}>
             <TextInput accessibilityLabel="Add allergies" value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
@@ -664,9 +674,76 @@ export default function SettingsScreen() {
           )}
         </Section>
 
+        <View
+          onLayout={(event) => {
+            if (params.focus !== 'dictation' || dictationFocusHandledRef.current) return;
+            dictationFocusHandledRef.current = true;
+            const y = Math.max(0, event.nativeEvent.layout.y - 12);
+            setTimeout(() => settingsScrollRef.current?.scrollTo({ y, animated: false }), 0);
+          }}
+        >
         <Section title="Local models" subtitle="Experimental in-browser inference. Downloaded models run on this device and do not require an API key.">
           <View style={styles.capabilityBox}>
-            <Text style={styles.capabilityTitle}>Dictation · Whisper Tiny</Text>
+            <Text style={styles.capabilityTitle}>Dictation</Text>
+            <Text style={styles.help}>Choose what the microphone button beside the Chef text field uses. You can change this any time.</Text>
+            <View accessibilityRole="radiogroup" style={styles.providerGrid}>
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityLabel="Use browser dictation engine"
+                aria-checked={app.settings.dictationEngine === 'browser'}
+                aria-disabled={!browserDictationSupport.available}
+                accessibilityState={{ checked: app.settings.dictationEngine === 'browser', disabled: !browserDictationSupport.available }}
+                disabled={!browserDictationSupport.available}
+                onPress={() => selectDictationEngine('browser')}
+                style={[
+                  styles.providerButton,
+                  app.settings.dictationEngine === 'browser' && styles.providerButtonActive,
+                  !browserDictationSupport.available && styles.disabledButton
+                ]}
+              >
+                <Text style={[
+                  styles.providerButtonText,
+                  app.settings.dictationEngine === 'browser' && styles.providerButtonTextActive
+                ]}>Browser speech</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityLabel="Use Whisper dictation engine"
+                aria-checked={app.settings.dictationEngine === 'whisper'}
+                aria-disabled={!whisperDictationReady}
+                accessibilityState={{ checked: app.settings.dictationEngine === 'whisper', disabled: !whisperDictationReady }}
+                disabled={!whisperDictationReady}
+                onPress={() => selectDictationEngine('whisper')}
+                style={[
+                  styles.providerButton,
+                  app.settings.dictationEngine === 'whisper' && styles.providerButtonActive,
+                  !whisperDictationReady && styles.disabledButton
+                ]}
+              >
+                <Text style={[
+                  styles.providerButtonText,
+                  app.settings.dictationEngine === 'whisper' && styles.providerButtonTextActive
+                ]}>
+                  {whisperModelCached ? 'Whisper' : 'Whisper · download first'}
+                </Text>
+              </Pressable>
+            </View>
+            {!browserDictationSupport.available && (
+              <Text style={styles.warning}>Browser speech is unavailable here. Download Whisper below, then select it as the dictation engine.</Text>
+            )}
+            {app.settings.dictationEngine === 'browser' && browserDictationSupport.available && (
+              <Text style={styles.help}>Chef’s mic currently uses your browser’s on-device English speech.</Text>
+            )}
+            {app.settings.dictationEngine === 'whisper' && whisperDictationReady && (
+              <Text style={styles.help}>Chef’s mic currently uses the downloaded Whisper model entirely on this device.</Text>
+            )}
+            {app.settings.dictationEngine === 'whisper' && !whisperDictationReady && (
+              <Text style={styles.warning}>Whisper is selected but is not ready. Download it below, or switch back to Browser speech if that option is available.</Text>
+            )}
+          </View>
+
+          <View style={styles.capabilityBox}>
+            <Text style={styles.capabilityTitle}>Whisper Tiny download</Text>
             <Text style={styles.help}>Model: {WHISPER_MODEL_ID}</Text>
             <Text style={styles.help}>
               Optional fallback for browsers without native on-device speech. Download is roughly {WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB} MB; at least 250 MB of free browser storage is recommended.
@@ -868,6 +945,7 @@ export default function SettingsScreen() {
             <Text style={styles.help}>Checking WebGPU and browser storage…</Text>
           )}
         </Section>
+        </View>
       </ScrollView>
     </Screen>
   );
