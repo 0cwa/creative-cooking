@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { groupPantryForChef, normalizeIngredientName, parseIngredientInput } from './pantry.ts';
+import { groupPantryForChef, normalizeIngredientName, parseIngredientInput, updatePantryItemName } from './pantry.ts';
 
 test('normalizes whitespace and parses a deduplicated ingredient list', () => {
   assert.equal(normalizeIngredientName('  green   onions  '), 'green onions');
@@ -8,6 +8,25 @@ test('normalizes whitespace and parses a deduplicated ingredient list', () => {
     parseIngredientInput('Carrots, green onions\ncarrots;  Tofu  '),
     ['Carrots', 'green onions', 'Tofu']
   );
+});
+
+test('updates pantry descriptions without losing preference or creating duplicates', () => {
+  const items = [
+    { id: 'mint', name: 'mint', preference: 5, createdAt: 'old', updatedAt: 'old' },
+    { id: 'okra', name: 'okra (frozen)', preference: 3, createdAt: 'old', updatedAt: 'old' }
+  ];
+
+  const renamed = updatePantryItemName(items, 'mint', 'mint (dried)');
+  assert.equal(renamed.updated, true);
+  assert.equal(renamed.items[0].id, 'mint');
+  assert.equal(renamed.items[0].name, 'mint (dried)');
+  assert.equal(renamed.items[0].preference, 5);
+  assert.equal(renamed.items[0].createdAt, 'old');
+  assert.notEqual(renamed.items[0].updatedAt, 'old');
+
+  const duplicate = updatePantryItemName(renamed.items, 'mint (dried)', 'okra (frozen)');
+  assert.equal(duplicate.updated, false);
+  assert.deepEqual(duplicate.items, renamed.items);
 });
 
 test('groups pantry items in preference order with explicit empty groups', () => {

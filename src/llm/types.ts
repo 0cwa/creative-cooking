@@ -2,6 +2,7 @@ import type { ChatMessage, IngredientPreference, Recipe, UiQuestion } from '@/do
 
 export type ToolExecutor = {
   addPantry(names: string[], preference?: IngredientPreference): void;
+  updatePantry(name: string, newName: string): boolean;
   removePantry(name: string): boolean;
   setPantryPreference(name: string, preference: IngredientPreference): boolean;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;

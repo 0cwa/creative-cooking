@@ -57,15 +57,15 @@ export default function PantryScreen() {
       </View>
 
       <View testID="pantry-composer" style={styles.composer}>
-        <Text style={styles.composerHelp}>Manually add ingredients 1-by-1 here. To dictate all at once, you can tell the chef.</Text>
+        <Text style={styles.composerHelp}>Add an ingredient with any useful detail — for example mint (dried) or okra (frozen). To dictate many at once, tell Chef.</Text>
         <View style={styles.composerRow}>
           <TextInput
             ref={inputRef}
-            accessibilityLabel="Ingredient name"
+            accessibilityLabel="Ingredient and details"
             value={input}
             onChangeText={setInput}
             onSubmitEditing={add}
-            placeholder="Ingredient name"
+            placeholder="e.g. mint (dried)"
             placeholderTextColor="#94a3b8"
             returnKeyType="done"
             submitBehavior="submit"

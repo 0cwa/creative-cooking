@@ -5,14 +5,14 @@ Creative Cooking is a local-first cooking application with interchangeable AI en
 ## Layers
 
 1. **Expo Router screens/components** — Pantry, Chef, Recipes, Settings.
-2. **Domain/state** — pantry names/preferences, structured recipes, chat messages, meal context, settings.
+2. **Domain/state** — pantry descriptions/preferences, structured recipes, chat messages, meal context, settings.
 3. **Chef orchestration** — prompt/context compiler and a small typed tool set.
 4. **LLM adapters** — OpenRouter plus direct OpenAI, Anthropic, Gemini, and Mistral BYOK adapters implement the same interface; future local providers use the same boundary.
 5. **Storage adapters** — IndexedDB for ordinary web/PWA app state, AsyncStorage on native, and a separate credential vault for provider secrets.
 
 ## Pantry model
 
-Only `name` and `preference` are required. The application must not turn cooking into inventory management. Optional quantity/expiry metadata may be added later but must stay optional.
+Only `name` and `preference` are required. The `name` field is intentionally a human-readable ingredient description, so relevant known qualifiers can remain inline (for example `mint (dried)`, `okra (frozen)`, or `fava beans (cooked, refrigerated)`) without adding a tag/category workflow. The application must not turn cooking into inventory management. Optional structured quantity/expiry metadata may be added later but must stay optional.
 
 The Chef receives pantry names grouped as:
 
@@ -27,6 +27,7 @@ The Chef receives pantry names grouped as:
 The model proposes mutations; application code validates and executes them. The MVP tools are deliberately small:
 
 - `pantry_add`
+- `pantry_update`
 - `pantry_remove`
 - `pantry_set_preference`
 - `recipe_save`

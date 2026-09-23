@@ -27,6 +27,12 @@ export function executeChefTool(
       tools.addPantry(names, preferenceFromToolValue(args.preference));
       return { result: JSON.stringify({ ok: true, added: names }) };
     }
+    case 'pantry_update': {
+      const name = typeof args.name === 'string' ? args.name : '';
+      const newName = typeof args.newName === 'string' ? args.newName : '';
+      const updated = tools.updatePantry(name, newName);
+      return { result: JSON.stringify({ ok: updated, name, newName }) };
+    }
     case 'pantry_remove': {
       const name = typeof args.name === 'string' ? args.name : '';
       const removed = tools.removePantry(name);
@@ -67,6 +73,7 @@ export function executeChefTool(
 
 export function toolHasSideEffects(name: string): boolean {
   return name === 'pantry_add'
+    || name === 'pantry_update'
     || name === 'pantry_remove'
     || name === 'pantry_set_preference'
     || name === 'recipe_save';

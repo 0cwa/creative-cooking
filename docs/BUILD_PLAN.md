@@ -1,8 +1,8 @@
 # Creative Cooking — step-by-step build plan
 
-## Product rule: ingredient names are enough
+## Product rule: simple ingredient descriptions are enough
 
-The pantry is intentionally low-friction. A pantry item requires only a human-readable name, for example `onions`, `leeks`, or `carrots`. Users can paste or dictate a comma/newline-separated list. New items default to preference 3/5 (“Open to eating”). Quantity, unit, expiry, location, brand, and inventory counts are not required and must never block use of the app.
+The pantry is intentionally low-friction. A pantry item requires only one human-readable text field, for example `onions`, `mint (dried)`, or `okra (frozen)`. Useful known form/condition/preparation/storage details can stay inline in that description; no category tags or metadata workflow is required. Users can paste or dictate a comma/newline-separated list. New items default to preference 3/5 (“Open to eating”). Quantity, unit, expiry, location, brand, and inventory counts are not required and must never block use of the app.
 
 ## Phase 1 — foundation and deployment
 
@@ -19,7 +19,7 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 ## Phase 2 — pantry
 
 - [x] FlashList ingredient list.
-- [x] Add a single ingredient by name from the Pantry bottom composer; bulk dictation goes through Chef.
+- [x] Add a single ingredient description from the Pantry bottom composer; optional qualifiers stay inline, and bulk dictation goes through Chef.
 - [x] Default new ingredients to 3/5 preference.
 - [x] 1–5 star preference editing.
 - [x] Swipe left to remove plus an accessible visible remove action.
@@ -37,7 +37,7 @@ The pantry is intentionally low-friction. A pantry item requires only a human-re
 - [x] Editable Chef system prompt plus non-editable app-level safety/tool contract.
 - [x] OpenRouter provider adapter with tool calling.
 - [x] Web/PWA OpenRouter OAuth PKCE and manual API key fallback.
-- [x] Chef tools: pantry add/remove/preference, recipe save, inline multiple choice question.
+- [x] Chef tools: pantry add/update/remove/preference, recipe save, inline multiple choice question.
 - [x] Streaming token rendering with cancel support through the provider abstraction.
 - [x] Additional direct BYOK provider adapters (Gemini, Mistral, OpenAI, Anthropic) behind the same interface, with centralized model capabilities and text-only degradation when tools are unavailable.
 
