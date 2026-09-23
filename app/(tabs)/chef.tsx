@@ -248,6 +248,7 @@ export default function ChefScreen() {
         onStatus: setProviderStatus,
         tools: capabilities.toolCalling === false ? undefined : {
           addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
+          updatePantry: app.updatePantryByName,
           removePantry: app.removePantryByName,
           setPantryPreference: app.setPantryPreferenceByName,
           saveRecipe: app.saveRecipe
