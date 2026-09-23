@@ -13,7 +13,8 @@ const defaults = {
     sendLocalTime: true,
     city: '',
     providerId: 'openrouter',
-    model: 'openrouter/free'
+    model: 'openrouter/free',
+    dictationEngine: 'browser'
   }
 };
 
@@ -73,6 +74,24 @@ test('backup parsing sanitizes unknown provider IDs while preserving known direc
   const restored = parseBackupEnvelope(known, defaults);
   assert.equal(restored.settings.providerId, 'gemini');
   assert.equal(restored.settings.model, 'gemini-3.8-flash');
+});
+
+test('backup parsing sanitizes dictation engine and defaults legacy backups to browser speech', () => {
+  const invalid = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-23T12:00:00.000Z',
+    state: { settings: { dictationEngine: 'future-engine' } }
+  });
+  assert.equal(parseBackupEnvelope(invalid, defaults).settings.dictationEngine, 'browser');
+
+  const whisper = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-23T12:00:00.000Z',
+    state: { settings: { dictationEngine: 'whisper' } }
+  });
+  assert.equal(parseBackupEnvelope(whisper, defaults).settings.dictationEngine, 'whisper');
 });
 
 test('legacy backups without providerId preserve their OpenRouter model', () => {
