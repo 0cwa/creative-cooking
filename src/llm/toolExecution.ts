@@ -6,7 +6,7 @@ import {
   recipeFromToolArgs
 } from '@/chef/toolPayload';
 import { RecipeAllergyError } from '@/domain/allergyValidation';
-import type { UiQuestion } from '@/domain/types';
+import type { ChefToolProposal, UiQuestion } from '@/domain/types';
 import type { ToolExecutor } from '@/llm/types';
 
 export type ChefToolCall = {
@@ -17,9 +17,28 @@ export type ChefToolCall = {
 
 export function executeChefTool(
   call: ChefToolCall,
-  tools: ToolExecutor
+  tools: ToolExecutor,
+  options: { forceApply?: boolean } = {}
 ): { result: string; question?: UiQuestion } {
   const args = parseToolArguments(call.arguments);
+  const shouldPropose = toolHasSideEffects(call.name)
+    && !options.forceApply
+    && (tools.forceProposals === true || args.propose === true);
+
+  if (shouldPropose) {
+    if (!tools.propose) {
+      return { result: JSON.stringify({ ok: false, error: 'proposal_unavailable' }) };
+    }
+
+    const proposal: ChefToolProposal = {
+      id: call.id,
+      toolName: call.name,
+      arguments: call.arguments,
+      status: 'pending'
+    };
+    tools.propose(proposal);
+    return { result: JSON.stringify({ ok: true, proposed: true }) };
+  }
 
   switch (call.name) {
     case 'pantry_add': {
@@ -69,6 +88,18 @@ export function executeChefTool(
     default:
       return { result: JSON.stringify({ ok: false, error: 'Unknown tool' }) };
   }
+}
+
+export function applyChefProposal(
+  proposal: ChefToolProposal,
+  tools: ToolExecutor
+): { result: string; question?: UiQuestion } {
+  const args = parseToolArguments(proposal.arguments);
+  return executeChefTool({
+    id: proposal.id,
+    name: proposal.toolName,
+    arguments: JSON.stringify({ ...args, propose: false })
+  }, tools, { forceApply: true });
 }
 
 export function toolHasSideEffects(name: string): boolean {
