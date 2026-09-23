@@ -2,6 +2,7 @@ export type DictationStatus =
   | 'idle'
   | 'checking'
   | 'installing-language'
+  | 'loading-model'
   | 'listening'
   | 'stopping'
   | 'error';
@@ -24,5 +25,6 @@ export type DictationController = {
 
 export type OnDeviceDictationSupport = {
   available: boolean;
+  backend: 'web-speech' | 'whisper' | 'none';
   reason?: string;
 };
