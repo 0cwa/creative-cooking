@@ -79,7 +79,9 @@ test('local Chef requires an explicit cached model before it can be selected', a
 
   await expect(page.getByText('WebGPU', { exact: true })).toBeVisible();
   await expect(page.getByText('Available', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('Not downloaded', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Model cache', { exact: true }).locator('..').getByText('Not downloaded', { exact: true })
+  ).toBeVisible();
 
   const download = page.getByLabel('Download local model');
   await expect(download).toBeEnabled();
