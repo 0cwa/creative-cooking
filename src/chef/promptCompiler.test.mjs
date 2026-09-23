@@ -53,7 +53,7 @@ test('compiles pantry, allergies, meal context, and optional location determinis
   assert.match(prompt, /mutation tools support a propose flag/i);
   assert.match(prompt, /intent is not entirely obvious, propose the pantry change/i);
   assert.match(prompt, /never save a recipe merely because you recommended or wrote it/i);
-  assert.match(prompt, /recipe_save with propose=true/i);
+  assert.match(prompt, /recipe_save tool with propose=true/i);
   assert.ok(prompt.indexOf('INTERNAL CHEF INSTRUCTIONS') < prompt.indexOf('APPLICATION CONTEXT'));
   assert.ok(prompt.indexOf('APPLICATION CONTEXT') < prompt.indexOf('MASTER INSTRUCTIONS'));
   assert.ok(prompt.indexOf('MASTER INSTRUCTIONS') < prompt.indexOf('Cook creatively.'));
