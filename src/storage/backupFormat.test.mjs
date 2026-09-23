@@ -6,6 +6,8 @@ const defaults = {
   pantry: [],
   recipes: [],
   chatMessages: [],
+  chatHistory: [],
+  activeConversationId: null,
   mealContext: { willingToShop: false, portions: 2, cooks: ['medium'] },
   settings: {
     systemPrompt: 'default prompt',
@@ -52,6 +54,35 @@ test('backup parsing migrates missing nested settings and context fields from de
   assert.equal(restored.settings.city, 'Malmö');
   assert.equal(restored.settings.model, 'openrouter/free');
   assert.deepEqual(restored.settings.allergies, []);
+  assert.deepEqual(restored.chatHistory, []);
+  assert.equal(restored.activeConversationId, null);
+});
+
+test('backup round-trip preserves archived Chef conversations', () => {
+  const state = {
+    ...defaults,
+    chatHistory: [{
+      id: 'chat-older',
+      title: 'Older dinner idea',
+      messages: [{
+        id: 'u1',
+        role: 'user',
+        content: 'Older dinner idea',
+        createdAt: '2026-09-22T18:00:00.000Z'
+      }],
+      createdAt: '2026-09-22T18:00:00.000Z',
+      updatedAt: '2026-09-22T18:00:00.000Z'
+    }],
+    activeConversationId: 'chat-current',
+    chatMessages: [{
+      id: 'u2',
+      role: 'user',
+      content: 'Current dinner idea',
+      createdAt: '2026-09-23T18:00:00.000Z'
+    }]
+  };
+  const serialized = serializeBackupEnvelope(state, '2026-09-23T18:30:00.000Z');
+  assert.deepEqual(parseBackupEnvelope(serialized, defaults), state);
 });
 
 test('backup parsing sanitizes unknown provider IDs while preserving known direct providers', () => {
@@ -118,6 +149,14 @@ test('fresh default state does not share mutable nested arrays with defaults', (
   const fresh = freshStateFromDefaults(defaults);
   fresh.mealContext.cooks.push('high');
   fresh.settings.allergies.push('sesame');
+  fresh.chatHistory.push({
+    id: 'chat-1',
+    title: 'Test',
+    messages: [],
+    createdAt: 'a',
+    updatedAt: 'b'
+  });
   assert.deepEqual(defaults.mealContext.cooks, ['medium']);
   assert.deepEqual(defaults.settings.allergies, []);
+  assert.deepEqual(defaults.chatHistory, []);
 });
