@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
-import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
+import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
 import { isDictationEngine, isProviderId } from '@/domain/types';
 import type {
   AppSettings,
@@ -52,6 +52,7 @@ type AppStateApi = PersistedState & {
   storageError: string | null;
   retryStorage(): Promise<boolean>;
   addPantryItems(names: string[], preference?: IngredientPreference): void;
+  updatePantryByName(name: string, newName: string): boolean;
   removePantryItem(id: string): void;
   removePantryByName(name: string): boolean;
   setPantryPreference(id: string, preference: IngredientPreference): void;
@@ -139,6 +140,16 @@ export function AppStateProvider({ children }: PropsWithChildren) {
         .map((name) => createPantryItem(name, preference));
       return { ...current, pantry: [...additions, ...current.pantry] };
     });
+  }, []);
+
+  const updatePantryByName = useCallback((name: string, newName: string) => {
+    let updated = false;
+    setState((current) => {
+      const result = updatePantryItemName(current.pantry, name, newName);
+      updated = result.updated;
+      return result.updated ? { ...current, pantry: result.items } : current;
+    });
+    return updated;
   }, []);
 
   const removePantryItem = useCallback((id: string) => {
@@ -264,6 +275,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       storageError,
       retryStorage,
       addPantryItems,
+      updatePantryByName,
       removePantryItem,
       removePantryByName,
       setPantryPreference,
@@ -285,6 +297,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       storageError,
       retryStorage,
       addPantryItems,
+      updatePantryByName,
       removePantryItem,
       removePantryByName,
       setPantryPreference,
