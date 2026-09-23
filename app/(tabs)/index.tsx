@@ -56,7 +56,7 @@ export default function PantryScreen() {
         />
       </View>
 
-      <View style={styles.composer}>
+      <View testID="pantry-composer" style={styles.composer}>
         <Text style={styles.composerHelp}>Manually add ingredients 1-by-1 here. To dictate all at once, you can tell the chef.</Text>
         <View style={styles.composerRow}>
           <TextInput
