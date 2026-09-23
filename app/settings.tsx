@@ -284,6 +284,8 @@ export default function SettingsScreen() {
     pantry: app.pantry,
     recipes: app.recipes,
     chatMessages: app.chatMessages,
+    chatHistory: app.chatHistory,
+    activeConversationId: app.activeConversationId,
     mealContext: app.mealContext,
     settings: app.settings
   });

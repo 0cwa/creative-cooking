@@ -35,7 +35,7 @@ If an offline route falls back to the root shell, confirm Expo Router resolves t
 On web, disconnect the mouse/trackpad for the pass.
 
 - Tab through Pantry. Settings, ingredient preference controls, visible Remove actions, the ingredient input, and Add must all be reachable.
-- In Chef, reach New chat, Settings, meal-context controls, question choices, the composer, Send/Stop, Retry, and any Settings recovery action.
+- In Chef, reach Previous chats, New chat, Settings, conversation rows and their visible Delete actions, meal-context controls, question choices, the composer, Send/Stop, Retry, and any Settings recovery action.
 - In Recipes, each recipe card, Close, and Delete must be reachable and activatable.
 - In Settings, Back, allergy add/remove controls, switches, backup actions, provider actions, and form fields must have visible focus and keyboard activation.
 - In Meal context, Done, counters, and every energy choice must be reachable and operable.

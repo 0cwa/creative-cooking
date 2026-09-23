@@ -5,7 +5,7 @@ Creative Cooking is a local-first cooking application with interchangeable AI en
 ## Layers
 
 1. **Expo Router screens/components** — Pantry, Chef, Recipes, Settings.
-2. **Domain/state** — pantry descriptions/preferences, structured recipes, chat messages, meal context, settings.
+2. **Domain/state** — pantry descriptions/preferences, structured recipes, the active Chef chat plus archived conversations, meal context, settings.
 3. **Chef orchestration** — prompt/context compiler and a small typed tool set.
 4. **LLM adapters** — OpenRouter plus direct OpenAI, Anthropic, Gemini, and Mistral BYOK adapters implement the same interface; future local providers use the same boundary.
 5. **Storage adapters** — IndexedDB for ordinary web/PWA app state, AsyncStorage on native, and a separate credential vault for provider secrets.

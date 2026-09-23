@@ -29,6 +29,7 @@ The pantry is intentionally low-friction. A pantry item requires only one human-
 ## Phase 3 — Chef
 
 - [x] Chat interface with new-chat action.
+- [x] Persist previous Chef conversations, reopen them from a compact history sheet, and support swipe-to-delete plus a visible accessible delete action.
 - [x] Shopping / pantry-only toggle.
 - [x] Meal context sheet: portions, number of cooks, per-cook energy.
 - [x] Compile pantry into the five requested preference groups for every Chef turn.

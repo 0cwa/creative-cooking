@@ -59,7 +59,8 @@ export function InstallAppPrompt() {
 
   const engaged = app.pantry.length > 0
     || app.recipes.length > 0
-    || app.chatMessages.some((message) => message.role === 'user');
+    || app.chatMessages.some((message) => message.role === 'user')
+    || app.chatHistory.some((conversation) => conversation.messages.some((message) => message.role === 'user'));
 
   useEffect(() => {
     setSuppressed(isStandalone() || wasDismissed());

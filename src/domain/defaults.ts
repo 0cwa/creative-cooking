@@ -21,6 +21,8 @@ export const DEFAULT_STATE: PersistedState = {
   pantry: [],
   recipes: [],
   chatMessages: [],
+  chatHistory: [],
+  activeConversationId: null,
   mealContext: {
     willingToShop: false,
     portions: 2,

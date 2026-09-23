@@ -57,6 +57,14 @@ export type ChatMessage = {
   proposals?: ChefToolProposal[];
 };
 
+export type ChatConversation = {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CookEnergy = 'low' | 'medium' | 'high';
 
 export type MealContext = {
@@ -79,6 +87,8 @@ export type PersistedState = {
   pantry: PantryItem[];
   recipes: Recipe[];
   chatMessages: ChatMessage[];
+  chatHistory: ChatConversation[];
+  activeConversationId: string | null;
   mealContext: MealContext;
   settings: AppSettings;
 };
