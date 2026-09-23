@@ -1,4 +1,14 @@
-import { appendSpeech } from './transcript';
+function normalizeSpeech(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function appendSpeech(existing: string, next: string): string {
+  const left = normalizeSpeech(existing);
+  const right = normalizeSpeech(next);
+  if (!left) return right;
+  if (!right) return left;
+  return `${left} ${right}`;
+}
 
 export type WhisperTimestampChunk = {
   text: string;
