@@ -45,6 +45,8 @@ test('compiles pantry, allergies, meal context, and optional location determinis
   assert.match(prompt, /City: Stockholm/);
   assert.match(prompt, /provided pantry tools/);
   assert.match(prompt, /recipe_save tool/);
+  assert.match(prompt, /meal may be one recipe or, when useful, several complementary recipes/i);
+  assert.match(prompt, /call recipe_save separately for each recipe/i);
   assert.ok(prompt.indexOf('INTERNAL CHEF INSTRUCTIONS') < prompt.indexOf('APPLICATION CONTEXT'));
   assert.ok(prompt.indexOf('APPLICATION CONTEXT') < prompt.indexOf('MASTER INSTRUCTIONS'));
   assert.ok(prompt.indexOf('MASTER INSTRUCTIONS') < prompt.indexOf('Cook creatively.'));
