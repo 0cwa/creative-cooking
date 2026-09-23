@@ -55,6 +55,7 @@ export function InstallAppPrompt() {
   const [suppressed, setSuppressed] = useState(false);
   const [ready, setReady] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [pantryBottomInset, setPantryBottomInset] = useState<number | null>(null);
 
   const engaged = app.pantry.length > 0
     || app.recipes.length > 0
@@ -94,6 +95,35 @@ export function InstallAppPrompt() {
     return () => window.clearTimeout(timer);
   }, [app.hydrated, appleMode, deferredPrompt, engaged, preferenceLoaded, suppressed]);
 
+  useEffect(() => {
+    if (pathname !== '/') {
+      setPantryBottomInset(null);
+      return;
+    }
+
+    const updateInset = () => {
+      const composer = document.querySelector('[data-testid="pantry-composer"]');
+      if (!(composer instanceof HTMLElement)) {
+        setPantryBottomInset(null);
+        return;
+      }
+      const composerTop = composer.getBoundingClientRect().top;
+      setPantryBottomInset(Math.max(72, window.innerHeight - composerTop + 10));
+    };
+
+    updateInset();
+    window.addEventListener('resize', updateInset);
+
+    const composer = document.querySelector('[data-testid="pantry-composer"]');
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateInset);
+    if (composer) observer?.observe(composer);
+
+    return () => {
+      window.removeEventListener('resize', updateInset);
+      observer?.disconnect();
+    };
+  }, [pathname]);
+
   const dismiss = () => {
     rememberDismissal();
     setSuppressed(true);
@@ -128,8 +158,14 @@ export function InstallAppPrompt() {
       : 'In Safari, use Share → Add to Dock (or File → Add to Dock).';
 
   return (
-    <View pointerEvents="box-none" style={styles.layer}>
-      <View accessibilityLiveRegion="polite" style={styles.card}>
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.layer,
+        pathname === '/' && pantryBottomInset !== null ? { bottom: pantryBottomInset } : null
+      ]}
+    >
+      <View accessibilityLiveRegion="polite" testID="install-app-prompt" style={styles.card}>
         <View style={styles.copy}>
           <Text style={styles.eyebrow}>APP TIP</Text>
           <Text style={styles.title}>Install Creative Cooking</Text>
