@@ -3,8 +3,8 @@ import {
   parseToolArguments,
   preferenceFromToolValue,
   recipeFromToolArgs
-} from '@/chef/toolPayload';
-import type { ChefToolProposal, Recipe } from '@/domain/types';
+} from './toolPayload.ts';
+import type { ChefToolProposal, Recipe } from '../domain/types';
 
 type RecipeDraft = Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>;
 
