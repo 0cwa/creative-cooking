@@ -257,6 +257,7 @@ export default function ChefScreen() {
           removePantry: app.removePantryByName,
           setPantryPreference: app.setPantryPreferenceByName,
           saveRecipe: app.saveRecipe,
+          validateRecipe: app.validateRecipe,
           propose: (proposal) => {
             const key = proposalFingerprint(proposal);
             if (proposalKeys.has(key)) return;
@@ -303,7 +304,8 @@ export default function ChefScreen() {
         updatePantry: app.updatePantryByName,
         removePantry: app.removePantryByName,
         setPantryPreference: app.setPantryPreferenceByName,
-        saveRecipe: app.saveRecipe
+        saveRecipe: app.saveRecipe,
+        validateRecipe: app.validateRecipe
       });
 
       let result: { ok?: boolean; message?: string; error?: string } = {};
