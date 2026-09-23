@@ -36,3 +36,10 @@ jobs:
       - run: npm run verify:pwa
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - name: Upload install prompt screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-prompt-screenshot
+          path: artifacts/pwa-install-tip.png
+          if-no-files-found: warn
