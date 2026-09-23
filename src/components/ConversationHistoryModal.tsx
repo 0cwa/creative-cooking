@@ -183,7 +183,7 @@ const styles = StyleSheet.create({
   deleteBackdropText: { color: 'white', fontWeight: '800' },
   row: { minHeight: 92, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16 },
   rowMain: { flex: 1, paddingLeft: 15, paddingVertical: 12, paddingRight: 8 },
-  rowTitle: { color: '#172033', fontSize: 16.5, fontWeight: '750' },
+  rowTitle: { color: '#172033', fontSize: 16.5, fontWeight: '700' },
   rowMeta: { color: '#94a3b8', fontSize: 11.5, fontWeight: '600', marginTop: 2 },
   rowPreview: { color: '#64748b', fontSize: 13, lineHeight: 18, marginTop: 5 },
   deleteButton: { width: 52, minHeight: 72, alignItems: 'center', justifyContent: 'center' },
