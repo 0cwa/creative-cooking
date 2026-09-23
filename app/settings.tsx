@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/components/Screen';
 import { DEFAULT_SYSTEM_PROMPT } from '@/domain/defaults';
@@ -54,6 +54,7 @@ function supportLabel(value: boolean | 'unknown'): string {
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ focus?: string }>();
   const app = useAppState();
   const [allergyInput, setAllergyInput] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -71,6 +72,8 @@ export default function SettingsScreen() {
   const [whisperDownloadProgress, setWhisperDownloadProgress] = useState<WhisperDownloadProgress | null>(null);
   const localDownloadController = useRef<AbortController | null>(null);
   const whisperDownloadController = useRef<AbortController | null>(null);
+  const settingsScrollRef = useRef<ScrollView>(null);
+  const dictationFocusHandledRef = useRef(false);
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
@@ -479,7 +482,7 @@ export default function SettingsScreen() {
         <Text style={styles.title}>Settings</Text>
         <View style={{ width: 42 }} />
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={settingsScrollRef} contentContainerStyle={styles.content}>
         <Section title="Allergies" subtitle="These are hard constraints and are sent with meal requests.">
           <View style={styles.inline}>
             <TextInput accessibilityLabel="Add allergies" value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
@@ -671,6 +674,14 @@ export default function SettingsScreen() {
           )}
         </Section>
 
+        <View
+          onLayout={(event) => {
+            if (params.focus !== 'dictation' || dictationFocusHandledRef.current) return;
+            dictationFocusHandledRef.current = true;
+            const y = Math.max(0, event.nativeEvent.layout.y - 12);
+            setTimeout(() => settingsScrollRef.current?.scrollTo({ y, animated: false }), 0);
+          }}
+        >
         <Section title="Local models" subtitle="Experimental in-browser inference. Downloaded models run on this device and do not require an API key.">
           <View style={styles.capabilityBox}>
             <Text style={styles.capabilityTitle}>Dictation</Text>
@@ -934,6 +945,7 @@ export default function SettingsScreen() {
             <Text style={styles.help}>Checking WebGPU and browser storage…</Text>
           )}
         </Section>
+        </View>
       </ScrollView>
     </Screen>
   );
