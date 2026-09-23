@@ -1,4 +1,4 @@
-import type { AppSettings, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
+import type { AppSettings, ChatConversation, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
 
 type BackupEnvelope = {
   format: 'creative-cooking-backup';
@@ -41,6 +41,12 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
   const pantry = Array.isArray(state.pantry) ? (state.pantry as PantryItem[]) : [];
   const recipes = Array.isArray(state.recipes) ? (state.recipes as Recipe[]) : [];
   const chatMessages = Array.isArray(state.chatMessages) ? (state.chatMessages as ChatMessage[]) : [];
+  const chatHistory = Array.isArray(state.chatHistory) ? (state.chatHistory as ChatConversation[]) : [];
+  const activeConversationId = typeof state.activeConversationId === 'string'
+    ? state.activeConversationId
+    : chatMessages.length
+      ? `chat-${chatMessages[0]?.id ?? 'legacy'}`
+      : null;
 
   const mealContextRecord = isRecord(state.mealContext) ? state.mealContext : {};
   const mealContext = {
@@ -75,7 +81,7 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
       : [...defaults.settings.allergies]
   } as AppSettings;
 
-  return { pantry, recipes, chatMessages, mealContext, settings };
+  return { pantry, recipes, chatMessages, chatHistory, activeConversationId, mealContext, settings };
 }
 
 export function freshStateFromDefaults(defaults: PersistedState): PersistedState {
@@ -83,6 +89,8 @@ export function freshStateFromDefaults(defaults: PersistedState): PersistedState
     pantry: [],
     recipes: [],
     chatMessages: [],
+    chatHistory: [],
+    activeConversationId: null,
     mealContext: { ...defaults.mealContext, cooks: [...defaults.mealContext.cooks] },
     settings: { ...defaults.settings, allergies: [...defaults.settings.allergies] }
   };
