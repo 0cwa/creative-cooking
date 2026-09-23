@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   secrets:
@@ -36,22 +36,3 @@ jobs:
       - run: npm run verify:pwa
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - name: Commit refreshed install prompt screenshot
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          path='docs/screenshots/pwa-install-tip.png'
-          existing_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${HEAD_BRANCH}" --jq .sha)"
-          generated_sha="$(git hash-object artifacts/pwa-install-tip.png)"
-          if [ "$existing_sha" = "$generated_sha" ]; then
-            echo "Screenshot is already current."
-            exit 0
-          fi
-          content="$(base64 -w0 artifacts/pwa-install-tip.png)"
-          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${path}" \
-            -f message='Refresh tested install tip screenshot' \
-            -f content="$content" \
-            -f sha="$existing_sha" \
-            -f branch="$HEAD_BRANCH"
