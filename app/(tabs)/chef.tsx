@@ -535,7 +535,7 @@ export default function ChefScreen() {
                 accessibilityLabel="Open dictation settings"
                 onPress={() => {
                   setDictationDialog(null);
-                  router.push('/settings');
+                  router.push('/settings?focus=dictation');
                 }}
                 style={styles.dictationDialogPrimary}
               >
