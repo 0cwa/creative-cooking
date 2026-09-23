@@ -706,6 +706,10 @@ export default function SettingsScreen() {
                   </View>
                   <View
                     accessibilityRole="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={whisperDownloadProgress.percent}
+                    aria-valuetext={`${whisperDownloadProgress.percent}% · ${formatBytes(whisperDownloadProgress.loadedBytes)} of ${formatBytes(whisperDownloadProgress.totalBytes)}`}
                     accessibilityValue={{
                       min: 0,
                       max: 100,
