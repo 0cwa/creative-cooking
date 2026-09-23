@@ -33,6 +33,12 @@ test('offers installation only after engagement and captures the CTA screenshot'
   await expect(page.getByText('Install Creative Cooking', { exact: true })).toBeVisible();
   await expect(page.getByText('Your pantry and saved recipes stay available offline.', { exact: false })).toBeVisible();
 
+  const promptBox = await page.getByTestId('install-app-prompt').boundingBox();
+  const composerBox = await page.getByTestId('pantry-composer').boundingBox();
+  expect(promptBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(promptBox.y + promptBox.height).toBeLessThanOrEqual(composerBox.y - 8);
+
   await mkdir('artifacts', { recursive: true });
   await page.screenshot({ path: 'artifacts/pwa-install-tip.png', fullPage: true });
 
