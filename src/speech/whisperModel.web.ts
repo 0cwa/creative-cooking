@@ -11,6 +11,15 @@ import {
 export const WHISPER_MODEL_ID = 'onnx-community/whisper-tiny';
 export const WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB = 130;
 export const WHISPER_RECOMMENDED_FREE_BYTES = 250 * 1024 * 1024;
+const WHISPER_MODEL_ESTIMATED_DOWNLOAD_BYTES = WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB * 1024 * 1024;
+
+export type WhisperDownloadProgress = {
+  phase: 'downloading' | 'warming' | 'ready';
+  message: string;
+  percent: number;
+  loadedBytes: number;
+  totalBytes: number;
+};
 
 const CACHE_NAME = 'transformers-cache';
 const MODEL_PATH_MARKER = '/onnx-community/whisper-tiny/resolve/main/';
@@ -37,6 +46,8 @@ type WhisperWorkerMessage = {
   message?: string;
   file?: string;
   progress?: number;
+  loaded?: number;
+  total?: number;
   result?: WhisperWindowResult;
 };
 
@@ -158,7 +169,7 @@ function createWhisperWorker(): Worker {
 }
 
 export async function downloadWhisperModel(
-  onStatus?: (status: string) => void,
+  onProgress?: (progress: WhisperDownloadProgress) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const capability = await getWhisperModelCapabilities();
@@ -169,6 +180,28 @@ export async function downloadWhisperModel(
   if (signal?.aborted) throw new DOMException('The download was cancelled.', 'AbortError');
 
   const worker = createWhisperWorker();
+  const files = new Map<string, { loaded: number; total: number }>();
+
+  const emitProgress = (
+    phase: WhisperDownloadProgress['phase'],
+    message: string,
+    forceComplete = false
+  ) => {
+    const totals = [...files.values()];
+    const knownLoaded = totals.reduce((sum, item) => sum + item.loaded, 0);
+    const knownTotal = totals.reduce((sum, item) => sum + item.total, 0);
+    const totalBytes = Math.max(WHISPER_MODEL_ESTIMATED_DOWNLOAD_BYTES, knownTotal);
+    const loadedBytes = forceComplete ? totalBytes : Math.min(knownLoaded, totalBytes);
+    const percent = forceComplete
+      ? 100
+      : phase === 'warming'
+        ? 99
+        : Math.min(98, Math.round((loadedBytes / totalBytes) * 100));
+
+    onProgress?.({ phase, message, percent, loadedBytes, totalBytes });
+  };
+
+  emitProgress('downloading', 'Preparing local voice-model download…');
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -180,12 +213,18 @@ export async function downloadWhisperModel(
       worker.onmessage = (event: MessageEvent<WhisperWorkerMessage>) => {
         const data = event.data ?? {};
         if (data.status === 'loading' && data.message) {
-          onStatus?.(data.message);
+          const phase = /warming/i.test(data.message) ? 'warming' : 'downloading';
+          emitProgress(phase, data.message);
         } else if (data.status === 'progress') {
-          const percent = typeof data.progress === 'number' ? Math.round(data.progress) : null;
-          const file = data.file?.split('/').at(-1) ?? 'model file';
-          onStatus?.(percent === null ? `Downloading ${file}…` : `Downloading ${file}… ${percent}%`);
+          const file = data.file ?? 'model-file';
+          const previous = files.get(file) ?? { loaded: 0, total: 0 };
+          files.set(file, {
+            loaded: typeof data.loaded === 'number' ? data.loaded : previous.loaded,
+            total: typeof data.total === 'number' ? data.total : previous.total
+          });
+          emitProgress('downloading', `Downloading ${file.split('/').at(-1) ?? 'model file'}…`);
         } else if (data.status === 'ready') {
+          emitProgress('ready', 'Local voice model ready.', true);
           signal?.removeEventListener('abort', onAbort);
           resolve();
         } else if (data.status === 'error') {
