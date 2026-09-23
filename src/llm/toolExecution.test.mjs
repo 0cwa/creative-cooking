@@ -49,6 +49,7 @@ test('proposed pantry changes are captured without mutating state until accepted
   }, tools);
 
   assert.deepEqual(JSON.parse(outcome.result), { ok: true, proposed: true });
+  assert.equal(outcome.sideEffectApplied, false);
   assert.equal(state.added.length, 0);
   assert.equal(state.proposals.length, 1);
   assert.equal(state.proposals[0].toolName, 'pantry_add');
@@ -56,6 +57,7 @@ test('proposed pantry changes are captured without mutating state until accepted
 
   const applied = applyChefProposal(state.proposals[0], tools);
   assert.equal(JSON.parse(applied.result).ok, true);
+  assert.equal(applied.sideEffectApplied, true);
   assert.deepEqual(state.added, [{ names: ['mint (dried)'], preference: 3 }]);
   assert.equal(state.proposals.length, 1);
 });
