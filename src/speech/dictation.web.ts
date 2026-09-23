@@ -4,7 +4,6 @@ import type {
   DictationStatus,
   OnDeviceDictationSupport
 } from './dictationTypes';
-import { getWhisperStaticSupport, WhisperDictationController } from './whisperModel';
 
 type SpeechPackAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable';
 
@@ -57,6 +56,59 @@ type Schedule = (callback: () => void, delayMs: number) => ReturnType<typeof set
 type CancelSchedule = (handle: ReturnType<typeof setTimeout>) => void;
 
 const RESTART_DELAY_MS = 250;
+
+function whisperFallbackSupport(): { available: boolean; reason?: string } {
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') {
+    return { available: false, reason: 'Local voice-model dictation is available only in the web app.' };
+  }
+
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter?: () => Promise<unknown> } }).gpu;
+  if (!gpu?.requestAdapter) {
+    return { available: false, reason: 'This browser does not provide WebGPU for the local voice model.' };
+  }
+  if (typeof Worker === 'undefined') {
+    return { available: false, reason: 'This browser does not provide Web Workers for the local voice model.' };
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return { available: false, reason: 'This browser cannot capture microphone audio for local dictation.' };
+  }
+  if (!window.AudioContext) {
+    return { available: false, reason: 'This browser does not provide Web Audio for local dictation.' };
+  }
+  if (typeof caches === 'undefined') {
+    return { available: false, reason: 'This browser cannot cache the local voice model.' };
+  }
+
+  return { available: true };
+}
+
+class LazyWhisperDictationController implements DictationController {
+  private delegate: DictationController | null = null;
+  private disposed = false;
+
+  async start(options: {
+    lang: string;
+    onChange: (snapshot: DictationSnapshot) => void;
+  }): Promise<void> {
+    if (this.disposed) return;
+    if (!this.delegate) {
+      const module = await import('./whisperModel');
+      if (this.disposed) return;
+      this.delegate = new module.WhisperDictationController();
+    }
+    await this.delegate.start(options);
+  }
+
+  stop(): void {
+    this.delegate?.stop();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.delegate?.dispose();
+    this.delegate = null;
+  }
+}
 
 function appendSpeech(existing: string, next: string): string {
   const left = existing.replace(/\s+/g, ' ').trim();
@@ -332,7 +384,7 @@ export function getOnDeviceDictationSupport(): OnDeviceDictationSupport {
     return { available: true, backend: 'web-speech' };
   }
 
-  const whisper = getWhisperStaticSupport();
+  const whisper = whisperFallbackSupport();
   if (whisper.available) {
     return {
       available: true,
@@ -358,9 +410,9 @@ export function createDictationController(): DictationController {
     return new WebSpeechDictationController(Recognition, browserLanguage());
   }
 
-  const whisper = getWhisperStaticSupport();
+  const whisper = whisperFallbackSupport();
   if (whisper.available) {
-    return new WhisperDictationController();
+    return new LazyWhisperDictationController();
   }
 
   throw new Error(whisper.reason ?? 'On-device dictation is not supported by this browser.');
