@@ -35,6 +35,8 @@ The model proposes mutations; application code validates and executes them. The 
 
 This keeps state integrity independent of provider/model quality.
 
+Mutation tools also accept a `propose` flag. Proposed calls are intercepted by the shared tool executor before any state mutation, stored with the assistant chat message, and rendered as compact confirmation cards. Accepting a card replays the same validated tool call through the executor with proposal mode bypassed. `ToolExecutor.forceProposals` is reserved for a future user preference that can require confirmation for every mutation without changing provider adapters or individual tool schemas.
+
 ## Multiple-choice UX
 
 `ask_user` ends the current model turn cleanly and renders an inline choice card. A tap becomes a new user turn. We do not keep a network inference request open while waiting for a person.

@@ -40,11 +40,21 @@ export type Recipe = {
   updatedAt: string;
 };
 
+export type ChefToolProposalStatus = 'pending' | 'applied';
+
+export type ChefToolProposal = {
+  id: string;
+  toolName: string;
+  arguments: string;
+  status: ChefToolProposalStatus;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  proposals?: ChefToolProposal[];
 };
 
 export type CookEnergy = 'low' | 'medium' | 'high';

@@ -1,7 +1,7 @@
 import { CHEF_TOOLS } from '@/chef/tools';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { SseDataParser } from '@/llm/openrouter/streaming';
-import { executeChefTool, toolHasSideEffects } from '@/llm/toolExecution';
+import { executeChefTool } from '@/llm/toolExecution';
 import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
 
 type GeminiFunctionCall = {
@@ -288,7 +288,7 @@ export const geminiProvider: LlmProvider = {
           const call = calls[index];
           const internalId = call.id || `gemini-${round}-${index}`;
           const outcome = runTool(call, internalId, tools);
-          if (toolHasSideEffects(call.name)) executedSideEffect = true;
+          if (outcome.sideEffectApplied) executedSideEffect = true;
           if (outcome.question) return { text: collectedText, question: outcome.question };
           responseParts.push({
             functionResponse: {

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
@@ -6,6 +6,8 @@ import { isDictationEngine, isProviderId } from '@/domain/types';
 import type {
   AppSettings,
   ChatMessage,
+  ChefToolProposal,
+  ChefToolProposalStatus,
   CookEnergy,
   IngredientPreference,
   MealContext,
@@ -57,11 +59,13 @@ type AppStateApi = PersistedState & {
   removePantryByName(name: string): boolean;
   setPantryPreference(id: string, preference: IngredientPreference): void;
   setPantryPreferenceByName(name: string, preference: IngredientPreference): boolean;
+  validateRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
   setChatMessages(messages: ChatMessage[]): void;
   appendChatMessage(message: ChatMessage): void;
+  setChatProposalStatus(messageId: string, proposalId: string, status: ChefToolProposalStatus): void;
   newChat(): void;
   updateMealContext(patch: Partial<MealContext>): void;
   updateCookEnergy(index: number, energy: CookEnergy): void;
@@ -73,6 +77,8 @@ const AppStateContext = createContext<AppStateApi | null>(null);
 
 export function AppStateProvider({ children }: PropsWithChildren) {
   const [state, setState] = useState<PersistedState>(DEFAULT_STATE);
+  const pantryRef = useRef(state.pantry);
+  pantryRef.current = state.pantry;
   const [hydrated, setHydrated] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [storageWritable, setStorageWritable] = useState(true);
@@ -130,72 +136,79 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     }
   }, [describeStorageError, state]);
 
-  const addPantryItems = useCallback((names: string[], preference: IngredientPreference = 3) => {
-    setState((current) => {
-      const existing = new Set(current.pantry.map((item) => item.name.toLocaleLowerCase()));
-      const additions = names
-        .map(normalizeIngredientName)
-        .filter(Boolean)
-        .filter((name) => !existing.has(name.toLocaleLowerCase()))
-        .map((name) => createPantryItem(name, preference));
-      return { ...current, pantry: [...additions, ...current.pantry] };
-    });
+  const commitPantry = useCallback((pantry: PersistedState['pantry']) => {
+    pantryRef.current = pantry;
+    setState((current) => ({ ...current, pantry }));
   }, []);
+
+  const addPantryItems = useCallback((names: string[], preference: IngredientPreference = 3) => {
+    const current = pantryRef.current;
+    const existing = new Set(current.map((item) => item.name.toLocaleLowerCase()));
+    const additions = names
+      .map(normalizeIngredientName)
+      .filter(Boolean)
+      .filter((name) => !existing.has(name.toLocaleLowerCase()))
+      .map((name) => createPantryItem(name, preference));
+
+    if (additions.length) commitPantry([...additions, ...current]);
+  }, [commitPantry]);
 
   const updatePantryByName = useCallback((name: string, newName: string) => {
-    let updated = false;
-    setState((current) => {
-      const result = updatePantryItemName(current.pantry, name, newName);
-      updated = result.updated;
-      return result.updated ? { ...current, pantry: result.items } : current;
-    });
-    return updated;
-  }, []);
+    const result = updatePantryItemName(pantryRef.current, name, newName);
+    if (result.updated) commitPantry(result.items);
+    return result.updated;
+  }, [commitPantry]);
 
   const removePantryItem = useCallback((id: string) => {
-    setState((current) => ({ ...current, pantry: current.pantry.filter((item) => item.id !== id) }));
-  }, []);
+    const current = pantryRef.current;
+    const next = current.filter((item) => item.id !== id);
+    if (next.length !== current.length) commitPantry(next);
+  }, [commitPantry]);
 
   const removePantryByName = useCallback((name: string) => {
-    let removed = false;
-    setState((current) => {
-      const target = normalizeIngredientName(name).toLocaleLowerCase();
-      const next = current.pantry.filter((item) => {
-        const isMatch = item.name.toLocaleLowerCase() === target;
-        if (isMatch) removed = true;
-        return !isMatch;
-      });
-      return { ...current, pantry: next };
-    });
+    const target = normalizeIngredientName(name).toLocaleLowerCase();
+    if (!target) return false;
+
+    const current = pantryRef.current;
+    const next = current.filter((item) => item.name.toLocaleLowerCase() !== target);
+    const removed = next.length !== current.length;
+    if (removed) commitPantry(next);
     return removed;
-  }, []);
+  }, [commitPantry]);
 
   const setPantryPreference = useCallback((id: string, preference: IngredientPreference) => {
-    setState((current) => ({
-      ...current,
-      pantry: current.pantry.map((item) =>
-        item.id === id ? { ...item, preference, updatedAt: new Date().toISOString() } : item
-      )
-    }));
-  }, []);
+    const current = pantryRef.current;
+    const targetIndex = current.findIndex((item) => item.id === id);
+    if (targetIndex < 0) return;
+
+    const updatedAt = new Date().toISOString();
+    commitPantry(current.map((item, index) => (
+      index === targetIndex ? { ...item, preference, updatedAt } : item
+    )));
+  }, [commitPantry]);
 
   const setPantryPreferenceByName = useCallback((name: string, preference: IngredientPreference) => {
-    let updated = false;
     const target = normalizeIngredientName(name).toLocaleLowerCase();
-    setState((current) => ({
-      ...current,
-      pantry: current.pantry.map((item) => {
-        if (item.name.toLocaleLowerCase() !== target) return item;
-        updated = true;
-        return { ...item, preference, updatedAt: new Date().toISOString() };
-      })
-    }));
-    return updated;
-  }, []);
+    if (!target) return false;
 
-  const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const current = pantryRef.current;
+    const targetIndex = current.findIndex((item) => item.name.toLocaleLowerCase() === target);
+    if (targetIndex < 0) return false;
+
+    const updatedAt = new Date().toISOString();
+    commitPantry(current.map((item, index) => (
+      index === targetIndex ? { ...item, preference, updatedAt } : item
+    )));
+    return true;
+  }, [commitPantry]);
+
+  const validateRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
     if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+  }, [state.settings.allergies]);
+
+  const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    validateRecipe(input);
 
     const now = new Date().toISOString();
     const recipe: Recipe = {
@@ -206,7 +219,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     };
     setState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, [state.settings.allergies]);
+  }, [validateRecipe]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     const existing = state.recipes.find((recipe) => recipe.id === id);
@@ -242,6 +255,26 @@ export function AppStateProvider({ children }: PropsWithChildren) {
 
   const appendChatMessage = useCallback((message: ChatMessage) => {
     setState((current) => ({ ...current, chatMessages: [...current.chatMessages, message] }));
+  }, []);
+
+  const setChatProposalStatus = useCallback((
+    messageId: string,
+    proposalId: string,
+    status: ChefToolProposalStatus
+  ) => {
+    setState((current) => ({
+      ...current,
+      chatMessages: current.chatMessages.map((message) => (
+        message.id === messageId
+          ? {
+              ...message,
+              proposals: message.proposals?.map((proposal) => (
+                proposal.id === proposalId ? { ...proposal, status } : proposal
+              ))
+            }
+          : message
+      ))
+    }));
   }, []);
 
   const newChat = useCallback(() => {
@@ -280,11 +313,13 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       removePantryByName,
       setPantryPreference,
       setPantryPreferenceByName,
+      validateRecipe,
       saveRecipe,
       updateRecipe,
       deleteRecipe,
       setChatMessages,
       appendChatMessage,
+      setChatProposalStatus,
       newChat,
       updateMealContext,
       updateCookEnergy,
@@ -302,11 +337,13 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       removePantryByName,
       setPantryPreference,
       setPantryPreferenceByName,
+      validateRecipe,
       saveRecipe,
       updateRecipe,
       deleteRecipe,
       setChatMessages,
       appendChatMessage,
+      setChatProposalStatus,
       newChat,
       updateMealContext,
       updateCookEnergy,
@@ -324,11 +361,16 @@ export function useAppState(): AppStateApi {
   return value;
 }
 
-export function makeChatMessage(role: ChatMessage['role'], content: string): ChatMessage {
+export function makeChatMessage(
+  role: ChatMessage['role'],
+  content: string,
+  proposals?: ChefToolProposal[]
+): ChatMessage {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     role,
     content,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...(proposals?.length ? { proposals } : {})
   };
 }
