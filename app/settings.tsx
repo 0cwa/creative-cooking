@@ -3,6 +3,7 @@ import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text
 import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/components/Screen';
+import { DEFAULT_SYSTEM_PROMPT } from '@/domain/defaults';
 import type { ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
 import { createOpenRouterShareLink } from '@/llm/openrouter/share';
@@ -426,6 +427,21 @@ export default function SettingsScreen() {
     );
   };
 
+  const resetMasterInstructions = () => {
+    Alert.alert(
+      'Reset master instructions?',
+      'This replaces your customized master instructions with the Creative Cooking defaults. Your other settings are unchanged.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset instructions',
+          style: 'destructive',
+          onPress: () => app.updateSettings({ systemPrompt: DEFAULT_SYSTEM_PROMPT })
+        }
+      ]
+    );
+  };
+
   const persistenceLabel = Platform.OS !== 'web'
     ? 'Device managed'
     : persistence?.persistent
@@ -513,6 +529,11 @@ export default function SettingsScreen() {
 
         <Section title="Master instructions" subtitle="Customize Chef’s style and priorities. Tool behavior, safety constraints, and app mechanics are managed separately and cannot be edited here.">
           <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
+          {app.settings.systemPrompt !== DEFAULT_SYSTEM_PROMPT && (
+            <Pressable accessibilityRole="button" accessibilityLabel="Reset master instructions to default" onPress={resetMasterInstructions} style={styles.textButton}>
+              <Text style={styles.resetLink}>Reset to default instructions</Text>
+            </Pressable>
+          )}
         </Section>
 
         <Section title="Chef provider" subtitle="Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.">
@@ -855,6 +876,7 @@ const styles = StyleSheet.create({
   statusConnected: { color: '#166534' },
   textButton: { minHeight: 44, alignSelf: 'flex-start', justifyContent: 'center' },
   dangerLink: { color: '#b91c1c', fontWeight: '600' },
+  resetLink: { color: '#475569', fontWeight: '600' },
   tags: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   tag: { backgroundColor: '#fee2e2', borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
   tagText: { color: '#991b1b', fontWeight: '600' },
