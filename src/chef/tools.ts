@@ -1,3 +1,9 @@
+const PROPOSE_PROPERTY = {
+  type: 'boolean',
+  default: false,
+  description: 'Set true to suggest this change for user confirmation instead of applying it immediately.'
+} as const;
+
 export const CHEF_TOOLS = [
   {
     type: 'function',
@@ -8,7 +14,8 @@ export const CHEF_TOOLS = [
         type: 'object',
         properties: {
           names: { type: 'array', items: { type: 'string' } },
-          preference: { type: 'integer', minimum: 1, maximum: 5, default: 3 }
+          preference: { type: 'integer', minimum: 1, maximum: 5, default: 3 },
+          propose: PROPOSE_PROPERTY
         },
         required: ['names']
       }
@@ -23,7 +30,8 @@ export const CHEF_TOOLS = [
         type: 'object',
         properties: {
           name: { type: 'string' },
-          newName: { type: 'string' }
+          newName: { type: 'string' },
+          propose: PROPOSE_PROPERTY
         },
         required: ['name', 'newName']
       }
@@ -36,7 +44,7 @@ export const CHEF_TOOLS = [
       description: 'Remove an ingredient from the pantry by name.',
       parameters: {
         type: 'object',
-        properties: { name: { type: 'string' } },
+        properties: { name: { type: 'string' }, propose: PROPOSE_PROPERTY },
         required: ['name']
       }
     }
@@ -50,7 +58,8 @@ export const CHEF_TOOLS = [
         type: 'object',
         properties: {
           name: { type: 'string' },
-          preference: { type: 'integer', minimum: 1, maximum: 5 }
+          preference: { type: 'integer', minimum: 1, maximum: 5 },
+          propose: PROPOSE_PROPERTY
         },
         required: ['name', 'preference']
       }
@@ -80,7 +89,8 @@ export const CHEF_TOOLS = [
             }
           },
           steps: { type: 'array', items: { type: 'string' } },
-          notes: { type: 'array', items: { type: 'string' } }
+          notes: { type: 'array', items: { type: 'string' } },
+          propose: PROPOSE_PROPERTY
         },
         required: ['title', 'portions', 'ingredients', 'steps']
       }
