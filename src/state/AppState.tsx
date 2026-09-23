@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName } from '@/domain/pantry';
-import { isProviderId } from '@/domain/types';
+import { isDictationEngine, isProviderId } from '@/domain/types';
 import type {
   AppSettings,
   ChatMessage,
@@ -28,6 +28,9 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
     : typeof savedModel === 'string'
       ? savedModel
       : DEFAULT_STATE.settings.model;
+  const dictationEngine = isDictationEngine(saved.settings?.dictationEngine)
+    ? saved.settings.dictationEngine
+    : DEFAULT_STATE.settings.dictationEngine;
 
   return {
     ...DEFAULT_STATE,
@@ -38,6 +41,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
       ...(saved.settings ?? {}),
       providerId,
       model,
+      dictationEngine,
       systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
     }
   };
