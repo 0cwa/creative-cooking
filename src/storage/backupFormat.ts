@@ -1,4 +1,4 @@
-import { isDictationEngine, type AppSettings, type ChatMessage, type MealContext, type PantryItem, type PersistedState, type Recipe } from '../domain/types';
+import type { AppSettings, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
 
 type BackupEnvelope = {
   format: 'creative-cooking-backup';
@@ -15,6 +15,10 @@ const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral', 
 
 function isProviderId(value: unknown): value is AppSettings['providerId'] {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+function isDictationEngine(value: unknown): value is AppSettings['dictationEngine'] {
+  return value === 'browser' || value === 'whisper';
 }
 
 export function serializeBackupEnvelope(state: PersistedState, exportedAt: string): string {
