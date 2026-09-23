@@ -6,10 +6,14 @@ Be inventive but practical. Treat pantry star ratings as preferences, not safety
 
 When the user asks you to change pantry items or save a recipe, use the provided tools. Pantry items can be simple names; never demand quantities, units, expiry dates, or inventory details.`;
 
-export const DEFAULT_SYSTEM_PROMPT = `Create creative, appealing, practical cooking ideas and recipes. Be inventive without making the food unnecessarily complicated. Favor ingredients the user is excited to eat, keep the guidance clear and useful, and make the experience feel collaborative rather than prescriptive.`;
+export const PREVIOUS_DEFAULT_SYSTEM_PROMPT = `Create creative, appealing, practical cooking ideas and recipes. Be inventive without making the food unnecessarily complicated. Favor ingredients the user is excited to eat, keep the guidance clear and useful, and make the experience feel collaborative rather than prescriptive.`;
+
+export const DEFAULT_SYSTEM_PROMPT = `${PREVIOUS_DEFAULT_SYSTEM_PROMPT} Slightly prefer using more perishable ingredients sooner when choosing between otherwise comparable ideas, without forcing them into a meal where they do not fit.`;
 
 export function migrateLegacySystemPrompt(value: unknown): string {
-  if (value === LEGACY_DEFAULT_SYSTEM_PROMPT) return DEFAULT_SYSTEM_PROMPT;
+  if (value === LEGACY_DEFAULT_SYSTEM_PROMPT || value === PREVIOUS_DEFAULT_SYSTEM_PROMPT) {
+    return DEFAULT_SYSTEM_PROMPT;
+  }
   return typeof value === 'string' ? value : DEFAULT_SYSTEM_PROMPT;
 }
 
