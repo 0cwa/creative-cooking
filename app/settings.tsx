@@ -18,6 +18,15 @@ import {
   downloadLocalModel,
   isLocalModelCached
 } from '@/llm/webllm/modelCache';
+import {
+  deleteWhisperModel,
+  downloadWhisperModel,
+  getWhisperModelCapabilities,
+  isWhisperModelCached,
+  WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB,
+  WHISPER_MODEL_ID,
+  type WhisperCapabilityResult
+} from '@/speech/whisperModel';
 import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
 import {
   clearProviderKey,
@@ -52,7 +61,12 @@ export default function SettingsScreen() {
   const [localModelCached, setLocalModelCached] = useState<boolean | null>(null);
   const [localModelBusy, setLocalModelBusy] = useState(false);
   const [localModelStatus, setLocalModelStatus] = useState('');
+  const [whisperCapability, setWhisperCapability] = useState<WhisperCapabilityResult | null>(null);
+  const [whisperModelCached, setWhisperModelCached] = useState<boolean | null>(null);
+  const [whisperModelBusy, setWhisperModelBusy] = useState(false);
+  const [whisperModelStatus, setWhisperModelStatus] = useState('');
   const localDownloadController = useRef<AbortController | null>(null);
+  const whisperDownloadController = useRef<AbortController | null>(null);
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
@@ -70,12 +84,16 @@ export default function SettingsScreen() {
   }, [app.settings.providerId]);
 
   const refreshLocalState = async () => {
-    const [capability, cached] = await Promise.all([
+    const [capability, cached, voiceCapability, voiceCached] = await Promise.all([
       getLocalInferenceCapabilities(),
-      isLocalModelCached(WEBLLM_MODEL_ID).catch(() => false)
+      isLocalModelCached(WEBLLM_MODEL_ID).catch(() => false),
+      getWhisperModelCapabilities(),
+      isWhisperModelCached().catch(() => false)
     ]);
     setLocalCapability(capability);
     setLocalModelCached(cached);
+    setWhisperCapability(voiceCapability);
+    setWhisperModelCached(voiceCached);
   };
 
   useEffect(() => {
@@ -84,6 +102,7 @@ export default function SettingsScreen() {
 
     return () => {
       localDownloadController.current?.abort();
+      whisperDownloadController.current?.abort();
     };
   }, []);
 
@@ -159,6 +178,84 @@ export default function SettingsScreen() {
                 );
               } finally {
                 setLocalModelBusy(false);
+              }
+            })();
+          }
+        }
+      ]
+    );
+  };
+
+  const downloadVoiceModel = async () => {
+    if (!whisperCapability?.available || whisperModelBusy) return;
+
+    const controller = new AbortController();
+    whisperDownloadController.current = controller;
+    setWhisperModelBusy(true);
+    setWhisperModelStatus('Starting local voice-model download…');
+
+    try {
+      await downloadWhisperModel(
+        (status) => setWhisperModelStatus(status),
+        controller.signal
+      );
+      setWhisperModelCached(true);
+      setWhisperModelStatus('Local voice model downloaded and ready.');
+      await refreshLocalState();
+      Alert.alert(
+        'Local dictation ready',
+        'Creative Cooking can now use the downloaded Whisper model when browser-native on-device speech is unavailable.'
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await deleteWhisperModel().catch(() => undefined);
+        setWhisperModelCached(false);
+        setWhisperModelStatus('');
+      } else {
+        setWhisperModelStatus('');
+        Alert.alert(
+          'Voice model download failed',
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+        await refreshLocalState();
+      }
+    } finally {
+      if (whisperDownloadController.current === controller) whisperDownloadController.current = null;
+      setWhisperModelBusy(false);
+    }
+  };
+
+  const cancelVoiceModelDownload = () => {
+    whisperDownloadController.current?.abort();
+    setWhisperModelStatus('Canceling voice-model download…');
+  };
+
+  const deleteDownloadedVoiceModel = () => {
+    Alert.alert(
+      'Delete downloaded voice model?',
+      'This frees the Whisper model cache. Dictation will keep using browser-native on-device speech wherever the browser provides it.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete model',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setWhisperModelBusy(true);
+              setWhisperModelStatus('Deleting local voice model…');
+              try {
+                await deleteWhisperModel();
+                setWhisperModelCached(false);
+                setWhisperModelStatus('');
+                await refreshLocalState();
+              } catch (error) {
+                setWhisperModelStatus('');
+                Alert.alert(
+                  'Could not delete voice model',
+                  error instanceof Error ? error.message : 'Unknown error'
+                );
+              } finally {
+                setWhisperModelBusy(false);
               }
             })();
           }
@@ -537,7 +634,74 @@ export default function SettingsScreen() {
           )}
         </Section>
 
-        <Section title="Local models" subtitle="Experimental in-browser inference. The model runs on this device and does not require an API key.">
+        <Section title="Local models" subtitle="Experimental in-browser inference. Downloaded models run on this device and do not require an API key.">
+          <View style={styles.capabilityBox}>
+            <Text style={styles.capabilityTitle}>Dictation · Whisper Tiny</Text>
+            <Text style={styles.help}>Model: {WHISPER_MODEL_ID}</Text>
+            <Text style={styles.help}>
+              Optional fallback for browsers without native on-device speech. Download is roughly {WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB} MB; at least 250 MB of free browser storage is recommended.
+            </Text>
+            <Text style={styles.warning}>
+              Browser-native on-device speech remains preferred. The Whisper fallback also stays entirely on this device; microphone audio is never sent to a transcription service.
+            </Text>
+          </View>
+
+          {whisperCapability ? (
+            <>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Voice-model compatibility</Text>
+                <Text style={[styles.status, whisperCapability.available && styles.statusConnected]}>
+                  {whisperCapability.available ? 'Available' : 'Unavailable'}
+                </Text>
+              </View>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Voice model cache</Text>
+                <Text style={[styles.status, whisperModelCached && styles.statusConnected]}>
+                  {whisperModelCached === null ? 'Checking…' : whisperModelCached ? 'Downloaded' : 'Not downloaded'}
+                </Text>
+              </View>
+              {whisperCapability.freeBytes !== undefined && (
+                <Text style={styles.help}>Free browser storage: {formatBytes(whisperCapability.freeBytes)}</Text>
+              )}
+              {whisperCapability.reasons.map((reason) => (
+                <Text key={reason} style={styles.warning}>• {reason}</Text>
+              ))}
+              {!!whisperModelStatus && (
+                <Text accessibilityLiveRegion="polite" style={styles.help}>{whisperModelStatus}</Text>
+              )}
+              <View style={styles.buttonRow}>
+                {whisperModelCached === false && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={whisperModelBusy ? 'Cancel voice model download' : 'Download local voice model'}
+                    disabled={!whisperCapability.available && !whisperModelBusy}
+                    onPress={whisperModelBusy ? cancelVoiceModelDownload : () => void downloadVoiceModel()}
+                    style={[
+                      styles.smallButton,
+                      (!whisperCapability.available && !whisperModelBusy) && styles.disabledButton
+                    ]}
+                  >
+                    <Text style={styles.smallButtonText}>
+                      {whisperModelBusy ? 'Cancel download' : 'Download voice model'}
+                    </Text>
+                  </Pressable>
+                )}
+                {whisperModelCached === true && !whisperModelBusy && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete downloaded voice model"
+                    onPress={deleteDownloadedVoiceModel}
+                    style={styles.textButton}
+                  >
+                    <Text style={styles.dangerLink}>Delete voice model</Text>
+                  </Pressable>
+                )}
+              </View>
+            </>
+          ) : (
+            <Text style={styles.help}>Checking local voice-model compatibility…</Text>
+          )}
+
           <View style={styles.capabilityBox}>
             <Text style={styles.capabilityTitle}>WebLLM · Llama 3.2 1B</Text>
             <Text style={styles.help}>Model: {WEBLLM_MODEL_ID}</Text>

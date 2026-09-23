@@ -45,6 +45,8 @@ assert.match(sw, /creative-cooking-v\d+/);
 assert.match(sw, /event\.request\.mode === 'navigate'/);
 assert.match(sw, /caches\.match\(appRoot\)/);
 assert.match(sw, /url\.origin !== self\.location\.origin/);
+assert.match(sw, /@huggingface\/transformers@3\.8\.1/);
+assert.match(read('whisper-worker.js').toString('utf8'), /onnx-community\/whisper-tiny/);
 
 const index = read('index.html').toString('utf8');
 assert.match(index, /\/creative-cooking\/manifest\.json/);

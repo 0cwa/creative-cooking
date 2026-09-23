@@ -3,6 +3,7 @@ import type { DictationController, OnDeviceDictationSupport } from './dictationT
 export function getOnDeviceDictationSupport(): OnDeviceDictationSupport {
   return {
     available: false,
+    backend: 'none',
     reason: 'On-device dictation is currently available only in the web app.'
   };
 }
