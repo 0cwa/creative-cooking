@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -9,6 +9,9 @@ import type { ChatMessage, IngredientPreference, UiQuestion } from '@/domain/typ
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { providerForId } from '@/llm/providers';
 import { modelCapabilities, providerMetadata } from '@/llm/registry';
+import { createDictationController, getOnDeviceDictationSupport, getPreferredDictationLanguage } from '@/speech/dictation';
+import { appendDictationToDraft, joinDictation } from '@/speech/transcript';
+import type { DictationController, DictationSnapshot, DictationStatus } from '@/speech/dictationTypes';
 import { getProviderKey } from '@/storage/credentialVault';
 import { makeChatMessage, useAppState } from '@/state/AppState';
 
@@ -67,6 +70,30 @@ function errorPresentation(error: LlmRequestError, providerName: string): { titl
   }
 }
 
+function isDictationActive(status: DictationStatus): boolean {
+  return status === 'checking'
+    || status === 'installing-language'
+    || status === 'listening'
+    || status === 'stopping';
+}
+
+function dictationStatusText(status: DictationStatus, lang: string, error: string): string {
+  switch (status) {
+    case 'checking':
+      return `Checking the on-device speech pack for ${lang}…`;
+    case 'installing-language':
+      return `Installing the on-device speech pack for ${lang}…`;
+    case 'listening':
+      return 'Listening on device. Pauses are okay — press Stop when finished.';
+    case 'stopping':
+      return 'Finishing your last words…';
+    case 'error':
+      return error || 'On-device dictation stopped. Try again when you are ready.';
+    default:
+      return 'Speech stays on this device. Press Start, then Stop when you are finished.';
+  }
+}
+
 export default function ChefScreen() {
   const router = useRouter();
   const app = useAppState();
@@ -77,11 +104,22 @@ export default function ChefScreen() {
   const [runError, setRunError] = useState<RunErrorState | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [question, setQuestion] = useState<UiQuestion | null>(null);
+  const [dictationStatus, setDictationStatus] = useState<DictationStatus>('idle');
+  const [dictationError, setDictationError] = useState('');
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamingTextRef = useRef('');
   const discardCancelledRef = useRef(false);
+  const dictationControllerRef = useRef<DictationController | null>(null);
+  const dictationBaseRef = useRef('');
   const activeProvider = providerMetadata(app.settings.providerId);
+  const dictationSupport = useMemo(() => getOnDeviceDictationSupport(), []);
+  const dictationLang = useMemo(() => getPreferredDictationLanguage(), []);
+  const dictationActive = isDictationActive(dictationStatus);
+
+  useEffect(() => () => {
+    dictationControllerRef.current?.dispose();
+  }, []);
 
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
@@ -90,6 +128,36 @@ export default function ChefScreen() {
     mealContext: app.mealContext,
     settings: app.settings
   }), [app.pantry, app.recipes, app.chatMessages, app.mealContext, app.settings]);
+
+  const handleDictationSnapshot = (snapshot: DictationSnapshot) => {
+    setDictationStatus(snapshot.status);
+    setDictationError(snapshot.error ?? '');
+    const dictated = joinDictation(snapshot.finalText, snapshot.interimText);
+    setInput(appendDictationToDraft(dictationBaseRef.current, dictated));
+  };
+
+  const startDictation = () => {
+    if (!dictationSupport.available || dictationActive) return;
+
+    dictationBaseRef.current = input;
+    setDictationError('');
+
+    try {
+      const controller = dictationControllerRef.current ?? createDictationController();
+      dictationControllerRef.current = controller;
+      void controller.start({
+        lang: dictationLang,
+        onChange: handleDictationSnapshot
+      });
+    } catch (error) {
+      setDictationStatus('error');
+      setDictationError(error instanceof Error ? error.message : 'On-device dictation could not start.');
+    }
+  };
+
+  const stopDictation = () => {
+    dictationControllerRef.current?.stop();
+  };
 
   const runChef = async (messages: ChatMessage[]) => {
     setQuestion(null);
@@ -175,7 +243,7 @@ export default function ChefScreen() {
 
   const send = async (override?: string) => {
     const text = (override ?? input).trim();
-    if (!text || busy) return;
+    if (!text || busy || dictationActive) return;
 
     setInput('');
     const userMessage = makeChatMessage('user', text);
@@ -202,6 +270,12 @@ export default function ChefScreen() {
         onPress: () => {
           discardCancelledRef.current = true;
           abortRef.current?.abort();
+          dictationControllerRef.current?.dispose();
+          dictationControllerRef.current = null;
+          dictationBaseRef.current = '';
+          setDictationStatus('idle');
+          setDictationError('');
+          setInput('');
           app.newChat();
           setQuestion(null);
           setRunError(null);
@@ -211,6 +285,9 @@ export default function ChefScreen() {
   };
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
+  const dictationCopy = dictationSupport.available
+    ? dictationStatusText(dictationStatus, dictationLang, dictationError)
+    : dictationSupport.reason ?? 'On-device dictation is unavailable in this browser.';
 
   return (
     <Screen>
@@ -296,35 +373,73 @@ export default function ChefScreen() {
           )}
         </ScrollView>
 
-        <View style={styles.composerWrap}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>
-          <TextInput
-            accessibilityLabel="Message Chef"
-            value={input}
-            onChangeText={setInput}
-            placeholder="Type or dictate to Chef…"
-            placeholderTextColor="#94a3b8"
-            style={styles.composer}
-            multiline
-            onSubmitEditing={() => void send()}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={busy ? 'Stop Chef response' : 'Send message'}
-            disabled={!busy && !input.trim()}
-            onPress={busy ? stop : () => void send()}
-            style={[styles.send, (!busy && !input.trim()) && styles.sendDisabled]}
-          >
-            {busy ? (
-              <View style={styles.stopGlyph} />
-            ) : (
-              <View style={styles.sendGlyph}>
-                <View style={styles.sendShaft} />
-                <View style={styles.sendHeadLeft} />
-                <View style={styles.sendHeadRight} />
+        <View style={styles.composerArea}>
+          {Platform.OS === 'web' && (
+            <View style={styles.dictationBar}>
+              <View style={styles.dictationInfo}>
+                <View style={[styles.dictationBadge, dictationStatus === 'listening' && styles.dictationBadgeListening]}>
+                  <Text style={[styles.dictationBadgeText, dictationStatus === 'listening' && styles.dictationBadgeTextListening]}>ON-DEVICE</Text>
+                </View>
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={[styles.dictationHelp, dictationStatus === 'error' && styles.dictationErrorText]}
+                >
+                  {dictationCopy}
+                </Text>
               </View>
-            )}
-          </Pressable>
+              {dictationSupport.available && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={dictationActive ? 'Stop dictation' : 'Start dictation'}
+                  accessibilityState={{ disabled: dictationStatus === 'stopping' }}
+                  disabled={dictationStatus === 'stopping'}
+                  onPress={dictationActive ? stopDictation : startDictation}
+                  style={[
+                    styles.dictationButton,
+                    dictationActive && styles.dictationStopButton,
+                    dictationStatus === 'stopping' && styles.dictationButtonDisabled
+                  ]}
+                >
+                  <Text style={styles.dictationButtonText}>{dictationActive ? 'Stop dictation' : 'Start dictation'}</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
+          <View style={styles.composerWrap}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>
+            <TextInput
+              accessibilityLabel="Message Chef"
+              accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : undefined}
+              editable={!dictationActive}
+              value={input}
+              onChangeText={setInput}
+              placeholder="Type or dictate to Chef…"
+              placeholderTextColor="#94a3b8"
+              style={[styles.composer, dictationActive && styles.composerDictating]}
+              multiline
+              onSubmitEditing={() => {
+                if (!dictationActive) void send();
+              }}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={busy ? 'Stop Chef response' : 'Send message'}
+              disabled={!busy && (!input.trim() || dictationActive)}
+              onPress={busy ? stop : () => void send()}
+              style={[styles.send, (!busy && (!input.trim() || dictationActive)) && styles.sendDisabled]}
+            >
+              {busy ? (
+                <View style={styles.stopGlyph} />
+              ) : (
+                <View style={styles.sendGlyph}>
+                  <View style={styles.sendShaft} />
+                  <View style={styles.sendHeadLeft} />
+                  <View style={styles.sendHeadRight} />
+                </View>
+              )}
+            </Pressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
 
@@ -376,10 +491,24 @@ const styles = StyleSheet.create({
   questionOptions: { gap: 8 },
   questionOption: { minHeight: 44, backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: '#fed7aa', justifyContent: 'center' },
   questionOptionText: { color: '#9a3412', fontWeight: '600' },
-  composerWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', flexWrap: 'wrap' },
+  composerArea: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingTop: 8 },
+  dictationBar: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingHorizontal: 12, paddingBottom: 8 },
+  dictationInfo: { flex: 1, minWidth: 220, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dictationBadge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: '#e2e8f0' },
+  dictationBadgeListening: { backgroundColor: '#dcfce7' },
+  dictationBadgeText: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 0.7 },
+  dictationBadgeTextListening: { color: '#166534' },
+  dictationHelp: { flex: 1, color: '#64748b', fontSize: 12.5, lineHeight: 17 },
+  dictationErrorText: { color: '#9a3412' },
+  dictationButton: { minHeight: 38, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#14532d', alignItems: 'center', justifyContent: 'center' },
+  dictationStopButton: { backgroundColor: '#991b1b' },
+  dictationButtonDisabled: { opacity: 0.55 },
+  dictationButtonText: { color: 'white', fontSize: 13, fontWeight: '800' },
+  composerWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingBottom: 10, backgroundColor: 'white', flexWrap: 'wrap' },
   plus: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   plusText: { fontSize: 24, color: '#475569' },
   composer: { flex: 1, minWidth: 140, maxHeight: 160, minHeight: 42, borderRadius: 18, backgroundColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10, color: '#172033', fontSize: 15.5 },
+  composerDictating: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0' },
   send: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
   sendDisabled: { opacity: 0.35 },
   sendGlyph: { width: 18, height: 20, position: 'relative' },
