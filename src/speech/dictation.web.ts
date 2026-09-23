@@ -335,7 +335,11 @@ export function getOnDeviceDictationSupport(): OnDeviceDictationSupport {
     };
 }
 
-export function getPreferredDictationLanguage(): string {\n  return browserLanguage();\n}\n\nexport function createDictationController(): DictationController {
+export function getPreferredDictationLanguage(): string {
+  return browserLanguage();
+}
+
+export function createDictationController(): DictationController {
   const Recognition = speechRecognitionConstructor();
   if (!Recognition) {
     throw new Error('On-device dictation is not supported by this browser.');
