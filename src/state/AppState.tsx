@@ -59,6 +59,7 @@ type AppStateApi = PersistedState & {
   removePantryByName(name: string): boolean;
   setPantryPreference(id: string, preference: IngredientPreference): void;
   setPantryPreferenceByName(name: string, preference: IngredientPreference): boolean;
+  validateRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
@@ -196,9 +197,13 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     return updated;
   }, []);
 
-  const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const validateRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
     if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+  }, [state.settings.allergies]);
+
+  const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    validateRecipe(input);
 
     const now = new Date().toISOString();
     const recipe: Recipe = {
@@ -209,7 +214,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     };
     setState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, [state.settings.allergies]);
+  }, [validateRecipe]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     const existing = state.recipes.find((recipe) => recipe.id === id);
@@ -303,6 +308,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       removePantryByName,
       setPantryPreference,
       setPantryPreferenceByName,
+      validateRecipe,
       saveRecipe,
       updateRecipe,
       deleteRecipe,
@@ -326,6 +332,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       removePantryByName,
       setPantryPreference,
       setPantryPreferenceByName,
+      validateRecipe,
       saveRecipe,
       updateRecipe,
       deleteRecipe,
