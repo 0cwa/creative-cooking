@@ -4,7 +4,7 @@ test('Pantry and Recipes survive an offline reload from the exported PWA', async
   await page.goto('./');
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
 
-  const ingredient = page.getByLabel('Ingredient name');
+  const ingredient = page.getByLabel('Ingredient and details');
   await ingredient.fill('offline carrots');
   await ingredient.press('Enter');
   await expect(page.getByText('offline carrots', { exact: true })).toBeVisible();
