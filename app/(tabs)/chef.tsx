@@ -128,6 +128,12 @@ export default function ChefScreen() {
     dictationControllerRef.current?.dispose();
   }, []);
 
+  useEffect(() => {
+    dictationControllerRef.current?.dispose();
+    dictationControllerRef.current = null;
+    setDictationStatus('idle');
+  }, [dictationEngine]);
+
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
     recipes: app.recipes,
@@ -508,7 +514,7 @@ export default function ChefScreen() {
         <View style={styles.dictationDialogBackdrop}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Close dictation message"
+            accessibilityLabel="Dismiss dictation message"
             onPress={() => setDictationDialog(null)}
             style={styles.dictationDialogDismissArea}
           />
