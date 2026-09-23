@@ -10,12 +10,13 @@ function result(transcript, isFinal) {
 class FakeRecognition {
   static instances = [];
   static availability = 'available';
+  static availabilityByLanguage = new Map();
   static installs = 0;
   static options = [];
 
   static async available(options) {
     this.options.push(options);
-    return this.availability;
+    return this.availabilityByLanguage.get(options.langs[0]) ?? this.availability;
   }
 
   static async install(options) {
@@ -59,6 +60,7 @@ class FakeRecognition {
 function resetFake() {
   FakeRecognition.instances = [];
   FakeRecognition.availability = 'available';
+  FakeRecognition.availabilityByLanguage = new Map();
   FakeRecognition.installs = 0;
   FakeRecognition.options = [];
 }
@@ -119,17 +121,32 @@ test('user Stop prevents a recognizer end from restarting the session', async ()
   assert.equal(snapshots.at(-1).status, 'idle');
 });
 
-test('downloadable language packs are installed for local dictation quality', async () => {
+test('downloadable English packs are installed for local dictation quality', async () => {
   resetFake();
   FakeRecognition.availability = 'downloadable';
   const snapshots = [];
-  const controller = new WebSpeechDictationController(FakeRecognition, 'sv-SE');
-  await controller.start({ lang: 'sv-SE', onChange: (snapshot) => snapshots.push(snapshot) });
+  const controller = new WebSpeechDictationController(FakeRecognition, 'en-US');
+  await controller.start({ lang: 'en-US', onChange: (snapshot) => snapshots.push(snapshot) });
 
   assert.equal(FakeRecognition.installs, 1);
   assert.equal(FakeRecognition.options[0].processLocally, true);
   assert.equal(FakeRecognition.options[0].quality, 'dictation');
-  assert.equal(FakeRecognition.options[0].langs[0], 'sv-SE');
+  assert.equal(FakeRecognition.options[0].langs[0], 'en-US');
   assert.ok(snapshots.some((snapshot) => snapshot.status === 'installing-language'));
   assert.equal(snapshots.at(-1).status, 'listening');
+});
+
+test('regional browser locale cannot block English dictation and English packs fall back', async () => {
+  resetFake();
+  FakeRecognition.availabilityByLanguage.set('en-US', 'unavailable');
+  FakeRecognition.availabilityByLanguage.set('en-GB', 'available');
+
+  const controller = new WebSpeechDictationController(FakeRecognition, 'en-DK');
+  await controller.start({ lang: 'en-DK', onChange: () => {} });
+
+  assert.deepEqual(
+    FakeRecognition.options.slice(0, 2).map((options) => options.langs[0]),
+    ['en-US', 'en-GB']
+  );
+  assert.equal(FakeRecognition.instances[0].lang, 'en-GB');
 });
