@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
+import { ConversationHistoryModal } from '@/components/ConversationHistoryModal';
 import { SettingsGlyph } from '@/components/SettingsGlyph';
 import { MealContextModal } from '@/components/MealContextModal';
 import { ToolProposalCard } from '@/components/ToolProposalCard';
@@ -96,6 +97,7 @@ export default function ChefScreen() {
   const [providerStatus, setProviderStatus] = useState('');
   const [runError, setRunError] = useState<RunErrorState | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [question, setQuestion] = useState<UiQuestion | null>(null);
   const [dictationStatus, setDictationStatus] = useState<DictationStatus>('idle');
   const [dictationDialog, setDictationDialog] = useState<DictationDialogState | null>(null);
@@ -379,7 +381,7 @@ export default function ChefScreen() {
     abortRef.current?.abort();
   };
 
-  const startNewChat = () => {
+  const prepareConversationChange = () => {
     discardCancelledRef.current = true;
     abortRef.current?.abort();
     dictationControllerRef.current?.dispose();
@@ -388,29 +390,19 @@ export default function ChefScreen() {
     setDictationStatus('idle');
     setDictationDialog(null);
     setInput('');
-    app.newChat();
     setQuestion(null);
     setRunError(null);
   };
 
-  const reset = () => {
-    const message = 'Your pantry and saved recipes stay as they are.';
+  const startNewChat = () => {
+    prepareConversationChange();
+    app.newChat();
+  };
 
-    if (Platform.OS === 'web') {
-      if (typeof window !== 'undefined' && window.confirm(`Start a new chat?\n\n${message}`)) {
-        startNewChat();
-      }
-      return;
-    }
-
-    Alert.alert('Start a new chat?', message, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'New chat',
-        style: 'destructive',
-        onPress: startNewChat
-      }
-    ]);
+  const openConversation = (id: string) => {
+    prepareConversationChange();
+    app.openChatConversation(id);
+    setHistoryOpen(false);
   };
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
@@ -424,7 +416,10 @@ export default function ChefScreen() {
             <Text style={styles.title}>Chef</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={reset} style={styles.newChatButton}><Text style={styles.newChatText}>New chat</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open previous chats" onPress={() => setHistoryOpen(true)} style={styles.historyButton}>
+              <Text style={styles.historyText}>Chats{app.chatHistory.length ? ` ${app.chatHistory.length}` : ''}</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={startNewChat} style={styles.newChatButton}><Text style={styles.newChatText}>New chat</Text></Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.iconButton}><SettingsGlyph /></Pressable>
           </View>
         </View>
@@ -581,6 +576,14 @@ export default function ChefScreen() {
         onChange={(mealContext) => app.updateMealContext(mealContext)}
       />
 
+      <ConversationHistoryModal
+        visible={historyOpen}
+        conversations={app.chatHistory}
+        onClose={() => setHistoryOpen(false)}
+        onOpen={openConversation}
+        onDelete={app.deleteChatConversation}
+      />
+
       <Modal
         transparent
         animationType="fade"
@@ -630,6 +633,8 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   headerActions: { flexDirection: 'row', gap: 8 },
+  historyButton: { height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  historyText: { fontSize: 13, color: '#475569', fontWeight: '700' },
   newChatButton: { height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
   newChatText: { fontSize: 13, color: '#334155', fontWeight: '700' },
   iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
