@@ -13,7 +13,8 @@ function metaText(conversation: ChatConversation): string {
 
 function previewText(conversation: ChatConversation): string {
   const last = [...conversation.messages].reverse().find((message) => message.content.trim());
-  return last?.content.replace(/\s+/g, ' ').trim() ?? '';
+  const preview = last?.content.replace(/\s+/g, ' ').trim() ?? '';
+  return preview === conversation.title ? '' : preview;
 }
 
 function ConversationRow({
@@ -55,7 +56,9 @@ function ConversationRow({
         >
           <Text numberOfLines={1} style={styles.rowTitle}>{conversation.title}</Text>
           <Text style={styles.rowMeta}>{metaText(conversation)}</Text>
-          <Text numberOfLines={2} style={styles.rowPreview}>{previewText(conversation)}</Text>
+          {previewText(conversation) ? (
+            <Text numberOfLines={2} style={styles.rowPreview}>{previewText(conversation)}</Text>
+          ) : null}
         </Pressable>
         <Pressable
           accessibilityRole="button"
