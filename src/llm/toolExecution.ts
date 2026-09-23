@@ -30,6 +30,25 @@ export function executeChefTool(
       return { result: JSON.stringify({ ok: false, error: 'proposal_unavailable' }) };
     }
 
+    if (call.name === 'recipe_save' && tools.validateRecipe) {
+      try {
+        tools.validateRecipe(recipeFromToolArgs(args));
+      } catch (error) {
+        if (error instanceof RecipeAllergyError) {
+          return {
+            result: JSON.stringify({
+              ok: false,
+              error: 'allergy_validation_failed',
+              message: error.message,
+              matches: error.matches
+            }),
+            sideEffectApplied: false
+          };
+        }
+        throw error;
+      }
+    }
+
     const proposal: ChefToolProposal = {
       id: call.id,
       toolName: call.name,
