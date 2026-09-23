@@ -1,4 +1,4 @@
-import type { AppSettings, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
+import { isDictationEngine, type AppSettings, type ChatMessage, type MealContext, type PantryItem, type PersistedState, type Recipe } from '../domain/types';
 
 type BackupEnvelope = {
   format: 'creative-cooking-backup';
@@ -57,11 +57,15 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
     : typeof settingsRecord.model === 'string'
       ? settingsRecord.model
       : defaults.settings.model;
+  const dictationEngine = isDictationEngine(settingsRecord.dictationEngine)
+    ? settingsRecord.dictationEngine
+    : defaults.settings.dictationEngine;
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
     providerId,
     model,
+    dictationEngine,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]
