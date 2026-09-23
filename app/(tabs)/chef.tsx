@@ -297,7 +297,7 @@ export default function ChefScreen() {
     }
   };
 
-  const applyProposal = (messageId: string, proposal: ChefToolProposal) => {
+  const applyProposal = (messageId: string, proposal: ChefToolProposal): boolean => {
     try {
       const outcome = applyChefProposal(proposal, {
         addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
@@ -319,11 +319,13 @@ export default function ChefScreen() {
       }
 
       app.setChatProposalStatus(messageId, proposal.id, 'applied');
+      return true;
     } catch (error) {
       Alert.alert(
         'Could not apply change',
         error instanceof Error ? error.message : 'That suggested change could not be applied.'
       );
+      return false;
     }
   };
 
