@@ -6,6 +6,7 @@ export type ToolExecutor = {
   removePantry(name: string): boolean;
   setPantryPreference(name: string, preference: IngredientPreference): boolean;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
+  validateRecipe?(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   propose?(proposal: ChefToolProposal): void;
   forceProposals?: boolean;
 };
