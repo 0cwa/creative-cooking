@@ -5,10 +5,15 @@ test('on-device dictation stays active across browser ends until the user presse
     let starts = 0;
     const localFlags = [];
 
+    Object.defineProperty(navigator, 'language', {
+      configurable: true,
+      value: 'en-DK'
+    });
+
     class FakeSpeechRecognition {
       static async available(options) {
-        window.__speechOptions = options;
-        return 'available';
+        window.__speechOptions = [...(window.__speechOptions ?? []), options];
+        return options.langs[0] === 'en-US' ? 'available' : 'unavailable';
       }
 
       static async install() {
@@ -62,7 +67,9 @@ test('on-device dictation stays active across browser ends until the user presse
   await expect(composer).toHaveValue('tomatoes and basil');
 
   expect(await page.evaluate(() => window.__speechLocalFlags)).toEqual([true, true]);
-  expect(await page.evaluate(() => window.__speechOptions.processLocally)).toBe(true);
+  const options = await page.evaluate(() => window.__speechOptions);
+  expect(options[0].processLocally).toBe(true);
+  expect(options[0].langs[0]).toBe('en-US');
 
   await page.getByLabel('Stop dictation').click();
   await expect(page.getByLabel('Start dictation')).toBeVisible();

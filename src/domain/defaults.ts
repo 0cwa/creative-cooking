@@ -32,6 +32,7 @@ export const DEFAULT_STATE: PersistedState = {
     sendLocalTime: true,
     city: '',
     providerId: 'openrouter',
-    model: 'openrouter/free'
+    model: 'openrouter/free',
+    dictationEngine: 'browser'
   }
 };

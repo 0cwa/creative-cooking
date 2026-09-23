@@ -25,6 +25,6 @@ export type DictationController = {
 
 export type OnDeviceDictationSupport = {
   available: boolean;
-  backend: 'web-speech' | 'whisper' | 'none';
+  backend: 'browser' | 'whisper' | 'none';
   reason?: string;
 };

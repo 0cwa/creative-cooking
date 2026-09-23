@@ -17,6 +17,10 @@ function isProviderId(value: unknown): value is AppSettings['providerId'] {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
 }
 
+function isDictationEngine(value: unknown): value is AppSettings['dictationEngine'] {
+  return value === 'browser' || value === 'whisper';
+}
+
 export function serializeBackupEnvelope(state: PersistedState, exportedAt: string): string {
   const envelope: BackupEnvelope = {
     format: 'creative-cooking-backup',
@@ -57,11 +61,15 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
     : typeof settingsRecord.model === 'string'
       ? settingsRecord.model
       : defaults.settings.model;
+  const dictationEngine = isDictationEngine(settingsRecord.dictationEngine)
+    ? settingsRecord.dictationEngine
+    : defaults.settings.dictationEngine;
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
     providerId,
     model,
+    dictationEngine,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]

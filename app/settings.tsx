@@ -26,7 +26,8 @@ import {
   isWhisperModelCached,
   WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB,
   WHISPER_MODEL_ID,
-  type WhisperCapabilityResult
+  type WhisperCapabilityResult,
+  type WhisperDownloadProgress
 } from '@/speech/whisperModel';
 import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
 import {
@@ -66,6 +67,7 @@ export default function SettingsScreen() {
   const [whisperModelCached, setWhisperModelCached] = useState<boolean | null>(null);
   const [whisperModelBusy, setWhisperModelBusy] = useState(false);
   const [whisperModelStatus, setWhisperModelStatus] = useState('');
+  const [whisperDownloadProgress, setWhisperDownloadProgress] = useState<WhisperDownloadProgress | null>(null);
   const localDownloadController = useRef<AbortController | null>(null);
   const whisperDownloadController = useRef<AbortController | null>(null);
 
@@ -194,10 +196,14 @@ export default function SettingsScreen() {
     whisperDownloadController.current = controller;
     setWhisperModelBusy(true);
     setWhisperModelStatus('Starting local voice-model download…');
+    setWhisperDownloadProgress(null);
 
     try {
       await downloadWhisperModel(
-        (status) => setWhisperModelStatus(status),
+        (progress) => {
+          setWhisperModelStatus(progress.message);
+          setWhisperDownloadProgress(progress);
+        },
         controller.signal
       );
       setWhisperModelCached(true);
@@ -212,8 +218,10 @@ export default function SettingsScreen() {
         await deleteWhisperModel().catch(() => undefined);
         setWhisperModelCached(false);
         setWhisperModelStatus('');
+        setWhisperDownloadProgress(null);
       } else {
         setWhisperModelStatus('');
+        setWhisperDownloadProgress(null);
         Alert.alert(
           'Voice model download failed',
           error instanceof Error ? error.message : 'Unknown error'
@@ -248,6 +256,7 @@ export default function SettingsScreen() {
                 await deleteWhisperModel();
                 setWhisperModelCached(false);
                 setWhisperModelStatus('');
+                setWhisperDownloadProgress(null);
                 await refreshLocalState();
               } catch (error) {
                 setWhisperModelStatus('');
@@ -687,7 +696,43 @@ export default function SettingsScreen() {
               {whisperCapability.reasons.map((reason) => (
                 <Text key={reason} style={styles.warning}>• {reason}</Text>
               ))}
-              {!!whisperModelStatus && (
+              {whisperDownloadProgress && (
+                <View accessibilityLiveRegion="polite" style={styles.downloadProgressCard}>
+                  <View style={styles.downloadProgressHeader}>
+                    <Text style={styles.downloadProgressTitle}>
+                      {whisperDownloadProgress.phase === 'ready' ? 'Voice model ready' : 'Downloading voice model'}
+                    </Text>
+                    <Text style={styles.downloadProgressPercent}>{whisperDownloadProgress.percent}%</Text>
+                  </View>
+                  <View
+                    accessibilityRole="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={whisperDownloadProgress.percent}
+                    aria-valuetext={`${whisperDownloadProgress.percent}% · ${formatBytes(whisperDownloadProgress.loadedBytes)} of ${formatBytes(whisperDownloadProgress.totalBytes)}`}
+                    accessibilityValue={{
+                      min: 0,
+                      max: 100,
+                      now: whisperDownloadProgress.percent
+                    }}
+                    style={styles.downloadProgressTrack}
+                  >
+                    <View
+                      style={[
+                        styles.downloadProgressFill,
+                        { width: `${Math.max(2, whisperDownloadProgress.percent)}%` }
+                      ]}
+                    />
+                  </View>
+                  <View style={styles.downloadProgressMeta}>
+                    <Text style={styles.help}>{whisperModelStatus}</Text>
+                    <Text style={styles.downloadProgressBytes}>
+                      {formatBytes(whisperDownloadProgress.loadedBytes)} / {formatBytes(whisperDownloadProgress.totalBytes)}
+                    </Text>
+                  </View>
+                </View>
+              )}
+              {!whisperDownloadProgress && !!whisperModelStatus && (
                 <Text accessibilityLiveRegion="polite" style={styles.help}>{whisperModelStatus}</Text>
               )}
               <View style={styles.buttonRow}>
@@ -858,6 +903,14 @@ const styles = StyleSheet.create({
   providerButtonTextActive: { color: 'white' },
   capabilityBox: { backgroundColor: '#f8fafc', borderRadius: 12, padding: 12, gap: 6, borderWidth: 1, borderColor: '#e2e8f0' },
   capabilityTitle: { color: '#334155', fontWeight: '800' },
+  downloadProgressCard: { backgroundColor: '#f0fdf4', borderRadius: 14, padding: 12, gap: 9, borderWidth: 1, borderColor: '#bbf7d0' },
+  downloadProgressHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  downloadProgressTitle: { color: '#166534', fontWeight: '800', fontSize: 14 },
+  downloadProgressPercent: { color: '#166534', fontWeight: '800', fontVariant: ['tabular-nums'] },
+  downloadProgressTrack: { height: 9, borderRadius: 999, backgroundColor: '#dcfce7', overflow: 'hidden' },
+  downloadProgressFill: { height: '100%', borderRadius: 999, backgroundColor: '#166534' },
+  downloadProgressMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' },
+  downloadProgressBytes: { color: '#166534', fontSize: 12.5, fontWeight: '700', fontVariant: ['tabular-nums'] },
   buttonRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   input: { flex: 1, minWidth: 200, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
   prompt: { minHeight: 210 },
