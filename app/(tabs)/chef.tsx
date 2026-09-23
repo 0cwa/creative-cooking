@@ -298,25 +298,36 @@ export default function ChefScreen() {
     abortRef.current?.abort();
   };
 
+  const startNewChat = () => {
+    discardCancelledRef.current = true;
+    abortRef.current?.abort();
+    dictationControllerRef.current?.dispose();
+    dictationControllerRef.current = null;
+    dictationBaseRef.current = '';
+    setDictationStatus('idle');
+    setDictationError('');
+    setInput('');
+    app.newChat();
+    setQuestion(null);
+    setRunError(null);
+  };
+
   const reset = () => {
-    Alert.alert('Start a new chat?', 'Your pantry and saved recipes stay as they are.', [
+    const message = 'Your pantry and saved recipes stay as they are.';
+
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Start a new chat?\n\n${message}`)) {
+        startNewChat();
+      }
+      return;
+    }
+
+    Alert.alert('Start a new chat?', message, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'New chat',
         style: 'destructive',
-        onPress: () => {
-          discardCancelledRef.current = true;
-          abortRef.current?.abort();
-          dictationControllerRef.current?.dispose();
-          dictationControllerRef.current = null;
-          dictationBaseRef.current = '';
-          setDictationStatus('idle');
-          setDictationError('');
-          setInput('');
-          app.newChat();
-          setQuestion(null);
-          setRunError(null);
-        }
+        onPress: startNewChat
       }
     ]);
   };
