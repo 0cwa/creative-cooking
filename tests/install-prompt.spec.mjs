@@ -26,7 +26,7 @@ test('offers installation only after engagement and captures the CTA screenshot'
   await offerInstall(page);
   await expect(page.getByText('Install Creative Cooking', { exact: true })).toHaveCount(0);
 
-  const ingredient = page.getByLabel('Ingredient name');
+  const ingredient = page.getByLabel('Ingredient and details');
   await ingredient.fill('fresh tomatoes');
   await ingredient.press('Enter');
 
@@ -51,7 +51,7 @@ test('remembers when the user dismisses the install tip', async ({ page }) => {
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
   await offerInstall(page);
 
-  const ingredient = page.getByLabel('Ingredient name');
+  const ingredient = page.getByLabel('Ingredient and details');
   await ingredient.fill('lemons');
   await ingredient.press('Enter');
   await expect(page.getByText('Install Creative Cooking', { exact: true })).toBeVisible();
