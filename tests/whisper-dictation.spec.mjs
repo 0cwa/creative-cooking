@@ -99,15 +99,25 @@ test('downloaded Whisper fallback keeps Start/Stop UX and never enables remote m
       value: FakeWorker
     });
 
+    class FakeSpeechRecognition {
+      static async available() { return 'available'; }
+      static async install() { return true; }
+      start() { this.onstart?.(); }
+      stop() { this.onend?.(); }
+      abort() {}
+    }
     Object.defineProperty(window, 'SpeechRecognition', {
       configurable: true,
-      value: undefined
+      value: FakeSpeechRecognition
     });
   });
 
   await page.goto('./chef');
   const composer = page.getByLabel('Message Chef');
 
+  await expect(page.getByLabel('Use browser dictation engine')).toHaveAttribute('aria-checked', 'true');
+  await page.getByLabel('Use Whisper dictation engine').click();
+  await expect(page.getByLabel('Use Whisper dictation engine')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByLabel('Start dictation')).toBeEnabled();
   await page.getByLabel('Start dictation').click();
   await expect(page.getByLabel('Stop dictation')).toBeVisible();
