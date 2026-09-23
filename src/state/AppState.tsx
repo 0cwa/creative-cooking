@@ -6,6 +6,8 @@ import { isDictationEngine, isProviderId } from '@/domain/types';
 import type {
   AppSettings,
   ChatMessage,
+  ChefToolProposal,
+  ChefToolProposalStatus,
   CookEnergy,
   IngredientPreference,
   MealContext,
@@ -62,6 +64,7 @@ type AppStateApi = PersistedState & {
   deleteRecipe(id: string): void;
   setChatMessages(messages: ChatMessage[]): void;
   appendChatMessage(message: ChatMessage): void;
+  setChatProposalStatus(messageId: string, proposalId: string, status: ChefToolProposalStatus): void;
   newChat(): void;
   updateMealContext(patch: Partial<MealContext>): void;
   updateCookEnergy(index: number, energy: CookEnergy): void;
@@ -244,6 +247,26 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     setState((current) => ({ ...current, chatMessages: [...current.chatMessages, message] }));
   }, []);
 
+  const setChatProposalStatus = useCallback((
+    messageId: string,
+    proposalId: string,
+    status: ChefToolProposalStatus
+  ) => {
+    setState((current) => ({
+      ...current,
+      chatMessages: current.chatMessages.map((message) => (
+        message.id === messageId
+          ? {
+              ...message,
+              proposals: message.proposals?.map((proposal) => (
+                proposal.id === proposalId ? { ...proposal, status } : proposal
+              ))
+            }
+          : message
+      ))
+    }));
+  }, []);
+
   const newChat = useCallback(() => {
     setState((current) => ({ ...current, chatMessages: [] }));
   }, []);
@@ -285,6 +308,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       deleteRecipe,
       setChatMessages,
       appendChatMessage,
+      setChatProposalStatus,
       newChat,
       updateMealContext,
       updateCookEnergy,
@@ -307,6 +331,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       deleteRecipe,
       setChatMessages,
       appendChatMessage,
+      setChatProposalStatus,
       newChat,
       updateMealContext,
       updateCookEnergy,
@@ -324,11 +349,16 @@ export function useAppState(): AppStateApi {
   return value;
 }
 
-export function makeChatMessage(role: ChatMessage['role'], content: string): ChatMessage {
+export function makeChatMessage(
+  role: ChatMessage['role'],
+  content: string,
+  proposals?: ChefToolProposal[]
+): ChatMessage {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     role,
     content,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...(proposals?.length ? { proposals } : {})
   };
 }
