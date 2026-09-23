@@ -280,6 +280,7 @@ export class WhisperDictationController implements DictationController {
   private silentGain: GainNode | null = null;
   private audioChunks: Float32Array[] = [];
   private totalSamples = 0;
+  private inputSampleRate = TARGET_SAMPLE_RATE;
   private processing = false;
   private desiredActive = false;
   private disposed = false;
@@ -302,6 +303,7 @@ export class WhisperDictationController implements DictationController {
     this.onChange = options.onChange;
     this.audioChunks = [];
     this.totalSamples = 0;
+    this.inputSampleRate = TARGET_SAMPLE_RATE;
     this.finalText = '';
     this.interimText = '';
     this.desiredActive = true;
@@ -420,6 +422,7 @@ export class WhisperDictationController implements DictationController {
 
     this.stream = stream;
     this.audioContext = audioContext;
+    this.inputSampleRate = audioContext.sampleRate;
     this.source = source;
     this.processor = processor;
     this.silentGain = silentGain;
@@ -433,7 +436,7 @@ export class WhisperDictationController implements DictationController {
 
     this.timer = setTimeout(() => {
       this.timer = null;
-      const sampleRate = this.audioContext?.sampleRate ?? TARGET_SAMPLE_RATE;
+      const sampleRate = this.inputSampleRate;
       if (this.totalSamples / sampleRate >= MIN_TRANSCRIBE_SECONDS) {
         this.transcribe(false);
       } else {
@@ -448,7 +451,7 @@ export class WhisperDictationController implements DictationController {
       return;
     }
 
-    const sampleRate = this.audioContext?.sampleRate ?? TARGET_SAMPLE_RATE;
+    const sampleRate = this.inputSampleRate;
     const sampleCount = this.totalSamples;
     const input = appendFloatChunks(this.audioChunks, sampleCount);
     const audio = resampleLinear(input, sampleRate, TARGET_SAMPLE_RATE);
@@ -481,7 +484,7 @@ export class WhisperDictationController implements DictationController {
     this.interimText = applied.interimText;
 
     if (applied.dropSeconds > 0) {
-      const sampleRate = this.audioContext?.sampleRate ?? TARGET_SAMPLE_RATE;
+      const sampleRate = this.inputSampleRate;
       const requestedDrop = Math.min(
         this.snapshotSamples,
         Math.round(applied.dropSeconds * sampleRate)
