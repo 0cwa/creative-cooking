@@ -438,6 +438,8 @@ export default function ChefScreen() {
                   <Pressable
                     accessibilityRole="radio"
                     accessibilityLabel="Use browser dictation engine"
+                    aria-checked={dictationEngine === 'browser'}
+                    aria-disabled={dictationActive || !browserDictationSupport.available}
                     accessibilityState={{ checked: dictationEngine === 'browser', disabled: dictationActive || !browserDictationSupport.available }}
                     disabled={dictationActive || !browserDictationSupport.available}
                     onPress={() => selectDictationEngine('browser')}
@@ -452,6 +454,8 @@ export default function ChefScreen() {
                   <Pressable
                     accessibilityRole="radio"
                     accessibilityLabel="Use Whisper dictation engine"
+                    aria-checked={dictationEngine === 'whisper'}
+                    aria-disabled={dictationActive || !whisperDictationSupport.available}
                     accessibilityState={{ checked: dictationEngine === 'whisper', disabled: dictationActive || !whisperDictationSupport.available }}
                     disabled={dictationActive || !whisperDictationSupport.available}
                     onPress={() => selectDictationEngine('whisper')}
