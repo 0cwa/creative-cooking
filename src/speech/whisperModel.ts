@@ -4,6 +4,14 @@ export const WHISPER_MODEL_ID = 'onnx-community/whisper-tiny';
 export const WHISPER_MODEL_ESTIMATED_DOWNLOAD_MB = 130;
 export const WHISPER_RECOMMENDED_FREE_BYTES = 250 * 1024 * 1024;
 
+export type WhisperDownloadProgress = {
+  phase: 'downloading' | 'warming' | 'ready';
+  message: string;
+  percent: number;
+  loadedBytes: number;
+  totalBytes: number;
+};
+
 export type WhisperCapabilityResult = {
   available: boolean;
   webGpu: boolean;
@@ -41,7 +49,7 @@ export async function isWhisperModelCached(): Promise<boolean> {
 }
 
 export async function downloadWhisperModel(
-  _onStatus?: (status: string) => void,
+  _onProgress?: (progress: WhisperDownloadProgress) => void,
   _signal?: AbortSignal
 ): Promise<void> {
   throw new Error('Local voice-model dictation is not available on this platform.');
