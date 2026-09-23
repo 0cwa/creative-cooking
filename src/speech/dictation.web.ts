@@ -4,6 +4,7 @@ import type {
   DictationStatus,
   OnDeviceDictationSupport
 } from './dictationTypes';
+import { getWhisperStaticSupport, WhisperDictationController } from './whisperModel';
 
 type SpeechPackAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable';
 
@@ -327,12 +328,24 @@ export class WebSpeechDictationController implements DictationController {
 }
 
 export function getOnDeviceDictationSupport(): OnDeviceDictationSupport {
-  return speechRecognitionConstructor()
-    ? { available: true }
-    : {
-      available: false,
-      reason: 'On-device dictation is not supported by this browser yet. You can keep typing normally.'
+  if (speechRecognitionConstructor()) {
+    return { available: true, backend: 'web-speech' };
+  }
+
+  const whisper = getWhisperStaticSupport();
+  if (whisper.available) {
+    return {
+      available: true,
+      backend: 'whisper',
+      reason: 'Browser-native on-device speech is unavailable, so Creative Cooking can use the optional downloaded local voice model.'
     };
+  }
+
+  return {
+    available: false,
+    backend: 'none',
+    reason: whisper.reason ?? 'On-device dictation is not supported by this browser yet. You can keep typing normally.'
+  };
 }
 
 export function getPreferredDictationLanguage(): string {
@@ -341,8 +354,14 @@ export function getPreferredDictationLanguage(): string {
 
 export function createDictationController(): DictationController {
   const Recognition = speechRecognitionConstructor();
-  if (!Recognition) {
-    throw new Error('On-device dictation is not supported by this browser.');
+  if (Recognition) {
+    return new WebSpeechDictationController(Recognition, browserLanguage());
   }
-  return new WebSpeechDictationController(Recognition, browserLanguage());
+
+  const whisper = getWhisperStaticSupport();
+  if (whisper.available) {
+    return new WhisperDictationController();
+  }
+
+  throw new Error(whisper.reason ?? 'On-device dictation is not supported by this browser.');
 }
