@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   secrets:
@@ -36,26 +36,3 @@ jobs:
       - run: npm run verify:pwa
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - name: Upload install prompt screenshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: install-prompt-screenshot
-          path: artifacts/pwa-install-tip.png
-          if-no-files-found: warn
-      - name: Commit tested screenshot to PR branch
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          path='docs/screenshots/pwa-install-tip.png'
-          if gh api --silent "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${HEAD_BRANCH}" >/dev/null 2>&1; then
-            echo "Screenshot already committed."
-            exit 0
-          fi
-          content="$(base64 -w0 artifacts/pwa-install-tip.png)"
-          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${path}" \
-            -f message='Add tested install tip screenshot' \
-            -f content="$content" \
-            -f branch="$HEAD_BRANCH"
