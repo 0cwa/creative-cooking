@@ -4,11 +4,26 @@ import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { SettingsGlyph } from '@/components/SettingsGlyph';
-import { scaleRecipeIngredients, shoppingIngredients } from '@/domain/recipeEditing';
-import type { Recipe, RecipeIngredient } from '@/domain/types';
+import {
+  formatRecipeIngredientsText,
+  formatRecipeTextList,
+  parseRecipeIngredientsText,
+  parseRecipeTextList,
+  scaleRecipeIngredients,
+  shoppingIngredients
+} from '@/domain/recipeEditing';
+import type { Recipe } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
 
 type RecipeDraft = Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>;
+
+type RecipeEditDraft = {
+  title: string;
+  description: string;
+  ingredientsText: string;
+  stepsText: string;
+  notesText: string;
+};
 
 function toRecipeDraft(recipe: Recipe): RecipeDraft {
   return {
@@ -21,25 +36,26 @@ function toRecipeDraft(recipe: Recipe): RecipeDraft {
   };
 }
 
-function cleanRecipeDraft(draft: RecipeDraft): RecipeDraft {
-  const ingredients = draft.ingredients
-    .map((ingredient) => ({
-      name: ingredient.name.trim(),
-      amount: ingredient.amount?.trim() || undefined,
-      needsShopping: ingredient.needsShopping ? true : undefined
-    }))
-    .filter((ingredient) => ingredient.name);
+function toRecipeEditDraft(recipe: Recipe): RecipeEditDraft {
+  return {
+    title: recipe.title,
+    description: recipe.description ?? '',
+    ingredientsText: formatRecipeIngredientsText(recipe.ingredients),
+    stepsText: formatRecipeTextList(recipe.steps),
+    notesText: formatRecipeTextList(recipe.notes)
+  };
+}
 
-  const steps = draft.steps.map((step) => step.trim()).filter(Boolean);
-  const notes = draft.notes?.map((note) => note.trim()).filter(Boolean);
+function cleanRecipeEditDraft(recipe: Recipe, draft: RecipeEditDraft): RecipeDraft {
+  const notes = parseRecipeTextList(draft.notesText);
 
   return {
-    ...draft,
     title: draft.title.trim(),
-    description: draft.description?.trim() || undefined,
-    ingredients,
-    steps,
-    notes: notes?.length ? notes : undefined
+    description: draft.description.trim() || undefined,
+    portions: recipe.portions,
+    ingredients: parseRecipeIngredientsText(draft.ingredientsText, recipe.ingredients),
+    steps: parseRecipeTextList(draft.stepsText),
+    notes: notes.length ? notes : undefined
   };
 }
 
@@ -53,7 +69,7 @@ export default function RecipesScreen() {
     deleteRecipe
   } = useAppState();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<RecipeDraft | null>(null);
+  const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
   const [checkedShopping, setCheckedShopping] = useState<Set<number>>(new Set());
 
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? null;
@@ -81,12 +97,12 @@ export default function RecipesScreen() {
   const startEditing = () => {
     if (!selected) return;
     setCheckedShopping(new Set());
-    setDraft(toRecipeDraft(selected));
+    setDraft(toRecipeEditDraft(selected));
   };
 
   const saveEditing = () => {
     if (!selected || !draft) return;
-    const cleaned = cleanRecipeDraft(draft);
+    const cleaned = cleanRecipeEditDraft(selected, draft);
 
     if (!cleaned.title) {
       Alert.alert('Recipe needs a title', 'Add a title before saving.');
@@ -162,36 +178,6 @@ export default function RecipesScreen() {
     }
   };
 
-  const updateDraftIngredient = (index: number, patch: Partial<RecipeIngredient>) => {
-    setDraft((current) => current ? {
-      ...current,
-      ingredients: current.ingredients.map((ingredient, ingredientIndex) => (
-        ingredientIndex === index ? { ...ingredient, ...patch } : ingredient
-      ))
-    } : current);
-  };
-
-  const removeDraftIngredient = (index: number) => {
-    setDraft((current) => current ? {
-      ...current,
-      ingredients: current.ingredients.filter((_, ingredientIndex) => ingredientIndex !== index)
-    } : current);
-  };
-
-  const updateDraftStep = (index: number, value: string) => {
-    setDraft((current) => current ? {
-      ...current,
-      steps: current.steps.map((step, stepIndex) => stepIndex === index ? value : step)
-    } : current);
-  };
-
-  const updateDraftNote = (index: number, value: string) => {
-    setDraft((current) => current ? {
-      ...current,
-      notes: (current.notes ?? []).map((note, noteIndex) => noteIndex === index ? value : note)
-    } : current);
-  };
-
   return (
     <Screen>
       <View style={styles.header}>
@@ -230,155 +216,74 @@ export default function RecipesScreen() {
                   </Pressable>
                 </View>
 
-                <Text style={styles.editLabel}>Title</Text>
+                <View style={styles.editorIntro}>
+                  <Text style={styles.editorIntroTitle}>Edit it like a recipe</Text>
+                  <Text style={styles.editorIntroText}>Write naturally, one ingredient or step per line. Clear amounts such as “1 cup” stay structured for portion scaling; the rest can stay plain text.</Text>
+                </View>
+
                 <TextInput
                   accessibilityLabel="Recipe title"
                   value={draft.title}
                   onChangeText={(title) => setDraft((current) => current ? { ...current, title } : current)}
                   placeholder="Recipe title"
                   placeholderTextColor="#94a3b8"
-                  style={styles.input}
+                  style={styles.editorTitleInput}
                 />
 
-                <Text style={styles.editLabel}>Description</Text>
                 <TextInput
                   accessibilityLabel="Recipe description"
-                  value={draft.description ?? ''}
+                  value={draft.description}
                   onChangeText={(description) => setDraft((current) => current ? { ...current, description } : current)}
-                  placeholder="Optional description"
+                  placeholder="Add a short description (optional)"
                   placeholderTextColor="#94a3b8"
                   multiline
-                  style={[styles.input, styles.multilineInput]}
+                  style={styles.editorDescriptionInput}
                   textAlignVertical="top"
                 />
 
-                <Text style={styles.sectionTitle}>Ingredients</Text>
-                <View style={styles.editList}>
-                  {draft.ingredients.map((ingredient, index) => (
-                    <View key={index} style={styles.editCard}>
-                      <View style={styles.ingredientInputs}>
-                        <TextInput
-                          accessibilityLabel={`Amount for ingredient ${index + 1}`}
-                          value={ingredient.amount ?? ''}
-                          onChangeText={(amount) => updateDraftIngredient(index, { amount })}
-                          placeholder="Amount"
-                          placeholderTextColor="#94a3b8"
-                          style={[styles.input, styles.amountInput]}
-                        />
-                        <TextInput
-                          accessibilityLabel={`Ingredient ${index + 1} name`}
-                          value={ingredient.name}
-                          onChangeText={(name) => updateDraftIngredient(index, { name })}
-                          placeholder="Ingredient"
-                          placeholderTextColor="#94a3b8"
-                          style={[styles.input, styles.nameInput]}
-                        />
-                      </View>
-                      <View style={styles.editCardActions}>
-                        <Pressable
-                          accessibilityRole="checkbox"
-                          accessibilityState={{ checked: Boolean(ingredient.needsShopping) }}
-                          accessibilityLabel={`Ingredient ${index + 1} needs shopping`}
-                          onPress={() => updateDraftIngredient(index, { needsShopping: !ingredient.needsShopping })}
-                          style={[styles.shoppingToggle, ingredient.needsShopping && styles.shoppingToggleActive]}
-                        >
-                          <Text style={[styles.shoppingToggleText, ingredient.needsShopping && styles.shoppingToggleTextActive]}>
-                            {ingredient.needsShopping ? '✓ Need to buy' : 'Need to buy'}
-                          </Text>
-                        </Pressable>
-                        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ingredient ${index + 1}`} onPress={() => removeDraftIngredient(index)} style={styles.removeButton}>
-                          <Text style={styles.removeText}>Remove</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  ))}
+                <View style={styles.editorSection}>
+                  <Text style={styles.editorSectionTitle}>Ingredients</Text>
+                  <Text style={styles.editorHelp}>One per line — for example “1 cup lentils” or “salt to taste”. Shopping is worked out from Pantry, so there are no extra fields to maintain here.</Text>
+                  <TextInput
+                    accessibilityLabel="Recipe ingredients"
+                    value={draft.ingredientsText}
+                    onChangeText={(ingredientsText) => setDraft((current) => current ? { ...current, ingredientsText } : current)}
+                    placeholder={'1 cup lentils\n1/2 lemon\nsalt to taste'}
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    style={[styles.editorTextArea, styles.ingredientsEditor]}
+                    textAlignVertical="top"
+                  />
                 </View>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setDraft((current) => current ? {
-                    ...current,
-                    ingredients: [...current.ingredients, { name: '', amount: '', needsShopping: false }]
-                  } : current)}
-                  style={styles.secondaryButton}
-                >
-                  <Text style={styles.secondaryButtonText}>+ Add ingredient</Text>
-                </Pressable>
 
-                <Text style={styles.sectionTitle}>Method</Text>
-                <View style={styles.editList}>
-                  {draft.steps.map((step, index) => (
-                    <View key={index} style={styles.editCard}>
-                      <Text style={styles.stepNumber}>{index + 1}.</Text>
-                      <TextInput
-                        accessibilityLabel={`Recipe step ${index + 1}`}
-                        value={step}
-                        onChangeText={(value) => updateDraftStep(index, value)}
-                        placeholder="Cooking step"
-                        placeholderTextColor="#94a3b8"
-                        multiline
-                        style={[styles.input, styles.stepInput]}
-                        textAlignVertical="top"
-                      />
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Remove recipe step ${index + 1}`}
-                        onPress={() => setDraft((current) => current ? {
-                          ...current,
-                          steps: current.steps.filter((_, stepIndex) => stepIndex !== index)
-                        } : current)}
-                        style={styles.removeButton}
-                      >
-                        <Text style={styles.removeText}>Remove</Text>
-                      </Pressable>
-                    </View>
-                  ))}
+                <View style={styles.editorSection}>
+                  <Text style={styles.editorSectionTitle}>Method</Text>
+                  <Text style={styles.editorHelp}>One step per line. No need to number them — Creative Cooking does that when the recipe is displayed.</Text>
+                  <TextInput
+                    accessibilityLabel="Recipe method"
+                    value={draft.stepsText}
+                    onChangeText={(stepsText) => setDraft((current) => current ? { ...current, stepsText } : current)}
+                    placeholder={'Warm the lentils.\nFinish with lemon and herbs.'}
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    style={[styles.editorTextArea, styles.methodEditor]}
+                    textAlignVertical="top"
+                  />
                 </View>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setDraft((current) => current ? { ...current, steps: [...current.steps, ''] } : current)}
-                  style={styles.secondaryButton}
-                >
-                  <Text style={styles.secondaryButtonText}>+ Add step</Text>
-                </Pressable>
 
-                <Text style={styles.sectionTitle}>Notes</Text>
-                <View style={styles.editList}>
-                  {(draft.notes ?? []).map((note, index) => (
-                    <View key={index} style={styles.editCard}>
-                      <TextInput
-                        accessibilityLabel={`Recipe note ${index + 1}`}
-                        value={note}
-                        onChangeText={(value) => updateDraftNote(index, value)}
-                        placeholder="Optional note"
-                        placeholderTextColor="#94a3b8"
-                        multiline
-                        style={[styles.input, styles.stepInput]}
-                        textAlignVertical="top"
-                      />
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Remove recipe note ${index + 1}`}
-                        onPress={() => setDraft((current) => current ? {
-                          ...current,
-                          notes: (current.notes ?? []).filter((_, noteIndex) => noteIndex !== index)
-                        } : current)}
-                        style={styles.removeButton}
-                      >
-                        <Text style={styles.removeText}>Remove</Text>
-                      </Pressable>
-                    </View>
-                  ))}
+                <View style={styles.editorSection}>
+                  <Text style={styles.editorSectionTitle}>Notes <Text style={styles.optionalText}>optional</Text></Text>
+                  <TextInput
+                    accessibilityLabel="Recipe notes"
+                    value={draft.notesText}
+                    onChangeText={(notesText) => setDraft((current) => current ? { ...current, notesText } : current)}
+                    placeholder="Anything worth remembering next time"
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    style={[styles.editorTextArea, styles.notesEditor]}
+                    textAlignVertical="top"
+                  />
                 </View>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setDraft((current) => current ? {
-                    ...current,
-                    notes: [...(current.notes ?? []), '']
-                  } : current)}
-                  style={styles.secondaryButton}
-                >
-                  <Text style={styles.secondaryButtonText}>+ Add note</Text>
-                </Pressable>
               </>
             ) : (
               <>
@@ -505,8 +410,6 @@ const styles = StyleSheet.create({
   delete: { color: '#b91c1c', fontWeight: '700' },
   primaryAction: { minHeight: 44, backgroundColor: '#172033', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   primaryActionText: { color: 'white', fontWeight: '800' },
-  secondaryButton: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center', justifyContent: 'center', marginTop: 10 },
-  secondaryButtonText: { color: '#334155', fontWeight: '700' },
   detailTitle: { fontSize: 34, fontWeight: '800', color: '#172033' },
   detailDescription: { marginTop: 8, color: '#64748b', fontSize: 16, lineHeight: 23 },
   portionCard: { marginTop: 22, padding: 14, borderRadius: 16, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 16, flexWrap: 'wrap' },
@@ -530,20 +433,17 @@ const styles = StyleSheet.create({
   checkboxText: { color: 'white', fontWeight: '900' },
   shoppingName: { flex: 1, color: '#334155', fontSize: 16 },
   shoppingNameChecked: { textDecorationLine: 'line-through', color: '#64748b' },
-  editLabel: { color: '#334155', fontWeight: '800', marginBottom: 7, marginTop: 14 },
-  input: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 9, color: '#172033', backgroundColor: '#fff' },
-  multilineInput: { minHeight: 92 },
-  editList: { gap: 10 },
-  editCard: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 12, gap: 10, backgroundColor: '#f8fafc' },
-  ingredientInputs: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  amountInput: { flexGrow: 0, flexBasis: 120, minWidth: 100 },
-  nameInput: { flex: 1, minWidth: 180 },
-  editCardActions: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  shoppingToggle: { minHeight: 40, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#e2e8f0', justifyContent: 'center' },
-  shoppingToggleActive: { backgroundColor: '#fef3c7' },
-  shoppingToggleText: { color: '#475569', fontWeight: '700' },
-  shoppingToggleTextActive: { color: '#92400e' },
-  removeButton: { minHeight: 40, paddingHorizontal: 8, justifyContent: 'center', alignSelf: 'flex-start' },
-  removeText: { color: '#b91c1c', fontWeight: '700' },
-  stepInput: { flex: 1, minHeight: 72 }
+  editorIntro: { marginBottom: 22, borderRadius: 16, backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#dcfce7', padding: 14 },
+  editorIntroTitle: { color: '#166534', fontSize: 15, fontWeight: '800' },
+  editorIntroText: { color: '#475569', fontSize: 13.5, lineHeight: 20, marginTop: 4 },
+  editorTitleInput: { color: '#172033', fontSize: 32, lineHeight: 39, fontWeight: '800', paddingVertical: 6, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  editorDescriptionInput: { minHeight: 72, color: '#64748b', fontSize: 16, lineHeight: 23, paddingHorizontal: 0, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  editorSection: { marginTop: 26 },
+  editorSectionTitle: { color: '#334155', fontSize: 19, fontWeight: '800', marginBottom: 5 },
+  optionalText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
+  editorHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 18, marginBottom: 9 },
+  editorTextArea: { borderRadius: 15, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 14, paddingVertical: 12, color: '#172033', fontSize: 16, lineHeight: 24 },
+  ingredientsEditor: { minHeight: 170 },
+  methodEditor: { minHeight: 210 },
+  notesEditor: { minHeight: 110 }
 });
