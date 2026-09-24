@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View, useColorScheme } from 'react-native';
 import { StyleSheet, themeColor } from '@/theme/StyleSheet';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
@@ -61,6 +61,7 @@ function cleanRecipeEditDraft(recipe: Recipe, draft: RecipeEditDraft): RecipeDra
 }
 
 export default function RecipesScreen() {
+  useColorScheme();
   const router = useRouter();
   const {
     pantry,
