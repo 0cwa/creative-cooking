@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { proposalPresentation } from '@/chef/proposals';
+import { formatRecipeIngredientLine } from '@/domain/recipeEditing';
 import type { ChefToolProposal } from '@/domain/types';
 
 type Props = {
@@ -39,13 +40,11 @@ export function ToolProposalCard({ proposal, onApply }: Props) {
       {recipe && expanded ? (
         <View style={styles.preview}>
           {recipe.description ? <Text style={styles.description}>{recipe.description}</Text> : null}
+          <Text style={styles.recipeMeta}>{recipe.portions} portions · {recipe.ingredients.length} ingredients</Text>
           <Text style={styles.sectionTitle}>Ingredients</Text>
           <View style={styles.list}>
             {recipe.ingredients.map((ingredient, index) => (
-              <Text key={`${ingredient.name}-${index}`} style={styles.listText}>
-                • {[ingredient.amount, ingredient.name].filter(Boolean).join(' ')}
-                {ingredient.needsShopping ? ' · shop' : ''}
-              </Text>
+              <Text key={`${ingredient.name}-${index}`} style={styles.listText}>• {formatRecipeIngredientLine(ingredient)}</Text>
             ))}
           </View>
           <Text style={styles.sectionTitle}>Method</Text>
@@ -133,6 +132,7 @@ const styles = StyleSheet.create({
     gap: 8
   },
   description: { color: '#475569', fontSize: 14, lineHeight: 20 },
+  recipeMeta: { color: '#94a3b8', fontSize: 12.5, fontWeight: '700' },
   sectionTitle: { color: '#334155', fontSize: 12, fontWeight: '900', letterSpacing: 0.7, textTransform: 'uppercase', marginTop: 2 },
   list: { gap: 4 },
   listText: { color: '#475569', fontSize: 13.5, lineHeight: 19 },
