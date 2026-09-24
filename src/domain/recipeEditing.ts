@@ -103,7 +103,11 @@ function formatQuantity(value: number): string {
 }
 
 export function formatRecipeIngredientLine(ingredient: RecipeIngredient): string {
-  return [ingredient.amount?.trim(), ingredient.name.trim()].filter(Boolean).join(' ');
+  const name = ingredient.name.trim();
+  const amount = ingredient.amount?.trim();
+  if (!amount) return name;
+  if (/^(?:to taste|as needed)$/i.test(amount)) return [name, amount].filter(Boolean).join(' ');
+  return [amount, name].filter(Boolean).join(' ');
 }
 
 export function formatRecipeIngredientsText(ingredients: RecipeIngredient[]): string {
@@ -113,6 +117,11 @@ export function formatRecipeIngredientsText(ingredients: RecipeIngredient[]): st
 export function parseRecipeIngredientLine(value: string): RecipeIngredient | null {
   const line = stripListMarker(value);
   if (!line) return null;
+
+  const trailingAmount = line.match(/^(.+?)\s+(to taste|as needed)$/i);
+  if (trailingAmount) {
+    return { name: trailingAmount[1].trim(), amount: trailingAmount[2].toLocaleLowerCase() };
+  }
 
   const match = line.match(NATURAL_INGREDIENT_PATTERN);
   if (!match) return { name: line };
