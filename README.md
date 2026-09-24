@@ -7,7 +7,7 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 - Pantry powered by FlashList: manually add concise ingredient descriptions one at a time from a bottom composer, rate each 1–5 stars, swipe to remove; optional details such as `mint (dried)` or `okra (frozen)` stay plain text, and bulk dictation goes through Chef.
 - Chef chat: pantry preferences, allergies, shopping willingness, portions, cooks, energy, optional city/time context.
 - Chef can add/update/remove/rate pantry items and save structured recipes via tool calls.
-- Saved recipe collection with editing, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
+- Saved recipe collection with recipe-like natural-text editing over structured data, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
 - OpenRouter OAuth PKCE plus direct BYOK connections for OpenAI, Anthropic, Gemini, and Mistral, all behind the same Chef provider interface.
 - Installable GitHub Pages PWA with local-first app state.
 - Experimental WebLLM local Chef on compatible WebGPU browsers, with explicit model download/cache/delete controls and no hidden model download from chat.
