@@ -58,7 +58,7 @@ export default function PantryScreen() {
       </View>
 
       <View testID="pantry-composer" style={styles.composer}>
-        <Text style={styles.composerHelp}>Add an ingredient with any useful detail — for example mint (dried) or okra (frozen). When you run out, tap 🛒+ to move it to Shopping. To dictate many at once, tell Chef.</Text>
+        <Text style={styles.composerHelp}>Add an ingredient with any useful detail — for example mint (dried) or okra (frozen). When you run out, tap Buy again to move it to Shopping. To dictate many at once, tell Chef.</Text>
         <View style={styles.composerRow}>
           <TextInput
             ref={inputRef}
