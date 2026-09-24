@@ -168,7 +168,24 @@ export function parseRecipeIngredientsText(
     }
 
     const parsed = parseRecipeIngredientLine(line);
-    return parsed ? [parsed] : [];
+    if (!parsed) return [];
+
+    const sameNameIndex = previousIngredients.findIndex((ingredient, previousIndex) => (
+      !usedPrevious.has(previousIndex)
+      && normalizeIngredientName(ingredient.name).toLocaleLowerCase()
+        === normalizeIngredientName(parsed.name).toLocaleLowerCase()
+    ));
+
+    if (sameNameIndex >= 0) {
+      usedPrevious.add(sameNameIndex);
+      return [{
+        ...previousIngredients[sameNameIndex],
+        ...parsed,
+        amount: parsed.amount
+      }];
+    }
+
+    return [parsed];
   });
 }
 
