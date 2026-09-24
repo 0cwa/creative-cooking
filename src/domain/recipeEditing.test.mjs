@@ -41,9 +41,9 @@ test('natural ingredient editing preserves exact existing metadata and parses ne
   ];
 
   assert.deepEqual(
-    parseRecipeIngredientsText('• 1/2 lemon\n1 cup lentils\n1 tbsp olive oil', previous),
+    parseRecipeIngredientsText('• 3/4 lemon\n1 cup lentils\n1 tbsp olive oil', previous),
     [
-      { name: 'lemon', amount: '1/2', needsShopping: true },
+      { name: 'lemon', amount: '3/4', needsShopping: true },
       { name: 'lentils', amount: '1 cup' },
       { name: 'olive oil', amount: '1 tbsp' }
     ]
