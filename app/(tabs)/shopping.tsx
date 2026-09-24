@@ -90,7 +90,7 @@ export default function ShoppingScreen() {
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🛒</Text>
               <Text style={styles.emptyTitle}>Your shopping list is clear</Text>
-              <Text style={styles.emptyText}>Add something below, send missing recipe ingredients here, or tap 🛒+ on a Pantry item when you want to buy it again.</Text>
+              <Text style={styles.emptyText}>Add something below, send missing recipe ingredients here, or use Buy again on a Pantry item when you want to restock it.</Text>
             </View>
           }
           contentContainerStyle={{ paddingBottom: 18 }}
