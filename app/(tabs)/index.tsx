@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View, useColorScheme } from 'react-native';
 import { StyleSheet, themeColor } from '@/theme/StyleSheet';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
@@ -10,6 +10,7 @@ import { normalizeIngredientName } from '@/domain/pantry';
 import { useAppState } from '@/state/AppState';
 
 export default function PantryScreen() {
+  useColorScheme();
   const router = useRouter();
   const { pantry, addPantryItems, removePantryItem, setPantryPreference } = useAppState();
   const [input, setInput] = useState('');
