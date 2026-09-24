@@ -44,11 +44,20 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   await expect(page.getByText(/3\/4 lemon/).first()).toBeVisible();
 
   await page.getByLabel('Edit recipe Lentil bowl').click();
+  await expect(page.getByText('Edit it like a recipe', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Amount for ingredient 1')).toHaveCount(0);
+  await expect(page.getByLabel('Recipe ingredients')).toHaveValue('1 1/2 cup lentils\n3/4 lemon');
   await page.getByLabel('Recipe title').fill('Bright lentil bowl');
+  await page.getByLabel('Recipe ingredients').fill('1 1/2 cup lentils\n3/4 lemon\n1 tbsp olive oil');
+  await page.getByLabel('Recipe method').fill('1. Warm the lentils.\n2. Finish with lemon.\n3. Drizzle with olive oil.');
+  await page.getByLabel('Recipe notes').fill('Taste before salting.\nBest served warm.');
   await page.getByLabel('Save recipe changes').click();
   await expect(page.getByRole('dialog').getByText('Bright lentil bowl', { exact: true })).toBeVisible();
+  await expect(page.getByText(/1 tbsp olive oil/)).toBeVisible();
+  await expect(page.getByText(/3\. Drizzle with olive oil\./)).toBeVisible();
 
   await page.getByLabel('lemon purchased').click();
+  await page.getByLabel('olive oil purchased').click();
   page.once('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: 'Add checked to Pantry' }).click();
 
@@ -68,9 +77,27 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
     return raw;
   })).toContain('Bright lentil bowl');
 
+  await expect.poll(async () => page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('creative-cooking', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const transaction = database.transaction('app-state', 'readonly');
+      const request = transaction.objectStore('app-state').get('creative-cooking-state-v1');
+      request.onsuccess = () => resolve(request.result ?? '');
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    const persisted = JSON.parse(raw);
+    return persisted.recipes[0].ingredients.find((ingredient) => ingredient.name === 'olive oil')?.amount ?? null;
+  })).toBe('1 tbsp');
+
   await page.getByLabel('Close recipe').click();
   await page.goto('./');
   await expect(page.getByText('lemon', { exact: true })).toBeVisible();
+  await expect(page.getByText('olive oil', { exact: true })).toBeVisible();
 
   await page.goto('./recipes');
   await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();
