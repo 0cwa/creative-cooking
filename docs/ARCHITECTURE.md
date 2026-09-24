@@ -22,6 +22,12 @@ The Chef receives pantry names grouped as:
 - Probably don't want to eat — 2/5
 - Don't want to eat — 1/5
 
+## Recipe editing boundary
+
+Recipes remain structured domain data because portions, parsed ingredient amounts, ingredient names, and ordered steps power scaling, allergy checks, Pantry comparison, shopping, and cooking display. The editing UI does not expose that schema directly. It serializes ingredients and method steps into natural recipe text, then parses conservative structure back on save. Exact unchanged ingredient lines retain their existing metadata; edited lines only split amount/name when the amount is clear, while ambiguous lines remain valid plain text. This keeps the storage/tool contract rich without making manual editing feel like database maintenance.
+
+The same presentation rule applies to Chef recipe proposals: cards render recipe-like text and useful human metadata instead of internal mutation flags.
+
 ## Tool boundary
 
 The model proposes mutations; application code validates and executes them. The MVP tools are deliberately small:
