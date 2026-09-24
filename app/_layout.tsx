@@ -9,6 +9,7 @@ import { InstallAppPrompt } from '@/components/InstallAppPrompt';
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
 import { requestPersistentStorageOnce } from '@/storage/persistence';
+import { useAppTheme } from '@/theme/theme';
 
 function StorageFailureAlert() {
   const { storageError } = useAppState();
@@ -70,19 +71,34 @@ function BootTasks() {
   return null;
 }
 
+function AppShell() {
+  const theme = useAppTheme();
+
+  return (
+    <>
+      <BootTasks />
+      <StorageFailureAlert />
+      <StatusBar style={theme.scheme === 'dark' ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: theme.colors.background }
+        }}
+      >
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="settings" />
+      </Stack>
+      <InstallAppPrompt />
+      <FirstOpenLoadingAnimation />
+    </>
+  );
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AppStateProvider>
-        <BootTasks />
-        <StorageFailureAlert />
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="settings" />
-        </Stack>
-        <InstallAppPrompt />
-        <FirstOpenLoadingAnimation />
+        <AppShell />
       </AppStateProvider>
     </SafeAreaProvider>
   );
