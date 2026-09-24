@@ -15,6 +15,7 @@ import {
 test('formats structured ingredients as natural recipe lines', () => {
   assert.equal(formatRecipeIngredientLine({ name: 'lentils', amount: '1 cup' }), '1 cup lentils');
   assert.equal(formatRecipeIngredientLine({ name: 'salt' }), 'salt');
+  assert.equal(formatRecipeIngredientLine({ name: 'salt', amount: 'to taste' }), 'salt to taste');
   assert.equal(
     formatRecipeIngredientsText([
       { name: 'lentils', amount: '1 cup' },
@@ -29,7 +30,8 @@ test('parses common natural ingredient lines into amount and name', () => {
   assert.deepEqual(parseRecipeIngredientLine('200 g carrots'), { amount: '200 g', name: 'carrots' });
   assert.deepEqual(parseRecipeIngredientLine('3/4 lemon'), { amount: '3/4', name: 'lemon' });
   assert.deepEqual(parseRecipeIngredientLine('2 large onions'), { amount: '2', name: 'large onions' });
-  assert.deepEqual(parseRecipeIngredientLine('salt to taste'), { name: 'salt to taste' });
+  assert.deepEqual(parseRecipeIngredientLine('salt to taste'), { name: 'salt', amount: 'to taste' });
+  assert.deepEqual(parseRecipeIngredientLine('chili flakes as needed'), { name: 'chili flakes', amount: 'as needed' });
 });
 
 test('natural ingredient editing preserves exact existing metadata and parses new lines', () => {
