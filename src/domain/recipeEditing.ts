@@ -4,6 +4,14 @@ function normalizeIngredientName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
+function stripListMarker(value: string): string {
+  return value.replace(/^\s*(?:[-*•]\s+|\d+[.)]\s+)/, '').trim();
+}
+
+function normalizeIngredientLine(value: string): string {
+  return stripListMarker(value).replace(/\s+/g, ' ');
+}
+
 const FRACTIONS: Array<[number, string]> = [
   [1 / 8, '1/8'],
   [1 / 6, '1/6'],
@@ -17,6 +25,35 @@ const FRACTIONS: Array<[number, string]> = [
   [5 / 6, '5/6'],
   [7 / 8, '7/8']
 ];
+
+const INGREDIENT_UNIT_PATTERN = [
+  'cups?', 'c',
+  'tablespoons?', 'tbsp?s?',
+  'teaspoons?', 'tsps?',
+  'grams?', 'g',
+  'kilograms?', 'kgs?',
+  'millilit(?:er|re)s?', 'ml',
+  'lit(?:er|re)s?', 'l',
+  'ounces?', 'oz',
+  'pounds?', 'lbs?',
+  'cloves?',
+  'cans?', 'tins?',
+  'packages?', 'packs?',
+  'bunch(?:es)?',
+  'heads?',
+  'pieces?',
+  'slices?',
+  'sticks?',
+  'sprigs?',
+  'handfuls?',
+  'pinches?'
+].join('|');
+
+const QUANTITY_PATTERN = '(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:\\.\\d+)?)';
+const NATURAL_INGREDIENT_PATTERN = new RegExp(
+  `^((?:${QUANTITY_PATTERN})(?:\\s*(?:[-–—]|to)\\s*(?:${QUANTITY_PATTERN}))?(?:\\s+(?:${INGREDIENT_UNIT_PATTERN}))?)\\s+(.+)$`,
+  'i'
+);
 
 function parseQuantity(value: string): number | null {
   const mixed = value.match(/^(\d+)\s+(\d+)\/(\d+)$/);
@@ -63,6 +100,79 @@ function formatQuantity(value: number): string {
   }
 
   return String(Math.round(value * 100) / 100);
+}
+
+export function formatRecipeIngredientLine(ingredient: RecipeIngredient): string {
+  return [ingredient.amount?.trim(), ingredient.name.trim()].filter(Boolean).join(' ');
+}
+
+export function formatRecipeIngredientsText(ingredients: RecipeIngredient[]): string {
+  return ingredients.map(formatRecipeIngredientLine).join('\n');
+}
+
+export function parseRecipeIngredientLine(value: string): RecipeIngredient | null {
+  const line = stripListMarker(value);
+  if (!line) return null;
+
+  const match = line.match(NATURAL_INGREDIENT_PATTERN);
+  if (!match) return { name: line };
+
+  const amount = match[1].trim();
+  const name = match[2].trim().replace(/^of\s+/i, '');
+  if (!name) return { name: line };
+
+  return { name, amount };
+}
+
+export function parseRecipeIngredientsText(
+  value: string,
+  previousIngredients: RecipeIngredient[] = []
+): RecipeIngredient[] {
+  const lines = value
+    .split(/\r?\n/)
+    .map(stripListMarker)
+    .filter(Boolean);
+
+  const usedPrevious = new Set<number>();
+
+  return lines.flatMap((line, index) => {
+    const normalized = normalizeIngredientLine(line);
+    const sameIndex = previousIngredients[index];
+
+    if (
+      sameIndex
+      && normalizeIngredientLine(formatRecipeIngredientLine(sameIndex)) === normalized
+      && !usedPrevious.has(index)
+    ) {
+      usedPrevious.add(index);
+      return [{ ...sameIndex }];
+    }
+
+    const exactIndex = previousIngredients.findIndex((ingredient, previousIndex) => (
+      !usedPrevious.has(previousIndex)
+      && normalizeIngredientLine(formatRecipeIngredientLine(ingredient)) === normalized
+    ));
+
+    if (exactIndex >= 0) {
+      usedPrevious.add(exactIndex);
+      return [{ ...previousIngredients[exactIndex] }];
+    }
+
+    const parsed = parseRecipeIngredientLine(line);
+    return parsed ? [parsed] : [];
+  });
+}
+
+export function formatRecipeTextList(items: string[] | undefined): string {
+  return (items ?? []).join('\n');
+}
+
+export function parseRecipeTextList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map(stripListMarker)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 export function scaleIngredientAmount(
