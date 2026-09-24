@@ -46,7 +46,7 @@ export function PantryRow({
             onPress={onBuyAgain}
             style={styles.buyAgainButton}
           >
-            <Text accessible={false} style={styles.buyAgainText}>🛒+</Text>
+            <Text style={styles.buyAgainText}>Buy again</Text>
           </Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={onDelete} style={styles.removeButton}>
             <Text style={styles.removeText}>×</Text>
@@ -65,8 +65,8 @@ const styles = StyleSheet.create({
   textWrap: { flex: 1, gap: 3 },
   name: { color: '#172033', fontSize: 17, fontWeight: '600' },
   actions: { flexDirection: 'row', alignItems: 'center', marginRight: 4 },
-  buyAgainButton: { width: 52, height: 52, borderRadius: 13, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center' },
-  buyAgainText: { fontSize: 18, lineHeight: 24 },
+  buyAgainButton: { minWidth: 80, height: 44, borderRadius: 12, backgroundColor: '#f0fdf4', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  buyAgainText: { color: '#166534', fontSize: 12.5, fontWeight: '800' },
   removeButton: { width: 48, height: 52, alignItems: 'center', justifyContent: 'center' },
   removeText: { fontSize: 28, color: '#94a3b8', lineHeight: 30 }
 });
