@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  AccessibilityInfo,
-  Animated,
-  Easing,
-  StyleSheet,
-  Text,
-  View
-} from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import { hasSeenFirstOpenIntro, markFirstOpenIntroSeen } from '@/storage/firstOpenIntro';
 
 type IntroPhase = 'checking' | 'animating' | 'hidden';
