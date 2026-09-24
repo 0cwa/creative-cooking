@@ -6,10 +6,12 @@ import { StarRating } from './StarRating';
 export function PantryRow({
   item,
   onDelete,
+  onBuyAgain,
   onPreference
 }: {
   item: PantryItem;
   onDelete(): void;
+  onBuyAgain(): void;
   onPreference(value: IngredientPreference): void;
 }) {
   const x = useRef(new Animated.Value(0)).current;
@@ -36,9 +38,20 @@ export function PantryRow({
           <Text style={styles.name}>{item.name}</Text>
           <StarRating value={item.preference} onChange={onPreference} />
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={onDelete} style={styles.removeButton}>
-          <Text style={styles.removeText}>×</Text>
-        </Pressable>
+        <View style={styles.actions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Buy ${item.name} again`}
+            accessibilityHint="Removes it from Pantry and adds it to Shopping"
+            onPress={onBuyAgain}
+            style={styles.buyAgainButton}
+          >
+            <Text accessible={false} style={styles.buyAgainText}>🛒+</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={onDelete} style={styles.removeButton}>
+            <Text style={styles.removeText}>×</Text>
+          </Pressable>
+        </View>
       </Animated.View>
     </View>
   );
@@ -51,6 +64,9 @@ const styles = StyleSheet.create({
   row: { minHeight: 72, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, paddingLeft: 16, flexDirection: 'row', alignItems: 'center' },
   textWrap: { flex: 1, gap: 3 },
   name: { color: '#172033', fontSize: 17, fontWeight: '600' },
-  removeButton: { width: 52, height: 52, marginRight: 4, alignItems: 'center', justifyContent: 'center' },
+  actions: { flexDirection: 'row', alignItems: 'center', marginRight: 4 },
+  buyAgainButton: { width: 52, height: 52, borderRadius: 13, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center' },
+  buyAgainText: { fontSize: 18, lineHeight: 24 },
+  removeButton: { width: 48, height: 52, alignItems: 'center', justifyContent: 'center' },
   removeText: { fontSize: 28, color: '#94a3b8', lineHeight: 30 }
 });
