@@ -84,7 +84,7 @@ function mergeShoppingItems(current: ShoppingItem[], incoming: ShoppingItemInput
       next[existingIndex] = {
         ...existing,
         name,
-        amount: existing.amount || amount || undefined,
+        amount: amount || existing.amount || undefined,
         checked: false,
         updatedAt: now
       };
