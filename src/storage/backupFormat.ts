@@ -21,6 +21,10 @@ function isDictationEngine(value: unknown): value is AppSettings['dictationEngin
   return value === 'browser' || value === 'whisper';
 }
 
+function isThemePreference(value: unknown): value is AppSettings['theme'] {
+  return value === 'system' || value === 'light' || value === 'dark';
+}
+
 export function serializeBackupEnvelope(state: PersistedState, exportedAt: string): string {
   const envelope: BackupEnvelope = {
     format: 'creative-cooking-backup',
@@ -70,12 +74,16 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
   const dictationEngine = isDictationEngine(settingsRecord.dictationEngine)
     ? settingsRecord.dictationEngine
     : defaults.settings.dictationEngine;
+  const theme = isThemePreference(settingsRecord.theme)
+    ? settingsRecord.theme
+    : defaults.settings.theme;
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
     providerId,
     model,
     dictationEngine,
+    theme,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]
