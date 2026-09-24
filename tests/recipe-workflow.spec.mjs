@@ -53,7 +53,7 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   await page.getByLabel('Recipe notes').fill('Taste before salting.\nBest served warm.');
   await page.getByLabel('Save recipe changes').click();
   await expect(page.getByRole('dialog').getByText('Bright lentil bowl', { exact: true })).toBeVisible();
-  await expect(page.getByText(/1 tbsp olive oil/)).toBeVisible();
+  await expect(page.getByText(/1 tbsp olive oil/).first()).toBeVisible();
   await expect(page.getByText(/3\. Drizzle with olive oil\./)).toBeVisible();
 
   await page.getByLabel('lemon purchased').click();
