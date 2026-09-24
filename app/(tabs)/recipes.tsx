@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -226,7 +227,7 @@ export default function RecipesScreen() {
                   value={draft.title}
                   onChangeText={(title) => setDraft((current) => current ? { ...current, title } : current)}
                   placeholder="Recipe title"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={themeColor('#94a3b8')}
                   style={styles.editorTitleInput}
                 />
 
@@ -235,7 +236,7 @@ export default function RecipesScreen() {
                   value={draft.description}
                   onChangeText={(description) => setDraft((current) => current ? { ...current, description } : current)}
                   placeholder="Add a short description (optional)"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={themeColor('#94a3b8')}
                   multiline
                   style={styles.editorDescriptionInput}
                   textAlignVertical="top"
@@ -249,7 +250,7 @@ export default function RecipesScreen() {
                     value={draft.ingredientsText}
                     onChangeText={(ingredientsText) => setDraft((current) => current ? { ...current, ingredientsText } : current)}
                     placeholder={'1 cup lentils\n1/2 lemon\nsalt to taste'}
-                    placeholderTextColor="#94a3b8"
+                    placeholderTextColor={themeColor('#94a3b8')}
                     multiline
                     style={[styles.editorTextArea, styles.ingredientsEditor]}
                     textAlignVertical="top"
@@ -264,7 +265,7 @@ export default function RecipesScreen() {
                     value={draft.stepsText}
                     onChangeText={(stepsText) => setDraft((current) => current ? { ...current, stepsText } : current)}
                     placeholder={'Warm the lentils.\nFinish with lemon and herbs.'}
-                    placeholderTextColor="#94a3b8"
+                    placeholderTextColor={themeColor('#94a3b8')}
                     multiline
                     style={[styles.editorTextArea, styles.methodEditor]}
                     textAlignVertical="top"
@@ -278,7 +279,7 @@ export default function RecipesScreen() {
                     value={draft.notesText}
                     onChangeText={(notesText) => setDraft((current) => current ? { ...current, notesText } : current)}
                     placeholder="Anything worth remembering next time"
-                    placeholderTextColor="#94a3b8"
+                    placeholderTextColor={themeColor('#94a3b8')}
                     multiline
                     style={[styles.editorTextArea, styles.notesEditor]}
                     textAlignVertical="top"
