@@ -22,6 +22,15 @@ export type PantryItem = {
   updatedAt: string;
 };
 
+export type ShoppingItem = {
+  id: string;
+  name: string;
+  amount?: string;
+  checked: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type RecipeIngredient = {
   name: string;
   amount?: string;
@@ -85,6 +94,7 @@ export type AppSettings = {
 
 export type PersistedState = {
   pantry: PantryItem[];
+  shoppingList: ShoppingItem[];
   recipes: Recipe[];
   chatMessages: ChatMessage[];
   chatHistory: ChatConversation[];
