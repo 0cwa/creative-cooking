@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
   checkboxChecked: { borderColor: '#16a34a', backgroundColor: '#16a34a' },
   checkboxText: { color: '#ffffff', fontSize: 16, fontWeight: '900', lineHeight: 18 },
   itemText: { flex: 1 },
-  itemName: { color: '#172033', fontSize: 17, fontWeight: '650' },
+  itemName: { color: '#172033', fontSize: 17, fontWeight: '600' },
   itemNameChecked: { color: '#64748b', textDecorationLine: 'line-through' },
   itemHint: { color: '#94a3b8', fontSize: 11.5, marginTop: 4 },
   removeButton: { width: 48, height: 52, marginRight: 4, alignItems: 'center', justifyContent: 'center' },
