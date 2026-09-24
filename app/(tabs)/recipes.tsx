@@ -335,7 +335,11 @@ export default function RecipesScreen() {
                       ))}
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel={allNeededOnShoppingList ? 'Open Shopping' : `Add ${shoppingRows.length} needed ingredients to Shopping`}
+                        accessibilityLabel={allNeededOnShoppingList
+                          ? 'Open Shopping'
+                          : shoppingRows.length === 1
+                            ? 'Add needed ingredient to Shopping'
+                            : `Add ${shoppingRows.length} needed ingredients to Shopping`}
                         onPress={allNeededOnShoppingList ? openShopping : addNeededToShopping}
                         style={styles.shoppingAction}
                       >
