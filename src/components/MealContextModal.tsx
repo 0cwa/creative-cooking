@@ -1,4 +1,5 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import type { CookEnergy, MealContext } from '@/domain/types';
 
 const energyOptions: CookEnergy[] = ['low', 'medium', 'high'];
