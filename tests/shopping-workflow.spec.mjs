@@ -33,6 +33,7 @@ test('Pantry buy-again moves items to the persistent Shopping tab', async ({ pag
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript((seed) => {
     window.localStorage.setItem('creative-cooking-state-v1', JSON.stringify(seed));
+    window.localStorage.setItem('creative-cooking-install-prompt-dismissed-v1', '1');
   }, state);
 
   await mkdir('test-results/screenshots', { recursive: true });
@@ -40,6 +41,7 @@ test('Pantry buy-again moves items to the persistent Shopping tab', async ({ pag
 
   await expect(page.getByText('milk', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Buy milk again')).toBeVisible();
+  await expect(page.getByText('Cooking up something creative', { exact: true })).toHaveCount(0, { timeout: 10_000 });
   await page.screenshot({
     path: 'test-results/screenshots/pantry-buy-again.png',
     fullPage: true
