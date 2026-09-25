@@ -115,10 +115,15 @@ export function themeColor(color: string, property = 'color'): string {
 
 export const StyleSheet = {
   create<T extends NamedStyles<T> | NamedStyles<any>>(styles: T & NamedStyles<any>): T {
-    const lightStyles = NativeStyleSheet.create(styles) as T;
+    // React Native Web mutates definitions while compiling them, so build the
+    // alternate palette before either set is registered.
+    const lightDefinitions = Object.fromEntries(
+      Object.entries(styles).map(([name, style]) => [name, { ...(style as ViewStyle | TextStyle | ImageStyle) }])
+    ) as T & NamedStyles<any>;
     const darkDefinitions = Object.fromEntries(
       Object.entries(styles).map(([name, style]) => [name, makeDarkStyle(style as ViewStyle | TextStyle | ImageStyle)])
     ) as T & NamedStyles<any>;
+    const lightStyles = NativeStyleSheet.create(lightDefinitions) as T;
     const darkStyles = NativeStyleSheet.create(darkDefinitions) as T;
 
     return new Proxy(lightStyles as object, {
