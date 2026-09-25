@@ -17,7 +17,8 @@
     "build:web": "expo export -p web",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "check": "npm run test && npm run typecheck && EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web && npm run verify:pwa",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "benchmark:local-llm": "node scripts/serve-local-llm-benchmark.mjs"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",

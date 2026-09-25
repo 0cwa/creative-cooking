@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Creative Cooking · Local LLM bake-off</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+    body { max-width: 1100px; margin: 0 auto; padding: 24px; line-height: 1.45; }
+    h1 { margin-bottom: 4px; }
+    .muted { opacity: .72; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+    .card { border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 14px; padding: 16px; margin-top: 16px; }
+    label { display: grid; gap: 6px; margin-bottom: 12px; font-weight: 600; }
+    select, input, textarea, button { font: inherit; }
+    select, input, textarea { width: 100%; box-sizing: border-box; padding: 9px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); }
+    textarea { min-height: 90px; resize: vertical; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { padding: 9px 13px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); cursor: pointer; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; padding: 12px; border-radius: 10px; background: color-mix(in srgb, currentColor 7%, transparent); }
+    .scores { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    @media (max-width: 680px) { .scores { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <h1>Local LLM bake-off</h1>
+  <p class="muted">A development-only harness for choosing the on-device Chef model/runtime. It intentionally lives outside the production app.</p>
+  <p><strong>Warning:</strong> first runs can download hundreds of MB to several GB. Use a stable connection, keep one model loaded at a time, and record the exact device/browser.</p>
+
+  <div class="grid">
+    <section class="card">
+      <label>Candidate model
+        <select id="model"></select>
+      </label>
+      <label>Scenario
+        <select id="scenario"></select>
+      </label>
+      <div class="buttons">
+        <button id="run">Run scenario</button>
+        <button id="abort">Abort</button>
+        <button id="unload">Unload model</button>
+        <button id="export">Export JSON</button>
+      </div>
+      <p id="status" class="muted"></p>
+    </section>
+
+    <section class="card">
+      <strong>Human review</strong>
+      <p class="muted">Score 1–5 after reading the output. Hard constraints are checked separately.</p>
+      <div class="scores">
+        <label>Useful<input id="usefulness" type="number" min="1" max="5" step="1" /></label>
+        <label>Creative<input id="creativity" type="number" min="1" max="5" step="1" /></label>
+        <label>Practical<input id="practicality" type="number" min="1" max="5" step="1" /></label>
+        <label>Coherent<input id="coherence" type="number" min="1" max="5" step="1" /></label>
+      </div>
+      <label>Review notes<textarea id="review-notes" placeholder="Constraint miss, ingredient hallucination, especially good idea, etc."></textarea></label>
+      <button id="record-review">Record review on latest result</button>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Latest output</h2>
+    <pre id="output"></pre>
+    <h3>Metrics</h3>
+    <pre id="metrics"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Session results</h2>
+    <pre id="results">[]</pre>
+  </section>
+
+  <script type="module" src="./benchmark.mjs"></script>
+</body>
+</html>
