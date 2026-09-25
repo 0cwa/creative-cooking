@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Appearance, Platform, useColorScheme } from 'react-native';
 import type { ThemePreference } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
-import { setActiveColorScheme, type ResolvedColorScheme } from './StyleSheet';
+import { setActiveColorScheme, type ResolvedColorScheme } from '@/theme/StyleSheet';
 
 const WEB_THEME_KEY = 'creative-cooking-theme-v1';
 
