@@ -32,14 +32,14 @@ test('benchmark prompt keeps hard constraints and pantry context explicit', () =
   assert.match(messages[1].content, /spicy noodle dinner/i);
 });
 
-test('deterministic checks flag forbidden ingredients', () => {
+test('deterministic checks flag constraint terms for human review without claiming semantic failure', () => {
   const scenario = BENCHMARK_SCENARIOS.find((item) => item.id === 'allergy-tree-nut');
-  const bad = deterministicChecks(scenario, 'Make the pesto with pine nuts.');
-  assert.equal(bad.forbiddenPass, false);
-  assert.deepEqual(bad.forbiddenHits, ['pine nut']);
+  const hit = deterministicChecks(scenario, 'Do not use pine nuts; use toasted breadcrumbs instead.');
+  assert.equal(hit.requiresConstraintReview, true);
+  assert.deepEqual(hit.forbiddenTermHits, ['pine nut']);
 
-  const good = deterministicChecks(scenario, 'Use toasted breadcrumbs for body.');
-  assert.equal(good.forbiddenPass, true);
+  const clear = deterministicChecks(scenario, 'Use toasted breadcrumbs for body.');
+  assert.equal(clear.requiresConstraintReview, false);
 });
 
 test('clarification heuristic distinguishes question/no-question scenarios', () => {
