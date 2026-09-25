@@ -24,6 +24,7 @@ The initial set intentionally stays small:
 - LFM2.5 1.2B Instruct / Transformers.js 4.3 — efficiency candidate. Its LFM 1.0 license is acceptable for the project's current sub-$10M annual-revenue situation, but license eligibility must be rechecked before release if that changes.
 - Qwen3 1.7B / WebLLM 0.2.85 — optimized WebLLM control.
 - Qwen3.5 2B / Transformers.js 4.3 — likely middle candidate.
+- LFM2.5 2.6B / Transformers.js 4.3 — larger Liquid same-family scaling candidate; official Q4 WebGPU packaging is roughly 1.9 GB.
 - Qwen3.5 4B / Transformers.js 4.3 — higher-compute quality candidate.
 
 Llama 3.2 is intentionally excluded. Gemma 4 E2B is a second-round challenger only if these candidates leave a meaningful quality gap.
