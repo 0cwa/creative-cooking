@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View, useColorScheme } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, themeColor } from '@/theme/StyleSheet';
+import { useSystemColorScheme } from '@/theme/theme';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -61,7 +62,7 @@ function cleanRecipeEditDraft(recipe: Recipe, draft: RecipeEditDraft): RecipeDra
 }
 
 export default function RecipesScreen() {
-  useColorScheme();
+  useSystemColorScheme();
   const router = useRouter();
   const {
     pantry,
