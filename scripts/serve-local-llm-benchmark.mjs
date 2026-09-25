@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const root = join(repoRoot, 'benchmarks', 'local-llm');
 const port = Number(process.env.PORT || 4179);
+const host = process.env.HOST || '127.0.0.1';
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -30,6 +31,6 @@ createServer(async (req, res) => {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('Not found');
   }
-}).listen(port, '127.0.0.1', () => {
-  console.log(`Local LLM benchmark: http://127.0.0.1:${port}`);
+}).listen(port, host, () => {
+  console.log(`Local LLM benchmark: http://${host}:${port}`);
 });
