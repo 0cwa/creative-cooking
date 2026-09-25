@@ -105,12 +105,21 @@ function makeDarkStyle(style: ViewStyle | TextStyle | ImageStyle): ViewStyle | T
   return result as ViewStyle | TextStyle | ImageStyle;
 }
 
+function currentColorScheme(): ResolvedColorScheme {
+  if (typeof document !== 'undefined') {
+    const documentScheme = document.documentElement.dataset.theme;
+    if (documentScheme === 'light' || documentScheme === 'dark') return documentScheme;
+  }
+  return activeColorScheme;
+}
+
 export function setActiveColorScheme(scheme: ResolvedColorScheme): void {
   activeColorScheme = scheme;
+  if (typeof document !== 'undefined') document.documentElement.dataset.theme = scheme;
 }
 
 export function themeColor(color: string, property = 'color'): string {
-  return activeColorScheme === 'dark' ? darkColor(property, color) : color;
+  return currentColorScheme() === 'dark' ? darkColor(property, color) : color;
 }
 
 export const StyleSheet = {
@@ -128,7 +137,7 @@ export const StyleSheet = {
 
     return new Proxy(lightStyles as object, {
       get(_target, property, receiver) {
-        const source = activeColorScheme === 'dark' ? darkStyles : lightStyles;
+        const source = currentColorScheme() === 'dark' ? darkStyles : lightStyles;
         return Reflect.get(source as object, property, receiver);
       }
     }) as T;
