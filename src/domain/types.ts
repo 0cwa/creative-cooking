@@ -26,6 +26,7 @@ export type ShoppingItem = {
   id: string;
   name: string;
   amount?: string;
+  pantryPreference?: IngredientPreference;
   checked: boolean;
   createdAt: string;
   updatedAt: string;
