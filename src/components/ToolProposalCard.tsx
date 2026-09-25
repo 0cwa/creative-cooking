@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import { proposalPresentation } from '@/chef/proposals';
 import { formatRecipeIngredientLine } from '@/domain/recipeEditing';
 import type { ChefToolProposal } from '@/domain/types';

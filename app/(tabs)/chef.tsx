@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
+import { useAppTheme } from '@/theme/theme';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { ConversationHistoryModal } from '@/components/ConversationHistoryModal';
@@ -89,6 +91,7 @@ function isDictationActive(status: DictationStatus): boolean {
 }
 
 export default function ChefScreen() {
+  useAppTheme();
   const router = useRouter();
   const app = useAppState();
   const [input, setInput] = useState('');
@@ -543,7 +546,7 @@ export default function ChefScreen() {
               value={input}
               onChangeText={setInput}
               placeholder="Type or dictate to Chef…"
-              placeholderTextColor="#94a3b8"
+              placeholderTextColor={themeColor('#94a3b8')}
               style={[styles.composer, dictationActive && styles.composerDictating]}
               multiline
               onSubmitEditing={() => {

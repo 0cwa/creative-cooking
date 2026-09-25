@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
+import { useAppTheme } from '@/theme/theme';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -9,6 +11,7 @@ import { normalizeIngredientName } from '@/domain/pantry';
 import { useAppState } from '@/state/AppState';
 
 export default function PantryScreen() {
+  useAppTheme();
   const router = useRouter();
   const { pantry, addPantryItems, removePantryItem, setPantryPreference } = useAppState();
   const [input, setInput] = useState('');
@@ -66,7 +69,7 @@ export default function PantryScreen() {
             onChangeText={setInput}
             onSubmitEditing={add}
             placeholder="e.g. mint (dried)"
-            placeholderTextColor="#94a3b8"
+            placeholderTextColor={themeColor('#94a3b8')}
             returnKeyType="done"
             submitBehavior="submit"
             style={styles.input}

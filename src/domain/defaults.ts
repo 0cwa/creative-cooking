@@ -29,6 +29,7 @@ export const DEFAULT_STATE: PersistedState = {
     cooks: ['medium']
   },
   settings: {
+    theme: 'system',
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     allergies: [],
     sendLocalTime: true,
