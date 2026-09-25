@@ -12,6 +12,8 @@ npm run benchmark:local-llm
 
 Open the printed localhost URL in the browser/device being measured. WebGPU is required.
 
+For another device on the LAN you can set `HOST=0.0.0.0`, but WebGPU generally requires a secure context. Plain LAN HTTP may therefore be unavailable on phones even when localhost works. Use a trusted HTTPS development origin/tunnel for mobile measurements rather than weakening browser security settings.
+
 Run one model at a time. The first load downloads and caches model files; subsequent loads measure cached startup. Export JSON after every device/model session and keep the exact browser, OS, hardware, runtime, model ID, and quantization in the result.
 
 ## Candidate set
@@ -51,4 +53,4 @@ For each scenario, record the runtime metrics and then score the output 1–5 fo
 
 Also note constraint failures, invented ingredients, unnecessary clarifying questions, particularly good ideas, or other product-relevant observations.
 
-The harness performs only lightweight deterministic checks. Human review remains necessary for cooking quality. Do not treat a generic benchmark score or parameter count as the final product decision.
+The harness performs only lightweight deterministic checks. Forbidden-term matches are review flags, not semantic safety verdicts (for example, a correct answer may say “do not use peanuts”). Human review remains necessary for cooking quality; production allergy enforcement will remain deterministic over structured recipe data. Do not treat a generic benchmark score or parameter count as the final product decision.
