@@ -60,7 +60,7 @@ const darkTheme: Omit<AppTheme, 'preference'> = {
 
 export function resolveColorScheme(
   preference: ThemePreference,
-  systemScheme: 'light' | 'dark' | null | undefined
+  systemScheme: 'light' | 'dark' | 'unspecified' | null | undefined
 ): ResolvedColorScheme {
   if (preference === 'light' || preference === 'dark') return preference;
   return systemScheme === 'dark' ? 'dark' : 'light';
@@ -75,7 +75,7 @@ export function useAppTheme(): AppTheme {
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
-      Appearance.setColorScheme(preference === 'system' ? null : preference);
+      Appearance.setColorScheme(preference === 'system' ? 'unspecified' : preference);
       return;
     }
 
