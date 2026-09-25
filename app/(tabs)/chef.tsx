@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, themeColor } from '@/theme/StyleSheet';
-import { useSystemColorScheme } from '@/theme/theme';
+import { useAppTheme } from '@/theme/theme';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { ConversationHistoryModal } from '@/components/ConversationHistoryModal';
@@ -91,7 +91,7 @@ function isDictationActive(status: DictationStatus): boolean {
 }
 
 export default function ChefScreen() {
-  useSystemColorScheme();
+  useAppTheme();
   const router = useRouter();
   const app = useAppState();
   const [input, setInput] = useState('');
