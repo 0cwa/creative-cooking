@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Platform, Pressable, ScrollView, Share, Switch, Text, TextInput, View, useColorScheme } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Share, Switch, Text, TextInput, View } from 'react-native';
 import { StyleSheet, themeColor } from '@/theme/StyleSheet';
+import { useSystemColorScheme } from '@/theme/theme';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/components/Screen';
@@ -54,7 +55,7 @@ function supportLabel(value: boolean | 'unknown'): string {
 }
 
 export default function SettingsScreen() {
-  useColorScheme();
+  useSystemColorScheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ focus?: string }>();
   const app = useAppState();
