@@ -13,7 +13,8 @@ import type {
   IngredientPreference,
   MealContext,
   PersistedState,
-  Recipe
+  Recipe,
+  ShoppingItem
 } from '@/domain/types';
 import { loadState, saveState } from '@/storage/appStorage';
 
@@ -34,6 +35,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   const dictationEngine = isDictationEngine(saved.settings?.dictationEngine)
     ? saved.settings.dictationEngine
     : DEFAULT_STATE.settings.dictationEngine;
+  const shoppingList = Array.isArray(saved.shoppingList) ? saved.shoppingList : [];
   const chatMessages = Array.isArray(saved.chatMessages) ? saved.chatMessages : [];
   const chatHistory = Array.isArray(saved.chatHistory) ? saved.chatHistory : [];
   const activeConversationId = typeof saved.activeConversationId === 'string'
@@ -45,6 +47,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   return {
     ...DEFAULT_STATE,
     ...saved,
+    shoppingList,
     chatMessages,
     chatHistory: sortChatHistory(chatHistory),
     activeConversationId,
@@ -58,6 +61,50 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
       systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
     }
   };
+}
+
+type ShoppingItemInput = {
+  name: string;
+  amount?: string;
+  pantryPreference?: IngredientPreference;
+};
+
+function mergeShoppingItems(current: ShoppingItem[], incoming: ShoppingItemInput[]): ShoppingItem[] {
+  const now = new Date().toISOString();
+  const next = [...current];
+
+  for (const item of incoming) {
+    const name = normalizeIngredientName(item.name);
+    if (!name) continue;
+    const amount = typeof item.amount === 'string' ? item.amount.trim() : '';
+    const key = name.toLocaleLowerCase();
+    const existingIndex = next.findIndex((entry) => entry.name.toLocaleLowerCase() === key);
+
+    if (existingIndex >= 0) {
+      const existing = next[existingIndex];
+      next[existingIndex] = {
+        ...existing,
+        name,
+        amount: amount || existing.amount || undefined,
+        pantryPreference: item.pantryPreference ?? existing.pantryPreference,
+        checked: false,
+        updatedAt: now
+      };
+      continue;
+    }
+
+    next.push({
+      id: `shopping-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name,
+      amount: amount || undefined,
+      pantryPreference: item.pantryPreference,
+      checked: false,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  return next;
 }
 
 function archiveActiveChat(current: PersistedState): PersistedState['chatHistory'] {
@@ -81,6 +128,11 @@ type AppStateApi = PersistedState & {
   removePantryByName(name: string): boolean;
   setPantryPreference(id: string, preference: IngredientPreference): void;
   setPantryPreferenceByName(name: string, preference: IngredientPreference): boolean;
+  addShoppingItems(items: ShoppingItemInput[]): void;
+  removeShoppingItem(id: string): void;
+  toggleShoppingItem(id: string): void;
+  movePantryItemToShopping(id: string): void;
+  moveCheckedShoppingToPantry(): void;
   validateRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
@@ -225,6 +277,84 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     )));
     return true;
   }, [commitPantry]);
+
+  const addShoppingItems = useCallback((items: ShoppingItemInput[]) => {
+    if (!items.length) return;
+    setState((current) => ({
+      ...current,
+      shoppingList: mergeShoppingItems(current.shoppingList, items)
+    }));
+  }, []);
+
+  const removeShoppingItem = useCallback((id: string) => {
+    setState((current) => ({
+      ...current,
+      shoppingList: current.shoppingList.filter((item) => item.id !== id)
+    }));
+  }, []);
+
+  const toggleShoppingItem = useCallback((id: string) => {
+    setState((current) => {
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        shoppingList: current.shoppingList.map((item) => (
+          item.id === id ? { ...item, checked: !item.checked, updatedAt: now } : item
+        ))
+      };
+    });
+  }, []);
+
+  const movePantryItemToShopping = useCallback((id: string) => {
+    setState((current) => {
+      const item = current.pantry.find((entry) => entry.id === id);
+      if (!item) return current;
+      const pantry = current.pantry.filter((entry) => entry.id !== id);
+      pantryRef.current = pantry;
+      return {
+        ...current,
+        pantry,
+        shoppingList: mergeShoppingItems(current.shoppingList, [{ name: item.name, pantryPreference: item.preference }])
+      };
+    });
+  }, []);
+
+  const moveCheckedShoppingToPantry = useCallback(() => {
+    setState((current) => {
+      const purchased = current.shoppingList.filter((item) => item.checked);
+      if (!purchased.length) return current;
+
+      const existing = new Set(current.pantry.map((item) => item.name.toLocaleLowerCase()));
+      const additions = purchased
+        .map((item) => ({ item, name: normalizeIngredientName(item.name) }))
+        .filter(({ name }) => Boolean(name))
+        .filter(({ name }) => !existing.has(name.toLocaleLowerCase()))
+        .map(({ item, name }) => createPantryItem(name, item.pantryPreference ?? 3));
+      const pantry = [...additions, ...current.pantry];
+      pantryRef.current = pantry;
+
+      const purchasedNames = new Set(purchased.map((item) => normalizeIngredientName(item.name).toLocaleLowerCase()));
+      const now = new Date().toISOString();
+      const recipes = current.recipes.map((recipe) => {
+        let changed = false;
+        const ingredients = recipe.ingredients.map((ingredient) => {
+          if (!purchasedNames.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase()) || !ingredient.needsShopping) {
+            return ingredient;
+          }
+          changed = true;
+          return { ...ingredient, needsShopping: undefined };
+        });
+        return changed ? { ...recipe, ingredients, updatedAt: now } : recipe;
+      });
+
+      return {
+        ...current,
+        pantry,
+        recipes,
+        shoppingList: current.shoppingList.filter((item) => !item.checked)
+      };
+    });
+  }, []);
 
   const validateRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
@@ -372,6 +502,11 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       removePantryByName,
       setPantryPreference,
       setPantryPreferenceByName,
+      addShoppingItems,
+      removeShoppingItem,
+      toggleShoppingItem,
+      movePantryItemToShopping,
+      moveCheckedShoppingToPantry,
       validateRecipe,
       saveRecipe,
       updateRecipe,
@@ -398,6 +533,11 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       removePantryByName,
       setPantryPreference,
       setPantryPreferenceByName,
+      addShoppingItems,
+      removeShoppingItem,
+      toggleShoppingItem,
+      movePantryItemToShopping,
+      moveCheckedShoppingToPantry,
       validateRecipe,
       saveRecipe,
       updateRecipe,

@@ -282,6 +282,7 @@ export default function SettingsScreen() {
 
   const snapshot = () => ({
     pantry: app.pantry,
+    shoppingList: app.shoppingList,
     recipes: app.recipes,
     chatMessages: app.chatMessages,
     chatHistory: app.chatHistory,

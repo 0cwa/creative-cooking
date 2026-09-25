@@ -34,9 +34,8 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
 
   await page.getByLabel('Open recipe Lentil bowl').click();
   await expect(page.getByLabel('2 portions')).toBeVisible();
-  await expect(page.getByText('Shopping list', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('lemon purchased')).toBeVisible();
-  await expect(page.getByLabel('lentils purchased')).toHaveCount(0);
+  await expect(page.getByText('Need to shop', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add needed ingredient to Shopping' })).toBeVisible();
 
   await page.getByLabel('Increase portions').click();
   await expect(page.getByLabel('3 portions')).toBeVisible();
@@ -56,10 +55,17 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   await expect(page.getByText(/1 tbsp olive oil/).first()).toBeVisible();
   await expect(page.getByText(/3\. Drizzle with olive oil\./)).toBeVisible();
 
+  await expect(page.getByText('Need to shop', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Add 2 needed ingredients to Shopping' }).click();
+  await expect(page.getByRole('button', { name: 'Open Shopping' })).toBeVisible();
+  await page.getByLabel('Close recipe').click();
+
+  await page.goto('./shopping');
+  await expect(page.getByLabel('lemon purchased')).toBeVisible();
+  await expect(page.getByLabel('olive oil purchased')).toBeVisible();
   await page.getByLabel('lemon purchased').click();
   await page.getByLabel('olive oil purchased').click();
-  page.once('dialog', (dialog) => void dialog.accept());
-  await page.getByRole('button', { name: 'Add checked to Pantry' }).click();
+  await page.getByRole('button', { name: 'Put checked items in Pantry' }).click();
 
   await expect.poll(async () => page.evaluate(async () => {
     const database = await new Promise((resolve, reject) => {
@@ -94,7 +100,6 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
     return persisted.recipes[0].ingredients.find((ingredient) => ingredient.name === 'olive oil')?.amount ?? null;
   })).toBe('1 tbsp');
 
-  await page.getByLabel('Close recipe').click();
   await page.goto('./');
   await expect(page.getByText('lemon', { exact: true })).toBeVisible();
   await expect(page.getByText('olive oil', { exact: true })).toBeVisible();
@@ -102,7 +107,7 @@ test('saved recipe can be scaled, edited, shopped, added to Pantry, and persiste
   await page.goto('./recipes');
   await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();
   await page.getByLabel('Open recipe Bright lentil bowl').click();
-  await expect(page.getByText('Shopping list', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Need to shop', { exact: true })).toHaveCount(0);
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();

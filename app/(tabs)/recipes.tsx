@@ -63,14 +63,14 @@ export default function RecipesScreen() {
   const router = useRouter();
   const {
     pantry,
+    shoppingList,
     recipes,
-    addPantryItems,
+    addShoppingItems,
     updateRecipe,
     deleteRecipe
   } = useAppState();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
-  const [checkedShopping, setCheckedShopping] = useState<Set<number>>(new Set());
 
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? null;
   const shoppingRows = selected
@@ -81,22 +81,23 @@ export default function RecipesScreen() {
           .filter(({ ingredient }) => shopping.has(ingredient));
       })()
     : [];
+  const shoppingListNames = new Set(shoppingList.map((item) => item.name.trim().toLocaleLowerCase()));
+  const allNeededOnShoppingList = Boolean(shoppingRows.length) && shoppingRows.every(({ ingredient }) => (
+    shoppingListNames.has(ingredient.name.trim().toLocaleLowerCase())
+  ));
 
   const openRecipe = (recipe: Recipe) => {
     setSelectedId(recipe.id);
     setDraft(null);
-    setCheckedShopping(new Set());
   };
 
   const closeRecipe = () => {
     setSelectedId(null);
     setDraft(null);
-    setCheckedShopping(new Set());
   };
 
   const startEditing = () => {
     if (!selected) return;
-    setCheckedShopping(new Set());
     setDraft(toRecipeEditDraft(selected));
   };
 
@@ -119,7 +120,6 @@ export default function RecipesScreen() {
 
     try {
       updateRecipe(selected.id, cleaned);
-      setCheckedShopping(new Set());
       setDraft(null);
     } catch (error) {
       Alert.alert('Could not save recipe', error instanceof Error ? error.message : 'Unknown error');
@@ -140,42 +140,17 @@ export default function RecipesScreen() {
     }
   };
 
-  const toggleShoppingItem = (index: number) => {
-    setCheckedShopping((current) => {
-      const next = new Set(current);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
+  const addNeededToShopping = () => {
+    if (!shoppingRows.length) return;
+    addShoppingItems(shoppingRows.map(({ ingredient }) => ({
+      name: ingredient.name,
+      amount: ingredient.amount
+    })));
   };
 
-  const addCheckedToPantry = () => {
-    if (!selected || !checkedShopping.size) return;
-
-    const purchasedNames = selected.ingredients
-      .filter((_, index) => checkedShopping.has(index))
-      .map((ingredient) => ingredient.name);
-
-    try {
-      updateRecipe(selected.id, {
-        ...toRecipeDraft(selected),
-        ingredients: selected.ingredients.map((ingredient, index) => (
-          checkedShopping.has(index)
-            ? { ...ingredient, needsShopping: undefined }
-            : ingredient
-        ))
-      });
-      addPantryItems(purchasedNames);
-      setCheckedShopping(new Set());
-      Alert.alert(
-        'Pantry updated',
-        purchasedNames.length === 1
-          ? `${purchasedNames[0]} was added to Pantry.`
-          : `${purchasedNames.length} ingredients were added to Pantry.`
-      );
-    } catch (error) {
-      Alert.alert('Could not update shopping list', error instanceof Error ? error.message : 'Unknown error');
-    }
+  const openShopping = () => {
+    closeRecipe();
+    router.push('/shopping');
   };
 
   return (
@@ -347,31 +322,36 @@ export default function RecipesScreen() {
 
                 {!!shoppingRows.length && (
                   <View style={styles.shoppingSection}>
-                    <Text style={styles.sectionTitle}>Shopping list</Text>
-                    <Text style={styles.shoppingHelp}>Ingredients marked “Need to buy” or missing from Pantry appear here. Check things off as you buy them, then add the checked ingredients back to Pantry.</Text>
-                    {shoppingRows.map(({ ingredient, index }) => {
-                      const checked = checkedShopping.has(index);
-                      return (
-                        <Pressable
-                          key={`shopping-${index}`}
-                          accessibilityRole="checkbox"
-                          accessibilityState={{ checked }}
-                          accessibilityLabel={`${ingredient.name} purchased`}
-                          onPress={() => toggleShoppingItem(index)}
-                          style={[styles.shoppingRow, checked && styles.shoppingRowChecked]}
-                        >
-                          <View style={[styles.checkbox, checked && styles.checkboxChecked]}><Text style={styles.checkboxText}>{checked ? '✓' : ''}</Text></View>
-                          <Text style={[styles.shoppingName, checked && styles.shoppingNameChecked]}>
+                    <Text style={styles.sectionTitle}>Need to shop</Text>
+                    <Text style={styles.shoppingHelp}>These ingredients are marked “Need to buy” or are not in Pantry yet. Send them to the Shopping tab, then check them off while you shop.</Text>
+                    <View style={styles.shoppingNeedCard}>
+                      {shoppingRows.map(({ ingredient, index }) => (
+                        <View key={`shopping-${index}`} style={styles.shoppingNeedRow}>
+                          <Text accessible={false} style={styles.shoppingNeedIcon}>🛒</Text>
+                          <Text style={styles.shoppingName}>
                             {ingredient.amount ? `${ingredient.amount} ` : ''}{ingredient.name}
                           </Text>
-                        </Pressable>
-                      );
-                    })}
-                    {!!checkedShopping.size && (
-                      <Pressable accessibilityRole="button" onPress={addCheckedToPantry} style={styles.primaryAction}>
-                        <Text style={styles.primaryActionText}>Add checked to Pantry</Text>
+                        </View>
+                      ))}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={allNeededOnShoppingList
+                          ? 'Open Shopping'
+                          : shoppingRows.length === 1
+                            ? 'Add needed ingredient to Shopping'
+                            : `Add ${shoppingRows.length} needed ingredients to Shopping`}
+                        onPress={allNeededOnShoppingList ? openShopping : addNeededToShopping}
+                        style={styles.shoppingAction}
+                      >
+                        <Text style={styles.shoppingActionText}>
+                          {allNeededOnShoppingList
+                            ? 'Open Shopping'
+                            : shoppingRows.length === 1
+                              ? 'Add to Shopping'
+                              : `Add ${shoppingRows.length} to Shopping`}
+                        </Text>
                       </Pressable>
-                    )}
+                    </View>
                   </View>
                 )}
 
@@ -426,13 +406,12 @@ const styles = StyleSheet.create({
   stepNumber: { fontWeight: '800', color: '#172033' },
   shoppingSection: { marginTop: 4 },
   shoppingHelp: { color: '#64748b', lineHeight: 19, marginBottom: 10 },
-  shoppingRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7 },
-  shoppingRowChecked: { opacity: 0.75 },
-  checkbox: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: '#94a3b8', alignItems: 'center', justifyContent: 'center' },
-  checkboxChecked: { backgroundColor: '#172033', borderColor: '#172033' },
-  checkboxText: { color: 'white', fontWeight: '900' },
+  shoppingNeedCard: { borderRadius: 16, borderWidth: 1, borderColor: '#dbeafe', backgroundColor: '#eff6ff', padding: 12, gap: 4 },
+  shoppingNeedRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  shoppingNeedIcon: { fontSize: 16 },
   shoppingName: { flex: 1, color: '#334155', fontSize: 16 },
-  shoppingNameChecked: { textDecorationLine: 'line-through', color: '#64748b' },
+  shoppingAction: { minHeight: 44, marginTop: 8, borderRadius: 12, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 10 },
+  shoppingActionText: { color: '#ffffff', fontWeight: '800' },
   editorIntro: { marginBottom: 22, borderRadius: 16, backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#dcfce7', padding: 14 },
   editorIntroTitle: { color: '#166534', fontSize: 15, fontWeight: '800' },
   editorIntroText: { color: '#475569', fontSize: 13.5, lineHeight: 20, marginTop: 4 },

@@ -4,6 +4,7 @@ import { freshStateFromDefaults, parseBackupEnvelope, serializeBackupEnvelope } 
 
 const defaults = {
   pantry: [],
+  shoppingList: [],
   recipes: [],
   chatMessages: [],
   chatHistory: [],
@@ -55,6 +56,7 @@ test('backup parsing migrates missing nested settings and context fields from de
   assert.equal(restored.settings.model, 'openrouter/free');
   assert.deepEqual(restored.settings.allergies, []);
   assert.deepEqual(restored.chatHistory, []);
+  assert.deepEqual(restored.shoppingList, []);
   assert.equal(restored.activeConversationId, null);
 });
 
@@ -156,7 +158,15 @@ test('fresh default state does not share mutable nested arrays with defaults', (
     createdAt: 'a',
     updatedAt: 'b'
   });
+  fresh.shoppingList.push({
+    id: 'shop-1',
+    name: 'milk',
+    checked: false,
+    createdAt: 'a',
+    updatedAt: 'b'
+  });
   assert.deepEqual(defaults.mealContext.cooks, ['medium']);
   assert.deepEqual(defaults.settings.allergies, []);
   assert.deepEqual(defaults.chatHistory, []);
+  assert.deepEqual(defaults.shoppingList, []);
 });

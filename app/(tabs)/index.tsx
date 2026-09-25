@@ -10,7 +10,7 @@ import { useAppState } from '@/state/AppState';
 
 export default function PantryScreen() {
   const router = useRouter();
-  const { pantry, addPantryItems, removePantryItem, setPantryPreference } = useAppState();
+  const { pantry, addPantryItems, removePantryItem, movePantryItemToShopping, setPantryPreference } = useAppState();
   const [input, setInput] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -42,6 +42,7 @@ export default function PantryScreen() {
             <PantryRow
               item={item}
               onDelete={() => removePantryItem(item.id)}
+              onBuyAgain={() => movePantryItemToShopping(item.id)}
               onPreference={(preference) => setPantryPreference(item.id, preference)}
             />
           )}
@@ -57,7 +58,7 @@ export default function PantryScreen() {
       </View>
 
       <View testID="pantry-composer" style={styles.composer}>
-        <Text style={styles.composerHelp}>Add an ingredient with any useful detail — for example mint (dried) or okra (frozen). To dictate many at once, tell Chef.</Text>
+        <Text style={styles.composerHelp}>Add an ingredient with any useful detail — for example mint (dried) or okra (frozen). When you run out, tap Buy again to move it to Shopping. To dictate many at once, tell Chef.</Text>
         <View style={styles.composerRow}>
           <TextInput
             ref={inputRef}
