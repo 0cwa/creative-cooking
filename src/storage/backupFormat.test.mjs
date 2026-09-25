@@ -10,6 +10,7 @@ const defaults = {
   activeConversationId: null,
   mealContext: { willingToShop: false, portions: 2, cooks: ['medium'] },
   settings: {
+    theme: 'system',
     systemPrompt: 'default prompt',
     allergies: [],
     sendLocalTime: true,
@@ -123,6 +124,32 @@ test('backup parsing sanitizes dictation engine and defaults legacy backups to b
     state: { settings: { dictationEngine: 'whisper' } }
   });
   assert.equal(parseBackupEnvelope(whisper, defaults).settings.dictationEngine, 'whisper');
+});
+
+test('backup parsing sanitizes theme preference and defaults legacy backups to system', () => {
+  const invalid = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-25T00:00:00.000Z',
+    state: { settings: { theme: 'future-theme' } }
+  });
+  assert.equal(parseBackupEnvelope(invalid, defaults).settings.theme, 'system');
+
+  const legacy = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-25T00:00:00.000Z',
+    state: { settings: {} }
+  });
+  assert.equal(parseBackupEnvelope(legacy, defaults).settings.theme, 'system');
+
+  const dark = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-25T00:00:00.000Z',
+    state: { settings: { theme: 'dark' } }
+  });
+  assert.equal(parseBackupEnvelope(dark, defaults).settings.theme, 'dark');
 });
 
 test('legacy backups without providerId preserve their OpenRouter model', () => {
