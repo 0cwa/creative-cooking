@@ -66,6 +66,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
 type ShoppingItemInput = {
   name: string;
   amount?: string;
+  pantryPreference?: IngredientPreference;
 };
 
 function mergeShoppingItems(current: ShoppingItem[], incoming: ShoppingItemInput[]): ShoppingItem[] {
@@ -85,6 +86,7 @@ function mergeShoppingItems(current: ShoppingItem[], incoming: ShoppingItemInput
         ...existing,
         name,
         amount: amount || existing.amount || undefined,
+        pantryPreference: item.pantryPreference ?? existing.pantryPreference,
         checked: false,
         updatedAt: now
       };
@@ -95,6 +97,7 @@ function mergeShoppingItems(current: ShoppingItem[], incoming: ShoppingItemInput
       id: `shopping-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name,
       amount: amount || undefined,
+      pantryPreference: item.pantryPreference,
       checked: false,
       createdAt: now,
       updatedAt: now
@@ -311,7 +314,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       return {
         ...current,
         pantry,
-        shoppingList: mergeShoppingItems(current.shoppingList, [{ name: item.name }])
+        shoppingList: mergeShoppingItems(current.shoppingList, [{ name: item.name, pantryPreference: item.preference }])
       };
     });
   }, []);
@@ -323,10 +326,10 @@ export function AppStateProvider({ children }: PropsWithChildren) {
 
       const existing = new Set(current.pantry.map((item) => item.name.toLocaleLowerCase()));
       const additions = purchased
-        .map((item) => normalizeIngredientName(item.name))
-        .filter(Boolean)
-        .filter((name) => !existing.has(name.toLocaleLowerCase()))
-        .map((name) => createPantryItem(name, 3));
+        .map((item) => ({ item, name: normalizeIngredientName(item.name) }))
+        .filter(({ name }) => Boolean(name))
+        .filter(({ name }) => !existing.has(name.toLocaleLowerCase()))
+        .map(({ item, name }) => createPantryItem(name, item.pantryPreference ?? 3));
       const pantry = [...additions, ...current.pantry];
       pantryRef.current = pantry;
 
