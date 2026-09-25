@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Appearance, Platform, useColorScheme } from 'react-native';
 import type { ThemePreference } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
@@ -66,9 +66,30 @@ export function resolveColorScheme(
   return systemScheme === 'dark' ? 'dark' : 'light';
 }
 
+export function useSystemColorScheme(): ResolvedColorScheme {
+  const nativeScheme = useColorScheme();
+  const [webScheme, setWebScheme] = useState<ResolvedColorScheme>(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return 'light';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const query = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => setWebScheme(query.matches ? 'dark' : 'light');
+    update();
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  if (Platform.OS === 'web') return webScheme;
+  return nativeScheme === 'dark' ? 'dark' : 'light';
+}
+
 export function useAppTheme(): AppTheme {
   const app = useAppState();
-  const systemScheme = useColorScheme();
+  const systemScheme = useSystemColorScheme();
   const preference = app.settings.theme;
   const scheme = resolveColorScheme(preference, systemScheme);
   setActiveColorScheme(scheme);
