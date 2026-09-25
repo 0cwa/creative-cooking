@@ -470,11 +470,11 @@ export function buildScenarioMessages(scenario) {
 
 export function deterministicChecks(scenario, output) {
   const text = output.toLowerCase();
-  const forbiddenHits = (scenario.forbiddenTerms ?? []).filter((term) => text.includes(term.toLowerCase()));
+  const forbiddenTermHits = (scenario.forbiddenTerms ?? []).filter((term) => text.includes(term.toLowerCase()));
   const hasQuestion = output.includes('?');
   return {
-    forbiddenHits,
-    forbiddenPass: forbiddenHits.length === 0,
+    forbiddenTermHits,
+    requiresConstraintReview: forbiddenTermHits.length > 0,
     clarificationHeuristicPass: scenario.expectQuestion === undefined
       ? null
       : scenario.expectQuestion === hasQuestion
