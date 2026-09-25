@@ -8,6 +8,7 @@ const CANDIDATES = [
   ['lfm25-12b-tjs', 'LFM2.5 1.2B Instruct · Transformers.js 4.3', 'LFM2.5', 1.2, 'transformersjs', 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX', 'causal'],
   ['qwen3-17b-webllm', 'Qwen3 1.7B · WebLLM 0.2.85 control', 'Qwen3', 1.7, 'webllm', 'Qwen3-1.7B-q4f16_1-MLC', 'webllm'],
   ['qwen35-2b-tjs', 'Qwen3.5 2B · Transformers.js 4.3', 'Qwen3.5', 2, 'transformersjs', 'onnx-community/Qwen3.5-2B-ONNX-OPT', 'qwen35'],
+  ['lfm25-26b-tjs', 'LFM2.5 2.6B · Transformers.js 4.3', 'LFM2.5', 2.6, 'transformersjs', 'LiquidAI/LFM2.5-2.6B-ONNX', 'causal'],
   ['qwen35-4b-tjs', 'Qwen3.5 4B · Transformers.js 4.3', 'Qwen3.5', 4, 'transformersjs', 'onnx-community/Qwen3.5-4B-ONNX-OPT', 'qwen35']
 ].map(([id, label, family, paramsB, runtime, modelId, kind]) => ({ id, label, family, paramsB, runtime, modelId, kind }));
 
