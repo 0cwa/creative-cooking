@@ -52,8 +52,8 @@ test('Pantry buy-again moves items to the persistent Shopping tab', async ({ pag
   await expect(page.getByText('Shopping', { exact: true })).toBeVisible();
   await expect(page.getByText('milk', { exact: true })).toBeVisible();
 
-  await page.getByLabel('Shopping item').fill('lemons');
-  await page.getByLabel('Add shopping item').click();
+  await page.getByRole('textbox', { name: 'Shopping item' }).fill('lemons');
+  await page.getByRole('button', { name: 'Add shopping item' }).click();
   await expect(page.getByText('lemons', { exact: true })).toBeVisible();
 
   await page.getByLabel('lemons purchased').click();
