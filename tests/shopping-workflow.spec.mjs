@@ -66,6 +66,7 @@ test('Pantry buy-again moves items to the persistent Shopping tab', async ({ pag
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByText('milk', { exact: true })).toBeVisible();
   await expect(page.getByText('lemons', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Food preference 4 out of 5')).toBeVisible();
   await expect(page.getByText('1 item purchased', { exact: true })).toBeVisible();
 
   await page.getByLabel('milk purchased').click();
