@@ -17,6 +17,7 @@ Tester:
 | LFM2.5 1.2B Instruct | Transformers.js 4.3 | q4 | ~850 MB model weights | LFM 1.0 |  |
 | Qwen3 1.7B | WebLLM 0.2.85 | q4f16_1 |  | Apache-2.0 |  |
 | Qwen3.5 2B | Transformers.js 4.3 | q4 |  | Apache-2.0 |  |
+| LFM2.5 2.6B | Transformers.js 4.3 | q4 | ~1.9 GB model package | LFM 1.0 |  |
 | Qwen3.5 4B | Transformers.js 4.3 | q4 |  | Apache-2.0 |  |
 
 ## Runtime summary
