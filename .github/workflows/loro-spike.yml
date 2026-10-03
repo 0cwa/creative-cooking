@@ -1,0 +1,46 @@
+name: Loro feasibility spike
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/loro-spike.yml'
+      - 'scripts/spikes/loro/**'
+      - 'docs/spikes/local-first-loro.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-api:
+    name: Loro web API probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+      - run: node scripts/spikes/loro/web-probe.mjs
+      - uses: actions/upload-artifact@v6
+        with:
+          name: loro-web-api-probe
+          path: artifacts/loro/web-api-probe.json
+
+  native-package:
+    name: Loro native package + API surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm install --no-save --no-audit --no-fund loro-react-native@1.13.2
+      - run: |
+          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
+          grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
+          du -sh node_modules/loro-react-native
