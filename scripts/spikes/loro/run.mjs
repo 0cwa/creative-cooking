@@ -609,12 +609,13 @@ const interop = (() => {
   const base = seed();
   const snapshot = base.export({ mode: 'snapshot' });
   const web = clone(base, 'iphone');
-  web.getMap('recipe:recipe-1').set('title', 'Web fork title');
-  save(web, 'iphone', 'interop web fork');
+  web.getMap('recipe:recipe-1').set('portions', 4);
+  save(web, 'iphone', 'interop web portions=4');
   const update = web.export({ mode: 'update', from: base.oplogVersion() });
   return {
     format: 1,
     webPackage: 'loro-crdt@1.16.4',
+    scenario: 'base portions=2; web iphone=4; native ipad=6',
     snapshotBase64: Buffer.from(snapshot).toString('base64'),
     webUpdateBase64: Buffer.from(update).toString('base64'),
     baseJson: base.toJSON(),
