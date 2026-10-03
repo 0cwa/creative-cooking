@@ -38,3 +38,88 @@ jobs:
           name: automerge-web-evidence
           path: spikes/automerge/artifacts
           if-no-files-found: warn
+
+  java-native-contract:
+    name: Java native core contract and JS interoperability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated JS dependencies
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
+      - name: Compile pinned Automerge Java harness
+        working-directory: spikes/automerge/native/java
+        run: |
+          mvn -q -DskipTests package
+          mvn -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
+      - name: Run all 18 native binding scenarios
+        shell: bash
+        run: |
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          mkdir -p spikes/automerge/artifacts
+          java -cp "$CP" spike.AutomergeNativeScenarios scenarios spikes/automerge/artifacts/java-scenario-results.json
+      - name: Prove JS to Java to JS binary interoperability
+        shell: bash
+        run: |
+          set -euo pipefail
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          cd spikes/automerge
+          mkdir -p artifacts
+          node web-interop.mjs create artifacts/web-seed.am
+          cd ../..
+          java -cp "$CP" spike.AutomergeNativeScenarios mutate spikes/automerge/artifacts/web-seed.am spikes/automerge/artifacts/java-mutated.am java-0.0.9
+          cd spikes/automerge
+          node web-interop.mjs verify-native artifacts/java-mutated.am java-0.0.9
+      - name: Exercise cross-language sync protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          cd spikes/automerge
+          node web-interop.mjs fork-edit artifacts/java-mutated.am artifacts/web-concurrent.am
+          cd ../..
+          java -cp "$CP" spike.AutomergeNativeScenarios fork-edit spikes/automerge/artifacts/java-mutated.am spikes/automerge/artifacts/java-concurrent.am
+          : > spikes/automerge/artifacts/web-sync.state
+          : > spikes/automerge/artifacts/java-sync.state
+          for round in 1 2 3 4 5 6; do
+            cd spikes/automerge
+            node web-interop.mjs sync-generate artifacts/web-concurrent.am artifacts/web-sync.state artifacts/web-to-java.msg
+            cd ../..
+            java -cp "$CP" spike.AutomergeNativeScenarios sync-receive spikes/automerge/artifacts/java-concurrent.am spikes/automerge/artifacts/java-sync.state spikes/automerge/artifacts/web-to-java.msg
+            java -cp "$CP" spike.AutomergeNativeScenarios sync-generate spikes/automerge/artifacts/java-concurrent.am spikes/automerge/artifacts/java-sync.state spikes/automerge/artifacts/java-to-web.msg
+            cd spikes/automerge
+            node web-interop.mjs sync-receive artifacts/web-concurrent.am artifacts/web-sync.state artifacts/java-to-web.msg
+            cd ../..
+          done
+          cd spikes/automerge
+          node web-interop.mjs verify-converged artifacts/web-concurrent.am artifacts/java-concurrent.am
+      - name: Probe Automerge 3.5 author-metadata forward compatibility
+        shell: bash
+        run: |
+          set +e
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          cd spikes/automerge
+          node web-interop.mjs create-authored artifacts/web-authored.am
+          cd ../..
+          java -cp "$CP" spike.AutomergeNativeScenarios verify-authored spikes/automerge/artifacts/web-authored.am \
+            > spikes/automerge/artifacts/java-author-compat.log 2>&1
+          code=$?
+          printf '{"javaBinding":"0.0.9","webBinding":"3.5.0","loadAuthoredDocumentExitCode":%s}\n' "$code" \
+            > spikes/automerge/artifacts/java-author-compat.json
+          cat spikes/automerge/artifacts/java-author-compat.log
+          cat spikes/automerge/artifacts/java-author-compat.json
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-java-native-evidence
+          path: spikes/automerge/artifacts
+          if-no-files-found: warn
