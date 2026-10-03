@@ -1,0 +1,40 @@
+name: Automerge feasibility spike
+
+on:
+  pull_request:
+    paths:
+      - 'spikes/automerge/**'
+      - 'docs/spikes/local-first-automerge.md'
+      - '.github/workflows/automerge-spike.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-contract:
+    name: Web Automerge contract and benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install isolated spike dependencies
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
+      - name: Run scenarios, representative benchmark, and bundle probe
+        working-directory: spikes/automerge
+        run: npm test
+      - name: Record dependency versions
+        working-directory: spikes/automerge
+        run: |
+          node -p '"node=" + process.version'
+          npm ls --depth=0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-web-evidence
+          path: spikes/automerge/artifacts
+          if-no-files-found: warn
