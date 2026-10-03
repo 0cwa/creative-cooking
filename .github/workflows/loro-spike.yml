@@ -52,13 +52,18 @@ jobs:
       - name: Run Loro static export in Chromium
         run: |
           npx playwright install --with-deps chromium
-          mkdir -p serve-root
-          ln -s "$PWD/dist-loro" serve-root/creative-cooking
+          mkdir -p serve-root/creative-cooking
+          cp -R dist-loro/. serve-root/creative-cooking/
           python3 -m http.server 4173 --directory serve-root > artifacts/loro/web-server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID || true' EXIT
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173/creative-cooking/ > artifacts/loro/web-served-index.html; then break; fi
+            sleep 1
+          done
           node scripts/spikes/loro/web-browser-verify.mjs
       - uses: actions/upload-artifact@v6
+        if: always()
         with:
           name: loro-web-results
           path: artifacts/loro/
@@ -89,6 +94,7 @@ jobs:
   android-runtime:
     name: Android compile + runtime + web interop
     needs: web-scenarios
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -158,6 +164,7 @@ jobs:
   ios-runtime:
     name: iOS compile + runtime + web interop
     needs: web-scenarios
+    if: always()
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
