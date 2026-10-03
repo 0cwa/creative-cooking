@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LoroDoc } from 'loro-react-native';
 import { baseSnapshot, scenario, webPackage, webUpdate } from '../scripts/spikes/loro/native-fixture';
 
 type HarnessResult = {
   ok: boolean;
-  platformApi: string;
+  platform: string;\n  platformApi: string;
   webPackage: string;
   scenario: string;
   importedWebSnapshot?: boolean;
