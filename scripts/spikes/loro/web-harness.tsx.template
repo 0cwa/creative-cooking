@@ -1,0 +1,63 @@
+import React, { useMemo } from 'react';
+import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { LoroDoc } from 'loro-crdt';
+
+function run() {
+  const base = new LoroDoc();
+  base.setPeerId('900');
+  base.getMap('recipe').set('portions', 2);
+  base.getText('method').insert(0, 'Heat oil, then add tomatoes.');
+  base.commit({ message: 'device:seed; browser base' });
+
+  const iphone = base.fork();
+  iphone.setPeerId('101');
+  const macbook = base.fork();
+  macbook.setPeerId('202');
+
+  iphone.getMap('recipe').set('title', 'Browser tomato toast');
+  iphone.getText('method').insert(0, 'Gently ');
+  iphone.commit({ message: 'device:iphone; browser edit' });
+
+  macbook.getMap('recipe').set('portions', 4);
+  macbook.getText('method').push(' Simmer briefly.');
+  macbook.commit({ message: 'device:macbook; browser edit' });
+
+  iphone.import(macbook.export({ mode: 'update', from: iphone.oplogVersion() }));
+  macbook.import(iphone.export({ mode: 'update', from: macbook.oplogVersion() }));
+
+  const state = iphone.toJSON();
+  const text = iphone.getText('method').toString();
+  if (state.recipe.title !== 'Browser tomato toast' || state.recipe.portions !== 4) {
+    throw new Error('browser map merge failed: ' + JSON.stringify(state));
+  }
+  if (!text.startsWith('Gently ') || !text.endsWith(' Simmer briefly.')) {
+    throw new Error('browser text merge failed: ' + text);
+  }
+  return { state, text };
+}
+
+export default function LoroWebHarness() {
+  const result = useMemo(() => {
+    try {
+      return { ok: true as const, value: run() };
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+    }
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.content}>
+        <Text style={styles.title}>Loro web feasibility</Text>
+        <Text testID="loro-web-result">{result.ok ? 'LORO WEB RUNTIME PASS' : 'LORO WEB RUNTIME FAIL'}</Text>
+        <Text testID="loro-web-detail">{JSON.stringify(result)}</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#f6f4ef' },
+  content: { padding: 24, gap: 16 },
+  title: { fontSize: 28, fontWeight: '700' }
+});
