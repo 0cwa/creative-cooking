@@ -277,12 +277,27 @@ tests.push(await run(7, 'Same scalar disagreement', () => {
     shallowSnapshotEvidence = { error: error instanceof Error ? error.message : String(error) };
   }
 
+  let shallowAfterUnrelatedEditEvidence;
+  try {
+    const advanced = iphone.fork();
+    advanced.setPeerId(PEERS.ipad);
+    advanced.getMap('set:allergies').set('mustard', true);
+    save(advanced, 'ipad', 'unrelated edit after unresolved portions conflict');
+    const shallowBytes = advanced.export({ mode: 'shallow-snapshot', frontiers: advanced.frontiers() });
+    const shallow = new LoroDoc();
+    shallow.import(shallowBytes);
+    shallowAfterUnrelatedEditEvidence = disagreement(shallow, 'recipe:recipe-1', 'portions', ['recipe', 'recipe-1', 'portions']);
+  } catch (error) {
+    shallowAfterUnrelatedEditEvidence = { error: error instanceof Error ? error.message : String(error) };
+  }
+
   return {
     visibleWinner: iphone.getMap('recipe:recipe-1').get('portions'),
     evidence,
     afterRestart,
     laterResolutionCausallySupersedes: true,
-    shallowSnapshotEvidence
+    shallowSnapshotEvidence,
+    shallowAfterUnrelatedEditEvidence
   };
 }));
 
