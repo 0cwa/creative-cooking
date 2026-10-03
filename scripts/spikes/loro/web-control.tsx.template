@@ -1,0 +1,19 @@
+import React from 'react';
+import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+
+export default function LoroWebControl() {
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.content}>
+        <Text style={styles.title}>Loro web feasibility control</Text>
+        <Text testID="loro-web-result">CONTROL PASS</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#f6f4ef' },
+  content: { padding: 24, gap: 16 },
+  title: { fontSize: 28, fontWeight: '700' }
+});
