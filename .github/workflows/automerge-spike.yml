@@ -123,3 +123,89 @@ jobs:
           name: automerge-java-native-evidence
           path: spikes/automerge/artifacts
           if-no-files-found: warn
+
+  swift-native-interop:
+    name: Swift native interop and iOS compile probe
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install isolated JS dependencies
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
+      - name: Resolve and build pinned Automerge Swift
+        working-directory: spikes/automerge/native/swift
+        run: |
+          swift --version
+          swift package resolve
+          swift build -c release
+          .build/release/AutomergeSwiftInterop backend-smoke | tee ../../artifacts/swift-backend-smoke.log
+      - name: Prove JS to Swift to JS binary interoperability
+        shell: bash
+        run: |
+          set -euo pipefail
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          mkdir -p artifacts
+          node web-interop.mjs create artifacts/web-seed-swift.am
+          "$SWIFT_BIN" mutate artifacts/web-seed-swift.am artifacts/swift-mutated.am swift-0.7.2
+          node web-interop.mjs verify-native artifacts/swift-mutated.am swift-0.7.2
+      - name: Exercise JS to Swift sync protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          node web-interop.mjs fork-edit artifacts/swift-mutated.am artifacts/web-concurrent-swift.am
+          "$SWIFT_BIN" fork-edit artifacts/swift-mutated.am artifacts/swift-concurrent.am
+          : > artifacts/web-swift-sync.state
+          : > artifacts/swift-sync.state
+          for round in 1 2 3 4 5 6; do
+            node web-interop.mjs sync-generate artifacts/web-concurrent-swift.am artifacts/web-swift-sync.state artifacts/web-to-swift.msg
+            "$SWIFT_BIN" sync-receive artifacts/swift-concurrent.am artifacts/swift-sync.state artifacts/web-to-swift.msg
+            "$SWIFT_BIN" sync-generate artifacts/swift-concurrent.am artifacts/swift-sync.state artifacts/swift-to-web.msg
+            node web-interop.mjs sync-receive artifacts/web-concurrent-swift.am artifacts/web-swift-sync.state artifacts/swift-to-web.msg
+          done
+          node web-interop.mjs verify-converged artifacts/web-concurrent-swift.am artifacts/swift-concurrent.am
+      - name: Probe Automerge 3.5 author-metadata forward compatibility in Swift 0.7.2
+        shell: bash
+        run: |
+          set +e
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          node web-interop.mjs create-authored artifacts/web-authored-swift.am
+          "$SWIFT_BIN" verify-authored artifacts/web-authored-swift.am > artifacts/swift-author-compat.log 2>&1
+          code=$?
+          printf '{"swiftBinding":"0.7.2","webBinding":"3.5.0","loadAuthoredDocumentExitCode":%s}\n' "$code" \
+            > artifacts/swift-author-compat.json
+          cat artifacts/swift-author-compat.log
+          cat artifacts/swift-author-compat.json
+          exit 0
+      - name: Compile backend probe for iOS Simulator
+        shell: bash
+        working-directory: spikes/automerge/native/swift
+        run: |
+          set +e
+          mkdir -p ../../artifacts
+          xcodebuild -list > ../../artifacts/ios-xcodebuild-list.log 2>&1
+          xcodebuild \
+            -scheme AutomergeBridgeProbe \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            build > ../../artifacts/ios-simulator-build.log 2>&1
+          code=$?
+          printf '{"target":"iOS Simulator","scheme":"AutomergeBridgeProbe","exitCode":%s}\n' "$code" \
+            > ../../artifacts/ios-simulator-build.json
+          tail -n 120 ../../artifacts/ios-simulator-build.log
+          cat ../../artifacts/ios-simulator-build.json
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-swift-native-evidence
+          path: spikes/automerge/artifacts
+          if-no-files-found: warn
