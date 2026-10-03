@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { LoroDoc } from 'loro-react-native';
+import { Frontiers, LoroDoc, VersionVector } from 'loro-react-native';
 import { baseSnapshot, scenario, webPackage, webUpdate } from '../scripts/spikes/loro/native-fixture';
 
 type HarnessResult = {
@@ -16,11 +16,82 @@ type HarnessResult = {
   movableList?: unknown;
   text?: unknown;
   mergeableMap?: unknown;
-  nativeUpdateBytes?: number[];
+  nativeUpdateBytes?: number[];\n  nativeDisagreementEvidence?: unknown;
   snapshotBytes?: number;
   updateBytes?: number;
   error?: string;
 };
+
+function reconstructNativeDisagreement(document: LoroDoc) {
+  const empty = new VersionVector();
+  const history = JSON.parse(
+    document.exportJsonUpdatesWithoutPeerCompression(empty, document.oplogVersion())
+  );
+  const writes: Array<{
+    value: unknown;
+    actor: string;
+    peer: string;
+    counter: number;
+    changeId: string;
+  }> = [];
+
+  for (const change of history.changes ?? []) {
+    const changeId = String(change.id);
+    const peer = changeId.slice(changeId.lastIndexOf('@') + 1);
+    const actor = typeof change.msg === 'string'
+      ? (/device:([^;]+)/u.exec(change.msg)?.[1] ?? peer)
+      : peer;
+
+    for (const op of change.ops ?? []) {
+      if (
+        op.container === 'cid:root-recipe:recipe-1:Map'
+        && op.content?.type === 'insert'
+        && op.content?.key === 'portions'
+        && (op.content.value === 4 || op.content.value === 6)
+      ) {
+        writes.push({
+          value: op.content.value,
+          actor,
+          peer,
+          counter: op.counter,
+          changeId
+        });
+      }
+    }
+  }
+
+  const four = writes.find((write) => write.value === 4);
+  const six = writes.find((write) => write.value === 6);
+  if (!four || !six) {
+    throw new Error('native history did not retain both portions writes: ' + JSON.stringify(writes));
+  }
+
+  const fourVv = document.frontiersToVv(
+    Frontiers.fromId({ peer: BigInt(four.peer), counter: four.counter })
+  );
+  const sixVv = document.frontiersToVv(
+    Frontiers.fromId({ peer: BigInt(six.peer), counter: six.counter })
+  );
+  if (!fourVv || !sixVv) {
+    throw new Error('native history could not convert write IDs to version vectors');
+  }
+
+  const relation = fourVv.partialCmp(sixVv);
+  if (relation !== undefined) {
+    throw new Error('native writes were not concurrent; partialCmp=' + String(relation));
+  }
+
+  return {
+    alternatives: writes.map(({ value, actor, changeId }) => ({ value, actor, changeId })),
+    concurrent: true,
+    publicApis: [
+      'exportJsonUpdatesWithoutPeerCompression',
+      'Frontiers.fromId',
+      'frontiersToVv',
+      'VersionVector.partialCmp'
+    ]
+  };
+}
 
 function runHarness(): HarnessResult {
   const replica = new LoroDoc();
@@ -41,7 +112,7 @@ function runHarness(): HarnessResult {
   const nativeUpdate = replica.export({ mode: 'updates', from: commonVersion });
 
   replica.import_(webUpdate);
-  const afterMerge = replica.toJSON() as Record<string, any>;
+  const afterMerge = replica.toJSON() as Record<string, any>;\n  const nativeDisagreementEvidence = reconstructNativeDisagreement(replica);
 
   const snapshot = replica.export({ mode: 'snapshot' });
   const restarted = new LoroDoc();
@@ -80,7 +151,7 @@ function runHarness(): HarnessResult {
     movableList: structureJson.steps,
     text: structureJson.method,
     mergeableMap: structureJson.root,
-    nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),
+    nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),\n    nativeDisagreementEvidence,
     snapshotBytes: snapshot.byteLength,
     updateBytes: nativeUpdate.byteLength
   };
