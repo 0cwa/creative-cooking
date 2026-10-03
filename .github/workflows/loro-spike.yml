@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  web-api:
-    name: Loro web API probe
+  web-scenarios:
+    name: Loro web scenarios + benchmark
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -24,13 +24,18 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
       - run: node scripts/spikes/loro/web-probe.mjs
+      - run: node scripts/spikes/loro/run.mjs
+      - name: Package footprint
+        run: |
+          du -sh node_modules/loro-crdt
+          du -sh node_modules/loro-crdt/* | sort -h | tail -20
       - uses: actions/upload-artifact@v6
         with:
-          name: loro-web-api-probe
-          path: artifacts/loro/web-api-probe.json
+          name: loro-web-results
+          path: artifacts/loro/
 
   native-package:
-    name: Loro native package + API surface
+    name: Loro native publication + source probe
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -39,8 +44,14 @@ jobs:
           node-version: 22.13
           package-manager-cache: false
       - run: npm install --no-audit --no-fund
-      - run: npm install --no-save --no-audit --no-fund loro-react-native@1.13.2
-      - run: |
+      - name: Inspect registry publication
+        run: |
+          echo "latest=$(npm view loro-react-native version)"
+          npm view loro-react-native versions --json
+      - name: Install exact current official source commit
+        run: npm install --no-save --no-audit --no-fund github:loro-dev/loro-react-native#8fad8d61c11c23e7c57999533d637d316465ffc1
+      - name: Inspect source package
+        run: |
           node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
           grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
           du -sh node_modules/loro-react-native
