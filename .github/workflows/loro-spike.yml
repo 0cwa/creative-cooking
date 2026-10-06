@@ -43,6 +43,10 @@ jobs:
           EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir dist-control
           cp scripts/spikes/loro/web-harness.tsx.template app/index.tsx
           EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir dist-loro
+          # Loro's browser package loads this relative WASM URL at runtime. Its upstream
+          # README explicitly requires esbuild/Rollup-style static builds to copy the
+          # asset beside emitted JS; Expo static export does not currently do so.
+          install -D node_modules/loro-crdt/browser/loro_wasm_bg.wasm dist-loro/_expo/static/js/web/loro_wasm_bg.wasm
           CONTROL=$(du -sb dist-control | cut -f1)
           LORO=$(du -sb dist-loro | cut -f1)
           DELTA=$((LORO - CONTROL))
@@ -133,24 +137,45 @@ jobs:
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
           stat -c '%s' "$APK" | tee artifacts/loro/android/apk-bytes.txt
           unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/native-library-list.txt || true
-      - name: Run on Android emulator
-        uses: reactivecircus/android-emulator-runner@ed009f5318f15b1cf93a191b856c4f1748a2d4c1
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_6
-          disable-animations: true
-          script: |
-            set -euxo pipefail
-            APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-            adb install -r "$APK"
-            adb logcat -c
-            adb shell am force-stop com.creativecooking.lorospike || true
-            adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1
-            sleep 12
-            adb logcat -d > artifacts/loro/android/runtime.log
-            adb exec-out screencap -p > artifacts/loro/android/runtime.png
-            node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/android/runtime.log artifacts/loro/android/result.json
+      - name: Run on Android x86_64 emulator
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts/loro/android
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          echo no | "$AVDMANAGER" create avd --force --name loro-spike --package "system-images;android-35;default;x86_64"
+          sudo chmod a+rw /dev/kvm || true
+          "$ANDROID_HOME/emulator/emulator" -avd loro-spike -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim > artifacts/loro/android/emulator.log 2>&1 &
+          EMULATOR_PID=$!
+          CI=1 npx expo start --localhost --port 8081 > artifacts/loro/android/metro.log 2>&1 &
+          METRO_PID=$!
+          cleanup() {
+            kill "$METRO_PID" "$EMULATOR_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          timeout 180 adb wait-for-device
+          BOOTED=0
+          for i in {1..120}; do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              BOOTED=1
+              break
+            fi
+            sleep 2
+          done
+          test "$BOOTED" = 1
+          adb reverse tcp:8081 tcp:8081
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          adb install -r "$APK" | tee artifacts/loro/android/install.log
+          adb logcat -c
+          adb shell am force-stop com.creativecooking.lorospike || true
+          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1 | tee artifacts/loro/android/launch.log
+          sleep 20
+          adb logcat -d > artifacts/loro/android/runtime.log
+          adb exec-out screencap -p > artifacts/loro/android/runtime.png
+          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/android/runtime.log artifacts/loro/android/result.json
       - name: Verify native-produced update in web Loro
         run: |
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
