@@ -39,6 +39,73 @@ jobs:
           path: spikes/automerge/artifacts
           if-no-files-found: warn
 
+  polygen-wasm-probe:
+    name: Polygen Automerge WASM bounded probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install Automerge and wasm2c prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wabt
+          cd spikes/automerge
+          npm install --no-audit --no-fund
+          cd polygen-probe
+          npm install --no-audit --no-fund
+      - name: Copy the exact Automerge 3.5 WASM into the Polygen fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p spikes/automerge/polygen-probe/src spikes/automerge/artifacts
+          wasm="$(find spikes/automerge/node_modules/@automerge -type f -name '*.wasm' | head -n 1)"
+          test -n "$wasm"
+          cp "$wasm" spikes/automerge/polygen-probe/src/automerge.wasm
+          bytes="$(wc -c < "$wasm" | tr -d ' ')"
+          printf '{"automergeJs":"3.5.0","polygen":"0.2.1","wasmPath":"%s","wasmBytes":%s}\n' "$wasm" "$bytes"             > spikes/automerge/artifacts/polygen-input.json
+      - name: Attempt wasm2c and Polygen generation
+        shell: bash
+        working-directory: spikes/automerge/polygen-probe
+        run: |
+          set +e
+          mkdir -p ../artifacts
+          wasm2c src/automerge.wasm -o /tmp/automerge-polygen.c > ../artifacts/polygen-wasm2c.log 2>&1
+          wasm2c_code=$?
+          npx polygen --project "$PWD" generate -f > ../artifacts/polygen-generate.log 2>&1
+          polygen_code=$?
+          if grep -q "Error generating modules" ../artifacts/polygen-generate.log; then
+            generator_error=true
+          else
+            generator_error=false
+          fi
+          generated_files="$(find generated -type f 2>/dev/null | wc -l | tr -d ' ')"
+          generated_bytes="$(du -sb generated 2>/dev/null | cut -f1)"
+          generated_bytes="${generated_bytes:-0}"
+          if [ "$wasm2c_code" -eq 0 ] && [ "$polygen_code" -eq 0 ] && [ "$generator_error" = false ] && [ "$generated_files" -gt 0 ]; then
+            result=PASS
+          else
+            result=FAIL
+          fi
+          printf '{"result":"%s","automergeJs":"3.5.0","polygen":"0.2.1","wasm2cExitCode":%s,"polygenExitCode":%s,"polygenReportedGeneratorError":%s,"generatedFiles":%s,"generatedBytes":%s}\n'             "$result" "$wasm2c_code" "$polygen_code" "$generator_error" "$generated_files" "$generated_bytes"             > ../artifacts/polygen-result.json
+          cat ../artifacts/polygen-result.json
+          tail -n 120 ../artifacts/polygen-wasm2c.log
+          tail -n 120 ../artifacts/polygen-generate.log
+          # This is an evidence-producing feasibility probe; an incompatibility is a valid result.
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-polygen-evidence
+          path: |
+            spikes/automerge/artifacts/polygen-input.json
+            spikes/automerge/artifacts/polygen-result.json
+            spikes/automerge/artifacts/polygen-wasm2c.log
+            spikes/automerge/artifacts/polygen-generate.log
+          if-no-files-found: warn
+
   java-native-contract:
     name: Java native core contract and JS interoperability
     runs-on: ubuntu-latest
