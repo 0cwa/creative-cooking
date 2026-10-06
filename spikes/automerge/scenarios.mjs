@@ -143,19 +143,15 @@ function syncPair(inputA, inputB, maxRounds = 50) {
   for (; rounds < maxRounds; rounds += 1) {
     let messageA;
     [stateA, messageA] = A.generateSyncMessage(docA, stateA);
-    stateA = A.decodeSyncState(A.encodeSyncState(stateA));
     if (messageA) {
       [docB, stateB] = A.receiveSyncMessage(docB, stateB, messageA);
-      stateB = A.decodeSyncState(A.encodeSyncState(stateB));
       messages += 1;
     }
 
     let messageB;
     [stateB, messageB] = A.generateSyncMessage(docB, stateB);
-    stateB = A.decodeSyncState(A.encodeSyncState(stateB));
     if (messageB) {
       [docA, stateA] = A.receiveSyncMessage(docA, stateA, messageB);
-      stateA = A.decodeSyncState(A.encodeSyncState(stateA));
       messages += 1;
     }
 
@@ -539,7 +535,7 @@ await run(17, 'sync protocol', () => {
   assertLogicalEqual(synced.docA, synced.docB);
   assert.equal(synced.docA.recipesById['recipe-1'].title, 'Synced phone title');
   assert.equal(synced.docA.recipesById['recipe-1'].description, 'Synced laptop description');
-  return { actualSyncApi: true, persistedSyncStateRoundTrips: true, messages: synced.messages, rounds: synced.rounds };
+  return { actualSyncApi: true, inMemorySessionState: true, messages: synced.messages, rounds: synced.rounds };
 });
 
 await run(18, 'three replicas', () => {
