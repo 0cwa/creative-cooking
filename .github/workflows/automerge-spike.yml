@@ -55,15 +55,27 @@ jobs:
           npm install --no-audit --no-fund
       - name: Bundle Automerge for a plain Hermes execution attempt
         working-directory: spikes/automerge
+        shell: bash
         run: |
+          set +e
           mkdir -p artifacts
-          npx esbuild hermes-direct.mjs --bundle --platform=browser --format=iife --outfile=artifacts/hermes-direct.bundle.js
+          npx esbuild hermes-direct.mjs --bundle --platform=neutral --conditions=import --format=iife --outfile=artifacts/hermes-direct.bundle.js             > artifacts/hermes-bundle.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > artifacts/hermes-bundle-exit.txt
+          cat artifacts/hermes-bundle.log
+          exit 0
       - name: Execute the Automerge bundle with the Hermes shipped by React Native 0.86.3
         shell: bash
         run: |
           set +e
           hermesc="$(find node_modules/react-native/sdks/hermesc -type f -name hermesc | head -n 1)"
           mkdir -p spikes/automerge/artifacts
+          bundle_code="$(cat spikes/automerge/artifacts/hermes-bundle-exit.txt 2>/dev/null || echo 1)"
+          if [ "$bundle_code" -ne 0 ] || [ ! -f spikes/automerge/artifacts/hermes-direct.bundle.js ]; then
+            printf '{"result":"PARTIAL","reason":"Automerge bundle could not be prepared for Hermes","bundleExitCode":%s}\n' "$bundle_code"               > spikes/automerge/artifacts/hermes-direct-result.json
+            cat spikes/automerge/artifacts/hermes-direct-result.json
+            exit 0
+          fi
           if [ -z "$hermesc" ]; then
             printf '{"result":"PARTIAL","reason":"hermesc binary not found in installed React Native"}\n'               > spikes/automerge/artifacts/hermes-direct-result.json
             cat spikes/automerge/artifacts/hermes-direct-result.json
@@ -91,6 +103,8 @@ jobs:
             spikes/automerge/artifacts/hermes-direct-result.json
             spikes/automerge/artifacts/hermes-direct.log
             spikes/automerge/artifacts/hermes-version.log
+            spikes/automerge/artifacts/hermes-bundle.log
+            spikes/automerge/artifacts/hermes-bundle-exit.txt
           if-no-files-found: warn
 
   polygen-wasm-probe:
@@ -128,7 +142,7 @@ jobs:
           mkdir -p ../artifacts
           wasm2c src/automerge.wasm -o /tmp/automerge-polygen.c > ../artifacts/polygen-wasm2c.log 2>&1
           wasm2c_code=$?
-          npx polygen --project "$PWD" generate -f > ../artifacts/polygen-generate.log 2>&1
+          node node_modules/@callstack/polygen-cli/bin/polygen.js --project "$PWD" generate -f > ../artifacts/polygen-generate.log 2>&1
           polygen_code=$?
           if grep -q "Error generating modules" ../artifacts/polygen-generate.log; then
             generator_error=true
