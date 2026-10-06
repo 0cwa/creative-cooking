@@ -5,7 +5,8 @@ import { baseSnapshot, scenario, webPackage, webUpdate } from '../scripts/spikes
 
 type HarnessResult = {
   ok: boolean;
-  platform: string;\n  platformApi: string;
+  platform: string;
+  platformApi: string;
   webPackage: string;
   scenario: string;
   importedWebSnapshot?: boolean;
@@ -16,7 +17,8 @@ type HarnessResult = {
   movableList?: unknown;
   text?: unknown;
   mergeableMap?: unknown;
-  nativeUpdateBytes?: number[];\n  nativeDisagreementEvidence?: unknown;
+  nativeUpdateBytes?: number[];
+  nativeDisagreementEvidence?: unknown;
   snapshotBytes?: number;
   updateBytes?: number;
   error?: string;
@@ -112,7 +114,8 @@ function runHarness(): HarnessResult {
   const nativeUpdate = replica.export({ mode: 'updates', from: commonVersion });
 
   replica.import_(webUpdate);
-  const afterMerge = replica.toJSON() as Record<string, any>;\n  const nativeDisagreementEvidence = reconstructNativeDisagreement(replica);
+  const afterMerge = replica.toJSON() as Record<string, any>;
+  const nativeDisagreementEvidence = reconstructNativeDisagreement(replica);
 
   const snapshot = replica.export({ mode: 'snapshot' });
   const restarted = new LoroDoc();
@@ -151,7 +154,8 @@ function runHarness(): HarnessResult {
     movableList: structureJson.steps,
     text: structureJson.method,
     mergeableMap: structureJson.root,
-    nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),\n    nativeDisagreementEvidence,
+    nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),
+    nativeDisagreementEvidence,
     snapshotBytes: snapshot.byteLength,
     updateBytes: nativeUpdate.byteLength
   };
