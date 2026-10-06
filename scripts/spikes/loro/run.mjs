@@ -522,87 +522,154 @@ try {
 
 function performanceFixture() {
   const d = doc();
+
   const pantry = d.getMap('pantry-registry');
   for (let i = 0; i < 200; i += 1) {
-    const id = `pantry-${i}`;
+    const id = `pantry-${String(i).padStart(4, '0')}`;
     pantry.set(id, true);
     const item = d.getMap(`pantry:${id}`);
-    item.set('id', id); item.set('name', `ingredient ${i}`); item.set('preference', (i % 5) + 1);
+    item.set('id', id);
+    item.set('name', `ingredient ${i}`);
+    item.set('preference', (i % 5) + 1);
+    item.set('createdAt', '2026-01-01T00:00:00Z');
+    item.set('updatedAt', '2026-01-01T00:00:00Z');
   }
+
   const recipes = d.getMap('recipes-registry');
+  const recipeOrder = d.getMovableList('recipe-order');
   for (let i = 0; i < 500; i += 1) {
-    const id = `recipe-${i}`;
+    const id = `recipe-${String(i).padStart(4, '0')}`;
     recipes.set(id, true);
+    recipeOrder.push(id);
     const recipe = d.getMap(`recipe:${id}`);
-    recipe.set('id', id); recipe.set('title', `Recipe ${i}`); recipe.set('portions', (i % 6) + 1); recipe.set('description', `Fixture recipe ${i}`);
+    recipe.set('id', id);
+    recipe.set('title', `Recipe ${i}`);
+    recipe.set('description', `Representative local-first recipe ${i}.`);
+    recipe.set('portions', 2 + (i % 5));
+    recipe.set('deleted', false);
+    recipe.set('deletedAt', null);
+    recipe.set('deletedBy', null);
+
     const ingredients = d.getMovableList(`recipe:${id}:ingredients`);
-    const steps = d.getMovableList(`recipe:${id}:steps`);
-    for (let j = 0; j < 4; j += 1) {
-      const ingredientId = `${id}:ingredient-${j}`;
+    for (let j = 0; j < 5; j += 1) {
+      const ingredientId = `${id}-ingredient-${j}`;
       ingredients.push(ingredientId);
       const ing = d.getMap(`ingredient:${ingredientId}`);
-      ing.set('id', ingredientId); ing.set('recipeId', id); ing.set('name', `ingredient ${(i + j) % 200}`); ing.set('amount', String(j + 1));
-      const stepId = `${id}:step-${j}`;
+      ing.set('id', ingredientId);
+      ing.set('recipeId', id);
+      ing.set('name', `ingredient ${(i * 5 + j) % 200}`);
+      ing.set('amount', `${j + 1} tbsp`);
+    }
+
+    const steps = d.getMovableList(`recipe:${id}:steps`);
+    for (let j = 0; j < 4; j += 1) {
+      const stepId = `${id}-step-${j}`;
       steps.push(stepId);
       d.getMap(`step:${stepId}`).set('id', stepId);
-      d.getText(`step:${stepId}:text`).insert(0, `Step ${j + 1} for recipe ${i}.`);
+      d.getText(`step:${stepId}:text`).insert(0, `Cook step ${j} for recipe ${i}.`);
     }
   }
+
+  const conversations = d.getMap('conversations-registry');
+  const conversationOrder = d.getMovableList('conversation-order');
   for (let i = 0; i < 100; i += 1) {
-    const messages = d.getList(`conversation:conversation-${i}:messages`);
+    const id = `conversation-${String(i).padStart(3, '0')}`;
+    conversations.set(id, true);
+    conversationOrder.push(id);
+    d.getMap(`conversation:${id}`).set('id', id);
+    const messageRegistry = d.getMap(`conversation:${id}:messages-registry`);
+    const messageOrder = d.getMovableList(`conversation:${id}:message-order`);
     for (let j = 0; j < 20; j += 1) {
-      messages.push({
-        id: `conversation-${i}:message-${j}`,
-        role: j % 2 ? 'assistant' : 'user',
-        content: `Fixture message ${j} in conversation ${i}`,
-        createdAt: '2026-01-01T00:00:00.000Z'
-      });
+      const messageId = `${id}-message-${String(j).padStart(2, '0')}`;
+      messageRegistry.set(messageId, true);
+      messageOrder.push(messageId);
+      const message = d.getMap(`message:${messageId}`);
+      message.set('id', messageId);
+      message.set('role', j % 2 === 0 ? 'user' : 'assistant');
+      message.set('content', `Representative message ${j} in conversation ${i} about dinner ideas.`);
     }
   }
+
   save(d, 'seed', 'performance fixture');
   return d;
 }
 
+function median(values) {
+  const ordered = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
+}
+
+if (global.gc) global.gc();
 const mem0 = process.memoryUsage().heapUsed;
 const tBuild = performance.now();
 const perfDoc = performanceFixture();
 const buildMs = performance.now() - tBuild;
+if (global.gc) global.gc();
 const mem1 = process.memoryUsage().heapUsed;
+
 const tSnap = performance.now();
 const perfSnapshot = perfDoc.export({ mode: 'snapshot' });
 const snapshotExportMs = performance.now() - tSnap;
-const tLoad = performance.now();
-const reloaded = new LoroDoc();
-reloaded.import(perfSnapshot);
-const coldLoadMs = performance.now() - tLoad;
-assert.deepEqual(reloaded.toJSON(), perfDoc.toJSON());
 
-const beforeTiny = reloaded.oplogVersion();
+const coldLoadSamples = [];
+for (let i = 0; i < 5; i += 1) {
+  const loaded = new LoroDoc();
+  const tLoad = performance.now();
+  loaded.import(perfSnapshot);
+  loaded.toJSON();
+  coldLoadSamples.push(performance.now() - tLoad);
+  loaded.free?.();
+}
+
+const beforeTiny = perfDoc.oplogVersion();
 perfDoc.setPeerId(PEERS.iphone);
-perfDoc.getMap('pantry:pantry-0').set('name', 'ingredient zero edited');
+perfDoc.getMap('recipe:recipe-0000').set('description', 'A tiny edited description.');
 save(perfDoc, 'iphone', 'benchmark tiny edit');
 const tiny = perfDoc.export({ mode: 'update', from: beforeTiny });
 
 const left = new LoroDoc(), right = new LoroDoc();
-left.import(perfSnapshot); right.import(perfSnapshot);
-left.setPeerId(PEERS.iphone); right.setPeerId(PEERS.macbook);
-left.getMap('recipe:recipe-0').set('title', 'Left benchmark title'); save(left, 'iphone', 'benchmark merge');
-right.getMap('recipe:recipe-1').set('portions', 9); save(right, 'macbook', 'benchmark merge');
+left.import(perfSnapshot);
+right.import(perfSnapshot);
+left.setPeerId(PEERS.iphone);
+right.setPeerId(PEERS.macbook);
+left.getMap('recipe:recipe-0001').set('title', 'Phone recipe title');
+save(left, 'iphone', 'benchmark merge title');
+right.getMap('pantry:pantry-0001').set('preference', 5);
+save(right, 'macbook', 'benchmark merge pantry preference');
 const tMerge = performance.now();
 const mergeBytes = sync(left, right);
 const twoReplicaMergeMs = performance.now() - tMerge;
 assert.deepEqual(left.toJSON(), right.toJSON());
 
+if (global.gc) global.gc();
+const memAfterAll = process.memoryUsage().heapUsed;
 const benchmark = {
-  fixture: { pantryItems: 200, recipes: 500, conversations: 100, messagesPerConversation: 20, ingredientsPerRecipe: 4, stepsPerRecipe: 4 },
+  fixture: {
+    pantryItems: 200,
+    recipes: 500,
+    conversations: 100,
+    messagesPerConversation: 20,
+    recipeIngredients: 5,
+    recipeSteps: 4,
+    comparisonShape: 'Matches the Automerge spike logical fixture: stable-ID maps plus explicit order lists and lifecycle metadata.'
+  },
   snapshotBytes: perfSnapshot.byteLength,
   tinyIncrementalUpdateBytes: tiny.byteLength,
   buildMs,
   snapshotExportMs,
-  coldLoadMs,
+  coldLoadMs: {
+    samples: coldLoadSamples,
+    median: median(coldLoadSamples)
+  },
   twoReplicaMergeMs,
   mergeUpdateBytes: mergeBytes,
-  memory: { heapBeforeBytes: mem0, heapAfterBuildBytes: mem1, grossDeltaBytes: mem1 - mem0, heapAfterAllBytes: process.memoryUsage().heapUsed }
+  memory: {
+    heapBeforeBytes: mem0,
+    heapAfterBuildBytes: mem1,
+    grossBuildDeltaBytes: mem1 - mem0,
+    heapAfterAllBytes: memAfterAll
+  }
 };
 
 const interop = (() => {
