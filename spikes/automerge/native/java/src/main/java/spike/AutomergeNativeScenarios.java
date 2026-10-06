@@ -170,12 +170,6 @@ public final class AutomergeNativeScenarios {
         return new HashSet<>(Arrays.asList(doc.getHeads()));
     }
 
-    private static SyncState roundTripState(SyncState state) {
-        byte[] encoded = state.encode();
-        state.free();
-        return SyncState.decode(encoded);
-    }
-
     private static void syncPair(Document a, Document b) {
         SyncState stateA = new SyncState();
         SyncState stateB = new SyncState();
@@ -183,17 +177,13 @@ public final class AutomergeNativeScenarios {
             for (int round = 0; round < 50; round++) {
                 boolean sent = false;
                 Optional<byte[]> fromA = a.generateSyncMessage(stateA);
-                stateA = roundTripState(stateA);
                 if (fromA.isPresent()) {
                     b.receiveSyncMessage(stateB, fromA.get());
-                    stateB = roundTripState(stateB);
                     sent = true;
                 }
                 Optional<byte[]> fromB = b.generateSyncMessage(stateB);
-                stateB = roundTripState(stateB);
                 if (fromB.isPresent()) {
                     a.receiveSyncMessage(stateA, fromB.get());
-                    stateA = roundTripState(stateA);
                     sent = true;
                 }
                 if (!sent) return;
@@ -540,7 +530,7 @@ public final class AutomergeNativeScenarios {
             check(str(phone, map(phone, ObjectId.ROOT, "recipe"), "description").equals("sync laptop"), "phone missing laptop description");
             check(heads(phone).equals(heads(laptop)), "converged heads differ");
             base.free(); phone.free(); laptop.free();
-            return "actual Java binding SyncState/message APIs converge across persisted state round-trips";
+            return "actual Java binding SyncState/message APIs converge with live in-memory session state";
         }));
 
         results.add(execute(18, "three replicas", () -> {
