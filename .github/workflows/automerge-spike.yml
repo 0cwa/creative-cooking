@@ -39,6 +39,60 @@ jobs:
           path: spikes/automerge/artifacts
           if-no-files-found: warn
 
+  hermes-direct-wasm-probe:
+    name: Direct Automerge JS on current Hermes probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install current app and isolated spike dependencies
+        run: |
+          npm install --no-audit --no-fund
+          cd spikes/automerge
+          npm install --no-audit --no-fund
+      - name: Bundle Automerge for a plain Hermes execution attempt
+        working-directory: spikes/automerge
+        run: |
+          mkdir -p artifacts
+          npx esbuild hermes-direct.mjs --bundle --platform=browser --format=iife --outfile=artifacts/hermes-direct.bundle.js
+      - name: Execute the Automerge bundle with the Hermes shipped by React Native 0.86.3
+        shell: bash
+        run: |
+          set +e
+          hermesc="$(find node_modules/react-native/sdks/hermesc -type f -name hermesc | head -n 1)"
+          mkdir -p spikes/automerge/artifacts
+          if [ -z "$hermesc" ]; then
+            printf '{"result":"PARTIAL","reason":"hermesc binary not found in installed React Native"}\n'               > spikes/automerge/artifacts/hermes-direct-result.json
+            cat spikes/automerge/artifacts/hermes-direct-result.json
+            exit 0
+          fi
+          "$hermesc" -version > spikes/automerge/artifacts/hermes-version.log 2>&1
+          "$hermesc" -exec spikes/automerge/artifacts/hermes-direct.bundle.js             > spikes/automerge/artifacts/hermes-direct.log 2>&1
+          code=$?
+          if [ "$code" -eq 0 ] && grep -q '"automergeLoaded":true' spikes/automerge/artifacts/hermes-direct.log; then
+            result=PASS
+          else
+            result=FAIL
+          fi
+          printf '{"result":"%s","expo":"57.0.17","reactNative":"0.86.3","automergeJs":"3.5.0","hermesExecExitCode":%s}\n'             "$result" "$code" > spikes/automerge/artifacts/hermes-direct-result.json
+          cat spikes/automerge/artifacts/hermes-version.log
+          cat spikes/automerge/artifacts/hermes-direct-result.json
+          tail -n 120 spikes/automerge/artifacts/hermes-direct.log
+          # A direct-runtime incompatibility is evidence, not a required-CI failure.
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-hermes-direct-evidence
+          path: |
+            spikes/automerge/artifacts/hermes-direct-result.json
+            spikes/automerge/artifacts/hermes-direct.log
+            spikes/automerge/artifacts/hermes-version.log
+          if-no-files-found: warn
+
   polygen-wasm-probe:
     name: Polygen Automerge WASM bounded probe
     runs-on: ubuntu-latest
