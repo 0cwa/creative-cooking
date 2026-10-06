@@ -40,7 +40,7 @@ function baseDoc(withAuthor = false) {
 
 function assertNativeMutation(doc, label) {
   assert.equal(doc.interop.webCreated, true);
-  assert.equal(doc.interop.nativeModified, label);
+  assert.equal(String(doc.interop.nativeModified), label);
 }
 
 const [command, ...args] = process.argv.slice(2);
@@ -110,8 +110,8 @@ switch (command) {
     const a = JSON.parse(JSON.stringify(web));
     const b = JSON.parse(JSON.stringify(native));
     assert.deepEqual(a, b);
-    assert.equal(a.interop.webConcurrent, 'web-edit-survived');
-    assert.equal(a.interop.nativeConcurrent, 'native-edit-survived');
+    assert.equal(String(a.interop.webConcurrent), 'web-edit-survived');
+    assert.equal(String(a.interop.nativeConcurrent), 'native-edit-survived');
     console.log(JSON.stringify({ command, converged: true, logical: a, webHeads: A.getHeads(web), nativeHeads: A.getHeads(native) }));
     A.free(web);
     A.free(native);
