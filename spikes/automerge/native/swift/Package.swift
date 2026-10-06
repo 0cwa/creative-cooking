@@ -27,6 +27,10 @@ let package = Package(
                 "AutomergeBridgeProbe",
                 .product(name: "Automerge", package: "automerge-swift")
             ]
+        ),
+        .testTarget(
+            name: "AutomergeBridgeProbeTests",
+            dependencies: ["AutomergeBridgeProbe"]
         )
     ]
 )
