@@ -9,6 +9,16 @@ public enum BridgeScalar: Equatable, Hashable, Sendable {
     case unsupported(String)
 }
 
+public final class SwiftAutomergeSyncSession: @unchecked Sendable {
+    fileprivate let state = SyncState()
+
+    public init() {}
+
+    public func encoded() -> Data {
+        state.encode()
+    }
+}
+
 public final class SwiftAutomergeBackend: @unchecked Sendable {
     public let document: Document
 
@@ -59,16 +69,16 @@ public final class SwiftAutomergeBackend: @unchecked Sendable {
         try document.merge(other: other.document)
     }
 
-    public func generateSyncMessage(encodedState: Data?) throws -> (state: Data, message: Data?) {
-        let state = try encodedState.map { try SyncState(bytes: $0) } ?? SyncState()
-        let message = document.generateSyncMessage(state: state)
-        return (state.encode(), message)
+    public func createSyncSession() -> SwiftAutomergeSyncSession {
+        SwiftAutomergeSyncSession()
     }
 
-    public func receiveSyncMessage(encodedState: Data?, message: Data) throws -> Data {
-        let state = try encodedState.map { try SyncState(bytes: $0) } ?? SyncState()
-        try document.receiveSyncMessage(state: state, message: message)
-        return state.encode()
+    public func generateSyncMessage(session: SwiftAutomergeSyncSession) -> Data? {
+        document.generateSyncMessage(state: session.state)
+    }
+
+    public func receiveSyncMessage(session: SwiftAutomergeSyncSession, message: Data) throws {
+        try document.receiveSyncMessage(state: session.state, message: message)
     }
 
     private static func scalar(_ value: Value) -> BridgeScalar {
