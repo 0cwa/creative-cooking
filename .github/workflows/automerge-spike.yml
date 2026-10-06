@@ -169,6 +169,7 @@ jobs:
       - name: Resolve and build pinned Automerge Swift
         working-directory: spikes/automerge/native/swift
         run: |
+          mkdir -p ../../artifacts
           swift --version
           swift package resolve
           swift build -c release
