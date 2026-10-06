@@ -40,8 +40,9 @@ try {
     decodedBodySize: 'decodedBodySize' in entry ? entry.decodedBodySize : 0
   })));
 
+  const meaningfulPageErrors = pageErrors.filter((value) => value.trim().length > 0);
   const outputValue = {
-    pass: result === 'LORO WEB RUNTIME PASS',
+    pass: result === 'LORO WEB RUNTIME PASS' && meaningfulPageErrors.length === 0,
     url,
     status,
     result,
@@ -50,13 +51,15 @@ try {
     resources,
     consoleMessages,
     pageErrors,
+    meaningfulPageErrors,
     failedRequests
   };
   fs.writeFileSync(output, JSON.stringify(outputValue, null, 2));
   console.log(JSON.stringify(outputValue, null, 2));
   assert.equal(status, 200);
   assert.equal(result, 'LORO WEB RUNTIME PASS');
-  assert.deepEqual(pageErrors, []);
+  assert.deepEqual(meaningfulPageErrors, []);
+  assert.deepEqual(failedRequests, []);
 } finally {
   await browser.close();
 }
