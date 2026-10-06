@@ -62,6 +62,99 @@ func state(_ path: String) throws -> SyncState {
     return SyncState()
 }
 
+func readPeerLine(_ handle: FileHandle) throws -> String {
+    var data = Data()
+    while true {
+        guard let byte = try handle.read(upToCount: 1), !byte.isEmpty else {
+            throw InteropError.unexpected("web sync peer closed stdout")
+        }
+        if byte[0] == 10 { break }
+        data.append(byte)
+    }
+    guard let line = String(data: data, encoding: .utf8) else {
+        throw InteropError.unexpected("web sync peer emitted non-UTF8 output")
+    }
+    return line
+}
+
+func peerCommand(_ command: String, stdin: FileHandle, stdout: FileHandle) throws -> String {
+    try stdin.write(contentsOf: Data((command + "\n").utf8))
+    return try readPeerLine(stdout)
+}
+
+func liveSyncWeb(nativeDocPath: String, webDocPath: String, nativeOut: String, webOut: String, peerScript: String) throws {
+    let doc = try load(nativeDocPath)
+    let sync = SyncState()
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["node", peerScript, webDocPath]
+    let input = Pipe()
+    let output = Pipe()
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = FileHandle.standardError
+    try process.run()
+
+    var messages = 0
+    var rounds = 0
+    defer {
+        if process.isRunning { process.terminate() }
+    }
+
+    for round in 0..<50 {
+        rounds = round + 1
+        var sent = false
+
+        let fromWeb = try peerCommand("GEN", stdin: input.fileHandleForWriting, stdout: output.fileHandleForReading)
+        guard fromWeb.hasPrefix("MSG ") else {
+            throw InteropError.unexpected("web peer response: \(fromWeb)")
+        }
+        let encodedWeb = String(fromWeb.dropFirst(4))
+        if encodedWeb != "-" {
+            guard let message = Data(base64Encoded: encodedWeb) else {
+                throw InteropError.unexpected("invalid web sync message")
+            }
+            try doc.receiveSyncMessage(state: sync, message: message)
+            messages += 1
+            sent = true
+        }
+
+        let nativeMessage = doc.generateSyncMessage(state: sync)
+        let encodedNative = nativeMessage?.base64EncodedString() ?? "-"
+        let receiveAck = try peerCommand("RECV " + encodedNative, stdin: input.fileHandleForWriting, stdout: output.fileHandleForReading)
+        guard receiveAck == "OK" else {
+            throw InteropError.unexpected("web receive response: \(receiveAck)")
+        }
+        if nativeMessage != nil {
+            messages += 1
+            sent = true
+        }
+
+        if !sent { break }
+        if round == 49 {
+            throw InteropError.unexpected("cross-language sync did not quiesce")
+        }
+    }
+
+    let webDocument = try peerCommand("DOC", stdin: input.fileHandleForWriting, stdout: output.fileHandleForReading)
+    guard webDocument.hasPrefix("DOC "),
+          let webData = Data(base64Encoded: String(webDocument.dropFirst(4))) else {
+        throw InteropError.unexpected("web doc response")
+    }
+    try write(webData, webOut)
+    try write(doc.save(), nativeOut)
+
+    let bye = try peerCommand("QUIT", stdin: input.fileHandleForWriting, stdout: output.fileHandleForReading)
+    guard bye == "BYE" else { throw InteropError.unexpected("web peer shutdown: \(bye)") }
+    input.fileHandleForWriting.closeFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw InteropError.unexpected("web peer exited \(process.terminationStatus)")
+    }
+    print(#"{"command":"live-sync-web","native":"swift-0.7.2","messages":#(messages),"rounds":#(rounds)}"#)
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else { throw InteropError.usage }
 
@@ -102,6 +195,10 @@ case "sync-receive":
     try write(doc.save(), args[1])
     try write(sync.encode(), args[2])
     print(#"{"command":"sync-receive","native":"swift-0.7.2","messageBytes":\#(message.count)}"#)
+
+case "live-sync-web":
+    guard args.count == 6 else { throw InteropError.usage }
+    try liveSyncWeb(nativeDocPath: args[1], webDocPath: args[2], nativeOut: args[3], webOut: args[4], peerScript: args[5])
 
 case "verify-authored":
     guard args.count == 2 else { throw InteropError.usage }
