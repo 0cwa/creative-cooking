@@ -1,0 +1,209 @@
+import React, { useEffect, useState } from 'react';
+import { Platform, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Frontiers, LoroDoc, VersionVector } from 'loro-react-native';
+import { baseSnapshot, scenario, webPackage, webUpdate } from '../scripts/spikes/loro/native-fixture';
+
+type HarnessResult = {
+  ok: boolean;
+  platform: string;
+  platformApi: string;
+  webPackage: string;
+  scenario: string;
+  importedWebSnapshot?: boolean;
+  nativeBeforeWeb?: unknown;
+  afterMerge?: unknown;
+  afterRestart?: unknown;
+  duplicateImportIdempotent?: boolean;
+  movableList?: unknown;
+  text?: unknown;
+  mergeableMap?: unknown;
+  nativeUpdateBytes?: number[];
+  nativeDisagreementEvidence?: unknown;
+  snapshotBytes?: number;
+  updateBytes?: number;
+  error?: string;
+};
+
+function reconstructNativeDisagreement(document: LoroDoc) {
+  const empty = new VersionVector();
+  const history = JSON.parse(
+    document.exportJsonUpdatesWithoutPeerCompression(empty, document.oplogVersion())
+  );
+  const writes: Array<{
+    value: unknown;
+    actor: string;
+    peer: string;
+    counter: number;
+    changeId: string;
+  }> = [];
+
+  for (const change of history.changes ?? []) {
+    const changeId = String(change.id);
+    const peer = changeId.slice(changeId.lastIndexOf('@') + 1);
+    const actor = typeof change.msg === 'string'
+      ? (/device:([^;]+)/u.exec(change.msg)?.[1] ?? peer)
+      : peer;
+
+    for (const op of change.ops ?? []) {
+      if (
+        op.container === 'cid:root-recipe:recipe-1:Map'
+        && op.content?.type === 'insert'
+        && op.content?.key === 'portions'
+        && (op.content.value === 4 || op.content.value === 6)
+      ) {
+        writes.push({
+          value: op.content.value,
+          actor,
+          peer,
+          counter: op.counter,
+          changeId
+        });
+      }
+    }
+  }
+
+  const four = writes.find((write) => write.value === 4);
+  const six = writes.find((write) => write.value === 6);
+  if (!four || !six) {
+    throw new Error('native history did not retain both portions writes: ' + JSON.stringify(writes));
+  }
+
+  const fourVv = document.frontiersToVv(
+    Frontiers.fromId({ peer: BigInt(four.peer), counter: four.counter })
+  );
+  const sixVv = document.frontiersToVv(
+    Frontiers.fromId({ peer: BigInt(six.peer), counter: six.counter })
+  );
+  if (!fourVv || !sixVv) {
+    throw new Error('native history could not convert write IDs to version vectors');
+  }
+
+  const relation = fourVv.partialCmp(sixVv);
+  if (relation !== undefined) {
+    throw new Error('native writes were not concurrent; partialCmp=' + String(relation));
+  }
+
+  return {
+    alternatives: writes.map(({ value, actor, changeId }) => ({ value, actor, changeId })),
+    concurrent: true,
+    publicApis: [
+      'exportJsonUpdatesWithoutPeerCompression',
+      'Frontiers.fromId',
+      'frontiersToVv',
+      'VersionVector.partialCmp'
+    ]
+  };
+}
+
+function runHarness(): HarnessResult {
+  const replica = new LoroDoc();
+  replica.import_(baseSnapshot);
+
+  const imported = replica.toJSON() as Record<string, any>;
+  if (imported['recipe:recipe-1']?.portions !== 2) {
+    throw new Error(`web snapshot import mismatch: ${JSON.stringify(imported['recipe:recipe-1'])}`);
+  }
+
+  const commonVersion = replica.oplogVersion();
+  replica.setPeerId(303n);
+  replica.getMap('recipe:recipe-1').set('portions', 6);
+  replica.setNextCommitMessage('device:ipad; interop native portions=6');
+  replica.commit();
+
+  const nativeBeforeWeb = replica.toJSON() as Record<string, any>;
+  const nativeUpdate = replica.export({ mode: 'updates', from: commonVersion });
+
+  replica.import_(webUpdate);
+  const afterMerge = replica.toJSON() as Record<string, any>;
+  const nativeDisagreementEvidence = reconstructNativeDisagreement(replica);
+
+  const snapshot = replica.export({ mode: 'snapshot' });
+  const restarted = new LoroDoc();
+  restarted.import_(snapshot);
+  const afterRestart = restarted.toJSON() as Record<string, any>;
+
+  const beforeDuplicate = JSON.stringify(afterRestart);
+  restarted.import_(webUpdate);
+  const duplicateImportIdempotent = JSON.stringify(restarted.toJSON()) === beforeDuplicate;
+
+  const structures = new LoroDoc();
+  structures.setPeerId(404n);
+  const movable = structures.getMovableList('steps');
+  movable.push('step-a');
+  movable.push('step-b');
+  movable.move(1, 0);
+  const text = structures.getText('method');
+  text.insert(0, 'Heat oil.');
+  text.insert(text.length(), ' Add tomatoes.');
+  const mergeable = structures.getMap('root').ensureMergeableMap('child') as any;
+  mergeable.set('nativeField', 'preserved');
+  structures.commit();
+
+  const structureJson = structures.toJSON() as Record<string, any>;
+
+  return {
+    ok: true,
+    platformApi: 'loro-react-native@source-8fad8d61 / loro-ffi 1.13.7',
+    webPackage,
+    scenario,
+    importedWebSnapshot: true,
+    nativeBeforeWeb: nativeBeforeWeb['recipe:recipe-1'],
+    afterMerge: afterMerge['recipe:recipe-1'],
+    afterRestart: afterRestart['recipe:recipe-1'],
+    duplicateImportIdempotent,
+    movableList: structureJson.steps,
+    text: structureJson.method,
+    mergeableMap: structureJson.root,
+    nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),
+    nativeDisagreementEvidence,
+    snapshotBytes: snapshot.byteLength,
+    updateBytes: nativeUpdate.byteLength
+  };
+}
+
+export default function LoroNativeHarness() {
+  const [result, setResult] = useState<HarnessResult | null>(null);
+
+  useEffect(() => {
+    let value: HarnessResult;
+    try {
+      value = runHarness();
+    } catch (error) {
+      value = {
+        ok: false,
+        platformApi: 'loro-react-native@source-8fad8d61 / loro-ffi 1.13.7',
+        webPackage,
+        scenario,
+        error: error instanceof Error ? error.stack ?? error.message : String(error)
+      };
+    }
+    setResult(value);
+    console.log(`LORO_NATIVE_RESULT:${JSON.stringify(value)}`);
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.title}>Loro native feasibility</Text>
+        <Text style={result?.ok ? styles.pass : styles.pending}>
+          {result === null ? 'RUNNING' : result.ok ? 'PASS' : 'FAIL'}
+        </Text>
+        <View style={styles.card}>
+          <Text selectable style={styles.mono}>
+            {result ? JSON.stringify(result, null, 2) : 'Starting native Loro runtime…'}
+          </Text>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#f6f4ef' },
+  content: { padding: 24, gap: 16 },
+  title: { fontSize: 28, fontWeight: '700' },
+  pass: { fontSize: 22, fontWeight: '700' },
+  pending: { fontSize: 22, fontWeight: '700' },
+  card: { backgroundColor: '#ffffff', borderRadius: 16, padding: 16 },
+  mono: { fontFamily: 'Courier', fontSize: 12, lineHeight: 18 }
+});

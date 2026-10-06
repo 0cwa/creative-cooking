@@ -1,0 +1,257 @@
+name: Loro feasibility spike
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/loro-spike.yml'
+      - 'scripts/spikes/loro/**'
+      - 'docs/spikes/local-first-loro.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LORO_RN_COMMIT: 8fad8d61c11c23e7c57999533d637d316465ffc1
+
+jobs:
+  web-scenarios:
+    name: Loro web scenarios + benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+      - run: node scripts/spikes/loro/web-probe.mjs
+      - run: node scripts/spikes/loro/run.mjs
+      - name: Package footprint
+        run: |
+          du -sh node_modules/loro-crdt
+          du -sh node_modules/loro-crdt/* | sort -h | tail -20
+          find node_modules/loro-crdt/browser -type f -maxdepth 2 -printf '%p %s bytes\n' | sort -k2 -n
+      - name: Build control and Loro static Expo pages
+        run: |
+          set -euxo pipefail
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/web-control.tsx.template app/index.tsx
+          EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir dist-control
+          cp scripts/spikes/loro/web-harness.tsx.template app/index.tsx
+          EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir dist-loro
+          # Loro's browser package loads this relative WASM URL at runtime. Its upstream
+          # README explicitly requires esbuild/Rollup-style static builds to copy the
+          # asset beside emitted JS; Expo static export does not currently do so.
+          install -D node_modules/loro-crdt/browser/loro_wasm_bg.wasm dist-loro/_expo/static/js/web/loro_wasm_bg.wasm
+          CONTROL=$(du -sb dist-control | cut -f1)
+          LORO=$(du -sb dist-loro | cut -f1)
+          DELTA=$((LORO - CONTROL))
+          printf '{"controlBytes":%s,"loroBytes":%s,"deltaBytes":%s}\n' "$CONTROL" "$LORO" "$DELTA" | tee artifacts/loro/web-bundle.json
+          find dist-control -type f -printf '%s %p\n' | sort -nr | head -30 > artifacts/loro/web-control-files.txt
+          find dist-loro -type f -printf '%s %p\n' | sort -nr | head -30 > artifacts/loro/web-loro-files.txt
+      - name: Run Loro static export in Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          mkdir -p serve-root/creative-cooking
+          cp -R dist-loro/. serve-root/creative-cooking/
+          python3 -m http.server 4173 --directory serve-root > artifacts/loro/web-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID || true' EXIT
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173/creative-cooking/ > artifacts/loro/web-served-index.html; then break; fi
+            sleep 1
+          done
+          node scripts/spikes/loro/web-browser-verify.mjs
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-web-results
+          path: artifacts/loro/
+
+  native-package:
+    name: Loro native publication + source probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - name: Inspect registry publication
+        run: |
+          echo "latest=$(npm view loro-react-native version)"
+          npm view loro-react-native versions --json
+      - name: Install exact current official source commit
+        run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
+      - name: Inspect source package
+        run: |
+          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
+          grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
+          du -sh node_modules/loro-react-native
+          find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
+
+  android-runtime:
+    name: Android compile + runtime + web interop
+    needs: web-scenarios
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm install --no-audit --no-fund
+      - name: Install exact current official RN source
+        run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Prepare isolated native harness
+        run: |
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Expo prebuild Android
+        run: CI=1 npx expo prebuild --clean --platform android --no-install
+      - name: Build Android debug APK
+        run: |
+          cd android
+          ./gradlew --no-daemon assembleDebug
+          cd ..
+          mkdir -p artifacts/loro/android
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          stat -c '%s' "$APK" | tee artifacts/loro/android/apk-bytes.txt
+          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/native-library-list.txt || true
+      - name: Run on Android x86_64 emulator
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts/loro/android
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          echo no | "$AVDMANAGER" create avd --force --name loro-spike --package "system-images;android-35;default;x86_64"
+          sudo chmod a+rw /dev/kvm || true
+          "$ANDROID_HOME/emulator/emulator" -avd loro-spike -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim > artifacts/loro/android/emulator.log 2>&1 &
+          EMULATOR_PID=$!
+          CI=1 npx expo start --localhost --port 8081 > artifacts/loro/android/metro.log 2>&1 &
+          METRO_PID=$!
+          cleanup() {
+            kill "$METRO_PID" "$EMULATOR_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          timeout 180 adb wait-for-device
+          BOOTED=0
+          for i in {1..120}; do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              BOOTED=1
+              break
+            fi
+            sleep 2
+          done
+          test "$BOOTED" = 1
+          adb reverse tcp:8081 tcp:8081
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          adb install -r "$APK" | tee artifacts/loro/android/install.log
+          adb logcat -c
+          adb shell am force-stop com.creativecooking.lorospike || true
+          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1 | tee artifacts/loro/android/launch.log
+          sleep 20
+          adb logcat -d > artifacts/loro/android/runtime.log
+          adb exec-out screencap -p > artifacts/loro/android/runtime.png
+          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/android/runtime.log artifacts/loro/android/result.json
+      - name: Verify native-produced update in web Loro
+        run: |
+          npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android/result.json | tee artifacts/loro/android/web-verification.json
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-android-runtime
+          path: artifacts/loro/android/
+
+  ios-runtime:
+    name: iOS compile + runtime + web interop
+    needs: web-scenarios
+    if: always()
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - name: Install exact current official RN source
+        run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Prepare isolated native harness
+        run: |
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Expo prebuild iOS
+        run: CI=1 npx expo prebuild --clean --platform ios --no-install
+      - name: Install CocoaPods
+        run: cd ios && pod install
+      - name: Build iOS simulator app
+        run: |
+          set -euxo pipefail
+          WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)
+          SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list -json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.workspace.schemes[0])})")
+          UDID=$(xcrun simctl list devices available -j | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);const ds=Object.values(j.devices).flat().filter(d=>d.isAvailable&&/^iPhone/.test(d.name));if(!ds[0])process.exit(2);console.log(ds[0].udid)})")
+          echo "workspace=$WORKSPACE scheme=$SCHEME simulator=$UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO build | tee artifacts/loro/ios-build.log
+          APP=$(find ios-build/Build/Products/Release-iphonesimulator -name '*.app' -print -quit)
+          mkdir -p artifacts/loro/ios
+          du -sk "$APP" | tee artifacts/loro/ios/app-kib.txt
+          find "$APP" -type f -maxdepth 5 -print | grep -Ei 'loro|framework|\.dylib$' > artifacts/loro/ios/native-library-list.txt || true
+          echo "$UDID" > artifacts/loro/ios/simulator-udid.txt
+          echo "$APP" > artifacts/loro/ios/app-path.txt
+      - name: Run on iOS simulator
+        run: |
+          set -euxo pipefail
+          UDID=$(cat artifacts/loro/ios/simulator-udid.txt)
+          APP=$(cat artifacts/loro/ios/app-path.txt)
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.creativecooking.lorospike
+          sleep 12
+          xcrun simctl spawn "$UDID" log show --last 2m --style compact --predicate 'eventMessage CONTAINS "LORO_NATIVE_RESULT"' > artifacts/loro/ios/runtime.log
+          xcrun simctl io "$UDID" screenshot artifacts/loro/ios/runtime.png
+          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/ios/runtime.log artifacts/loro/ios/result.json
+      - name: Verify native-produced update in web Loro
+        run: |
+          npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/ios/result.json | tee artifacts/loro/ios/web-verification.json
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-ios-runtime
+          path: |
+            artifacts/loro/ios/
+            artifacts/loro/ios-build.log
