@@ -18,18 +18,14 @@ final class BackendTests: XCTestCase {
         let reloaded = try SwiftAutomergeBackend(data: phone.save())
         XCTAssertEqual(Set(try reloaded.rootConflicts(key: "portions")), Set([.int(4), .int(6)]))
 
-        var phoneState: Data?
-        var laptopState: Data?
+        let phoneSession = phone.createSyncSession()
+        let laptopSession = laptop.createSyncSession()
         for _ in 0..<8 {
-            let fromPhone = try phone.generateSyncMessage(encodedState: phoneState)
-            phoneState = fromPhone.state
-            if let message = fromPhone.message {
-                laptopState = try laptop.receiveSyncMessage(encodedState: laptopState, message: message)
+            if let message = phone.generateSyncMessage(session: phoneSession) {
+                try laptop.receiveSyncMessage(session: laptopSession, message: message)
             }
-            let fromLaptop = try laptop.generateSyncMessage(encodedState: laptopState)
-            laptopState = fromLaptop.state
-            if let message = fromLaptop.message {
-                phoneState = try phone.receiveSyncMessage(encodedState: phoneState, message: message)
+            if let message = laptop.generateSyncMessage(session: laptopSession) {
+                try phone.receiveSyncMessage(session: phoneSession, message: message)
             }
         }
 
