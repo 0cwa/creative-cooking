@@ -1,7 +1,7 @@
 import Automerge
 import Foundation
 
-public enum BridgeScalar: Equatable, Sendable {
+public enum BridgeScalar: Equatable, Hashable, Sendable {
     case string(String)
     case int(Int64)
     case bool(Bool)
