@@ -1,10 +1,15 @@
 package spike;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -634,6 +639,70 @@ public final class AutomergeNativeScenarios {
         }
     }
 
+    private static String peerCommand(BufferedReader reader, BufferedWriter writer, String command) throws IOException {
+        writer.write(command);
+        writer.newLine();
+        writer.flush();
+        String line = reader.readLine();
+        if (line == null) throw new IOException("web peer exited while handling " + command);
+        return line;
+    }
+
+    private static void liveSyncWeb(Path nativeDocPath, Path webDocPath, Path nativeOut, Path webOut, String peerScript)
+            throws Exception {
+        Document doc = Document.load(Files.readAllBytes(nativeDocPath));
+        SyncState state = new SyncState();
+        Process peer = new ProcessBuilder("node", peerScript, webDocPath.toString())
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
+                .start();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(peer.getInputStream()));
+             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(peer.getOutputStream()))) {
+            int messages = 0;
+            int rounds = 0;
+            for (; rounds < 50; rounds++) {
+                boolean sent = false;
+
+                String fromWeb = peerCommand(reader, writer, "GEN");
+                check(fromWeb.startsWith("MSG "), "unexpected web peer response " + fromWeb);
+                String encodedWeb = fromWeb.substring(4);
+                if (!encodedWeb.equals("-")) {
+                    doc.receiveSyncMessage(state, Base64.getDecoder().decode(encodedWeb));
+                    messages++;
+                    sent = true;
+                }
+
+                Optional<byte[]> fromNative = doc.generateSyncMessage(state);
+                String encodedNative = fromNative
+                        .map(bytes -> Base64.getEncoder().encodeToString(bytes))
+                        .orElse("-");
+                String received = peerCommand(reader, writer, "RECV " + encodedNative);
+                check(received.equals("OK"), "unexpected web receive response " + received);
+                if (fromNative.isPresent()) {
+                    messages++;
+                    sent = true;
+                }
+
+                if (!sent) break;
+            }
+            check(rounds < 50, "cross-language sync did not quiesce");
+
+            String webDoc = peerCommand(reader, writer, "DOC");
+            check(webDoc.startsWith("DOC "), "unexpected web doc response " + webDoc);
+            Files.write(webOut, Base64.getDecoder().decode(webDoc.substring(4)));
+            Files.write(nativeOut, doc.save());
+            String bye = peerCommand(reader, writer, "QUIT");
+            check(bye.equals("BYE"), "unexpected web peer shutdown " + bye);
+            int exit = peer.waitFor();
+            check(exit == 0, "web peer exited " + exit);
+            System.out.println("{\"command\":\"live-sync-web\",\"native\":\"java-0.0.9\",\"messages\":" +
+                    messages + ",\"rounds\":" + (rounds + 1) + "}");
+        } finally {
+            if (peer.isAlive()) peer.destroyForcibly();
+            state.free();
+            doc.free();
+        }
+    }
+
     private static void verifyAuthored(Path path) throws IOException {
         Document doc = Document.load(Files.readAllBytes(path));
         try {
@@ -663,6 +732,8 @@ public final class AutomergeNativeScenarios {
             case "sync-generate" -> syncGenerate(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
             case "sync-receive" -> syncReceive(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
             case "verify-authored" -> verifyAuthored(Path.of(args[1]));
+            case "live-sync-web" -> liveSyncWeb(
+                    Path.of(args[1]), Path.of(args[2]), Path.of(args[3]), Path.of(args[4]), args[5]);
             default -> throw new IllegalArgumentException("unknown command " + args[0]);
         }
     }
