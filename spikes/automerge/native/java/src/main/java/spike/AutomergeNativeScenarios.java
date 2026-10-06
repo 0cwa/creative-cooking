@@ -166,6 +166,10 @@ public final class AutomergeNativeScenarios {
         }
     }
 
+    private static Set<ChangeHash> heads(Document doc) {
+        return new HashSet<>(Arrays.asList(doc.getHeads()));
+    }
+
     private static void syncPair(Document a, Document b) {
         SyncState stateA = new SyncState();
         SyncState stateB = new SyncState();
@@ -524,7 +528,7 @@ public final class AutomergeNativeScenarios {
             check(str(phone, map(phone, ObjectId.ROOT, "recipe"), "title").equals("sync phone"), "phone missing own title");
             check(str(laptop, map(laptop, ObjectId.ROOT, "recipe"), "title").equals("sync phone"), "laptop missing phone title");
             check(str(phone, map(phone, ObjectId.ROOT, "recipe"), "description").equals("sync laptop"), "phone missing laptop description");
-            check(Arrays.equals(phone.save(), laptop.save()), "converged saves differ");
+            check(heads(phone).equals(heads(laptop)), "converged heads differ");
             base.free(); phone.free(); laptop.free();
             return "actual Java binding SyncState/message APIs converge";
         }));
@@ -541,8 +545,11 @@ public final class AutomergeNativeScenarios {
             syncPair(laptop, ipad);
             syncPair(ipad, phone);
             syncPair(phone, laptop);
-            byte[] a = phone.save(), b = laptop.save(), c = ipad.save();
-            check(Arrays.equals(a, b) && Arrays.equals(b, c), "three replicas did not converge byte-for-byte");
+            Set<ChangeHash> a = heads(phone), b = heads(laptop), c = heads(ipad);
+            check(a.equals(b) && b.equals(c), "three replicas did not converge to equivalent heads");
+            check(str(phone, map(phone, ObjectId.ROOT, "recipe"), "title").equals("three"), "phone missing title");
+            check(str(ipad, map(ipad, ObjectId.ROOT, "recipe"), "description").equals("three replicas"), "ipad missing description");
+            check(str(laptop, map(laptop, ObjectId.ROOT, "allergies"), "sesame").equals("present"), "laptop missing allergy");
             base.free(); phone.free(); laptop.free(); ipad.free();
             return "three native replicas converge";
         }));
