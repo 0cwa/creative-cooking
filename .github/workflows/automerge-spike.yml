@@ -1,0 +1,382 @@
+name: Automerge feasibility spike
+
+on:
+  pull_request:
+    paths:
+      - 'spikes/automerge/**'
+      - 'docs/spikes/local-first-automerge.md'
+      - '.github/workflows/automerge-spike.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-contract:
+    name: Web Automerge contract and benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install isolated spike dependencies
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
+      - name: Run scenarios, representative benchmark, and bundle probe
+        working-directory: spikes/automerge
+        run: npm test
+      - name: Record dependency versions
+        working-directory: spikes/automerge
+        run: |
+          node -p '"node=" + process.version'
+          npm ls --depth=0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-web-evidence
+          path: spikes/automerge/artifacts
+          if-no-files-found: warn
+
+  hermes-direct-wasm-probe:
+    name: Direct Automerge JS on current Hermes probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install current app and isolated spike dependencies
+        run: |
+          npm install --no-audit --no-fund
+          cd spikes/automerge
+          npm install --no-audit --no-fund
+      - name: Bundle Automerge for a plain Hermes execution attempt
+        working-directory: spikes/automerge
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          npx esbuild hermes-direct.mjs --bundle --platform=neutral --conditions=import --format=iife --outfile=artifacts/hermes-direct.bundle.js             > artifacts/hermes-bundle.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > artifacts/hermes-bundle-exit.txt
+          cat artifacts/hermes-bundle.log
+          exit 0
+      - name: Execute the Automerge bundle with the Hermes shipped by React Native 0.86.3
+        shell: bash
+        run: |
+          set +e
+          rn_dir="$(node -p "require('path').dirname(require.resolve('react-native/package.json'))")"
+          hermes_pkg="$(node -p "require.resolve('hermes-compiler/package.json', { paths: ['$rn_dir'] })")"
+          hermesc="$(dirname "$hermes_pkg")/hermesc/linux64-bin/hermesc"
+          mkdir -p spikes/automerge/artifacts
+          bundle_code="$(cat spikes/automerge/artifacts/hermes-bundle-exit.txt 2>/dev/null || echo 1)"
+          if [ "$bundle_code" -ne 0 ] || [ ! -f spikes/automerge/artifacts/hermes-direct.bundle.js ]; then
+            printf '{"result":"PARTIAL","reason":"Automerge bundle could not be prepared for Hermes","bundleExitCode":%s}\n' "$bundle_code"               > spikes/automerge/artifacts/hermes-direct-result.json
+            cat spikes/automerge/artifacts/hermes-direct-result.json
+            exit 0
+          fi
+          if [ -z "$hermesc" ]; then
+            printf '{"result":"PARTIAL","reason":"hermesc binary not found in installed React Native"}\n'               > spikes/automerge/artifacts/hermes-direct-result.json
+            cat spikes/automerge/artifacts/hermes-direct-result.json
+            exit 0
+          fi
+          "$hermesc" -version > spikes/automerge/artifacts/hermes-version.log 2>&1
+          "$hermesc" -exec spikes/automerge/artifacts/hermes-direct.bundle.js             > spikes/automerge/artifacts/hermes-direct.log 2>&1
+          code=$?
+          if [ "$code" -eq 0 ] && grep -q '"automergeLoaded":true' spikes/automerge/artifacts/hermes-direct.log; then
+            result=PASS
+          else
+            result=FAIL
+          fi
+          printf '{"result":"%s","expo":"57.0.17","reactNative":"0.86.3","automergeJs":"3.5.0","hermesExecExitCode":%s}\n'             "$result" "$code" > spikes/automerge/artifacts/hermes-direct-result.json
+          cat spikes/automerge/artifacts/hermes-version.log
+          cat spikes/automerge/artifacts/hermes-direct-result.json
+          tail -n 120 spikes/automerge/artifacts/hermes-direct.log
+          # A direct-runtime incompatibility is evidence, not a required-CI failure.
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-hermes-direct-evidence
+          path: |
+            spikes/automerge/artifacts/hermes-direct-result.json
+            spikes/automerge/artifacts/hermes-direct.log
+            spikes/automerge/artifacts/hermes-version.log
+            spikes/automerge/artifacts/hermes-bundle.log
+            spikes/automerge/artifacts/hermes-bundle-exit.txt
+          if-no-files-found: warn
+
+  polygen-wasm-probe:
+    name: Polygen Automerge WASM bounded probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install Automerge and wasm2c prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wabt
+          cd spikes/automerge
+          npm install --no-audit --no-fund
+          cd polygen-probe
+          npm install --no-audit --no-fund
+      - name: Copy the exact Automerge 3.5 WASM into the Polygen fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p spikes/automerge/polygen-probe/src spikes/automerge/artifacts
+          wasm="$(find spikes/automerge/node_modules/@automerge -type f -name '*.wasm' | head -n 1)"
+          test -n "$wasm"
+          cp "$wasm" spikes/automerge/polygen-probe/src/automerge.wasm
+          bytes="$(wc -c < "$wasm" | tr -d ' ')"
+          printf '{"automergeJs":"3.5.0","polygen":"0.2.1","wasmPath":"%s","wasmBytes":%s}\n' "$wasm" "$bytes"             > spikes/automerge/artifacts/polygen-input.json
+      - name: Attempt wasm2c and Polygen generation
+        shell: bash
+        working-directory: spikes/automerge/polygen-probe
+        run: |
+          set +e
+          mkdir -p ../artifacts
+          wasm2c src/automerge.wasm -o /tmp/automerge-polygen.c > ../artifacts/polygen-wasm2c.log 2>&1
+          wasm2c_code=$?
+          node node_modules/@callstack/polygen-cli/bin/polygen.js --project "$PWD" generate > ../artifacts/polygen-generate.log 2>&1
+          polygen_code=$?
+          if grep -q "Error generating modules" ../artifacts/polygen-generate.log; then
+            generator_error=true
+          else
+            generator_error=false
+          fi
+          generated_files="$(find generated -type f 2>/dev/null | wc -l | tr -d ' ')"
+          generated_bytes="$(du -sb generated 2>/dev/null | cut -f1)"
+          generated_bytes="${generated_bytes:-0}"
+          if [ "$wasm2c_code" -eq 0 ] && [ "$polygen_code" -eq 0 ] && [ "$generator_error" = false ] && [ "$generated_files" -gt 0 ]; then
+            result=PASS
+          else
+            result=FAIL
+          fi
+          printf '{"result":"%s","automergeJs":"3.5.0","polygen":"0.2.1","wasm2cExitCode":%s,"polygenExitCode":%s,"polygenReportedGeneratorError":%s,"generatedFiles":%s,"generatedBytes":%s}\n'             "$result" "$wasm2c_code" "$polygen_code" "$generator_error" "$generated_files" "$generated_bytes"             > ../artifacts/polygen-result.json
+          cat ../artifacts/polygen-result.json
+          tail -n 120 ../artifacts/polygen-wasm2c.log
+          tail -n 120 ../artifacts/polygen-generate.log
+          # This is an evidence-producing feasibility probe; an incompatibility is a valid result.
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-polygen-evidence
+          path: |
+            spikes/automerge/artifacts/polygen-input.json
+            spikes/automerge/artifacts/polygen-result.json
+            spikes/automerge/artifacts/polygen-wasm2c.log
+            spikes/automerge/artifacts/polygen-generate.log
+          if-no-files-found: warn
+
+  java-native-contract:
+    name: Java native core contract and JS interoperability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated JS dependencies
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
+      - name: Compile pinned Automerge Java harness
+        working-directory: spikes/automerge/native/java
+        run: |
+          mvn -q -DskipTests package
+          mvn -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
+      - name: Run all 18 native binding scenarios
+        shell: bash
+        run: |
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          mkdir -p spikes/automerge/artifacts
+          java -cp "$CP" spike.AutomergeNativeScenarios scenarios spikes/automerge/artifacts/java-scenario-results.json
+      - name: Prove JS to Java to JS binary interoperability
+        shell: bash
+        run: |
+          set -euo pipefail
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          cd spikes/automerge
+          mkdir -p artifacts
+          node web-interop.mjs create artifacts/web-seed.am
+          cd ../..
+          java -cp "$CP" spike.AutomergeNativeScenarios mutate spikes/automerge/artifacts/web-seed.am spikes/automerge/artifacts/java-mutated.am java-0.0.9
+          cd spikes/automerge
+          node web-interop.mjs verify-native artifacts/java-mutated.am java-0.0.9
+      - name: Exercise cross-language sync protocol with live peer states
+        shell: bash
+        run: |
+          set -euo pipefail
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          cd spikes/automerge
+          node web-interop.mjs fork-edit artifacts/java-mutated.am artifacts/web-concurrent.am
+          cd ../..
+          java -cp "$CP" spike.AutomergeNativeScenarios fork-edit spikes/automerge/artifacts/java-mutated.am spikes/automerge/artifacts/java-concurrent.am
+          java -cp "$CP" spike.AutomergeNativeScenarios live-sync-web             spikes/automerge/artifacts/java-concurrent.am             spikes/automerge/artifacts/web-concurrent.am             spikes/automerge/artifacts/java-converged.am             spikes/automerge/artifacts/web-converged-java.am             spikes/automerge/web-sync-peer.mjs
+          cd spikes/automerge
+          node web-interop.mjs verify-converged artifacts/web-converged-java.am artifacts/java-converged.am
+      - name: Probe Automerge 3.5 author-metadata forward compatibility
+        shell: bash
+        run: |
+          set +e
+          CP="spikes/automerge/native/java/target/classes:$(cat spikes/automerge/native/java/target/classpath.txt)"
+          cd spikes/automerge
+          node web-interop.mjs create-authored artifacts/web-authored.am
+          cd ../..
+          java -cp "$CP" spike.AutomergeNativeScenarios verify-authored spikes/automerge/artifacts/web-authored.am \
+            > spikes/automerge/artifacts/java-author-compat.log 2>&1
+          code=$?
+          printf '{"javaBinding":"0.0.9","webBinding":"3.5.0","loadAuthoredDocumentExitCode":%s}\n' "$code" \
+            > spikes/automerge/artifacts/java-author-compat.json
+          cat spikes/automerge/artifacts/java-author-compat.log
+          cat spikes/automerge/artifacts/java-author-compat.json
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-java-native-evidence
+          path: spikes/automerge/artifacts
+          if-no-files-found: warn
+
+  android-native-runtime:
+    name: Android emulator native contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '8.13'
+      - name: Run all 18 scenarios inside Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: cd spikes/automerge/native/android && gradle --no-daemon connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-android-native-evidence
+          path: |
+            spikes/automerge/native/android/app/build/outputs/androidTest-results
+            spikes/automerge/native/android/app/build/reports/androidTests
+          if-no-files-found: warn
+
+  swift-native-interop:
+    name: Swift native interop and iOS compile probe
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install isolated JS dependencies
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
+      - name: Resolve and build pinned Automerge Swift
+        working-directory: spikes/automerge/native/swift
+        run: |
+          mkdir -p ../../artifacts
+          swift --version
+          swift package resolve
+          swift build -c release
+          .build/release/AutomergeSwiftInterop backend-smoke | tee ../../artifacts/swift-backend-smoke.log
+      - name: Prove JS to Swift to JS binary interoperability
+        shell: bash
+        run: |
+          set -euo pipefail
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          mkdir -p artifacts
+          node web-interop.mjs create artifacts/web-seed-swift.am
+          "$SWIFT_BIN" mutate artifacts/web-seed-swift.am artifacts/swift-mutated.am swift-0.7.2
+          node web-interop.mjs verify-native artifacts/swift-mutated.am swift-0.7.2
+      - name: Exercise JS to Swift sync protocol with live peer states
+        shell: bash
+        run: |
+          set -euo pipefail
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          node web-interop.mjs fork-edit artifacts/swift-mutated.am artifacts/web-concurrent-swift.am
+          "$SWIFT_BIN" fork-edit artifacts/swift-mutated.am artifacts/swift-concurrent.am
+          "$SWIFT_BIN" live-sync-web             artifacts/swift-concurrent.am             artifacts/web-concurrent-swift.am             artifacts/swift-converged.am             artifacts/web-converged-swift.am             "$PWD/web-sync-peer.mjs"
+          node web-interop.mjs verify-converged artifacts/web-converged-swift.am artifacts/swift-converged.am
+      - name: Probe Automerge 3.5 author-metadata forward compatibility in Swift 0.7.2
+        shell: bash
+        run: |
+          set +e
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          node web-interop.mjs create-authored artifacts/web-authored-swift.am
+          "$SWIFT_BIN" verify-authored artifacts/web-authored-swift.am > artifacts/swift-author-compat.log 2>&1
+          code=$?
+          printf '{"swiftBinding":"0.7.2","webBinding":"3.5.0","loadAuthoredDocumentExitCode":%s}\n' "$code" \
+            > artifacts/swift-author-compat.json
+          cat artifacts/swift-author-compat.log
+          cat artifacts/swift-author-compat.json
+          exit 0
+      - name: Compile backend probe for iOS Simulator
+        shell: bash
+        working-directory: spikes/automerge/native/swift
+        run: |
+          set +e
+          mkdir -p ../../artifacts
+          xcodebuild -list > ../../artifacts/ios-xcodebuild-list.log 2>&1
+          xcodebuild \
+            -scheme AutomergeBridgeProbe \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            build > ../../artifacts/ios-simulator-build.log 2>&1
+          code=$?
+          printf '{"target":"iOS Simulator","scheme":"AutomergeBridgeProbe","exitCode":%s}\n' "$code" \
+            > ../../artifacts/ios-simulator-build.json
+          tail -n 120 ../../artifacts/ios-simulator-build.log
+          cat ../../artifacts/ios-simulator-build.json
+          exit 0
+      - name: Attempt backend smoke test in an iOS Simulator runtime
+        shell: bash
+        working-directory: spikes/automerge/native/swift
+        run: |
+          set +e
+          mkdir -p ../../artifacts
+          udid="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next((d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if d.get("isAvailable") and d.get("name","").startswith("iPhone")), ""))')"
+          if [ -z "$udid" ]; then
+            printf '{"target":"iOS Simulator","result":"PARTIAL","reason":"no available iPhone simulator"}\n'               > ../../artifacts/ios-simulator-runtime.json
+            cat ../../artifacts/ios-simulator-runtime.json
+            exit 0
+          fi
+          xcrun simctl boot "$udid" > ../../artifacts/ios-simulator-boot.log 2>&1 || true
+          xcrun simctl bootstatus "$udid" -b >> ../../artifacts/ios-simulator-boot.log 2>&1
+          xcodebuild             -scheme AutomergeBridgeProbe             -destination "platform=iOS Simulator,id=$udid"             -configuration Debug             CODE_SIGNING_ALLOWED=NO             test > ../../artifacts/ios-simulator-runtime.log 2>&1
+          code=$?
+          if [ "$code" -eq 0 ]; then result=PASS; else result=PARTIAL; fi
+          printf '{"target":"iOS Simulator","scheme":"AutomergeBridgeProbe","result":"%s","exitCode":%s,"udid":"%s"}\n'             "$result" "$code" "$udid" > ../../artifacts/ios-simulator-runtime.json
+          tail -n 160 ../../artifacts/ios-simulator-runtime.log
+          cat ../../artifacts/ios-simulator-runtime.json
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-swift-native-evidence
+          path: spikes/automerge/artifacts
+          if-no-files-found: warn
