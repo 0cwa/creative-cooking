@@ -4,15 +4,15 @@
 
 ## Executive result
 
-The Loro web engine satisfies Creative Cooking's structural merge contract: all 18 common scenarios pass on \`loro-crdt@1.16.4\`, including text, movable-list reorder+edit, incremental/out-of-order/duplicate updates, restart, three replicas, and same-field disagreement reconstruction.
+The Loro web engine satisfies Creative Cooking's structural merge contract: all 18 common scenarios pass on `loro-crdt@1.16.4`, including text, movable-list reorder+edit, incremental/out-of-order/duplicate updates, restart, three replicas, and same-field disagreement reconstruction.
 
-The critical result is nuanced. Loro Maps expose one LWW winner, but retained Loro history is sufficient to reconstruct both concurrent scalar alternatives, authorship/change IDs, and causality using public \`getAllChanges\`, \`getOpsInChange\`, and \`cmpFrontiers\` APIs. No private API, custom vector clock, or second replicated CRDT was required. This is still not a first-class conflict read: \`getOpsInChange\` exposes low-level \`any[]\` operation payloads, and the prototype scans retained history. A production implementation should maintain a derived local review/history index and must preserve unresolved review evidence across compaction.
+The critical result is nuanced. Loro Maps expose one LWW winner, but retained Loro history is sufficient to reconstruct both concurrent scalar alternatives, authorship/change IDs, and causality using public `getAllChanges`, `getOpsInChange`, and `cmpFrontiers` APIs. No private API, custom vector clock, or second replicated CRDT was required. This is still not a first-class conflict read: `getOpsInChange` exposes low-level `any[]` operation payloads, and the prototype scans retained history. A production implementation should maintain a derived local review/history index and must preserve unresolved review evidence across compaction.
 
-Native feasibility is weaker. The latest npm publication is \`loro-react-native@1.10.3\`, while the RN repository head reports 1.13.2 and current Loro/FFI are newer still. The published package is the only drop-in artifact with prebuilt native archives; the source-head git install omits those archives. Expo 57/RN 0.86.3 build integration is demonstrated further than runtime interoperability, so compile support and actual runtime support are reported separately.
+Native feasibility is weaker. The latest npm publication is `loro-react-native@1.10.3`, while the RN repository head reports 1.13.2 and current Loro/FFI are newer still. The published package is the only drop-in artifact with prebuilt native archives; the source-head git install omits those archives. Expo 57/RN 0.86.3 build integration is demonstrated further than runtime interoperability, so compile support and actual runtime support are reported separately.
 
 ## Scope and fairness
 
-The branch was created directly from Creative Cooking \`main\` at \`a1c8993c4f45e9bb8de2b18d4f644088df99845a\`. It does not modify production AppState, IndexedDB, AsyncStorage, backup format, provider credentials, or production UI. PR #37 was not used as an implementation source or base. Its benchmark fixture was inspected only to confirm the requested common logical shape.
+The branch was created directly from Creative Cooking `main` at `a1c8993c4f45e9bb8de2b18d4f644088df99845a`. It does not modify production AppState, IndexedDB, AsyncStorage, backup format, provider credentials, or production UI. PR #37 was not used as an implementation source or base. Its benchmark fixture was inspected only to confirm the requested common logical shape.
 
 The Loro experiment uses stable logical entity IDs, scalar Map fields, explicit ordered ID collections, and LoroText for method prose. Mergeable containers are tested separately so the comparison does not depend on a Loro-only schema.
 
@@ -22,26 +22,26 @@ Umbrella issue: #36. Draft PR: #38.
 
 | Component | Exact input | Notes |
 |---|---|---|
-| Loro JS/WASM | \`loro-crdt@1.16.4\`; initially inspected at \`loro-dev/loro@c00c9fa501f8d32f68d6255eacb7035a67fb6ab6\` | Executable web tests use the published 1.16.4 package. |
-| Current Loro source recheck | \`loro-dev/loro@4f60d921d820de3522624a436de77f994a6622b8\` | Rechecked 2026-10-11; package remains 1.16.4. |
-| RN source head | \`loro-dev/loro-react-native@8fad8d61c11c23e7c57999533d637d316465ffc1\`, metadata 1.13.2 | Upstream dev matrix is RN 0.79.2 / React 19.0.0. |
-| RN npm publication | \`loro-react-native@1.10.3\`, release commit \`509d436255fe21e89ba36bd1ee5fb5873a7e7ae0\` | Latest npm version observed 2026-10-11; release uses Loro/Loro FFI 1.10.3. |
-| RN source-head FFI | \`loro-ffi = 1.13.7\` | Read from upstream RN source. |
-| Current Loro FFI | \`loro-dev/loro-ffi@0d215246d52540147edea7d38d3e50ceabbe017e\`, release 1.16.2 | Current FFI is newer than RN source and npm binding. |
+| Loro JS/WASM | `loro-crdt@1.16.4`; initially inspected at `loro-dev/loro@c00c9fa501f8d32f68d6255eacb7035a67fb6ab6` | Executable web tests use the published 1.16.4 package. |
+| Current Loro source recheck | `loro-dev/loro@4f60d921d820de3522624a436de77f994a6622b8` | Rechecked 2026-10-11; package remains 1.16.4. |
+| RN source head | `loro-dev/loro-react-native@8fad8d61c11c23e7c57999533d637d316465ffc1`, metadata 1.13.2 | Upstream dev matrix is RN 0.79.2 / React 19.0.0. |
+| RN npm publication | `loro-react-native@1.10.3`, release commit `509d436255fe21e89ba36bd1ee5fb5873a7e7ae0` | Latest npm version observed 2026-10-11; release uses Loro/Loro FFI 1.10.3. |
+| RN source-head FFI | `loro-ffi = 1.13.7` | Read from upstream RN source. |
+| Current Loro FFI | `loro-dev/loro-ffi@0d215246d52540147edea7d38d3e50ceabbe017e`, release 1.16.2 | Current FFI is newer than RN source and npm binding. |
 | Creative Cooking | Expo ~57.0.17, RN 0.86.3, React 19.2.3, Node 22.13+ | Existing constraints retained. |
 
 Loro and loro-react-native are MIT licensed.
 
 ## Common test contract
 
-Authoritative machine-readable outputs are uploaded by the Loro workflow as \`artifacts/loro/results.json\` and \`benchmark.json\`. Web result: **18 PASS / 0 PARTIAL / 0 FAIL**.
+Authoritative machine-readable outputs are uploaded by the Loro workflow as `artifacts/loro/results.json` and `benchmark.json`. Web result: **18 PASS / 0 PARTIAL / 0 FAIL**.
 
 | # | Scenario | Result | Observation |
 |---:|---|---|---|
 | 1 | Different recipe fields | PASS | Concurrent title + portions both survive; no disagreement. |
 | 2 | Same nested entity, different properties | PASS | Ingredient amount and name/qualifier both survive. |
 | 3 | Concurrent additions | PASS | Both additions survive; deterministic merged order. |
-| 4 | Concurrent text editing | PASS | Exact result: \`Gently Heat oil, then add tomatoes. Simmer for 10 minutes.\` |
+| 4 | Concurrent text editing | PASS | Exact result: `Gently Heat oil, then add tomatoes. Simmer for 10 minutes.` |
 | 5 | Chat appends | PASS | Neither append disappears. |
 | 6 | Set-like additions | PASS | Independent values both survive. |
 | 7 | Same scalar disagreement | PASS | Visible winner 6; history reconstructs 4/iphone and 6/macbook as concurrent alternatives. |
@@ -61,18 +61,18 @@ Authoritative machine-readable outputs are uploaded by the Loro workflow as \`ar
 
 For base portions=2, iphone writes 4 and macbook writes 6. After convergence the normal Map exposes only 6. The spike reconstructs:
 
-- value 4, actor iphone, change \`0@101\`
-- value 6, actor macbook, change \`0@202\`
+- value 4, actor iphone, change `0@101`
+- value 6, actor macbook, change `0@202`
 - the two writes are concurrent
 
 The executable detector uses only public Loro entry points:
-- \`getAllChanges()\`
-- \`getOpsInChange(...)\`
-- \`cmpFrontiers(...)\`
+- `getAllChanges()`
+- `getOpsInChange(...)`
+- `cmpFrontiers(...)`
 
-The result is cross-checked against \`exportJsonUpdates(...)\`. A full snapshot/restart preserves both alternatives. A later ipad resolution causally after both heads makes the earlier writes non-maximal, so the disagreement disappears.
+The result is cross-checked against `exportJsonUpdates(...)`. A full snapshot/restart preserves both alternatives. A later ipad resolution causally after both heads makes the earlier writes non-maximal, so the disagreement disappears.
 
-This answers the central architectural question: **yes, genuine same-field concurrent disagreement can be reconstructed from public retained-history APIs without implementing a second conflict CRDT.** The disadvantage is application complexity: operation payloads are low-level, \`getOpsInChange\` is typed \`any[]\`, and a production Sync Activity/review surface should index changes incrementally rather than scan full retained history for every query.
+This answers the central architectural question: **yes, genuine same-field concurrent disagreement can be reconstructed from public retained-history APIs without implementing a second conflict CRDT.** The disadvantage is application complexity: operation payloads are low-level, `getOpsInChange` is typed `any[]`, and a production Sync Activity/review surface should index changes incrementally rather than scan full retained history for every query.
 
 ## History / ledger quality
 
@@ -95,7 +95,7 @@ Therefore Creative Cooking must not compact past unresolved review evidence unle
 
 ## Mergeable containers
 
-Current web/source-head APIs provide \`ensureMergeableMap\`, \`ensureMergeableText\`, \`ensureMergeableMovableList\`, etc. The web probe passes: deterministic map-key child identity prevents concurrent lazy creation from creating separate children.
+Current web/source-head APIs provide `ensureMergeableMap`, `ensureMergeableText`, `ensureMergeableMovableList`, etc. The web probe passes: deterministic map-key child identity prevents concurrent lazy creation from creating separate children.
 
 These APIs do **not** change normal scalar Map LWW semantics, so they do not solve the portions/title disagreement problem. The common comparison schema does not depend on them. Current RN source head includes them; npm RN 1.10.3 does not expose the same current surface.
 
@@ -105,7 +105,7 @@ LoroText correctly merged the non-overlapping concurrent method edits in test 4.
 
 ## Delete versus edit strategy
 
-Physical deletion is not sufficient product UX. The raw test can remove visible registry membership while an offline-edited entity state still exists. The proposed lifecycle model stores a tombstone such as \`deleted=true\` plus eventual deletion metadata, retains the edited entity, and presents:
+Physical deletion is not sufficient product UX. The raw test can remove visible registry membership while an offline-edited entity state still exists. The proposed lifecycle model stores a tombstone such as `deleted=true` plus eventual deletion metadata, retains the edited entity, and presents:
 
 - Keep edited recipe
 - Keep deleted
@@ -118,9 +118,9 @@ Two offline devices creating equivalent carrots with different IDs correctly pro
 
 ## Web / static PWA
 
-**PASS.** A real Expo static export was served under the GitHub Pages-style \`/creative-cooking/\` subpath and exercised in Chromium.
+**PASS.** A real Expo static export was served under the GitHub Pages-style `/creative-cooking/` subpath and exercised in Chromium.
 
-One integration requirement is important: Expo static export did not automatically copy Loro's browser WASM asset. The spike explicitly copies \`loro_wasm_bg.wasm\` beside emitted web JS. Without that copy, the page fails at runtime with a WASM 404.
+One integration requirement is important: Expo static export did not automatically copy Loro's browser WASM asset. The spike explicitly copies `loro_wasm_bg.wasm` beside emitted web JS. Without that copy, the page fails at runtime with a WASM 404.
 
 Measured raw static footprint:
 - control export: 1,206,209 B
@@ -150,7 +150,7 @@ There are two materially different official artifacts.
 
 ### Android result
 
-**PARTIAL.** The published package autolinks and an ARM64 APK was built under Expo 57 / RN 0.86.3. Measured prior build: 87,482,205 B with \`lib/arm64-v8a/libloro-react-native.so\` at 5,944,816 B.
+**PARTIAL.** The published package autolinks and an ARM64 APK was built under Expo 57 / RN 0.86.3. Measured prior build: 87,482,205 B with `lib/arm64-v8a/libloro-react-native.so` at 5,944,816 B.
 
 An x86_64 emulator APK also compiles (80,374,176 B), but it contains no Loro native library, matching the npm package's lack of x86_64 Rust archive. Thus an ordinary GitHub x86_64 Android emulator cannot prove Loro runtime even though Gradle compilation succeeds.
 
@@ -194,7 +194,7 @@ Positive:
 - Core Loro is actively maintained.
 
 Risks:
-- \`getOpsInChange()\` returns low-level \`any[]\`, so the review index requires pinned executable compatibility tests.
+- `getOpsInChange()` returns low-level `any[]`, so the review index requires pinned executable compatibility tests.
 - Binary stability does not mean every high-level JS shape is frozen; changelogs still contain API/value-shape changes.
 - RN publication cadence materially lags core/FFI and the RN repository head.
 - Current mergeable-container functionality is not aligned across web and published RN.
@@ -215,7 +215,7 @@ Web requires explicit WASM asset handling in Expo static export. Native benefits
    **Functionally yes from retained history, but not as a simple first-class conflict read.** Both values/authors/concurrency are reconstructed and survive full restart. Production needs a derived index and an explicit retention policy.
 
 4. **Does doing so depend on public/stable-enough APIs?**  
-   **Public APIs: yes. High-level conflict abstraction: no.** \`getAllChanges\`, \`getOpsInChange\`, and \`cmpFrontiers\` are public. The maintenance risk is the low-level \`any[]\` operation payload shape.
+   **Public APIs: yes. High-level conflict abstraction: no.** `getAllChanges`, `getOpsInChange`, and `cmpFrontiers` are public. The maintenance risk is the low-level `any[]` operation payload shape.
 
 5. **What does Loro's normal LWW Map behavior cost Creative Cooking?**  
    Losing concurrent scalar alternatives disappear from ordinary reads, so Creative Cooking must own a history-aware review layer and treat compaction policy as correctness-critical.
