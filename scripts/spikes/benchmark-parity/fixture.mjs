@@ -9,7 +9,13 @@ export const FIXTURE_SPEC = Object.freeze({
 const pad = (n, w) => String(n).padStart(w, '0');
 const fixed = (text, size) => text.padEnd(size, ' ').slice(0, size);
 const rand = (() => { let x = SEED >>> 0; return () => ((x = (1664525 * x + 1013904223) >>> 0) % 10000); })();
-export const checksum = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+  return value;
+}
+export const checksum = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 
 export function fixture() {
   const f = { pantryOrder: [], pantryById: {}, recipeOrder: [], recipesById: {},
