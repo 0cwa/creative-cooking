@@ -1,0 +1,61 @@
+name: p2panda substrate spike (experimental)
+
+on:
+  pull_request:
+    paths:
+      - "experiments/p2panda/**"
+      - "docs/spikes/local-first-p2panda.md"
+      - ".github/workflows/p2panda-spike.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-contract:
+    name: Opaque contract and encrypted browser mailbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.13"
+          package-manager-cache: false
+      - run: node --test experiments/p2panda/*.test.mjs
+
+  rust-native:
+    name: Pinned p2panda native/space tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/p2panda/rust -> target
+      - run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets
+
+  mobile-cross-check:
+    name: Rust target check (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+          - os: macos-15
+            target: aarch64-apple-ios
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    # Target-check failures should surface as evidence without breaking app CI.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: ${{ matrix.target }}
+      - run: cargo check --manifest-path experiments/p2panda/rust/Cargo.toml --lib --target ${{ matrix.target }}
