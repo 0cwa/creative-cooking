@@ -91,7 +91,8 @@ function one(engine, trial, warmup = false) {
   const before = memory();
   const seed = report('populate', timing(() => b.populate(b.init('seed'), expected)));
   assert.equal(prove(b.project(seed), expected, 'initial logical fixture ' + engine), fixtureChecksum);
-  const snapshot = report('saveSnapshot', timing(() => b.save(seed)), { snapshotBytes: b.save(seed).byteLength });
+  const snapshotMeasurement = timing(() => b.save(seed));
+  const snapshot = report('saveSnapshot', snapshotMeasurement, { snapshotBytes: snapshotMeasurement.value.byteLength });
   const loaded = report('loadSnapshot', timing(() => b.load(snapshot, 'phone')));
   const projected = report('prepareLogicalView', timing(() => b.project(loaded)));
   prove(projected, expected, 'cold logical projection');
@@ -171,6 +172,7 @@ function one(engine, trial, warmup = false) {
   prove(b.project(dup.a), dupExpected, 'duplicate A'); prove(b.project(dup.b), dupExpected, 'duplicate B');
 
   const persisted = b.save(batch);
+  b.dispose(batch); // Prove a cold object can be reopened from bytes, not simply reused.
   let restarted = report('reloadAfterDispose', timing(() => b.load(persisted, 'phone')));
   prove(b.project(restarted), expectedAfter(expected, TRACE.batch), 'reload state');
   restarted = b.edit(restarted, TRACE.reload, 'phone');
