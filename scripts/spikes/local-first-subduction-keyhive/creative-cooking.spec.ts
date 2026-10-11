@@ -132,6 +132,23 @@ async function pull(page: any) {
     };
   });
 }
+// Subduction can finish an exchange before the relay propagates/apply-writes
+// the commit to a second subscriber. Upstream relay_topology_sync.rs also
+// polls until the receiving peer has the expected commits.
+async function eventuallyPull(page: any, expectedCount: number) {
+  const deadline = Date.now() + 18000;
+  let last: Awaited<ReturnType<typeof pull>> | undefined;
+  while (Date.now() < deadline) {
+    last = await pull(page);
+    if (last.success && last.count === expectedCount) return last;
+    if (last.count > expectedCount) {
+      throw new Error('Unexpected surplus commits: ' + JSON.stringify({expectedCount, last}));
+    }
+    await delay(150);
+  }
+  throw new Error('Timed out waiting for relay catch-up: ' +
+    JSON.stringify({expectedCount, last, serverLog: serverLog.slice(-2500)}));
+}
 async function encryptedBlobs(page: any): Promise<number[][]> {
   return await page.evaluate(async () => {
     const t = (window as any).ccTest;
@@ -199,7 +216,7 @@ test('encrypted real Automerge updates: two browsers, durable offline catch-up, 
     const firstPush = await push(a.page, 0);
     console.log("Initial push stats: " + JSON.stringify(firstPush));
     expect(firstPush.success).toBe(true);
-    const first = await pull(b.page);
+    const first = await eventuallyPull(b.page, 1);
     console.log("Initial receiver stats: " + JSON.stringify(first));
     expect(first.success).toBe(true);
     expect(first.count).toBe(1);
@@ -216,7 +233,7 @@ test('encrypted real Automerge updates: two browsers, durable offline catch-up, 
     expect(existsSync(join(dataDir, 'sedimentree.redb'))).toBe(true);
     await startServer();
     await reconnect(b.page);
-    const catchup = await pull(b.page);
+    const catchup = await eventuallyPull(b.page, 2);
     expect(catchup.success).toBe(true);
     expect(catchup.count).toBe(2);
     verifyReconstructed(await encryptedBlobs(b.page), ['pantry', 'recipe']);
@@ -224,7 +241,7 @@ test('encrypted real Automerge updates: two browsers, durable offline catch-up, 
 
     await reconnect(a.page);
     expect((await push(a.page, 2)).success).toBe(true);
-    const delta = await pull(b.page);
+    const delta = await eventuallyPull(b.page, 3);
     expect(delta.success).toBe(true);
     expect(delta.count).toBe(3);
     const idle = await pull(b.page);
@@ -235,7 +252,7 @@ test('encrypted real Automerge updates: two browsers, durable offline catch-up, 
 
     // Duplicate identical commit (not a new JSON snapshot).
     expect((await push(a.page, 2)).success).toBe(true);
-    const duplicate = await pull(b.page);
+    const duplicate = await eventuallyPull(b.page, 3);
     expect(duplicate.success).toBe(true);
     expect(duplicate.count).toBe(3);
     evidence.duplicate = duplicate;
@@ -243,13 +260,13 @@ test('encrypted real Automerge updates: two browsers, durable offline catch-up, 
     verifyReconstructed(await encryptedBlobs(b.page), ['pantry', 'recipe', 'chat']);
     await b.page.evaluate(async () => (window as any).ccTest.syncer.disconnectAll());
     await reconnect(b.page);
-    const reconnectRound = await pull(b.page);
+    const reconnectRound = await eventuallyPull(b.page, 3);
     expect(reconnectRound.success).toBe(true);
     expect(reconnectRound.count).toBe(3);
     evidence.cleanReconnect = reconnectRound;
 
     c = await newClient(browser, 'lp');
-    const longpoll = await pull(c.page);
+    const longpoll = await eventuallyPull(c.page, 3);
     expect(longpoll.success).toBe(true);
     expect(longpoll.count).toBe(3);
     verifyReconstructed(await encryptedBlobs(c.page), ['pantry', 'recipe', 'chat']);
