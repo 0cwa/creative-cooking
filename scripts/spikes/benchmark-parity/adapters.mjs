@@ -201,6 +201,14 @@ export function backend(engine) {
     }
     return syncPair(docA, docB, null, duplicate);
   }
+  function bootstrap(seeded, fresh) {
+    if (isA) return syncPair(seeded, fresh);
+    const snapshot = save(seeded);
+    fresh.import(snapshot);
+    return { a: seeded, b: fresh, session: null,
+      wire: { kind: 'Loro full snapshot bootstrap', aToB: snapshot.byteLength, bToA: 0,
+        rounds: 1, messages: 1 } };
+  }
   function docMerge(docA, docB) {
     if (isA) return A.merge(docA, docB);
     const copy = clone(docA, 'tablet');
@@ -211,5 +219,5 @@ export function backend(engine) {
     if (isA) A.free(doc);
     else if (typeof doc?.free === 'function') doc.free();
   };
-  return { engine, init, populate, clone, save, load, project, edit, read, syncPair, exchange, docMerge, dispose };
+  return { engine, init, populate, clone, save, load, project, edit, read, syncPair, exchange, bootstrap, docMerge, dispose };
 }
