@@ -74,6 +74,10 @@ jobs:
         run: |
           node scripts/spikes/local-first-subduction-keyhive/make-fixtures.mjs "$RUNNER_TEMP/cc-subduction-fixtures.json"
           cp scripts/spikes/local-first-subduction-keyhive/creative-cooking.spec.ts subduction-upstream/subduction_wasm/e2e/creative-cooking.spec.ts
+          # Playwright executes inside the pinned upstream checkout; resolve the fixture's
+          # exact test-only Automerge dependency without modifying upstream manifests.
+          mkdir -p subduction-upstream/subduction_wasm/node_modules/@automerge
+          ln -s "$GITHUB_WORKSPACE/scripts/spikes/local-first-subduction-keyhive/node_modules/@automerge/automerge" subduction-upstream/subduction_wasm/node_modules/@automerge/automerge
           echo "CC_SUBDUCTION_FIXTURES=$RUNNER_TEMP/cc-subduction-fixtures.json" >> "$GITHUB_ENV"
           echo "CC_SUBDUCTION_CLI=$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli" >> "$GITHUB_ENV"
 
