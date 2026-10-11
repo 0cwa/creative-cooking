@@ -210,7 +210,7 @@ export function backend(engine) {
         rounds: 1, messages: 1 } };
   }
   function docMerge(docA, docB) {
-    if (isA) return A.merge(docA, docB);
+    if (isA) return A.merge(A.clone(docA), A.clone(docB));
     const copy = clone(docA, 'tablet');
     copy.import(docB.export({ mode: 'update', from: copy.oplogVersion() }));
     return copy;
