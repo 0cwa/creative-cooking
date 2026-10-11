@@ -25,7 +25,7 @@ try {
       contentLength: Number(response.headers()['content-length'] ?? 0) });
   });
   const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.getByTestId('parity-marker').getByText('PARITY PASS').waitFor({ timeout: 60000 });
+  await page.getByTestId('parity-marker').filter({ hasText: 'PARITY PASS' }).waitFor({ timeout: 60000 });
   const detail = await page.getByTestId('parity-detail').textContent();
   const first = await page.evaluate(() => (window).__parityResult);
   assert.ok(first, 'window engine readiness');
@@ -33,21 +33,24 @@ try {
   assert.ok(assets.every(x => x.status === 200), 'all same-origin assets must load');
   assert.deepStrictEqual(pageErrors, []);
   assert.deepStrictEqual(failedRequests, []);
+  const firstCdpBytes = cdpTransfers.reduce((n,x) => n + x.encodedDataLength, 0);
   if (engine !== 'control') {
     assert.equal(first.engine, engine);
     assert.equal(first.snapshotLoaded, true);
     assert.equal(first.duplicateSafe, true);
     assert.ok(first.bytes > 0 && first.incrementalBytes > 0);
     const count = assets.length;
+    const failures = failedRequests.length;
     // All local document operations must remain functional with network access disabled.
     await context.setOffline(true);
     const offline = await page.evaluate(() => (window).__parityOffline());
     assert.equal(offline.offline, true);
     assert.equal(offline.revision, first.revision + 1);
     assert.equal(assets.length, count, 'no network request while editing offline');
+    assert.equal(failedRequests.length, failures, 'no failed background request from an offline edit');
     await context.setOffline(false);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByTestId('parity-marker').getByText('PARITY PASS').waitFor({ timeout: 60000 });
+    await page.getByTestId('parity-marker').filter({ hasText: 'PARITY PASS' }).waitFor({ timeout: 60000 });
     const second = await page.evaluate(() => (window).__parityResult);
     assert.ok(second.prior >= offline.revision, 'local snapshot survived a refresh');
     assert.deepStrictEqual(pageErrors, []);
@@ -63,8 +66,9 @@ try {
   })));
   const output = { engine, pass: true, pageUrl: url, initialResponse: response?.status(),
     first, pageErrors, failedRequests, assets, perfResources: perf,
-    initialCdpEncodedBytes: cdpTransfers.reduce((n,x) => n + x.encodedDataLength, 0),
-    transportNote:'CDP initial+refresh aggregate of encoded transferred bytes including HTTP response headers; browser context has blocked service workers',
+    initialCdpEncodedBytes: firstCdpBytes,
+    totalWithRefreshCdpEncodedBytes: cdpTransfers.reduce((n,x) => n + x.encodedDataLength, 0),
+    transportNote:'Initial CDP bytes include initial navigation/response headers (HTTP compression from server). TotalWithRefresh adds reload traffic. Browser service workers blocked for this isolated offline-document test',
     compression: 'local static server sends Brotli when the browser accepts it',
     screenshot: 'chromium-' + engine + '.png' };
   fs.writeFileSync(dir + '/browser-' + engine + '.json', JSON.stringify(output, null, 2) + '\n');
