@@ -203,7 +203,7 @@ case "verify-counter-conflicts":
     guard values == Set([4, 6]) else {
         throw InteropError.unexpected("counter conflicts=\(values)")
     }
-    print(#"{"command":"verify-counter-conflicts","native":"swift-0.7.2","values":[4,6],"heads":#(doc.heads().count)}"#)
+    print(#"{"command":"verify-counter-conflicts","native":"swift-0.7.2","values":[4,6]}"#)
 
 case "sync-generate":
     guard args.count == 4 else { throw InteropError.usage }
