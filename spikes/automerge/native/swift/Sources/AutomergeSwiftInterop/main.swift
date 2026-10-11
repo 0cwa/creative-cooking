@@ -93,6 +93,7 @@ func peerCommand(_ command: String, stdin: FileHandle, stdout: FileHandle) throw
     return try readPeerLine(stdout)
 }
 
+#if os(macOS)
 func liveSyncWeb(nativeDocPath: String, webDocPath: String, nativeOut: String, webOut: String, peerScript: String) throws {
     let doc = try load(nativeDocPath)
     let sync = SyncState()
@@ -165,6 +166,11 @@ func liveSyncWeb(nativeDocPath: String, webDocPath: String, nativeOut: String, w
     }
     print(#"{"command":"live-sync-web","native":"swift-0.7.2","messages":#(messages),"rounds":#(rounds)}"#)
 }
+#else
+func liveSyncWeb(nativeDocPath: String, webDocPath: String, nativeOut: String, webOut: String, peerScript: String) throws {
+    throw InteropError.unexpected("live-sync-web is a macOS host interoperability command")
+}
+#endif
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else { throw InteropError.usage }
