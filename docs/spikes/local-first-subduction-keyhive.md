@@ -28,7 +28,7 @@ Note the **ARK bridge version 0.16.1 vs Subduction HEAD bridge 0.19.0** discrepa
 ## 2. Evidence labels and executable experiment
 
 - **UPSTREAM** = code and/or test inspected at exact upstream commit, **not** independently executed in this project.
-- **SPIKE CI pending** = executable test committed to this draft, but **not a PASS until the exact Actions run succeeds**.
+- **SPIKE CI PASS** = executed successfully in [experimental run #38183684382](https://github.com/0cwa/creative-cooking/actions/runs/38183684382) at commit `2a29f28f18655aee2ef694966613f75c6e4c00c6`; this proves only the specific exercised scenarios, not Keyhive/ARK security.
 - **NOT PROVEN** = missing device/crypto/security evidence or a precisely stated blocker.
 
 Experimental files are [fixture generator](../../scripts/spikes/local-first-subduction-keyhive/make-fixtures.mjs), [browser test](../../scripts/spikes/local-first-subduction-keyhive/creative-cooking.spec.ts) and the [opt-in experimental workflow](../../.github/workflows/subduction-keyhive-spike.yml), all isolated from production.
@@ -49,26 +49,26 @@ Reproduce using workflow instructions: checkout upstream exactly at the pinned S
 
 ## 3. Scenario matrix
 
-| Feature / scenario | Status at initial report | Proof or blocker |
+| Feature / scenario | Verified status (2026-10-12) | Proof or blocker |
 | --- | --- | --- |
-| PWA (1, 8) | UPSTREAM + SPIKE CI pending | Rust/WASM browser client, WSS endpoint; Expo static-export packaging not integrated |
+| PWA (1, 8) | **PASS browser WASM harness; Expo integration NOT PROVEN** | Browser clients connect via WS and HTTP; production Expo static export and SW integration not tested |
 | iOS (14) | NOT PROVEN | No iOS Rust binary, Expo custom module, CocoaPods, native runtime/Hermes test |
 | Android (14) | NOT PROVEN | No Android NDK cross-build, Expo module, Gradle integration, emulator/device run |
-| WebSocket (1, 5) | UPSTREAM + SPIKE CI pending | Two real Chromium contexts and Rust CLI in committed test |
-| HTTP long poll (6) | UPSTREAM + SPIKE CI pending | Current endpoints; third-client fallback in test |
-| Iroh (7) | UPSTREAM only | `subduction_cli/tests/iroh_e2e.rs` tests two direct-only QUIC servers; no independent compile/run in this branch |
-| Durable offline catch-up (2) | UPSTREAM + SPIKE CI pending | B disconnect, A upload/disconnect, server restart, B catch-up; not live-P2P-only |
-| Server persistence (3) | UPSTREAM + SPIKE CI pending | Current CLI redb + FS; persistent key and volume tested |
-| Duplicates, reconnect, incrementality (4) | UPSTREAM + SPIKE CI pending | Repeated edits/duplicate/idle sync, counts; *no byte-level wire measurement or deterministic mid-packet interruption yet* |
-| E2EE / relay plaintext blindness (9) | **Fixture-specific** SPIKE CI pending, ARK NOT PROVEN | Independent test AEAD envelope; no real ARK crypto key distribution test |
+| WebSocket (1, 5) | **SPIKE CI PASS** | Two separate Chromium clients exchanged encrypted Automerge changes with local Rust CLI |
+| HTTP long poll (6) | **SPIKE CI PASS** | Third browser received, decrypted and reconstructed all three changes |
+| Iroh (7) | **SPIKE CI PASS for native direct-only** | Pinned upstream local QUIC test between two Rust CLI servers passed; Iroh relay fallback/browser/mobile remain NOT PROVEN |
+| Durable offline catch-up (2) | **SPIKE CI PASS** | B offline, A uploads and disconnects, relay restarts, B catches up solely from server durable store |
+| Server persistence (3) | **SPIKE CI PASS** | Real `sedimentree.redb` and stable signing key retained across server process restart |
+| Duplicates, reconnect, incrementality (4) | **SPIKE CI PASS for commit-object convergence; partial packets NOT PROVEN** | 3 incremental changes; duplicate/reconnect kept count=3, idle received=0; no measured wire bytes or mid-packet interruption |
+| E2EE / relay plaintext blindness (9) | **Fixture-only SPIKE CI PASS; ARK NOT PROVEN** | AES-GCM encrypted actual changes, client decryption/replay, redb plaintext markers absent; server `--auth open` and no Keyhive E2EE tested |
 | Relay-only permission (10–11) | SOURCE-VERIFIED; end-to-end NOT PROVEN | Relay fetch vs Edit author put code; no permission lifecycle test |
 | Delegation / second device (12) | Documented API; NOT PROVEN | ARK contact cards/member grant, no cryptographically verified QR/invite/historical-key test |
 | Revocation (13) | Documented API; NOT PROVEN | ARK revoke API; no proven forward secrecy or immediately enforced remote device removal |
-| Self-hosting / cost (15) | Source-supported; NOT production-soaked | Rust process + reverse proxy + persistent storage + backups; no measured load costs |
+| Self-hosting / cost (15) | **Local CLI functional; operations NOT PROVEN** | CLI + redb disk tested; TLS proxy, backups/restores, quotas and hosting budget not validated |
 | API stability | **UNSTABLE** | Explicit Subduction early-preview + ARK alpha and Keyhive pre-alpha |
 | Audit/security maturity | **NOT READY** | Keyhive unaudited, nonce/key commitment unreviewed, concrete policy issues below |
 
-**Test results must be edited after an actual green/failing workflow run.** Do not turn a source feature or this test's existence into a reported PASS.
+**Executed and verified:** [experimental run #38183684382](https://github.com/0cwa/creative-cooking/actions/runs/38183684382) and [standard Creative Cooking CI #38183684385](https://github.com/0cwa/creative-cooking/actions/runs/38183684385) both passed at `2a29f28f`. Security/Expo-native gaps remain unproven.
 
 ## 4. Subduction vs plain Automerge synchronization
 
@@ -139,9 +139,9 @@ No benchmarked RAM/CPU/throughput/disk budget, tenancy density or vendor cost ha
 ## 8. Answers to the ten evaluation questions
 
 1. **Beyond plain Automerge sync messages?** Sedimentree incremental encrypted-history replication, pluggable transports, persistence/relay and authorization hooks; no application recipe merge rules.
-2. **Durable asynchronous catch-up?** Plausible with a persistent online CLI peer (not with live P2P alone); the new offline/restart test must pass before marked proven.
-3. **Can the server stay unable to read cooking data?** Yes for independently encrypted test blobs; ARK/Keyhive-driven protected identity/key routing is *not yet end-to-end proven*. Metadata remains visible.
-4. **Static PWA?** Yes, with an additional hosted reachable WSS/HTTPS service; current Expo PWA bundle compatibility remains untested.
+2. **Durable asynchronous catch-up?** **Controlled local spike PASS:** B recovered data while A was offline and after Subduction restarted with the same redb and signer. An always-reachable durable peer is needed; production durability/availability not proven.
+3. **Can the server stay unable to read cooking data?** **Fixture-only PASS:** encrypted Automerge changes replayed on clients and no known plaintext marker appeared in persisted server bytes. The server did not receive the AES fixture key. **Real Keyhive/ARK E2EE is NOT proven**; metadata remains visible.
+4. **Static PWA?** Yes, with an additional hosted WSS/HTTPS service. Real Chromium WASM clients passed WS/HTTP transports, but actual Expo PWA bundle/service worker integration remains untested.
 5. **New server?** Subduction CLI + stable signing identity + redb/blob persistent volume + optional Keyhive state, reverse proxy/TLS and backup/monitoring.
 6. **iOS/Android?** Custom Rust native library bridge/Expo dev build, FFI, platform key storage, lifecycle and native compilation/device tests. No verified existing ready-made bridge.
 7. **Keyhive/ARK usability?** APIs exist for protected docs/identity/grants/revocation, but alpha/pre-alpha, unaudited and moving packages; not viable to adopt as production dependency today.
