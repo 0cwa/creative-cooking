@@ -70,6 +70,36 @@ Reproduce using workflow instructions: checkout upstream exactly at the pinned S
 
 **Executed and verified:** [experimental run #38183684382](https://github.com/0cwa/creative-cooking/actions/runs/38183684382) and [standard Creative Cooking CI #38183684385](https://github.com/0cwa/creative-cooking/actions/runs/38183684385) both passed at `2a29f28f`. Security/Expo-native gaps remain unproven.
 
+
+### Executed evidence: local-only pinned GitHub Actions
+
+[Experimental run #38183684382](https://github.com/0cwa/creative-cooking/actions/runs/38183684382) **succeeded** at `2a29f28f18655aee2ef694966613f75c6e4c00c6`. [Ordinary CI #38183684385](https://github.com/0cwa/creative-cooking/actions/runs/38183684385) was **green** on the same commit, covering normal typecheck, PWA export, app E2E and Gitleaks. All infrastructure in the test was local; source/tool dependencies were downloaded as usual.
+
+| Executed suite | Recorded outcome |
+| --- | --- |
+| Pinned upstream `relay_topology_sync` | **14 passed**, 0 failed |
+| Pinned upstream `addbatch_storage_durability` | **4 passed**, 0 failed |
+| Pinned upstream `responder_cache_fast_path` | **5 passed**, 0 failed |
+| Native Linux `cargo check -p subduction_core -p subduction_iroh -p subduction_keyhive` | **PASS**; *not* iOS or Android compilation |
+| Pinned upstream direct-only Iroh/QUIC Rust CLI E2E | **1 passed**, 0 failed; *not* public relay fallback |
+| Creative Cooking two-browser + long-poll encrypted fixture E2E | **1 passed**, 0 failed |
+
+The browser test created three distinct **actual Automerge binary changes**, each independently AES-256-GCM-encrypted under a fixture key present in the app-side test, not the relay. Recorded source plaintext change sizes: **172, 385 and 293 bytes**; encrypted blob sizes: **200, 413 and 321 bytes** (each includes 12-byte nonce, 16-byte tag). This is *not* a total wire-byte accounting.
+
+| Checkpoint | Observed commit counts | Implication |
+| --- | --- | --- |
+| WebSocket A initial upload → B first sync | A sent **1**, B received **1**, B count **1** | New encrypted pantry change reached second browser |
+| B disconnect, A edit/upload and disconnect; server stop/restart; B reconnect | B received **1**, B count **2** | Offline catch-up from durable **redb**, with A absent and server restarted using same signing seed |
+| A third incremental chat edit | B count **3** | Third change eventually reached B; explicit pull reported 0 received because async subscriber push already delivered it |
+| Duplicate commit; idle sync | B count remains **3**; idle **0 received** | No duplicate accumulation; not a wire-bandwidth benchmark |
+| Clean WebSocket reconnect | B count remains **3** | Reconnect did not lose previous state |
+| New browser C via HTTP long poll | C received **3**, count **3** | Independent HTTP client reconstructed the complete Automerge fixture stream |
+| Relay persistent representation | `sedimentree.redb` present; tested cooking-data plaintext markers absent | Ciphertext fixture stored, plaintext sentinels not present; **not** a security audit or Keyhive proof |
+
+**Important integration discoveries:** a previously unknown sedimentree is **not automatically uploaded** by `addCommit` alone: a subscribing sync (`subscribe=true`) is required to establish history with the relay. Asynchronous propagation is not guaranteed to be visible immediately upon a successful sync response. The final deterministic test uses bounded polling, matching upstream's own relay-topology tests, instead of assuming synchronous delivery.
+
+**Limitations:** neither mid-packet interruption nor network byte totals were measured. `--auth open` was intentionally used, so none of these passed transport tests prove Keyhive relay-only permissions, ARK document protection, historical key distribution, delegated edit/admin roles, revocation/rekeying or multi-user isolation. The Linux compilation is not native Expo 57, iOS or Android evidence. The upstream experimental and unaudited warnings remain unchanged.
+
 ## 4. Subduction vs plain Automerge synchronization
 
 Automerge handles local CRDT documents, changes, application-level merges and ordinary sync-state messages. Subduction adds **Sedimentree** history partitions and metadata diff/minimization, subscriptions/relay forwarding, incremental change/fragment dissemination, signed transport handshakes, multiple transports (WebSocket, HTTP long-poll, Iroh/QUIC), persistent CLI server storage, and Keyhive document ACL hooks. This may permit a service to replicate encrypted binary histories without opening recipe plaintext.
