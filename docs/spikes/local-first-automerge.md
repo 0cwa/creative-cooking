@@ -29,8 +29,8 @@ The experiment uses stable entity IDs plus explicit order lists rather than trea
 | `@automerge/automerge` | 3.5.0; current `main` still reports 3.5.0 | spike uses 3.5.0; release commit `4d2a8f6bfecfb7f1e4fca126e6d2122ac526f903`; current upstream `main` `7118d9cfd3611f71af44538793816881c5305562` | Mature web/Node JS binding backed by WASM. 3.5.0 added opaque author metadata and history lookup APIs that are directly useful for device attribution. |
 | Automerge Rust core | 0.12.0 | `4d2a8f6bfecfb7f1e4fca126e6d2122ac526f903` for the compiled current-core probe; current `main` also reports 0.12.0 | Canonical core. Rust 1.90 minimum in the inspected source. |
 | `automerge-c` | 0.2.2 | same Automerge commit `4d2a8f6bfecfb7f1e4fca126e6d2122ac526f903` | Official C API over the current Rust core. It exposes document and sync-state/message APIs and compiled successfully for Android arm64 in this spike. |
-| Automerge Swift | stable 0.7.2 | release tag commit `aa45d17ac92cef2b8ded63b47e65a28dc85e3418`; current upstream `main` `658cb91e914cabca4cba75557ed35a7de6ad1bfc` | Viable official Apple binding with a prebuilt XCFramework. Current `main` contains unreleased fixes beyond 0.7.2. |
-| Automerge Java/Kotlin/Android | stable 0.0.9 | release/current commit `523d63bc8003fb8d9941f1e8e1ee249f58214581` | Official Java API, Kotlin helpers, and Android AAR are published. Java exposes explicit native-memory `free()` lifecycle. Same-version native sync works, but JS 3.5 ↔ Java 0.0.9 sync interoperability failed in this spike. |
+| Automerge Swift | stable 0.7.2, embedding Rust Automerge 0.7.2 | release tag commit `aa45d17ac92cef2b8ded63b47e65a28dc85e3418`; current upstream `main` `658cb91e914cabca4cba75557ed35a7de6ad1bfc` | Viable official Apple binding with a prebuilt XCFramework. Current `main` contains unreleased fixes beyond 0.7.2. |
+| Automerge Java/Kotlin/Android | stable 0.0.9, JNI embedding Rust Automerge 0.8.0 | release/current commit `523d63bc8003fb8d9941f1e8e1ee249f58214581` | Official Java API, Kotlin helpers, and Android AAR are published. Java exposes explicit native-memory `free()` lifecycle. Same-version native sync works, but JS 3.5 ↔ Java 0.0.9 sync interoperability failed in this spike. |
 | Official React Native Automerge work | placeholder repository only | `automerge/react-native-automerge` at `9eb73115080c6e9ef5785b36e0b7d7d846cf9ec7` | README says there is “nothing here yet” and describes a future Turbo Native Module. There is no usable official React Native module today. |
 | Automerge Repo | stable 2.5.6; newest prerelease 3.0.0-experimental.2 (2026-10-09) | stable 2.5.6 commit `38d06b9d9ef0bbe1e0693d3b859015f38897f34b`; experimental.2 commit `cd0c78934a11653bb072ff07c9d1fb9c8a93e397`; current repo head `8b178e75ecca89f78465196ef786aa844da57aec` | Active, but transport/repository orchestration is separable from the document-engine question. This spike did not require Repo to prove CRDT semantics. |
 | Polygen | 0.2.1 | repository head `01a331652c2e417bedd90a5cd23c41d58cacd184` | Explicitly “active development”; React Native 0.75+ / new architecture. README marks Wasm exceptions unsupported. Automerge 3.5’s WASM hits exactly that limitation in the bounded probe. |
@@ -260,7 +260,7 @@ Proven:
 Not proven / failed:
 
 - A live JS 3.5 ↔ Java 0.0.9 sync session does **not** converge. The bounded probe times out after 30 seconds (`syncExitCode=124`).
-- Therefore Java 0.0.9 cannot currently be accepted as the Android production sync backend against the web 3.5 binding, even though their persisted document format is interoperable.
+- Therefore Java 0.0.9 cannot currently be accepted as the Android production sync backend against the web 3.5 binding, even though their persisted document format is interoperable. Java 0.0.9 embeds Rust Automerge 0.8.0, while JS 3.5 uses the newer 0.12.0 core; however Swift 0.7.2 embeds core 0.7.2 and interoperates in the exercised path, so the observed Java failure must be treated as a binding/version-pair wire incompatibility rather than attributed to version skew alone.
 
 ### Android target
 
@@ -331,7 +331,7 @@ This spike does **not** add Automerge to the production Expo bundle. A productio
 | Web JS/WASM | Low–medium | Easy API and strong history/conflict inspection; significant bundle payload. |
 | Swift binding | Medium | SPM + prebuilt XCFramework; good interoperability evidence; track unreleased Swift fixes and binding/core version alignment. |
 | Java/Kotlin binding | Medium | Easy Maven/Android consumption and usable native API, but explicit native memory lifecycle and current cross-version sync incompatibility are blockers. |
-| Current-core C + Nitro/native bridge | High initially | Rust/NDK/cargo-ndk + C/C++/JSI bridge and ownership tests, but it can keep Android on the same current core/protocol as web. Generated bridge code must be treated as untrusted until interop/lifecycle tests pass. |
+| Current-core C + Nitro/native bridge | High initially | Rust/NDK/cargo-ndk + C/C++/JSI bridge and ownership tests, but it can keep Android on the same current core/protocol as web. The C API exposes heads, conflicts, changes, actor IDs/dependencies/messages and sync primitives, but does not expose the new JS 3.5 author-mapping helpers directly; a backend may need application change metadata or a tiny Rust-level extension for equivalent attribution. Generated bridge code must be treated as untrusted until interop/lifecycle tests pass. |
 | Polygen | Not suitable today | Automerge WASM requires exception support that the current Polygen/wasm2c path does not provide. |
 
 ## Automerge Repo
