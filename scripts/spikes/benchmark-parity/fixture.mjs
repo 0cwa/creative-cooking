@@ -68,21 +68,21 @@ export const TRACE = Object.freeze({
   single: [{ type: 'recipe', id: 'recipe-0003', field: 'title', value: fixed('Fresh herb supper', 48) }],
   batch: [
     ...Array.from({ length: 5 }, (_, i) => ({ type: 'pantry', id: 'pantry-' + pad(i + 20, 4),
-      field: 'preference', value: 5 - (i % 5) })),
+      field: 'preference', value: ((i + 2) % 5) + 1 })),
     ...Array.from({ length: 3 }, (_, i) => ({ type: 'recipe', id: 'recipe-' + pad(i + 25, 4),
       field: 'description', value: fixed('A quick weeknight dinner ' + pad(i, 2), 80) })),
     { type: 'step', id: 'recipe-0030-step-01', field: 'text',
       value: fixed('Sauté everything gently for a few minutes.', 72) }
   ],
   warmA: [{ type: 'recipe', id: 'recipe-0040', field: 'title', value: fixed('Phone edit', 48) }],
-  warmB: [{ type: 'pantry', id: 'pantry-0040', field: 'preference', value: 1 }],
+  warmB: [{ type: 'pantry', id: 'pantry-0040', field: 'preference', value: 5 }],
   divergenceA: [
-    { type: 'recipe', id: 'recipe-0044', field: 'portions', value: 4 },
+    { type: 'recipe', id: 'recipe-0045', field: 'portions', value: 4 },
     ...Array.from({ length: 20 }, (_, i) => ({ type: 'pantry', id: 'pantry-' + pad(80 + i, 4),
-      field: 'preference', value: 5 }))
+      field: 'preference', value: ((i + 1) % 5) + 1 }))
   ],
   divergenceB: [
-    { type: 'recipe', id: 'recipe-0044', field: 'portions', value: 6 },
+    { type: 'recipe', id: 'recipe-0045', field: 'portions', value: 6 },
     ...Array.from({ length: 20 }, (_, i) => ({ type: 'recipe', id: 'recipe-' + pad(80 + i, 4),
       field: 'description', value: fixed('Offline update ' + pad(i, 2), 80) }))
   ],
