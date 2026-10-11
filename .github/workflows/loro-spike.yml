@@ -170,10 +170,14 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           hash -r
           command -v adb
           adb version
           echo no | "$AVDMANAGER" create avd --force --name loro-spike --package "system-images;android-35;default;x86_64"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | tee artifacts/loro/android/avd-list.txt
+          test -f "$ANDROID_AVD_HOME/loro-spike.ini" || test -f "$HOME/.android/avd/loro-spike.ini"
           sudo chmod a+rw /dev/kvm || true
           "$ANDROID_HOME/emulator/emulator" -avd loro-spike -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim > artifacts/loro/android/emulator.log 2>&1 &
           EMULATOR_PID=$!
@@ -230,6 +234,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools emulator'
       - run: npm install --no-audit --no-fund
       - name: Install latest published official RN package for autolinking
         run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
@@ -260,12 +267,14 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
-          EMULATOR="$ANDROID_HOME/emulator/emulator"
+          ANDROID_SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          SDKMANAGER="$(command -v sdkmanager)"
+          AVDMANAGER="$(command -v avdmanager)"
+          EMULATOR="$ANDROID_SDK/emulator/emulator"
+          printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\n' "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" | tee artifacts/loro/android-arm64/sdk-env.txt
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-35;default;arm64-v8a"
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          export PATH="$ANDROID_SDK/platform-tools:$ANDROID_SDK/emulator:$PATH"
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           mkdir -p "$ANDROID_AVD_HOME"
           echo no | "$AVDMANAGER" create avd --force --name loro-spike-arm64 --package "system-images;android-35;default;arm64-v8a"
