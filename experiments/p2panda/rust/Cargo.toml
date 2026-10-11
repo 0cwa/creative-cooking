@@ -1,0 +1,18 @@
+[package]
+name = "creative-cooking-p2panda-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+
+[dependencies]
+p2panda = "=0.7.0"
+p2panda-core = "=0.7.0"
+p2panda-spaces = { version = "=0.7.0", features = ["test_utils"] }
+p2panda-auth = "=0.7.0"
+futures-util = "=0.3.32"
+serde = { version = "=1.0.228", features = ["derive"] }
+tokio = { version = "=1.52.3", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+
+# p2panda-net 0.7.0 depends on iroh 1.0.0. No Cargo.lock yet:
+# direct versions are pinned, transitive dependency resolution can drift.
