@@ -64,7 +64,7 @@ jobs:
           printf '%s\n' "$code" > artifacts/hermes-bundle-exit.txt
           cat artifacts/hermes-bundle.log
           exit 0
-      - name: Execute the Automerge bundle with the Hermes shipped by React Native 0.86.3
+      - name: Probe the Hermes shipped by React Native 0.86.3
         shell: bash
         run: |
           set +e
@@ -78,24 +78,29 @@ jobs:
             cat spikes/automerge/artifacts/hermes-direct-result.json
             exit 0
           fi
-          if [ -z "$hermesc" ]; then
-            printf '{"result":"PARTIAL","reason":"hermesc binary not found in installed React Native"}\n'               > spikes/automerge/artifacts/hermes-direct-result.json
-            cat spikes/automerge/artifacts/hermes-direct-result.json
-            exit 0
-          fi
           "$hermesc" -version > spikes/automerge/artifacts/hermes-version.log 2>&1
-          "$hermesc" -exec spikes/automerge/artifacts/hermes-direct.bundle.js             > spikes/automerge/artifacts/hermes-direct.log 2>&1
-          code=$?
-          if [ "$code" -eq 0 ] && grep -q '"automergeLoaded":true' spikes/automerge/artifacts/hermes-direct.log; then
-            result=PASS
+          "$hermesc" -emit-binary -out spikes/automerge/artifacts/hermes-direct.hbc             spikes/automerge/artifacts/hermes-direct.bundle.js > spikes/automerge/artifacts/hermes-direct.log 2>&1
+          compile_code=$?
+          runtime="$(find "$rn_dir" -type f -name hermes -perm -111 2>/dev/null | head -n 1)"
+          if [ "$compile_code" -eq 0 ] && [ -n "$runtime" ]; then
+            "$runtime" spikes/automerge/artifacts/hermes-direct.hbc >> spikes/automerge/artifacts/hermes-direct.log 2>&1
+            exec_code=$?
+            if [ "$exec_code" -eq 0 ] && grep -q '"automergeLoaded":true' spikes/automerge/artifacts/hermes-direct.log; then
+              result=PASS
+              reason="bundled Hermes runtime executed Automerge"
+            else
+              result=FAIL
+              reason="bundled Hermes runtime could not execute Automerge"
+            fi
           else
-            result=FAIL
+            exec_code=125
+            result=PARTIAL
+            reason="React Native package exposes hermesc but no host Hermes runtime; runtime WebAssembly support was not directly executable in this CI environment"
           fi
-          printf '{"result":"%s","expo":"57.0.17","reactNative":"0.86.3","automergeJs":"3.5.0","hermesExecExitCode":%s}\n'             "$result" "$code" > spikes/automerge/artifacts/hermes-direct-result.json
+          printf '{"result":"%s","reason":"%s","expo":"57.0.17","reactNative":"0.86.3","automergeJs":"3.5.0","hermesCompileExitCode":%s,"hermesRuntimeExitCode":%s}\n'             "$result" "$reason" "$compile_code" "$exec_code" > spikes/automerge/artifacts/hermes-direct-result.json
           cat spikes/automerge/artifacts/hermes-version.log
           cat spikes/automerge/artifacts/hermes-direct-result.json
           tail -n 120 spikes/automerge/artifacts/hermes-direct.log
-          # A direct-runtime incompatibility is evidence, not a required-CI failure.
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()
@@ -174,6 +179,52 @@ jobs:
             spikes/automerge/artifacts/polygen-result.json
             spikes/automerge/artifacts/polygen-wasm2c.log
             spikes/automerge/artifacts/polygen-generate.log
+          if-no-files-found: warn
+
+  automerge-c-android-core:
+    name: automerge-c Android arm64 core compile probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: automerge/automerge
+          ref: 4d2a8f6bfecfb7f1e4fca126e6d2122ac526f903
+          path: spikes/automerge/upstream-automerge
+      - name: Install exact Rust toolchain and Android target
+        shell: bash
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup default 1.90.0
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --locked
+      - name: Build automerge-c from the Automerge 3.5 commit for Android arm64
+        shell: bash
+        run: |
+          set +e
+          mkdir -p spikes/automerge/artifacts
+          cd spikes/automerge/upstream-automerge/rust
+          cargo ndk -t arm64-v8a -p 26 build -p automerge-c --release             > ../../artifacts/automerge-c-android-build.log 2>&1
+          code=$?
+          lib="$(find target -type f -name 'libautomerge_core.a' | head -n 1)"
+          if [ "$code" -eq 0 ] && [ -n "$lib" ]; then
+            result=PASS
+            bytes="$(wc -c < "$lib" | tr -d ' ')"
+          else
+            result=FAIL
+            bytes=0
+          fi
+          printf '{"result":"%s","automergeCommit":"4d2a8f6bfecfb7f1e4fca126e6d2122ac526f903","automergeRust":"0.12.0","automergeC":"0.2.2","target":"aarch64-linux-android","api":26,"staticLibraryBytes":%s,"exitCode":%s}\n'             "$result" "$bytes" "$code" > ../../artifacts/automerge-c-android-result.json
+          cat ../../artifacts/automerge-c-android-result.json
+          tail -n 160 ../../artifacts/automerge-c-android-build.log
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-c-android-evidence
+          path: |
+            spikes/automerge/artifacts/automerge-c-android-result.json
+            spikes/automerge/artifacts/automerge-c-android-build.log
           if-no-files-found: warn
 
   java-native-contract:
@@ -392,10 +443,10 @@ jobs:
           fi
           xcrun simctl boot "$udid" > ../../artifacts/ios-simulator-boot.log 2>&1 || true
           xcrun simctl bootstatus "$udid" -b >> ../../artifacts/ios-simulator-boot.log 2>&1
-          xcodebuild             -scheme AutomergeBridgeProbe             -destination "platform=iOS Simulator,id=$udid"             -configuration Debug             CODE_SIGNING_ALLOWED=NO             test > ../../artifacts/ios-simulator-runtime.log 2>&1
+          xcodebuild             -scheme CreativeCookingAutomergeSwiftSpike-Package             -destination "platform=iOS Simulator,id=$udid"             -configuration Debug             CODE_SIGNING_ALLOWED=NO             test > ../../artifacts/ios-simulator-runtime.log 2>&1
           code=$?
           if [ "$code" -eq 0 ]; then result=PASS; else result=PARTIAL; fi
-          printf '{"target":"iOS Simulator","scheme":"AutomergeBridgeProbe","result":"%s","exitCode":%s,"udid":"%s"}\n'             "$result" "$code" "$udid" > ../../artifacts/ios-simulator-runtime.json
+          printf '{"target":"iOS Simulator","scheme":"CreativeCookingAutomergeSwiftSpike-Package","result":"%s","exitCode":%s,"udid":"%s"}\n'             "$result" "$code" "$udid" > ../../artifacts/ios-simulator-runtime.json
           tail -n 160 ../../artifacts/ios-simulator-runtime.log
           cat ../../artifacts/ios-simulator-runtime.json
           exit 0
