@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { baseSnapshot, scenario, webPackage, webUpdate } from '../scripts/spikes/loro/native-fixture';
 
@@ -8,6 +9,15 @@ const nativePackageLabel = process.env.EXPO_PUBLIC_LORO_NATIVE_LABEL ?? 'loro-re
 
 type HarnessResult = {
   ok: boolean;
+  status: 'PASS' | 'PARTIAL' | 'FAIL';
+  checks?: Record<string, 'PASS' | 'PARTIAL' | 'FAIL'>;
+  runId?: string;
+  processRestart?: unknown;
+  nativeResolvedState?: unknown;
+  nativeResolutionUpdateBytes?: number[];
+  nativeUpdateIdentity?: unknown;
+  duplicateDiagnostics?: unknown;
+  lifecycle?: unknown;
   platform: string;
   platformApi: string;
   webPackage: string;
@@ -27,6 +37,80 @@ type HarnessResult = {
   updateBytes?: number;
   error?: string;
 };
+
+
+const PERSISTED_RESTART_KEY = 'creative-cooking-loro-spike-restart-v2';
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([key, item]) => [key, canonical(item)])
+    );
+  }
+  return value;
+}
+
+function semanticEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
+
+// The published 1.10.3 VersionVector API provides toHashmap() and eq(),
+// NOT toJSON(). Calling String(vv) hid the useful identity in prior logs.
+function versionIdentity(version: any): Record<string, number> {
+  if (typeof version?.toHashmap !== 'function') {
+    throw new Error('published native version identity API toHashmap() is unavailable');
+  }
+  const pairs = Array.from(version.toHashmap() as Map<bigint, number>)
+    .map(([peer, end]) => [String(peer), end] as const)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  return Object.fromEntries(pairs);
+}
+
+function byteIdentity(bytes: ArrayBuffer): { bytes: number; fnv1a32: string } {
+  let hash = 0x811c9dc5;
+  const value = new Uint8Array(bytes);
+  for (const b of value) hash = Math.imul(hash ^ b, 0x01000193) >>> 0;
+  // Non-cryptographic reproducer identity, not an integrity/authentication claim.
+  return { bytes: value.length, fnv1a32: hash.toString(16).padStart(8, '0') };
+}
+
+function historyIdentity(document: any, loro: LoroModule): unknown {
+  if (typeof document.exportJsonUpdatesWithoutPeerCompression !== 'function'
+      || !loro.VersionVector) {
+    return { supported: false };
+  }
+  const full = JSON.parse(
+    document.exportJsonUpdatesWithoutPeerCompression(
+      new loro.VersionVector(), document.oplogVersion()
+    )
+  );
+  return {
+    supported: true,
+    changes: (full.changes ?? []).map((change: any) => ({
+      id: String(change.id), message: change.msg ?? null, operations: change.ops ?? []
+    }))
+  };
+}
+
+function assertSemanticAndVersion(before: unknown, after: unknown,
+  beforeVv: any, afterVv: any, context: string, historyBefore?: unknown,
+  historyAfter?: unknown): void {
+  const semantic = semanticEqual(before, after);
+  const versionsEqual = beforeVv.eq(afterVv);
+  if (!semantic || !versionsEqual) {
+    throw new Error(context + ': ' + JSON.stringify({
+      semanticEqual: semantic,
+      rawJsonEqual: JSON.stringify(before) === JSON.stringify(after),
+      versionsEqual,
+      beforeVersion: versionIdentity(beforeVv),
+      afterVersion: versionIdentity(afterVv),
+      before, after, historyBefore, historyAfter
+    }));
+  }
+}
 
 function reconstructNativeDisagreement(document: any, loro: LoroModule) {
   if (
@@ -110,9 +194,36 @@ function reconstructNativeDisagreement(document: any, loro: LoroModule) {
   }
 }
 
-function runHarness(loro: LoroModule): HarnessResult {
+async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   const { LoroDoc } = loro;
   if (!LoroDoc) throw new Error('LoroDoc export is missing');
+  const runId = Platform.OS + '-' + String(Date.now());
+  let processRestart: { status: 'PASS' | 'PARTIAL'; previousRunId?: string; reason?: string } = {
+    status: 'PARTIAL', reason: 'First process launch; persisted native data awaits an OS process relaunch'
+  };
+  const previousRaw = await AsyncStorage.getItem(PERSISTED_RESTART_KEY);
+  if (previousRaw !== null) {
+    const previous = JSON.parse(previousRaw);
+    if (typeof previous.runId !== 'string' || previous.runId === runId
+        || !Array.isArray(previous.snapshotBytes)) {
+      throw new Error('Invalid previous-process restart evidence');
+    }
+    const reloaded = new LoroDoc();
+    reloaded.import_(Uint8Array.from(previous.snapshotBytes).buffer);
+    const firstReload = reloaded.toJSON();
+    if (!semanticEqual(firstReload, previous.state)
+        || !semanticEqual(versionIdentity(reloaded.oplogVersion()), previous.version)) {
+      throw new Error('Persisted prior-process snapshot did not reproduce state/version: '
+        + JSON.stringify({ priorRunId: previous.runId, expected: previous.state,
+          observed: firstReload, expectedVersion: previous.version,
+          observedVersion: versionIdentity(reloaded.oplogVersion()) }));
+    }
+    const beforeReplay = reloaded.oplogVersion();
+    reloaded.import_(webUpdate);
+    assertSemanticAndVersion(firstReload, reloaded.toJSON(), beforeReplay,
+      reloaded.oplogVersion(), 'prior-process snapshot duplicate import');
+    processRestart = { status: 'PASS', previousRunId: previous.runId };
+  }
 
   const replica = new LoroDoc();
   replica.import_(baseSnapshot);
@@ -145,43 +256,96 @@ function runHarness(loro: LoroModule): HarnessResult {
   restarted.import_(snapshot);
   const afterRestart = restarted.toJSON() as Record<string, any>;
 
-  // Preserve the existing strict check while distinguishing logical change from
-  // JSON field-order drift, and capturing operation-version diagnostics.
-  const beforeDuplicate = JSON.stringify(afterRestart);
-  const beforeVersion = restarted.oplogVersion();
-  restarted.import_(webUpdate);
-  const afterDuplicate = restarted.toJSON() as Record<string, any>;
-  const afterVersion = restarted.oplogVersion();
-  const duplicateImportIdempotent = JSON.stringify(afterDuplicate) === beforeDuplicate;
-  if (!duplicateImportIdempotent) {
-    const normalized = (value: unknown): unknown => {
-      if (Array.isArray(value)) return value.map(normalized);
-      if (value !== null && typeof value === 'object') {
-        return Object.fromEntries(
-          Object.entries(value as Record<string, unknown>)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([key, item]) => [key, normalized(item)])
-        );
-      }
-      return value;
-    };
-    const versionDetails = (value: any) =>
-      typeof value?.toJSON === 'function' ? value.toJSON() : String(value);
-    const ordering = typeof beforeVersion?.partialCmp === 'function'
-      ? beforeVersion.partialCmp(afterVersion)
-      : 'unavailable';
-    throw new Error('duplicate update import was not idempotent after restart: '
-      + JSON.stringify({
-        sameLogicalValue: JSON.stringify(normalized(afterRestart)) === JSON.stringify(normalized(afterDuplicate)),
-        versionOrdering: ordering ?? 'concurrent',
-        beforeVersion: versionDetails(beforeVersion),
-        afterVersion: versionDetails(afterVersion),
-        before: afterRestart['recipe:recipe-1'],
-        after: afterDuplicate['recipe:recipe-1'],
-        beforeTopLevelKeys: Object.keys(afterRestart),
-        afterTopLevelKeys: Object.keys(afterDuplicate)
-      }));
+
+  if (!semanticEqual(afterMerge, afterRestart)) {
+    throw new Error('full native snapshot restart changed semantic state: '
+      + JSON.stringify({ before: afterMerge, after: afterRestart }));
   }
+
+  // Reproduce the exact earlier failure, recording real vector identities and
+  // operation history. A reordered JSON object is not a CRDT mutation.
+  const beforeDuplicate = restarted.toJSON();
+  const beforeDuplicateSecondRead = restarted.toJSON();
+  const beforeVersion = restarted.oplogVersion();
+  const historyBefore = historyIdentity(restarted, loro);
+  const rawKeyOrderStableWithoutMutation =
+    JSON.stringify(beforeDuplicate) === JSON.stringify(beforeDuplicateSecondRead);
+  restarted.import_(webUpdate);
+  const afterDuplicate = restarted.toJSON();
+  const afterVersion = restarted.oplogVersion();
+  const historyAfter = historyIdentity(restarted, loro);
+  assertSemanticAndVersion(beforeDuplicate, afterDuplicate, beforeVersion, afterVersion,
+    'duplicate web update import after native snapshot restart', historyBefore, historyAfter);
+  const duplicateImportIdempotent = true;
+  const duplicateDiagnostics = {
+    semanticEqual: true,
+    rawKeyOrderStableWithoutMutation,
+    rawJsonEqual: JSON.stringify(beforeDuplicate) === JSON.stringify(afterDuplicate),
+    versionEqual: true,
+    beforeVersion: versionIdentity(beforeVersion),
+    afterVersion: versionIdentity(afterVersion),
+    beforeHistory: historyBefore,
+    afterHistory: historyAfter,
+    updateIdentity: byteIdentity(webUpdate)
+  };
+
+  // A third native operation is causally AFTER both conflicting writes. Web
+  // verification must observe one resolved value while retaining raw history.
+  const preResolution = restarted.oplogVersion();
+  restarted.setPeerId(505n);
+  restarted.getMap('recipe:recipe-1').set('portions', 8);
+  if (typeof restarted.setNextCommitMessage === 'function') {
+    restarted.setNextCommitMessage('device:ipad; resolution after native/web merge');
+  }
+  restarted.commit();
+  const nativeResolutionUpdate = restarted.export({ mode: 'updates', from: preResolution });
+  const nativeResolvedState = restarted.toJSON();
+  if (nativeResolvedState['recipe:recipe-1']?.portions !== 8) {
+    throw new Error('causal resolution was not visible on native');
+  }
+  const resolvedReload = new LoroDoc();
+  resolvedReload.import_(restarted.export({ mode: 'snapshot' }));
+  if (!semanticEqual(resolvedReload.toJSON(), nativeResolvedState)) {
+    throw new Error('resolved native snapshot did not survive load');
+  }
+
+  // Exercise real UniFFI object construction, load, import, snapshot export,
+  // and handler acquisition repeatedly. No public synchronous dispose() exists
+  // in this generated 1.10.3 binding; this is NOT a native heap-leak proof.
+  const lifecycleStart = Date.now();
+  const lifecycleCycles = 24;
+  for (let i = 0; i < lifecycleCycles; i++) {
+    const created = new LoroDoc();
+    created.import_(baseSnapshot);
+    created.import_(webUpdate);
+    const snap = created.export({ mode: 'snapshot' });
+    const loaded = new LoroDoc();
+    loaded.import_(snap);
+    if (!semanticEqual(created.toJSON(), loaded.toJSON())) {
+      throw new Error('lifecycle create/load/export mismatch at cycle ' + i);
+    }
+    const initialVersion = loaded.oplogVersion();
+    loaded.import_(webUpdate);
+    assertSemanticAndVersion(created.toJSON(), loaded.toJSON(),
+      initialVersion, loaded.oplogVersion(), 'lifecycle duplicate import cycle ' + i);
+  }
+  const lifecycle = {
+    status: 'PASS', cycles: lifecycleCycles, documentsCreated: lifecycleCycles * 2,
+    elapsedMs: Date.now() - lifecycleStart,
+    explicitNativeDisposeAvailable: false,
+    heapGrowthMeasured: false
+  };
+
+  // Save only the actual binary CRDT snapshot and its expected logical/vector
+  // identity in this isolated spike app. The next simctl launch reads this
+  // record from AsyncStorage after the previous app process has terminated.
+  const persistedSnapshot = restarted.export({ mode: 'snapshot' });
+  await AsyncStorage.setItem(PERSISTED_RESTART_KEY, JSON.stringify({
+    runId,
+    snapshotBytes: Array.from(new Uint8Array(persistedSnapshot)),
+    state: nativeResolvedState,
+    version: versionIdentity(restarted.oplogVersion())
+  }));
 
   const structures = new LoroDoc();
   structures.setPeerId(404n);
@@ -214,8 +378,34 @@ function runHarness(loro: LoroModule): HarnessResult {
     mergeableMap = { supported: true, value: structureJson.root };
   }
 
+  const checks: NonNullable<HarnessResult['checks']> = {
+    importWebBinary: 'PASS',
+    nativeBinaryExport: 'PASS',
+    concurrentMerge: 'PASS',
+    snapshotReload: 'PASS',
+    duplicateImport: 'PASS',
+    causalResolution: 'PASS',
+    movableList: 'PASS',
+    text: 'PASS',
+    lifecycle: 'PASS',
+    processRestart: processRestart.status,
+    nativeProvenance: nativeDisagreementEvidence.supported
+      && !nativeDisagreementEvidence.error
+      && nativeDisagreementEvidence.concurrent ? 'PASS' : 'PARTIAL'
+  };
+  const status = Object.values(checks).every((value) => value === 'PASS')
+    ? 'PASS' : 'PARTIAL';
   return {
     ok: true,
+    status,
+    checks,
+    runId,
+    processRestart,
+    nativeResolvedState,
+    nativeResolutionUpdateBytes: Array.from(new Uint8Array(nativeResolutionUpdate)),
+    nativeUpdateIdentity: byteIdentity(nativeUpdate),
+    duplicateDiagnostics,
+    lifecycle,
     platform: Platform.OS,
     platformApi: nativePackageLabel,
     webPackage,
@@ -244,12 +434,28 @@ function failedResult(error: unknown, prefix = ''): HarnessResult {
   const detail = error instanceof Error ? error.stack ?? error.message : String(error);
   return {
     ok: false,
+    status: 'FAIL',
     platform: Platform.OS,
     platformApi: nativePackageLabel,
     webPackage,
     scenario,
     error: prefix + detail
   };
+}
+
+function emitNativeResult(value: HarnessResult): void {
+  // Native unified logging escapes backslashes as octal \\134, sometimes
+  // making JSON stacks invalid. URI encoding is ASCII/log safe. Frames also
+  // prevent truncation of full diagnostics and binary update arrays.
+  const payload = encodeURIComponent(JSON.stringify(value));
+  const id = Platform.OS + '_' + Date.now().toString(36)
+    + '_' + Math.random().toString(36).slice(2, 9);
+  const size = 450;
+  const count = Math.max(1, Math.ceil(payload.length / size));
+  for (let index = 0; index < count; index++) {
+    console.log('LORO_NATIVE_RESULT_V2:' + id + ':' + (index + 1)
+      + '/' + count + ':' + payload.slice(index * size, (index + 1) * size));
+  }
 }
 
 export default function LoroNativeHarness() {
@@ -259,15 +465,15 @@ export default function LoroNativeHarness() {
     let active = true;
     const finish = (value: HarnessResult) => {
       if (active) setResult(value);
-      console.log(`LORO_NATIVE_RESULT:${JSON.stringify(value)}`);
+      emitNativeResult(value);
     };
 
     console.log(`LORO_NATIVE_STAGE:${Platform.OS}:before-module-import:${nativePackageLabel}`);
     import('loro-react-native')
-      .then((loro) => {
+      .then(async (loro) => {
         console.log(`LORO_NATIVE_STAGE:${Platform.OS}:module-imported:${nativePackageLabel}`);
         try {
-          finish(runHarness(loro));
+          finish(await runHarness(loro));
         } catch (error) {
           finish(failedResult(error, 'runtime harness failed: '));
         }
@@ -284,7 +490,7 @@ export default function LoroNativeHarness() {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Loro native feasibility</Text>
         <Text style={result?.ok ? styles.pass : styles.pending}>
-          {result === null ? 'RUNNING' : result.ok ? 'PASS' : 'FAIL'}
+          {result === null ? 'RUNNING' : result.status}
         </Text>
         <View style={styles.card}>
           <Text selectable style={styles.mono}>

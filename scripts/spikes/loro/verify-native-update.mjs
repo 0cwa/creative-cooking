@@ -9,6 +9,8 @@ if (!fixturePath || !nativePath) throw new Error('usage: verify-native-update.mj
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 const native = JSON.parse(fs.readFileSync(nativePath, 'utf8'));
 assert.equal(native.ok, true);
+assert.equal(native.status, 'PASS');
+assert.equal(native.checks?.processRestart, 'PASS');
 
 const fromBase64 = (value) => new Uint8Array(Buffer.from(value, 'base64'));
 const document = new LoroDoc();
@@ -17,6 +19,14 @@ document.import(fromBase64(fixture.webUpdateBase64));
 document.import(Uint8Array.from(native.nativeUpdateBytes));
 
 const state = document.toJSON();
+const canonical = (value) => Array.isArray(value) ? value.map(canonical)
+  : value && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, v]) => [key, canonical(v)])) : value;
+assert.deepEqual(canonical(state), canonical(native.afterMerge ? {
+  ...state, ['recipe:recipe-1']: native.afterMerge
+} : state));
+
 const history = document.exportJsonUpdates(undefined, undefined, false);
 const writes = [];
 for (const change of history.changes ?? []) {
@@ -49,8 +59,24 @@ const concurrent = document.cmpFrontiers(
 ) === undefined;
 assert.equal(concurrent, true);
 
+const preResolutionState = document.toJSON();
+assert.deepEqual(canonical(preResolutionState['recipe:recipe-1']), canonical(native.afterRestart));
+assert.ok(Array.isArray(native.nativeResolutionUpdateBytes) && native.nativeResolutionUpdateBytes.length > 0);
+document.import(Uint8Array.from(native.nativeResolutionUpdateBytes));
+const finalState = document.toJSON();
+assert.equal(finalState['recipe:recipe-1']?.portions, 8);
+assert.deepEqual(canonical(finalState), canonical(native.nativeResolvedState));
+const firstFinal = document.oplogVersion();
+document.import(Uint8Array.from(native.nativeResolutionUpdateBytes));
+assert.deepEqual(canonical(document.toJSON()), canonical(finalState));
+assert.deepEqual(document.oplogVersion().toJSON(), firstFinal.toJSON());
+
 const result = {
+  status: 'PASS',
   pass: true,
+  processRestart: native.processRestart, 
+  resolvedPortions: finalState['recipe:recipe-1']?.portions,
+  resolvedConvergence: true,
   platform: native.platform ?? 'native',
   webVersion: fixture.webPackage,
   nativeApi: native.platformApi,

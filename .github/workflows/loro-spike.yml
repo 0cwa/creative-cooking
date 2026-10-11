@@ -380,6 +380,11 @@ jobs:
           trap cleanup EXIT
           xcrun simctl launch "$UDID" com.creativecooking.lorospike | tee artifacts/loro/ios/launch.log
           sleep 15
+          cat artifacts/loro/ios/live.log > artifacts/loro/ios/first-runtime.log
+          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/ios/first-runtime.log artifacts/loro/ios/first-result.json --allow-partial
+          xcrun simctl terminate "$UDID" com.creativecooking.lorospike
+          xcrun simctl launch "$UDID" com.creativecooking.lorospike | tee artifacts/loro/ios/relaunch.log
+          sleep 15
           xcrun simctl io "$UDID" screenshot artifacts/loro/ios/runtime.png
           xcrun simctl spawn "$UDID" log show --last 5m --style compact --level debug --predicate 'process == "CreativeCookingLoroSpike" OR eventMessage CONTAINS[c] "LORO_NATIVE" OR eventMessage CONTAINS[c] "TurboModule" OR eventMessage CONTAINS[c] "loro"' > artifacts/loro/ios/system.log 2>&1 || true
           find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -mmin -10 -print -exec cat {} \; > artifacts/loro/ios/diagnostic-reports.log 2>&1 || true
