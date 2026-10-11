@@ -34,7 +34,7 @@ jobs:
         with:
           node-version: "22.13"
           package-manager-cache: false
-      - run: npm ci --no-audit --no-fund
+      - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: node --test experiments/p2panda/chromium.smoke.mjs
 

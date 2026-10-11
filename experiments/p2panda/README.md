@@ -59,7 +59,7 @@ This runs on a single machine with three OS processes, not two physical phones o
 Unlike the Node-only WebCrypto contract tests, `chromium.smoke.mjs` loads `browser/index.html` and its ordinary ES module into a **real Chromium secure-context page** via a localhost static HTTP server. The publishing context disappears, the independent encrypted file-backed gateway is restarted, and a fresh isolated context catches up using the manually copied demo key and space.
 
 ```bash
-npm ci --no-audit --no-fund
+npm install --no-audit --no-fund
 npx playwright install --with-deps chromium
 node --test experiments/p2panda/chromium.smoke.mjs
 ```
