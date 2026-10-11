@@ -8,7 +8,6 @@ export const FIXTURE_SPEC = Object.freeze({
 });
 const pad = (n, w) => String(n).padStart(w, '0');
 const fixed = (text, size) => text.padEnd(size, ' ').slice(0, size);
-const rand = (() => { let x = SEED >>> 0; return () => ((x = (1664525 * x + 1013904223) >>> 0) % 10000); })();
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object')
@@ -18,6 +17,7 @@ function canonical(value) {
 export const checksum = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 
 export function fixture() {
+  const rand = (() => { let x = SEED >>> 0; return () => ((x = (1664525 * x + 1013904223) >>> 0) % 10000); })();
   const f = { pantryOrder: [], pantryById: {}, recipeOrder: [], recipesById: {},
     conversationOrder: [], conversationsById: {} };
   const at = FIXTURE_SPEC.logicalTimestamp;
