@@ -64,7 +64,8 @@ test('fails closed for interrupted latest session rather than accepting stale PA
 test('detects conflicting duplicate fragments', () => {
   const value = { ok: true, status: 'PASS' };
   const first = frames(value);
-  const corrupted = first[0].replace(/.$/u, 'Z\n');
+  const corrupted = first[0].slice(0, -2)
+    + (first[0].at(-2) === 'A' ? 'B' : 'A') + '\n';
   const { proc, parsed } = run(first.join('') + corrupted);
   assert.notEqual(proc.status, 0);
   assert.equal(parsed.status, 'FAIL');

@@ -220,11 +220,11 @@ jobs:
           path: artifacts/loro/android/
 
   android-arm64-runtime:
-    name: Android arm64 runtime + web interop
+    name: Android ARM64 simulator runtime + web interop (macOS ARM host)
     needs: web-scenarios
     if: always()
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
+    runs-on: macos-26
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -235,17 +235,23 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools emulator'
+      - name: Capture actual ARM64 host and Android SDK capabilities
+        run: |
+          mkdir -p artifacts/loro/android-arm64
+          uname -a | tee artifacts/loro/android-arm64/host.txt
+          printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}" | tee -a artifacts/loro/android-arm64/host.txt
+          df -h . | tee artifacts/loro/android-arm64/storage.txt
+          test "$(uname -m)" = arm64
+          test -x "${ANDROID_HOME}/emulator/emulator"
+          "${ANDROID_HOME}/emulator/emulator" -version | tee artifacts/loro/android-arm64/emulator-version.txt
       - run: npm install --no-audit --no-fund
-      - name: Install latest published official RN package for autolinking
+      - name: Install actual published RN binding (with ARM64 Rust binary)
         run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
           path: artifacts/loro
-      - name: Prepare isolated native harness
+      - name: Prepare isolated native fixture
         run: |
           node scripts/spikes/loro/materialize-native-fixture.mjs
           mv app app-production
@@ -253,60 +259,71 @@ jobs:
           cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
           cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
           cp scripts/spikes/loro/app.config.native.ts app.config.ts
-      - name: Expo prebuild Android
-        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
-      - name: Build Android arm64 debug APK
-        run: |
-          mkdir -p artifacts/loro/android-arm64
-          cd android
-          ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a | tee ../artifacts/loro/android-arm64/build.log
-          cd ..
-          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-          stat -c '%s' "$APK" | tee artifacts/loro/android-arm64/apk-bytes.txt
-          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android-arm64/native-library-list.txt || true
-      - name: Run on Android arm64 emulator
-        shell: bash
+      - name: Expo prebuild and actual ARM64 APK
         run: |
           set -euxo pipefail
-          ANDROID_SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          SDKMANAGER="$(command -v sdkmanager)"
-          AVDMANAGER="$(command -v avdmanager)"
-          EMULATOR="$ANDROID_SDK/emulator/emulator"
-          printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\n' "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" | tee artifacts/loro/android-arm64/sdk-env.txt
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-35;default;arm64-v8a"
-          export PATH="$ANDROID_SDK/platform-tools:$ANDROID_SDK/emulator:$PATH"
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-          echo no | "$AVDMANAGER" create avd --force --name loro-spike-arm64 --package "system-images;android-35;default;arm64-v8a"
-          "$EMULATOR" -list-avds | tee artifacts/loro/android-arm64/avd-list.txt
-          sudo chmod a+rw /dev/kvm || true
-          "$EMULATOR" -avd loro-spike-arm64 -no-window -noaudio -no-snapshot -gpu swiftshader_indirect -accel auto > artifacts/loro/android-arm64/emulator.log 2>&1 &
-          EMULATOR_PID=$!
-          cleanup() {
-            kill "$EMULATOR_PID" 2>/dev/null || true
-            kill "$METRO_PID" 2>/dev/null || true
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
+          (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > artifacts/loro/android-arm64/build.log 2>&1 || {
+            tail -180 artifacts/loro/android-arm64/build.log
+            exit 1
           }
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          stat -f '%z' "$APK" | tee artifacts/loro/android-arm64/apk-bytes.txt
+          unzip -l "$APK" | grep -E 'lib/arm64-v8a/.*\\.so' > artifacts/loro/android-arm64/native-libraries.txt
+          grep -q 'lib/arm64-v8a/libloro-react-native.so' artifacts/loro/android-arm64/native-libraries.txt
+      - name: Launch accelerated ARM64 Android Emulator; exercise real native binding twice
+        run: |
+          set -euxo pipefail
+          OUTPUT=artifacts/loro/android-arm64
+          SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f -print -quit)
+          AVDMANAGER=$(command -v avdmanager || find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f -print -quit)
+          echo "sdkmanager=$SDKMANAGER avdmanager=$AVDMANAGER" | tee "$OUTPUT/sdk-tools.txt"
+          "$SDKMANAGER" 'system-images;android-35;google_apis;arm64-v8a' > "$OUTPUT/image-install.log" 2>&1 || {
+            tail -100 "$OUTPUT/image-install.log"
+            exit 1
+          }
+          echo no | "$AVDMANAGER" create avd --force --name loro-spike-arm64 --package 'system-images;android-35;google_apis;arm64-v8a'
+          "$ANDROID_HOME/emulator/emulator" -avd loro-spike-arm64 -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -accel auto > "$OUTPUT/emulator.log" 2>&1 &
+          EMULATOR_PID=$!
+          METRO_PID=''
+          cleanup() { kill "$METRO_PID" "$EMULATOR_PID" 2>/dev/null || true; }
           trap cleanup EXIT
-          adb wait-for-device
-          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
-          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo start --localhost --non-interactive > artifacts/loro/android-arm64/metro.log 2>&1 &
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          BOOTED=0
+          for i in {1..150}; do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then BOOTED=1; break; fi
+            sleep 2
+          done
+          adb devices -l | tee "$OUTPUT/devices.txt"
+          test "$BOOTED" = 1 || { tail -120 "$OUTPUT/emulator.log"; exit 1; }
+          adb shell getprop ro.product.cpu.abi | tee "$OUTPUT/device-abi.txt"
+          adb shell getprop ro.build.version.sdk | tee "$OUTPUT/device-api.txt"
+          grep -q '^arm64-v8a' "$OUTPUT/device-abi.txt"
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo start --localhost --port 8081 > "$OUTPUT/metro.log" 2>&1 &
           METRO_PID=$!
           sleep 8
           adb reverse tcp:8081 tcp:8081
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-          adb install -r "$APK"
+          adb install -r "$APK" | tee "$OUTPUT/install.txt"
           adb logcat -c
-          adb shell am force-stop com.creativecooking.lorospike || true
-          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1
-          for i in {1..30}; do
-            if adb logcat -d | grep -q 'LORO_NATIVE_RESULT:'; then break; fi
-            sleep 1
+          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1 | tee "$OUTPUT/first-launch.txt"
+          for i in {1..90}; do
+            if adb logcat -d | grep -q 'LORO_NATIVE_RESULT_V2:'; then break; fi
+            sleep 2
           done
-          adb logcat -d > artifacts/loro/android-arm64/runtime.log
-          adb exec-out screencap -p > artifacts/loro/android-arm64/runtime.png
-          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/android-arm64/runtime.log artifacts/loro/android-arm64/result.json
-      - name: Verify arm64 native-produced update in web Loro
+          adb logcat -d > "$OUTPUT/first-runtime.log"
+          node scripts/spikes/loro/parse-native-log.mjs "$OUTPUT/first-runtime.log" "$OUTPUT/first-result.json" --allow-partial
+          adb shell am force-stop com.creativecooking.lorospike
+          adb logcat -c
+          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1 | tee "$OUTPUT/second-launch.txt"
+          for i in {1..90}; do
+            if adb logcat -d | grep -q 'LORO_NATIVE_RESULT_V2:'; then break; fi
+            sleep 2
+          done
+          adb logcat -d > "$OUTPUT/runtime.log"
+          adb exec-out screencap -p > "$OUTPUT/runtime.png"
+          node scripts/spikes/loro/parse-native-log.mjs "$OUTPUT/runtime.log" "$OUTPUT/result.json"
+      - name: Verify Android-produced real Loro updates on Loro 1.16.4 web
         run: |
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
           node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android-arm64/result.json | tee artifacts/loro/android-arm64/web-verification.json
