@@ -347,6 +347,19 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: cd spikes/automerge/native/android && gradle --no-daemon connectedDebugAndroidTest
+      - name: Record Android Automerge dependency sizes
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p spikes/automerge/artifacts
+          aar="$(find "$HOME/.gradle/caches/modules-2/files-2.1/org.automerge/androidnative/0.0.9" -type f -name '*.aar' 2>/dev/null | head -n 1)"
+          jar="$(find "$HOME/.gradle/caches/modules-2/files-2.1/org.automerge/automerge/0.0.9" -type f -name '*.jar' 2>/dev/null | head -n 1)"
+          aar_bytes=0
+          jar_bytes=0
+          [ -n "$aar" ] && aar_bytes="$(wc -c < "$aar" | tr -d ' ')"
+          [ -n "$jar" ] && jar_bytes="$(wc -c < "$jar" | tr -d ' ')"
+          printf '{"androidNativeAarBytes":%s,"javaApiJarBytes":%s,"note":"dependency artifact sizes, not final APK delta"}\n'             "$aar_bytes" "$jar_bytes" > spikes/automerge/artifacts/android-dependency-sizes.json
+          cat spikes/automerge/artifacts/android-dependency-sizes.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -354,6 +367,7 @@ jobs:
           path: |
             spikes/automerge/native/android/app/build/outputs/androidTest-results
             spikes/automerge/native/android/app/build/reports/androidTests
+            spikes/automerge/artifacts/android-dependency-sizes.json
           if-no-files-found: warn
 
   swift-native-interop:
@@ -450,6 +464,22 @@ jobs:
           tail -n 160 ../../artifacts/ios-simulator-runtime.log
           cat ../../artifacts/ios-simulator-runtime.json
           exit 0
+      - name: Record Swift Automerge native dependency sizes
+        if: always()
+        shell: bash
+        working-directory: spikes/automerge/native/swift
+        run: |
+          mkdir -p ../../artifacts
+          core="$(find .build -type f \( -name 'libuniffi_automerge.a' -o -name 'libautomerge_core.a' \) 2>/dev/null | head -n 1)"
+          core_bytes=0
+          [ -n "$core" ] && core_bytes="$(wc -c < "$core" | tr -d ' ')"
+          artifact_dir="$(find .build -type d -name 'automergeFFI.xcframework' 2>/dev/null | head -n 1)"
+          artifact_bytes=0
+          if [ -n "$artifact_dir" ]; then
+            artifact_bytes="$(du -sk "$artifact_dir" | awk '{print $1 * 1024}')"
+          fi
+          printf '{"nativeStaticLibraryBytes":%s,"resolvedXcframeworkBytes":%s,"note":"resolved dependency sizes, not final application binary delta"}\n'             "$core_bytes" "$artifact_bytes" > ../../artifacts/swift-dependency-sizes.json
+          cat ../../artifacts/swift-dependency-sizes.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
