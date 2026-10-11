@@ -118,7 +118,10 @@ function mapWrite(op) {
  * Serialize this index alongside the review ledger, never as authoritative edits.
  */
 export class IncrementalIndex {
-  constructor(snapshot = null) {
+  constructor(snapshot = null, mode = snapshot?.mode ?? 'activity') {
+    if (!['activity', 'review-only'].includes(mode)) throw new Error('Unknown index mode');
+    if (snapshot?.mode && snapshot.mode !== mode) throw new Error('Index mode mismatch');
+    this.mode = mode;
     this.seen = new Set(snapshot?.seen ?? []);
     this.items = [...(snapshot?.items ?? [])];
     this.opsDecoded = 0;
@@ -142,6 +145,15 @@ export class IncrementalIndex {
         for (const op of ops) {
           const write = mapWrite(op);
           if (!write) continue;
+          if (this.mode === 'review-only') {
+            const reviewable = ['title', 'portions', 'deleted'];
+            const pantry = ['name', 'preference'];
+            const ingredient = ['name', 'amount'];
+            const keep = ((write.name.startsWith('recipe:') || write.name.startsWith('bench:recipe:')) && reviewable.includes(write.key))
+              || (write.name.startsWith('pantry:') && pantry.includes(write.key))
+              || (write.name.startsWith('ingredient:') && ingredient.includes(write.key));
+            if (!keep) continue;
+          }
           this.items.push({
             map: write.name, key: write.key, value: write.value,
             authorId: peer, peer, counter: write.counter, changeId: id,
@@ -157,7 +169,7 @@ export class IncrementalIndex {
     return { newWrites: added, decodedOps: this.opsDecoded, changeHeadersVisited: this.changeHeadersVisited };
   }
   writes(map, key) { return this.items.filter((item) => item.map === map && item.key === key); }
-  serialize() { return { seen: [...this.seen].sort(), items: this.items, cachedFrontier: this.cachedFrontier }; }
+  serialize() { return { mode: this.mode, seen: [...this.seen].sort(), items: this.items, cachedFrontier: this.cachedFrontier }; }
 }
 export function compare(doc, a, b) {
   return doc.cmpFrontiers(
