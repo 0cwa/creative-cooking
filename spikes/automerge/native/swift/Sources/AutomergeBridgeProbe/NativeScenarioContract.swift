@@ -28,8 +28,8 @@ private struct NativeScenarioFailure: Error, CustomStringConvertible {
     var description: String { message }
 }
 
-private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
-    guard condition() else { throw NativeScenarioFailure(message: message) }
+private func require(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
+    guard try condition() else { throw NativeScenarioFailure(message: message) }
 }
 
 private let fixedTime = Date(timeIntervalSince1970: 1_700_000_000)
@@ -173,7 +173,7 @@ private func conflictStrings(_ doc: Document, _ objectId: ObjId, _ key: String) 
 
 private func commit(_ doc: Document, device: String, action: String) {
     doc.commitWith(
-        message: #"{"device":"#(device)","action":"#(action)"}"#,
+        message: #"{"device":"\#(device)","action":"\#(action)"}"#,
         timestamp: fixedTime
     )
     _ = doc.heads()
