@@ -114,6 +114,23 @@ for (const E of [Automerge, Loro]) {
     if (!t.value.concurrent) throw new Error('Lost conflict in warm benchmark');
     warmSamples.push(t.ms);
   }
+  let reviewOnly = null;
+  if (E.ENGINE === 'loro') {
+    const narrowIndex = new E.IncrementalIndex(null, 'review-only');
+    const builtNarrow = timed(() => narrowIndex.update(merged));
+    const narrowSamples = [];
+    for (let i = 0; i < 20; i++) {
+      const query = timed(() => E.scalar(merged, 'portions', narrowIndex));
+      if (!query.value.concurrent) throw new Error('Review-only index lost scalar disagreement');
+      narrowSamples.push(query.ms);
+    }
+    reviewOnly = {
+      indexBuildMs: +builtNarrow.ms.toFixed(3),
+      bytes: Buffer.byteLength(JSON.stringify(narrowIndex.serialize())),
+      indexedWrites: narrowIndex.items.length,
+      warmQueryMedianMs: +median(narrowSamples).toFixed(3)
+    };
+  }
   const scalar = E.scalar(merged, 'portions', index ?? undefined);
   const event = makeEvent({ engine: E.ENGINE, kind: 'scalar-disagreement',
     entity: { type: 'recipe', id: 'recipe-1' }, path: ['portions'],
@@ -151,6 +168,7 @@ for (const E of [Automerge, Loro]) {
     incrementalIndexBuildMs: indexed ? +indexed.ms.toFixed(3) : null,
     incrementalIndexInitialOpsDecoded: index?.opsDecoded ?? null,
     incrementalIndexBytes: indexBytes,
+    reviewOnlyIndex: reviewOnly,
     incrementalUpdate: incremental,
     serializedReviewLedgerBytes: eventBytes,
     adapterSourceLines: loc(E.ENGINE === 'loro' ? 'loro.mjs' : 'automerge.mjs'),
@@ -159,6 +177,7 @@ for (const E of [Automerge, Loro]) {
       'Fixture logical counts match; native container layouts differ, not byte-for-byte parity',
       'Ledger bytes are additional local storage; not automatically replicated',
       'Warm queries use frontier-cached Loro index, not a full operation-history scan',
+      'Loro activity index retains all observed map writes; review-only index is filtered for recipe, pantry, ingredient review fields',
       'Automerge first-class getConflicts read excludes separately measured provenance/history scans']
   });
   console.log(E.ENGINE + ' median cold=' + median(samples).toFixed(2) +
