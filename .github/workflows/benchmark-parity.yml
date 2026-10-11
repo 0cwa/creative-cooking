@@ -1,0 +1,98 @@
+name: Benchmark parity (experimental)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/spikes/benchmark-parity/**'
+      - 'docs/spikes/local-first-comparison-benchmarks.md'
+      - '.github/workflows/benchmark-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node-bakeoff:
+    name: Dual-engine logical benchmark (Node 22.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - name: Install pinned isolated packages
+        working-directory: scripts/spikes/benchmark-parity
+        run: npm install --no-audit --no-fund
+      - name: Measure identical scenarios with per-trial validation
+        working-directory: scripts/spikes/benchmark-parity
+        run: npm run bench
+        env:
+          BENCH_REPEATS: '5'
+      - name: Validate complete raw result schema and equivalence
+        working-directory: scripts/spikes/benchmark-parity
+        run: npm run check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-parity-node-evidence
+          path: |
+            scripts/spikes/benchmark-parity/artifacts/benchmark-parity/
+            scripts/spikes/benchmark-parity/package-lock.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  expo-chromium:
+    name: Real Expo static exports and Chromium at /creative-cooking/
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - name: Install production baseline plus exact benchmark-only engines
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund @automerge/automerge@3.5.0 loro-crdt@1.16.4
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Export unchanged production app with three isolated parity routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for engine in control automerge loro; do
+            node scripts/spikes/benchmark-parity/web-route.mjs "$engine"
+            rm -rf .expo dist
+            CI=1 EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir "dist-$engine" --clear
+          done
+          # Expo does not emit the Loro binary by itself. It loads this relative to emitted entry JS.
+          install -D node_modules/loro-crdt/browser/loro_wasm_bg.wasm dist-loro/_expo/static/js/web/loro_wasm_bg.wasm
+          rm -f app/benchmark-parity.tsx
+          node scripts/spikes/benchmark-parity/static-cost.mjs
+      - name: Run browser contract, network and offline-state probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for engine in control automerge loro; do
+            PORT=4173 node scripts/spikes/benchmark-parity/serve-static.mjs "dist-$engine" > "artifacts/benchmark-parity/server-$engine.log" 2>&1 &
+            pid=$!
+            trap 'kill "$pid" 2>/dev/null || true' EXIT
+            for t in {1..30}; do
+              if curl -fsS http://127.0.0.1:4173/creative-cooking/benchmark-parity -o /dev/null; then break; fi
+              sleep 1
+            done
+            node scripts/spikes/benchmark-parity/web-verify.mjs "$engine"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            trap - EXIT
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-parity-chromium-evidence
+          path: artifacts/benchmark-parity/
+          if-no-files-found: warn
+          retention-days: 90
