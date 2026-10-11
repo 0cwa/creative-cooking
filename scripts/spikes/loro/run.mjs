@@ -74,7 +74,7 @@ function actorOf(change, peer) {
   const m = typeof change.msg === 'string' ? /device:([^;]+)/u.exec(change.msg) : null;
   return m?.[1] ?? peer;
 }
-function writes(d, mapName, key) {
+function writesFromJsonExport(d, mapName, key) {
   const result = [];
   const container = `cid:root-${mapName}:Map`;
   const history = d.exportJsonUpdates(undefined, undefined, false);
@@ -94,6 +94,33 @@ function writes(d, mapName, key) {
           changeId: String(change.id),
           message: change.msg ?? null
         });
+      }
+    }
+  }
+  return result;
+}
+function writes(d, mapName, key) {
+  const result = [];
+  const container = `cid:root-${mapName}:Map`;
+  for (const [peerKey, changes] of d.getAllChanges()) {
+    const peer = String(peerKey);
+    for (const change of changes) {
+      const ops = d.getOpsInChange({ peer, counter: change.counter });
+      for (const op of ops) {
+        if (
+          op.container === container &&
+          op.content?.type === 'insert' &&
+          op.content?.key === key
+        ) {
+          result.push({
+            value: op.content.value,
+            actor: actorOf(change, peer),
+            peer,
+            counter: op.counter,
+            changeId: `${change.counter}@${peer}`,
+            message: change.message ?? change.msg ?? null
+          });
+        }
       }
     }
   }
@@ -255,6 +282,14 @@ tests.push(await run(7, 'Same scalar disagreement', () => {
   assert.deepEqual(new Set(evidence.alternatives.map((a) => a.value)), new Set([4, 6]));
   assert.deepEqual(new Set(evidence.alternatives.map((a) => a.actor)), new Set(['iphone', 'macbook']));
 
+  const operationWrites = writes(iphone, 'recipe:recipe-1', 'portions')
+    .map(({ value, actor, changeId }) => ({ value, actor, changeId }))
+    .sort((a, b) => a.changeId.localeCompare(b.changeId));
+  const jsonWrites = writesFromJsonExport(iphone, 'recipe:recipe-1', 'portions')
+    .map(({ value, actor, changeId }) => ({ value, actor, changeId }))
+    .sort((a, b) => a.changeId.localeCompare(b.changeId));
+  assert.deepEqual(operationWrites, jsonWrites);
+
   const snapshot = iphone.export({ mode: 'snapshot' });
   const restarted = new LoroDoc();
   restarted.import(snapshot);
@@ -297,7 +332,11 @@ tests.push(await run(7, 'Same scalar disagreement', () => {
     afterRestart,
     laterResolutionCausallySupersedes: true,
     shallowSnapshotEvidence,
-    shallowAfterUnrelatedEditEvidence
+    shallowAfterUnrelatedEditEvidence,
+    publicOperationApiCrossCheck: {
+      matchedExportJsonUpdates: true,
+      methods: ['getAllChanges', 'getOpsInChange', 'cmpFrontiers']
+    }
   };
 }));
 
@@ -706,8 +745,9 @@ const output = {
   mergeableContainers,
   benchmark,
   disagreementReconstruction: {
-    publicMethodsUsed: ['exportJsonUpdates', 'cmpFrontiers'],
-    lowLevelFormatDependency: true,
+    publicMethodsUsed: ['getAllChanges', 'getOpsInChange', 'cmpFrontiers'],
+    crossCheckedAgainst: ['exportJsonUpdates'],
+    lowLevelOperationShapeDependency: true,
     customVectorClock: false,
     prototypeScansFullRetainedHistory: true,
     productionWouldNeedDerivedIndexOrLedger: true
