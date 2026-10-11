@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# A new pushed spike revision supersedes an older expensive Rust/WASM build.
+concurrency:
+  group: subduction-feasibility-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   browser-durable-relay:
     name: Pinned Subduction binary + real browser clients
@@ -69,6 +74,19 @@ jobs:
           cargo test -p subduction_core --test relay_topology_sync
           cargo test -p subduction_core --test addbatch_storage_durability
           cargo test -p subduction_core --test responder_cache_fast_path
+
+      - name: Compile current native Rust Subduction and Keyhive components
+        run: |
+          cd subduction-upstream
+          cargo check -p subduction_core -p subduction_iroh -p subduction_keyhive
+
+      # This is the upstream's own local/direct-only QUIC test, with no public
+      # relay. It is exploratory (can fail in UDP-restricted hosted runners).
+      - name: Exercise local Iroh QUIC transport (exploratory)
+        continue-on-error: true
+        run: |
+          cd subduction-upstream
+          cargo test -p subduction_cli --test iroh_e2e -- --nocapture
 
       - name: Create encrypted real-Automerge test changes
         run: |
