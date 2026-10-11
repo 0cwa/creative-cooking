@@ -410,6 +410,17 @@ jobs:
           "$SWIFT_BIN" fork-edit artifacts/swift-mutated.am artifacts/swift-concurrent.am
           "$SWIFT_BIN" live-sync-web             artifacts/swift-concurrent.am             artifacts/web-concurrent-swift.am             artifacts/swift-converged.am             artifacts/web-converged-swift.am             "$PWD/web-sync-peer.mjs"
           node web-interop.mjs verify-converged artifacts/web-converged-swift.am artifacts/swift-converged.am
+      - name: Prove same-scalar disagreement evidence matches after JS to Swift sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          SWIFT_BIN="$PWD/spikes/automerge/native/swift/.build/release/AutomergeSwiftInterop"
+          cd spikes/automerge
+          node web-interop.mjs fork-conflict artifacts/swift-mutated.am artifacts/web-conflict-swift.am 4
+          "$SWIFT_BIN" fork-conflict artifacts/swift-mutated.am artifacts/swift-conflict.am
+          "$SWIFT_BIN" live-sync-web             artifacts/swift-conflict.am             artifacts/web-conflict-swift.am             artifacts/swift-conflict-converged.am             artifacts/web-conflict-converged.am             "$PWD/web-sync-peer.mjs"
+          node web-interop.mjs verify-counter-conflicts artifacts/web-conflict-converged.am             | tee artifacts/swift-web-conflict-evidence.json
+          "$SWIFT_BIN" verify-counter-conflicts artifacts/swift-conflict-converged.am             | tee artifacts/swift-native-conflict-evidence.json
       - name: Probe Automerge 3.5 author-metadata forward compatibility in Swift 0.7.2
         shell: bash
         run: |
