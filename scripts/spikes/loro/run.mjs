@@ -99,6 +99,20 @@ function writesFromJsonExport(d, mapName, key) {
   }
   return result;
 }
+function normalizeOperationValue(value) {
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+  }
+  if (Array.isArray(value)) return value.map(normalizeOperationValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, normalizeOperationValue(item)])
+    );
+  }
+  return value;
+}
+
 function rawMapWrite(op, mapName, key) {
   // loro-crdt's WASM getOpsInChange() exposes serde-serialized RemoteOp,
   // not the normalized JsonOp shape returned by exportJsonUpdates().
@@ -117,9 +131,9 @@ function rawMapWrite(op, mapName, key) {
   if (raw) {
     // MapSet.value is Option<LoroValue>; undefined/null here means delete.
     if (content.value === undefined || content.value === null) return null;
-    return { value: content.value, counter: op.counter };
+    return { value: normalizeOperationValue(content.value), counter: op.counter };
   }
-  return { value: content.value, counter: op.counter };
+  return { value: normalizeOperationValue(content.value), counter: op.counter };
 }
 function writes(d, mapName, key) {
   const result = [];
