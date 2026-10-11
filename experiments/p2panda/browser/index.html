@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Creative Cooking — experimental browser sync</title>
+<style>body{font:16px system-ui;max-width:680px;padding:20px;margin:auto;line-height:1.5}label{display:block;margin:12px 0}input,textarea{box-sizing:border-box;width:100%;padding:9px}button{padding:10px;margin:6px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f3f3;padding:12px}</style></head>
+<body><h1>Opaque browser catch-up experiment</h1>
+<p>This is not Creative Cooking UI or p2panda browser integration. It tests encrypted payloads through a separate localhost mailbox. Keys are not stored. Never enter real cooking or account data.</p>
+<label>Mailbox base URL<input id="base" value="http://127.0.0.1:8765"></label>
+<label>Space ID (32-64 lowercase hex)<input id="space"></label>
+<label>256-bit key (64 hex, share securely out-of-band)<input id="key"></label>
+<button id="generate">Generate demo key + space</button>
+<label>Text fixture<textarea id="content" rows="3">binary frame demo (not a recipe)</textarea></label>
+<button id="publish">Encrypt and publish</button><button id="read">Read/decrypt all</button>
+<pre id="log" role="status"></pre>
+<script type="module">
+import { seal, upload, catchUp } from './interop.mjs';
+const el = id => document.getElementById(id);
+const hex = a => Array.from(a, v=>v.toString(16).padStart(2,'0')).join('');
+const bytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
+function inputs(){return {base:el('base').value, space:el('space').value, key:bytes(el('key').value)};}
+el('generate').onclick=()=>{
+  el('space').value=hex(crypto.getRandomValues(new Uint8Array(16)));
+  el('key').value=hex(crypto.getRandomValues(new Uint8Array(32)));
+  el('log').textContent='Demo key generated. Another browser can use the same key and space.';
+};
+el('publish').onclick=async()=>{try{
+  const {base,space,key}=inputs();
+  const id=await upload(base,space,await seal(new TextEncoder().encode(el('content').value),key));
+  el('log').textContent='Stored encrypted frame '+id;
+}catch(e){el('log').textContent=String(e);}};
+el('read').onclick=async()=>{try{
+  const {base,space,key}=inputs();
+  const values=await catchUp(base,space,key);
+  el('log').textContent=values.map(v=>v.id+': '+new TextDecoder().decode(v.bytes)).join('\n');
+}catch(e){el('log').textContent=String(e);}};
+</script></body></html>
