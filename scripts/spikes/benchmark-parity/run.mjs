@@ -142,9 +142,9 @@ function one(engine, trial, warmup = false) {
   const diverged = report('longOfflineCatchUp', timing(() => b.exchange(seed, offlineA, offlineB)));
   const da = b.project(diverged.a), db = b.project(diverged.b);
   prove(da, db, 'divergence convergence');
-  assert.ok([4,6].includes(da.recipesById['recipe-0044'].portions));
+  assert.ok([4,6].includes(da.recipesById['recipe-0045'].portions));
   const offlineExpected = expectedAfter(expected, [...TRACE.divergenceA, ...TRACE.divergenceB]);
-  offlineExpected.recipesById['recipe-0044'].portions = da.recipesById['recipe-0044'].portions;
+  offlineExpected.recipesById['recipe-0045'].portions = da.recipesById['recipe-0045'].portions;
   prove(da, offlineExpected, 'conflicting scalar plus all nonconflicting edits');
   if (engine === 'automerge') {
     const conflicts = awaitConflicts(diverged.a);
@@ -152,13 +152,13 @@ function one(engine, trial, warmup = false) {
   } else {
     const updates = diverged.a.exportJsonUpdates(undefined, undefined, false);
     const values = (updates.changes ?? []).flatMap(change => change.ops ?? [])
-      .filter(op => op.container === 'cid:root-recipe:recipe-0044:Map' && op.content?.key === 'portions')
+      .filter(op => op.container === 'cid:root-recipe:recipe-0045:Map' && op.content?.key === 'portions')
       .map(op => op.content.value);
     assert.ok(values.includes(4) && values.includes(6), 'Loro retained operation history has both values');
   }
   if (!warmup) (wireSamples[engine].longOfflineCatchUp ??= []).push({
     ...diverged.wire, logicalOperations: TRACE.divergenceA.length + TRACE.divergenceB.length,
-    conflictValues: [4,6], visibleWinner: da.recipesById['recipe-0044'].portions
+    conflictValues: [4,6], visibleWinner: da.recipesById['recipe-0045'].portions
   });
 
   const third = report('thirdDeviceBootstrap', timing(() => b.bootstrap(b.clone(warm.a, 'phone'), b.init('tablet'))));
@@ -204,7 +204,7 @@ function one(engine, trial, warmup = false) {
 // Tests inspect engine-specific metadata only after completing the equivalent measured operation.
 import * as AM from '@automerge/automerge';
 const awaitLastChange = d => AM.getLastLocalChange(d);
-const awaitConflicts = d => Object.values(AM.getConflicts(d.recipesById['recipe-0044'], 'portions') ?? {});
+const awaitConflicts = d => Object.values(AM.getConflicts(d.recipesById['recipe-0045'], 'portions') ?? {});
 console.log(JSON.stringify({ phase: 'fixture', spec: FIXTURE_SPEC, checksum: fixtureChecksum, traceChecksum }));
 for (let trial = -1; trial < REPEATS; trial++) {
   const order = trial % 2 === 0 ? ['loro', 'automerge'] : ['automerge', 'loro'];
