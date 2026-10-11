@@ -4,6 +4,8 @@ import { baseSnapshot, scenario, webPackage, webUpdate } from '../scripts/spikes
 
 type LoroModule = any;
 
+const nativePackageLabel = process.env.EXPO_PUBLIC_LORO_NATIVE_LABEL ?? 'loro-react-native';
+
 type HarnessResult = {
   ok: boolean;
   platform: string;
@@ -20,85 +22,98 @@ type HarnessResult = {
   mergeableMap?: unknown;
   nativeUpdateBytes?: number[];
   nativeDisagreementEvidence?: unknown;
+  capabilities?: Record<string, boolean>;
   snapshotBytes?: number;
   updateBytes?: number;
   error?: string;
 };
 
 function reconstructNativeDisagreement(document: any, loro: LoroModule) {
-  const { Frontiers, VersionVector } = loro;
-  const empty = new VersionVector();
-  const history = JSON.parse(
-    document.exportJsonUpdatesWithoutPeerCompression(empty, document.oplogVersion())
-  );
-  const writes: Array<{
-    value: unknown;
-    actor: string;
-    peer: string;
-    counter: number;
-    changeId: string;
-  }> = [];
+  if (
+    typeof document.exportJsonUpdatesWithoutPeerCompression !== 'function'
+    || typeof document.frontiersToVv !== 'function'
+    || !loro.VersionVector
+    || !loro.Frontiers?.fromId
+  ) {
+    return {
+      supported: false,
+      reason: 'This RN binding does not expose the history/version APIs used by the current source probe.'
+    };
+  }
 
-  for (const change of history.changes ?? []) {
-    const changeId = String(change.id);
-    const peer = changeId.slice(changeId.lastIndexOf('@') + 1);
-    const actor = typeof change.msg === 'string'
-      ? (/device:([^;]+)/u.exec(change.msg)?.[1] ?? peer)
-      : peer;
+  try {
+    const { Frontiers, VersionVector } = loro;
+    const empty = new VersionVector();
+    const history = JSON.parse(
+      document.exportJsonUpdatesWithoutPeerCompression(empty, document.oplogVersion())
+    );
+    const writes: Array<{
+      value: unknown;
+      actor: string;
+      peer: string;
+      counter: number;
+      changeId: string;
+    }> = [];
 
-    for (const op of change.ops ?? []) {
-      if (
-        op.container === 'cid:root-recipe:recipe-1:Map'
-        && op.content?.type === 'insert'
-        && op.content?.key === 'portions'
-        && (op.content.value === 4 || op.content.value === 6)
-      ) {
-        writes.push({
-          value: op.content.value,
-          actor,
-          peer,
-          counter: op.counter,
-          changeId
-        });
+    for (const change of history.changes ?? []) {
+      const changeId = String(change.id);
+      const peer = changeId.slice(changeId.lastIndexOf('@') + 1);
+      const actor = typeof change.msg === 'string'
+        ? (/device:([^;]+)/u.exec(change.msg)?.[1] ?? peer)
+        : peer;
+
+      for (const op of change.ops ?? []) {
+        if (
+          op.container === 'cid:root-recipe:recipe-1:Map'
+          && op.content?.type === 'insert'
+          && op.content?.key === 'portions'
+          && (op.content.value === 4 || op.content.value === 6)
+        ) {
+          writes.push({ value: op.content.value, actor, peer, counter: op.counter, changeId });
+        }
       }
     }
-  }
 
-  const four = writes.find((write) => write.value === 4);
-  const six = writes.find((write) => write.value === 6);
-  if (!four || !six) {
-    throw new Error('native history did not retain both portions writes: ' + JSON.stringify(writes));
-  }
+    const four = writes.find((write) => write.value === 4);
+    const six = writes.find((write) => write.value === 6);
+    if (!four || !six) {
+      throw new Error('native history did not retain both portions writes: ' + JSON.stringify(writes));
+    }
 
-  const fourVv = document.frontiersToVv(
-    Frontiers.fromId({ peer: BigInt(four.peer), counter: four.counter })
-  );
-  const sixVv = document.frontiersToVv(
-    Frontiers.fromId({ peer: BigInt(six.peer), counter: six.counter })
-  );
-  if (!fourVv || !sixVv) {
-    throw new Error('native history could not convert write IDs to version vectors');
-  }
+    const fourVv = document.frontiersToVv(
+      Frontiers.fromId({ peer: BigInt(four.peer), counter: four.counter })
+    );
+    const sixVv = document.frontiersToVv(
+      Frontiers.fromId({ peer: BigInt(six.peer), counter: six.counter })
+    );
+    if (!fourVv || !sixVv) throw new Error('native history could not convert write IDs to version vectors');
 
-  const relation = fourVv.partialCmp(sixVv);
-  if (relation !== undefined) {
-    throw new Error('native writes were not concurrent; partialCmp=' + String(relation));
-  }
+    const relation = fourVv.partialCmp(sixVv);
+    if (relation !== undefined) throw new Error('native writes were not concurrent; partialCmp=' + String(relation));
 
-  return {
-    alternatives: writes.map(({ value, actor, changeId }) => ({ value, actor, changeId })),
-    concurrent: true,
-    publicApis: [
-      'exportJsonUpdatesWithoutPeerCompression',
-      'Frontiers.fromId',
-      'frontiersToVv',
-      'VersionVector.partialCmp'
-    ]
-  };
+    return {
+      supported: true,
+      alternatives: writes.map(({ value, actor, changeId }) => ({ value, actor, changeId })),
+      concurrent: true,
+      publicApis: [
+        'exportJsonUpdatesWithoutPeerCompression',
+        'Frontiers.fromId',
+        'frontiersToVv',
+        'VersionVector.partialCmp'
+      ]
+    };
+  } catch (error) {
+    return {
+      supported: true,
+      error: error instanceof Error ? error.stack ?? error.message : String(error)
+    };
+  }
 }
 
 function runHarness(loro: LoroModule): HarnessResult {
   const { LoroDoc } = loro;
+  if (!LoroDoc) throw new Error('LoroDoc export is missing');
+
   const replica = new LoroDoc();
   replica.import_(baseSnapshot);
 
@@ -110,7 +125,9 @@ function runHarness(loro: LoroModule): HarnessResult {
   const commonVersion = replica.oplogVersion();
   replica.setPeerId(303n);
   replica.getMap('recipe:recipe-1').set('portions', 6);
-  replica.setNextCommitMessage('device:ipad; interop native portions=6');
+  if (typeof replica.setNextCommitMessage === 'function') {
+    replica.setNextCommitMessage('device:ipad; interop native portions=6');
+  }
   replica.commit();
 
   const nativeBeforeWeb = replica.toJSON() as Record<string, any>;
@@ -118,6 +135,9 @@ function runHarness(loro: LoroModule): HarnessResult {
 
   replica.import_(webUpdate);
   const afterMerge = replica.toJSON() as Record<string, any>;
+  if (![4, 6].includes(afterMerge['recipe:recipe-1']?.portions)) {
+    throw new Error('native merge did not produce a valid converged portions value');
+  }
   const nativeDisagreementEvidence = reconstructNativeDisagreement(replica, loro);
 
   const snapshot = replica.export({ mode: 'snapshot' });
@@ -128,6 +148,7 @@ function runHarness(loro: LoroModule): HarnessResult {
   const beforeDuplicate = JSON.stringify(afterRestart);
   restarted.import_(webUpdate);
   const duplicateImportIdempotent = JSON.stringify(restarted.toJSON()) === beforeDuplicate;
+  if (!duplicateImportIdempotent) throw new Error('duplicate update import was not idempotent after restart');
 
   const structures = new LoroDoc();
   structures.setPeerId(404n);
@@ -137,17 +158,33 @@ function runHarness(loro: LoroModule): HarnessResult {
   movable.move(1, 0);
   const text = structures.getText('method');
   text.insert(0, 'Heat oil.');
-  text.insert(text.length(), ' Add tomatoes.');
-  const mergeable = structures.getMap('root').ensureMergeableMap('child') as any;
-  mergeable.set('nativeField', 'preserved');
+  const textLength = typeof text.length === 'function' ? text.length() : text.length;
+  text.insert(textLength, ' Add tomatoes.');
+
+  let mergeableMap: unknown = { supported: false };
+  const root = structures.getMap('root');
+  if (typeof root.ensureMergeableMap === 'function') {
+    const mergeable = root.ensureMergeableMap('child') as any;
+    mergeable.set('nativeField', 'preserved');
+    mergeableMap = { supported: true };
+  }
   structures.commit();
 
   const structureJson = structures.toJSON() as Record<string, any>;
+  if (JSON.stringify(structureJson.steps) !== JSON.stringify(['step-b', 'step-a'])) {
+    throw new Error('native movable-list move did not produce expected order: ' + JSON.stringify(structureJson.steps));
+  }
+  if (structureJson.method !== 'Heat oil. Add tomatoes.') {
+    throw new Error('native LoroText result mismatch: ' + JSON.stringify(structureJson.method));
+  }
+  if ((mergeableMap as any).supported) {
+    mergeableMap = { supported: true, value: structureJson.root };
+  }
 
   return {
     ok: true,
     platform: Platform.OS,
-    platformApi: 'loro-react-native@source-8fad8d61 / loro-ffi 1.13.7',
+    platformApi: nativePackageLabel,
     webPackage,
     scenario,
     importedWebSnapshot: true,
@@ -157,9 +194,14 @@ function runHarness(loro: LoroModule): HarnessResult {
     duplicateImportIdempotent,
     movableList: structureJson.steps,
     text: structureJson.method,
-    mergeableMap: structureJson.root,
+    mergeableMap,
     nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),
     nativeDisagreementEvidence,
+    capabilities: {
+      historyJson: typeof replica.exportJsonUpdatesWithoutPeerCompression === 'function',
+      frontierToVersion: typeof replica.frontiersToVv === 'function',
+      mergeableMap: typeof root.ensureMergeableMap === 'function'
+    },
     snapshotBytes: snapshot.byteLength,
     updateBytes: nativeUpdate.byteLength
   };
@@ -170,7 +212,7 @@ function failedResult(error: unknown, prefix = ''): HarnessResult {
   return {
     ok: false,
     platform: Platform.OS,
-    platformApi: 'loro-react-native@source-8fad8d61 / loro-ffi 1.13.7',
+    platformApi: nativePackageLabel,
     webPackage,
     scenario,
     error: prefix + detail
@@ -187,10 +229,10 @@ export default function LoroNativeHarness() {
       console.log(`LORO_NATIVE_RESULT:${JSON.stringify(value)}`);
     };
 
-    console.log(`LORO_NATIVE_STAGE:${Platform.OS}:before-module-import`);
+    console.log(`LORO_NATIVE_STAGE:${Platform.OS}:before-module-import:${nativePackageLabel}`);
     import('loro-react-native')
       .then((loro) => {
-        console.log(`LORO_NATIVE_STAGE:${Platform.OS}:module-imported`);
+        console.log(`LORO_NATIVE_STAGE:${Platform.OS}:module-imported:${nativePackageLabel}`);
         try {
           finish(runHarness(loro));
         } catch (error) {
