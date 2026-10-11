@@ -339,14 +339,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.13'
+      - name: Compile Android app and instrumentation APKs
+        working-directory: spikes/automerge/native/android
+        run: gradle --no-daemon assembleDebug assembleDebugAndroidTest
       - name: Run all 18 scenarios inside Android emulator
+        id: android-runtime
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: cd spikes/automerge/native/android && gradle --no-daemon connectedDebugAndroidTest
+          emulator-boot-timeout: 900
+          script: |
+            timeout 240 bash -c 'until adb shell service check package 2>/dev/null | grep -q "found"; do sleep 5; done'
+            adb shell service check package
+            cd spikes/automerge/native/android
+            gradle --no-daemon connectedDebugAndroidTest
       - name: Record Android Automerge dependency sizes
         if: always()
         shell: bash
