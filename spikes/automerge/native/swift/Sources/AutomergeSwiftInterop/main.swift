@@ -54,6 +54,17 @@ func bool(_ doc: Document, object: ObjId, key: String) throws -> Bool {
     return result
 }
 
+
+func intConflicts(_ doc: Document, object: ObjId, key: String) throws -> Set<Int64> {
+    let values = try doc.getAll(obj: object, key: key)
+    return Set(try values.map { value in
+        guard case let .Scalar(.Int(result)) = value else {
+            throw InteropError.unexpected("non-int conflict \(value)")
+        }
+        return result
+    })
+}
+
 func state(_ path: String) throws -> SyncState {
     if FileManager.default.fileExists(atPath: path) {
         let data = try fileData(path)
@@ -174,6 +185,25 @@ case "fork-edit":
     try doc.put(obj: interop, key: "nativeConcurrent", value: .String("native-edit-survived"))
     try write(doc.save(), args[2])
     print(#"{"command":"fork-edit","native":"swift-0.7.2"}"#)
+
+
+case "fork-conflict":
+    guard args.count == 3 else { throw InteropError.usage }
+    let doc = try loadWritable(args[1])
+    let interop = try map(doc, parent: .ROOT, key: "interop")
+    try doc.put(obj: interop, key: "counter", value: .Int(6))
+    try write(doc.save(), args[2])
+    print(#"{"command":"fork-conflict","native":"swift-0.7.2","value":6}"#)
+
+case "verify-counter-conflicts":
+    guard args.count == 2 else { throw InteropError.usage }
+    let doc = try load(args[1])
+    let interop = try map(doc, parent: .ROOT, key: "interop")
+    let values = try intConflicts(doc, object: interop, key: "counter")
+    guard values == Set([4, 6]) else {
+        throw InteropError.unexpected("counter conflicts=\(values)")
+    }
+    print(#"{"command":"verify-counter-conflicts","native":"swift-0.7.2","values":[4,6],"heads":#(doc.heads().count)}"#)
 
 case "sync-generate":
     guard args.count == 4 else { throw InteropError.usage }
