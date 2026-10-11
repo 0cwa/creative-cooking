@@ -1,6 +1,7 @@
 //! p2panda-spaces 0.7.0 group encryption exercised via upstream public test
 //! helpers (without any network). This is NOT an audited production stack.
 use p2panda_auth::Access;
+use std::borrow::Borrow;
 use p2panda_core::traits::Digest;
 use p2panda_spaces::test_utils::TestPeer;
 use p2panda_spaces::{Event, SpaceId, SpacesArgs};
@@ -36,7 +37,8 @@ async fn third_device_joins_and_removed_peer_cannot_decrypt_future_data() {
     }
     let body = vec![0, 255, 0, 1, 128, 42, 0, 17, 240];
     let encrypted = space.publish_persisted(&body).await.unwrap();
-    match &encrypted.header.extensions {
+    let extensions: &SpacesArgs<()> = encrypted.borrow();
+    match extensions {
         SpacesArgs::Application { ciphertext, .. } => assert_ne!(ciphertext, &body),
         _ => panic!("expected encrypted application frame")
     }

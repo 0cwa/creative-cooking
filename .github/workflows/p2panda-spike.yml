@@ -58,4 +58,22 @@ jobs:
         with:
           toolchain: "1.96.0"
           targets: ${{ matrix.target }}
+      - name: Configure Android NDK clang for Rust dependencies
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+            ndk="$ANDROID_NDK_HOME"
+          else
+            sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+            ndk="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          clang="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          ar="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          test -x "$clang" || { echo "Android NDK Clang missing at $clang" >&2; exit 1; }
+          test -x "$ar"
+          echo "CC_aarch64_linux_android=$clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
       - run: cargo check --manifest-path experiments/p2panda/rust/Cargo.toml --lib --target ${{ matrix.target }}

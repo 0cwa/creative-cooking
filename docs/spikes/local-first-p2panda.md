@@ -18,14 +18,14 @@ The branch changes only `experiments/p2panda/`, this report, and the opt-in isol
 
 | Component | Reviewed release / commit | Evidence and maturity |
 | --- | --- | --- |
-| p2panda core / net / sync / spaces / auth / encryption / store | **0.7.0**, upstream release commit `37be61875f285956c906002d74a2d0370df5b2c1` (released 2026-07-07) | Released crates; entire ecosystem warns APIs are unstable until 1.0. Operation header stabilized in v0.7.0 does **not** mean networking/security integration is production-ready. |
-| Experimental Rust harness | `p2panda = "=0.7.0"`, `p2panda-core = "=0.7.0"`, `p2panda-spaces = "=0.7.0"`, `p2panda-auth = "=0.7.0"`, `rust-toolchain = 1.96.0` | Exact direct-version and toolchain constraints, **not a generated cargo lockfile**. Transitive crate resolutions still need `Cargo.lock` for fully reproducible builds. |
-| Iroh underlying p2panda-net v0.7.0 | `iroh = "1.0.0"`, `iroh-base = "1.0.0"`, `iroh-gossip = "0.101.0"`, `iroh-mdns-address-lookup = "0.4.0"` in pinned upstream `p2panda-net/Cargo.toml` | Iroh 1.x has a stable transport core; upstream Cargo semver syntax allows compatible versions, so this is **not** a lockfile pin. |
+| p2panda core / net / sync / spaces / auth / encryption / store | **0.7.1**, upstream release commit `083b48215964e92a564f3c83a1c607b00e94aa64` (released 2026-08-21) | Released crates; entire ecosystem warns APIs are unstable until 1.0. Operation header work began stabilizing in v0.7.0; v0.7.1 improves canonical header encoding, relay bearer authentication, and patches crypto dependency advisories. This **does not** mean networking/security integration is production-ready. |
+| Experimental Rust harness | `p2panda = "=0.7.1"`, `p2panda-core = "=0.7.1"`, `p2panda-spaces = "=0.7.1"`, `p2panda-auth = "=0.7.1"`, `rust-toolchain = 1.96.0` | Exact direct-version, Iroh transport versions and toolchain constraints, **not a generated Cargo.lock**. Other transitive crate resolutions may still drift; add an audited lockfile before reproducibility claims. |
+| Iroh underlying p2panda-net v0.7.1 | `iroh = "1.0.3"`, `iroh-base = "1.0.3"`, `iroh-gossip = "0.101.0"`, `iroh-mdns-address-lookup = "0.5.0"` in pinned upstream `p2panda-net/Cargo.toml` | Iroh 1.x has a stable transport core; upstream Cargo semver syntax allows compatible versions, so this is **not** a lockfile pin. |
 | Iroh FFI | Public upstream `iroh-ffi` release **v1.1.0**, tag commit `5e451092dba0c1a09ee83ff6e5be37b1152a5c58`; `main` snapshot `3103bf5295be6d50c5272ff7a426e9b539f3f587` | Existing Swift/Kotlin and published Android/Apple bindings, but **only for Iroh's transport API**, not a complete p2panda Spaces or Node binding. Neither imported nor compiled in the Expo app. |
 | Dash Router | [2026-09-16 development report](https://p2panda.org/2026/09/16/dash-router-sync-api.html) | Proposed delay-tolerant, multi-hop, store-and-forward design and prototyping; **not a demonstrated published durable production backend**. |
 | App baseline | `a1c8993c4f45e9bb8de2b18d4f644088df99845a` | Expo 57, React Native 0.86.3, static Pages, web IndexedDB/native AsyncStorage, distinct provider credential vault. |
 
-References: [p2panda releases](https://github.com/p2panda/p2panda/releases), [pinned v0.7.0 library](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda/src/lib.rs), [NodeBuilder](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda/src/builder.rs), [net](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda-net/README.md), [net manifest](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda-net/Cargo.toml), [sync](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda-sync/README.md), [spaces](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda-spaces/README.md), [encryption](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda-encryption/README.md), [spaces upstream tests](https://github.com/p2panda/p2panda/blob/v0.7.0/p2panda-spaces/src/tests.rs), [Iroh FFI](https://github.com/n0-computer/iroh-ffi/tree/v1.1.0), [Iroh native demo](https://github.com/n0-computer/hello-iroh-ffi).
+References: [p2panda releases](https://github.com/p2panda/p2panda/releases), [pinned v0.7.1 library](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda/src/lib.rs), [NodeBuilder](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda/src/builder.rs), [net](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda-net/README.md), [net manifest](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda-net/Cargo.toml), [sync](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda-sync/README.md), [spaces](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda-spaces/README.md), [encryption](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda-encryption/README.md), [spaces upstream tests](https://github.com/p2panda/p2panda/blob/v0.7.1/p2panda-spaces/src/tests.rs), [Iroh FFI](https://github.com/n0-computer/iroh-ffi/tree/v1.1.0), [Iroh native demo](https://github.com/n0-computer/hello-iroh-ffi).
 
 This matrix deliberately distinguishes **upstream-documented capability** from **this spike's executable verification**. The existence of a test file is not a passing test run; use the draft PR checks for actual execution. Do not silently upgrade untested rows to "pass."
 
@@ -35,8 +35,8 @@ This matrix deliberately distinguishes **upstream-documented capability** from *
 | --- | --- | --- |
 | Opaque update bytes | JS deterministic/random byte frame encode/decode; Rust real `Node.stream<ReplicatedFrame>` publish/receive assertion added | **Reproducible harness**; native CI results must be checked |
 | PWA / static GitHub Pages | Static ESM WebCrypto client uses fetch against separate persistent HTTP mailbox; no p2panda WASM integration | **Partial; actual browser↔p2panda interoperability not demonstrated** |
-| iOS | Iroh-FFI offers XCFramework/Swift support; best-effort aarch64-apple-ios Rust `cargo check` job added | **Build check requested; no Expo iOS build, simulator or device run** |
-| Android | Iroh-FFI offers Android AAR/Kotlin support; best-effort aarch64-linux-android Rust `cargo check` job added | **Build check requested; NDK linker and Expo device not verified** |
+| iOS | Iroh-FFI offers XCFramework/Swift support; best-effort aarch64-apple-ios Rust `cargo check` job added | **0.7.0 pre-update check failed: transitive `netdev 0.46.3` references missing `libc::in6_ifreq` on iOS; 0.7.1 retry pending. No Expo iOS/simulator/device build.** |
+| Android | Iroh-FFI offers Android AAR/Kotlin support; best-effort aarch64-linux-android Rust `cargo check` job added | **Android 0.7.0 pre-update check failed due missing NDK Clang setup; runner fixed for 0.7.1 retry, results not yet verified. Expo device untested.** |
 | LAN discovery | Released `NodeBuilder` defaults to active mDNS; interactive Rust peer CLI uses mDNS | **Upstream-supported; no observed physical LAN path or packet trace** |
 | LAN direct QUIC | Iroh can connect by local endpoint address | **Upstream-supported; not measured** |
 | Remote direct / NAT traversal | Iroh 1.x relay-assisted address discovery and UDP hole punching | **Upstream-supported; distinct NAT networks not measured** |
@@ -50,7 +50,7 @@ This matrix deliberately distinguishes **upstream-documented capability** from *
 | Revocation | Spaces test rotates keys after removal and attempts to reject Bob's future ciphertext | **Test harness; does not erase past content, past keys or copied data** |
 | Personal + household spaces | Per-space auth/group/key model supports logical separation and nested groups | **Conceptually fits; no app state partition code** |
 | Self-hosting | Native Iroh relay can be self-hosted; persistent mailbox needs own service/storage | **Operationally plausible; not deployed or load-tested** |
-| API maturity | v0.7.0 current released pre-1.0; high-level Spaces integration progressing | **Experimental** |
+| API maturity | v0.7.1 current released pre-1.0; high-level Spaces integration progressing | **Experimental** |
 | Audit / security maturity | Upstream encryption docs warn unaudited; custom demo gateway has no auth | **Cannot recommend security-sensitive production adoption** |
 
 ## Test artifacts and what they actually do
@@ -83,13 +83,13 @@ The last two are *existing application* CI checks; `.github/workflows/ci.yml` ru
 
 ```mermaid
 flowchart LR
-    A["Opaque ReplicatedFrame bytes"] --> N["p2panda Node 0.7.0"]
+    A["Opaque ReplicatedFrame bytes"] --> N["p2panda Node 0.7.1"]
     N --> L["signed append-only operation"]
     L --> RX["Node topic stream"]
     RX --> CHECK["exact byte equality assertion"]
 ```
 
-This single-node test exercises the real p2panda operation pipeline. It is **not a two-device LAN demonstration**.
+This single-node test exercises the real p2panda operation pipeline. The initial **v0.7.0** CI native and Spaces test suite passed before migrating to current **v0.7.1**; revalidate under v0.7.1. It is **not a two-device LAN demonstration**.
 
 ### Actually represented topology: plaintext-blind offline mailbox demo
 
@@ -124,7 +124,7 @@ Do not confuse a hypothetical relay with a tested durable router. In this design
 
 ## Scenario 1 — same-LAN native peers
 
-**Library capability:** p2panda 0.7.0 high-level Node supports mDNS through Iroh. With no explicit relay/bootstrap, `Node::spawn` is LAN-only; `NodeBuilder` defaults to active local advertisement. In low-level `p2panda-net` mDNS configuration the default is *passive*; avoid conflating this with Node default. Active advertisement exposes identity and local address to the LAN and may be inappropriate on untrusted public Wi-Fi.
+**Library capability:** p2panda 0.7.1 high-level Node supports mDNS through Iroh. With no explicit relay/bootstrap, `Node::spawn` is LAN-only; `NodeBuilder` defaults to active local advertisement. In low-level `p2panda-net` mDNS configuration the default is *passive*; avoid conflating this with Node default. Active advertisement exposes identity and local address to the LAN and may be inappropriate on untrusted public Wi-Fi.
 
 **Experiment available:** start `rust/src/bin/peer.rs` on two hosts with a shared topic and distinct persistent DB and device seed; let both processes run; publish fixture; restart peer; publish while second offline; rejoin. Manual instructions in [README](../../experiments/p2panda/README.md). No recorded packet capture/two-device results in this PR, therefore no claimed actual direct path. To establish locality inspect UDP traffic and Iroh connection path changes; merely receiving a frame does not distinguish direct vs relay.
 
@@ -195,7 +195,7 @@ Independent browser mailboxes use AES-256-GCM through ordinary WebCrypto. This p
 
 | Question | Factual answer |
 | --- | --- |
-| Full ordinary browser p2panda 0.7.0 peer? | **Not demonstrated; no ready-made drop-in browser build of high-level SQLite/mDNS Node established.** |
+| Full ordinary browser p2panda 0.7.1 peer? | **Not demonstrated; no ready-made drop-in browser build of high-level SQLite/mDNS Node established.** |
 | Same native discovery? | No conventional UDP multicast/mDNS from JavaScript pages or installed PWAs. |
 | QUIC UDP directly? | Standard browser JavaScript cannot open arbitrary UDP or raw native QUIC sockets. Iroh browser-targeted/WASM transport efforts should be investigated separately; a low-level Iroh WASM entrypoint is not a proof of full p2panda browser parity. |
 | WebSocket/WebTransport/etc? | A browser-approved transport or HTTPS endpoint is needed. This experiment uses standard `fetch` over HTTP; production requires HTTPS and working CORS, rate limits and membership authorization. |
@@ -219,7 +219,7 @@ Minimum proposed vertical slice:
 5. Run on actual physical iPhone and Android device; test permission prompts, Wi-Fi/4G, standby/background disconnect and foreground catch-up, plus upgrade migration/crash recovery.
 6. Keep a separate ordinary-browser adapter; no native import in `appStorage.web.ts`.
 
-A best-effort Rust cross-target `cargo check --lib` for `aarch64-apple-ios` and `aarch64-linux-android` is configured. **It is not a linkable XCFramework/AAR or app build**, Android NDK linking may be missing, Xcode may be required, and p2panda cross-compilation may expose further blockers. The matrix deliberately labels those jobs experimental; detailed results belong in the PR checks. No native code size measurement, Expo app build, emulator run or real iOS/Android binary is claimed.
+On the initial 0.7.0 check, **Android cross-build failed** in `ring` because no `aarch64-linux-android-clang` was configured in the hosted runner; we now locate/configure the NDK toolchain explicitly. **iOS cross-build failed** in `netdev 0.46.3` (`libc::in6_ifreq` unavailable on iOS), a transitive native compatibility blocker not solved by using Swift FFI alone. A best-effort Rust cross-target `cargo check --lib` for `aarch64-apple-ios` and `aarch64-linux-android` is configured. **It is not a linkable XCFramework/AAR or app build**, Android NDK linking may be missing, Xcode may be required, and p2panda cross-compilation may expose further blockers. The matrix deliberately labels those jobs experimental; detailed results belong in the PR checks. No native code size measurement, Expo app build, emulator run or real iOS/Android binary is claimed.
 
 Native storage footprint: a long-lived Tokio runtime, Iroh socket/discovery/relay machinery, SQLite/sqlx, cryptographic key state, JS↔native bridge, notification/background lifecycle handling, and per-platform binary packaging; generally **substantially more than a single small RN JS module**. No evidence-based MB figure was measured.
 

@@ -4,7 +4,7 @@
 
 ## Evidence boundaries
 
-- **Actual upstream p2panda:** `rust/src/lib.rs` publishes an opaque binary envelope through a real p2panda 0.7.0 local `Node`. `rust/src/bin/peer.rs` is an interactive two-process native discovery/sync harness. Running a process locally does **not** prove direct LAN, NAT traversal, or relay fallback; capture traffic separately.
+- **Actual upstream p2panda:** `rust/src/lib.rs` publishes an opaque binary envelope through a real p2panda 0.7.1 local `Node`. `rust/src/bin/peer.rs` is an interactive two-process native discovery/sync harness. Running a process locally does **not** prove direct LAN, NAT traversal, or relay fallback; capture traffic separately.
 - **Actual upstream p2panda Spaces:** `rust/tests/spaces.rs` exercises two/three-device encrypted message membership and revocation via p2panda-spaces public test helpers **without a network**. Security API is experimental, not independently audited.
 - **Application-side contracts only:** `contract.mjs` is a transport-independent byte frame, `invitation.mjs` an unsigned/unredeemed QR-sized encoding proof.
 - **Not p2panda:** `browser/interop.mjs` and `gateway.mjs` demonstrate a conventional HTTP ciphertext mailbox using WebCrypto, not p2panda/Iroh browser interoperability. The gateway is insecure (no authentication/quotas; `Access-Control-Allow-Origin: *`), accepts anyone knowing the space ID, and must bind localhost only.
