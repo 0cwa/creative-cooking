@@ -1,0 +1,100 @@
+name: Subduction and Keyhive feasibility (experimental)
+
+# Isolated from the app build and from production state. No public relay,
+# credentials, secret variables, app migrations, or branch deployments.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/subduction-keyhive-spike.yml'
+      - 'scripts/spikes/local-first-subduction-keyhive/**'
+      - 'docs/spikes/local-first-subduction-keyhive.md'
+
+permissions:
+  contents: read
+
+jobs:
+  browser-durable-relay:
+    name: Pinned Subduction binary + real browser clients
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Creative Cooking
+        uses: actions/checkout@v4
+
+      - name: Checkout exactly pinned upstream Subduction
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up pinned upstream Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: wasm32-unknown-unknown
+          cache: true
+          cache-workspaces: subduction-upstream
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked --version 0.14.0
+
+      - name: Install pinned upstream and fixture dependencies
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm install --frozen-lockfile
+          cd ../..
+          npm install --prefix scripts/spikes/local-first-subduction-keyhive --no-audit --no-fund
+
+      - name: Build Subduction native relay, core and browser WASM
+        run: |
+          cd subduction-upstream
+          cargo build -p subduction_cli
+          wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release
+
+      - name: Run selected upstream transport and durability regressions
+        run: |
+          cd subduction-upstream
+          cargo test -p subduction_core --test relay_topology_sync
+          cargo test -p subduction_core --test addbatch_storage_durability
+          cargo test -p subduction_core --test responder_cache_fast_path
+
+      - name: Create encrypted real-Automerge test changes
+        run: |
+          node scripts/spikes/local-first-subduction-keyhive/make-fixtures.mjs "$RUNNER_TEMP/cc-subduction-fixtures.json"
+          cp scripts/spikes/local-first-subduction-keyhive/creative-cooking.spec.ts subduction-upstream/subduction_wasm/e2e/creative-cooking.spec.ts
+          echo "CC_SUBDUCTION_FIXTURES=$RUNNER_TEMP/cc-subduction-fixtures.json" >> "$GITHUB_ENV"
+          echo "CC_SUBDUCTION_CLI=$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli" >> "$GITHUB_ENV"
+
+      - name: Install local static test server and Chromium
+        run: |
+          npm install --global http-server@14.1.1
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Exercise two browser peers, WebSocket, redb restart and HTTP long poll
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright test creative-cooking.spec.ts --project=chromium --reporter=line
+
+      - name: Upload experimental browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subduction-keyhive-spike-diagnostics
+          path: |
+            subduction-upstream/subduction_wasm/test-results/
+            subduction-upstream/subduction_wasm/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
