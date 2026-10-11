@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Automerge Android Spike",
+    "slug": "automerge-android-spike",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "platforms": ["android"],
+    "newArchEnabled": true,
+    "android": {
+      "package": "creative.cooking.automerge.spike.expoapp"
+    }
+  }
+}

@@ -1,5 +1,5 @@
-mod bridge;
 //! Current-core JNI proof, not a production Expo/native module.
+mod bridge;
 use automerge::{transaction::Transactable, ActorId, AutoCommit, ReadDoc, ROOT, ScalarValue, Value};
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jbyteArray, jint, jstring};

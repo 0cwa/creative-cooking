@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["creative.cooking.automerge.spike.expo.AutomergeSpikeModule"]
+  }
+}

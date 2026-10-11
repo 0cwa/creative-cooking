@@ -279,6 +279,18 @@ jobs:
           (llvm-readelf -h "$LIB" || readelf -h "$LIB") > spikes/automerge/artifacts/jni-android-elf-header.txt
           BYTES=$(wc -c < "$LIB" | tr -d ' ')
           printf '{"result":"PASS","target":"aarch64-linux-android","api":26,"soBytes":%s,"note":"cross-compiled, not Android-runtime-tested"}\n' "$BYTES" | tee spikes/automerge/artifacts/jni-android-compile.json
+      - name: Build same current-core JNI for x86_64 accelerated Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add --toolchain 1.90.0 x86_64-linux-android
+          cargo +1.90.0 ndk -t x86_64 -P 26 build --manifest-path spikes/automerge/native/rust-jni/Cargo.toml --release
+          file spikes/automerge/native/rust-jni/target/x86_64-linux-android/release/libcreative_cooking_automerge_jni.so
+      - name: Compile isolated Expo 57 / RN 0.86.3 native module release and test APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash spikes/automerge/native/expo-fixture/build-ci.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -292,6 +304,46 @@ jobs:
             spikes/automerge/artifacts/jni-android-*.json
             spikes/automerge/artifacts/jni-android-*.txt
             spikes/automerge/native/rust-jni/target/aarch64-linux-android/release/libcreative_cooking_automerge_jni.so
+            spikes/automerge/artifacts/expo-build-result.json
+            spikes/automerge/artifacts/expo-build-versions.log
+            spikes/automerge/artifacts/expo-module-registered.log
+            spikes/automerge/artifacts/expo-packaged-jni.log
+            spikes/automerge/artifacts/expo-apk-badging.log
+            spikes/automerge/artifacts/expo-gradle-build.log
+          if-no-files-found: warn
+
+  android-expo-runtime:
+    name: Android Expo 57 Hermes runtime and native instrumentation (qualified only on device)
+    needs: automerge-c-android-core
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: automerge-expo-apks
+          path: spikes/automerge/native/expo-fixture/android/app/build/outputs/apk
+      - name: Verify device acceleration capability
+        shell: bash
+        run: |
+          ls -l /dev/kvm || true
+          test ! -e /dev/kvm || sudo chmod 666 /dev/kvm
+      - name: Run actual Expo/Hermes JS smoke and Android JNI instrumentation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: bash spikes/automerge/native/expo-fixture/run-device.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-expo-device-evidence
+          path: spikes/automerge/artifacts/expo-*
           if-no-files-found: warn
 
   java-native-contract:
