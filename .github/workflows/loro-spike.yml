@@ -269,7 +269,7 @@ jobs:
           }
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
           stat -f '%z' "$APK" | tee artifacts/loro/android-arm64/apk-bytes.txt
-          unzip -l "$APK" | grep -E 'lib/arm64-v8a/.*\\.so' > artifacts/loro/android-arm64/native-libraries.txt
+          unzip -l "$APK" | grep -E 'lib/arm64-v8a/.*\.so' > artifacts/loro/android-arm64/native-libraries.txt
           grep -q 'lib/arm64-v8a/libloro-react-native.so' artifacts/loro/android-arm64/native-libraries.txt
       - name: Launch accelerated ARM64 Android Emulator; exercise real native binding twice
         run: |
