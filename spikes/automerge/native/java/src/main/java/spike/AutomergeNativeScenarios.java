@@ -7,6 +7,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -717,9 +718,9 @@ public final class AutomergeNativeScenarios {
             ScenarioSummary summary = runAll();
             String json = toJson(summary);
             if (args.length >= 2) {
-                Path out = Path.of(args[1]);
+                Path out = Paths.get(args[1]);
                 Files.createDirectories(out.getParent());
-                Files.writeString(out, json + System.lineSeparator());
+                Files.write(out, (json + System.lineSeparator()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
             System.out.println(json);
             if (summary.fail() > 0) System.exit(1);
@@ -727,13 +728,13 @@ public final class AutomergeNativeScenarios {
         }
 
         switch (args[0]) {
-            case "mutate" -> mutateInterop(Path.of(args[1]), Path.of(args[2]), args[3], false);
-            case "fork-edit" -> mutateInterop(Path.of(args[1]), Path.of(args[2]), "native", true);
-            case "sync-generate" -> syncGenerate(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
-            case "sync-receive" -> syncReceive(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
-            case "verify-authored" -> verifyAuthored(Path.of(args[1]));
+            case "mutate" -> mutateInterop(Paths.get(args[1]), Paths.get(args[2]), args[3], false);
+            case "fork-edit" -> mutateInterop(Paths.get(args[1]), Paths.get(args[2]), "native", true);
+            case "sync-generate" -> syncGenerate(Paths.get(args[1]), Paths.get(args[2]), Paths.get(args[3]));
+            case "sync-receive" -> syncReceive(Paths.get(args[1]), Paths.get(args[2]), Paths.get(args[3]));
+            case "verify-authored" -> verifyAuthored(Paths.get(args[1]));
             case "live-sync-web" -> liveSyncWeb(
-                    Path.of(args[1]), Path.of(args[2]), Path.of(args[3]), Path.of(args[4]), args[5]);
+                    Paths.get(args[1]), Paths.get(args[2]), Paths.get(args[3]), Paths.get(args[4]), args[5]);
             default -> throw new IllegalArgumentException("unknown command " + args[0]);
         }
     }
