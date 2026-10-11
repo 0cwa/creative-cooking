@@ -402,7 +402,7 @@ jobs:
 
   swift-native-interop:
     name: Swift native interop and iOS compile probe
-    runs-on: macos-15
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
