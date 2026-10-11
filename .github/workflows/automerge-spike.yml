@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: automerge-spike-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   web-contract:
     name: Web Automerge contract and benchmark
