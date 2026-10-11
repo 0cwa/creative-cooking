@@ -90,8 +90,18 @@ jobs:
         run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
       - name: Inspect source package
         run: |
-          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
+          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({variant:'current-source',version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
           grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
+          grep -R "loro-ffi" node_modules/loro-react-native/loro-rs/Cargo.toml node_modules/loro-react-native/loro-rs/Cargo.lock | head -20 || true
+          du -sh node_modules/loro-react-native
+          find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
+      - name: Inspect latest published native package
+        run: |
+          rm -rf node_modules/loro-react-native
+          npm install --no-save --no-audit --no-fund loro-react-native@1.10.3
+          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({variant:'published',version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
+          grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
+          grep -R "loro-ffi" node_modules/loro-react-native/loro-rs/Cargo.toml node_modules/loro-react-native/loro-rs/Cargo.lock | head -20 || true
           du -sh node_modules/loro-react-native
           find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
 
@@ -112,8 +122,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: npm install --no-audit --no-fund
-      - name: Install exact current official RN source
-        run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
+      - name: Install latest published official RN package for autolinking
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+        env:
+          EXPO_PUBLIC_LORO_NATIVE_LABEL: loro-react-native@1.10.3
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
@@ -127,17 +139,28 @@ jobs:
           cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
           cp scripts/spikes/loro/app.config.native.ts app.config.ts
       - name: Expo prebuild Android
-        run: CI=1 npx expo prebuild --clean --platform android --no-install
-      - name: Build Android debug APK
+        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
+      - name: Build Android arm64 debug APK
+        run: |
+          mkdir -p artifacts/loro/android
+          cd android
+          ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a | tee ../artifacts/loro/android/arm64-build.log
+          cd ..
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          stat -c '%s' "$APK" | tee artifacts/loro/android/arm64-apk-bytes.txt
+          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/arm64-native-library-list.txt || true
+      - name: Build Android x86_64 emulator APK
+        id: android_x86_build
+        continue-on-error: true
         run: |
           cd android
-          ./gradlew --no-daemon assembleDebug
+          ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=x86_64 | tee ../artifacts/loro/android/x86_64-build.log
           cd ..
-          mkdir -p artifacts/loro/android
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-          stat -c '%s' "$APK" | tee artifacts/loro/android/apk-bytes.txt
-          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/native-library-list.txt || true
+          stat -c '%s' "$APK" | tee artifacts/loro/android/x86_64-apk-bytes.txt
+          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/x86_64-native-library-list.txt || true
       - name: Run on Android x86_64 emulator
+        if: steps.android_x86_build.outcome == 'success'
         shell: bash
         run: |
           set -euxo pipefail
@@ -181,6 +204,7 @@ jobs:
           adb exec-out screencap -p > artifacts/loro/android/runtime.png
           node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/android/runtime.log artifacts/loro/android/result.json
       - name: Verify native-produced update in web Loro
+        if: steps.android_x86_build.outcome == 'success'
         run: |
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
           node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android/result.json | tee artifacts/loro/android/web-verification.json
@@ -203,8 +227,10 @@ jobs:
           node-version: 22.13
           package-manager-cache: false
       - run: npm install --no-audit --no-fund
-      - name: Install exact current official RN source
-        run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
+      - name: Install latest published official RN package for autolinking
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+        env:
+          EXPO_PUBLIC_LORO_NATIVE_LABEL: loro-react-native@1.10.3
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
@@ -218,7 +244,7 @@ jobs:
           cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
           cp scripts/spikes/loro/app.config.native.ts app.config.ts
       - name: Expo prebuild iOS
-        run: CI=1 npx expo prebuild --clean --platform ios --no-install
+        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform ios --no-install
       - name: Install CocoaPods
         run: cd ios && pod install
       - name: Build iOS simulator app
@@ -230,7 +256,7 @@ jobs:
           echo "workspace=$WORKSPACE scheme=$SCHEME simulator=$UDID"
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
-          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO build | tee artifacts/loro/ios-build.log
+          EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO build | tee artifacts/loro/ios-build.log
           APP=$(find ios-build/Build/Products/Release-iphonesimulator -name '*.app' -print -quit)
           mkdir -p artifacts/loro/ios
           du -sk "$APP" | tee artifacts/loro/ios/app-kib.txt
