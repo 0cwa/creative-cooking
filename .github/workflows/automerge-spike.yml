@@ -196,15 +196,15 @@ jobs:
         run: |
           rustup toolchain install 1.90.0 --profile minimal
           rustup default 1.90.0
-          rustup target add aarch64-linux-android
-          cargo install cargo-ndk --locked
+          rustup target add --toolchain 1.90.0 aarch64-linux-android
+          cargo +1.90.0 install cargo-ndk --locked
       - name: Build automerge-c from the Automerge 3.5 commit for Android arm64
         shell: bash
         run: |
           set +e
           mkdir -p spikes/automerge/artifacts
           cd spikes/automerge/upstream-automerge/rust
-          cargo ndk -t arm64-v8a -P 26 build -p automerge-c --release             > ../../artifacts/automerge-c-android-build.log 2>&1
+          cargo +1.90.0 ndk -t arm64-v8a -P 26 build -p automerge-c --release             > ../../artifacts/automerge-c-android-build.log 2>&1
           code=$?
           lib="$(find target -type f -name 'libautomerge_core.a' | head -n 1)"
           if [ "$code" -eq 0 ] && [ -n "$lib" ]; then
