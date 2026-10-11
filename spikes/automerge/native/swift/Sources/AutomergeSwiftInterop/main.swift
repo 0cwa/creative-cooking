@@ -9,7 +9,7 @@ enum InteropError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .usage: return "usage: AutomergeSwiftInterop mutate|fork-edit|sync-generate|sync-receive|verify-authored ..."
+        case .usage: return "usage: AutomergeSwiftInterop mutate|fork-edit|sync-generate|sync-receive|live-sync-web|verify-authored|backend-smoke|scenarios ..."
         case let .missing(value): return "missing \(value)"
         case let .unexpected(value): return "unexpected \(value)"
         }
@@ -244,6 +244,18 @@ case "verify-authored":
         throw InteropError.unexpected("webCreated=false")
     }
     print(#"{"command":"verify-authored","native":"swift-0.7.2","loaded":true}"#)
+
+case "scenarios":
+    guard args.count == 1 || args.count == 2 else { throw InteropError.usage }
+    let summary = runSwiftNativeCommonScenarioContract()
+    let data = try summary.jsonData()
+    if args.count == 2 {
+        try write(data, args[1])
+    }
+    print(String(decoding: data, as: UTF8.self))
+    guard summary.results.count == 18, summary.fail == 0, summary.partial == 0 else {
+        throw InteropError.unexpected("Swift common contract pass=\(summary.pass) partial=\(summary.partial) fail=\(summary.fail)")
+    }
 
 case "backend-smoke":
     let left = SwiftAutomergeBackend()
