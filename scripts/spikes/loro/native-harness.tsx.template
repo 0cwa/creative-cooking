@@ -145,10 +145,43 @@ function runHarness(loro: LoroModule): HarnessResult {
   restarted.import_(snapshot);
   const afterRestart = restarted.toJSON() as Record<string, any>;
 
+  // Preserve the existing strict check while distinguishing logical change from
+  // JSON field-order drift, and capturing operation-version diagnostics.
   const beforeDuplicate = JSON.stringify(afterRestart);
+  const beforeVersion = restarted.oplogVersion();
   restarted.import_(webUpdate);
-  const duplicateImportIdempotent = JSON.stringify(restarted.toJSON()) === beforeDuplicate;
-  if (!duplicateImportIdempotent) throw new Error('duplicate update import was not idempotent after restart');
+  const afterDuplicate = restarted.toJSON() as Record<string, any>;
+  const afterVersion = restarted.oplogVersion();
+  const duplicateImportIdempotent = JSON.stringify(afterDuplicate) === beforeDuplicate;
+  if (!duplicateImportIdempotent) {
+    const normalized = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(normalized);
+      if (value !== null && typeof value === 'object') {
+        return Object.fromEntries(
+          Object.entries(value as Record<string, unknown>)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, item]) => [key, normalized(item)])
+        );
+      }
+      return value;
+    };
+    const versionDetails = (value: any) =>
+      typeof value?.toJSON === 'function' ? value.toJSON() : String(value);
+    const ordering = typeof beforeVersion?.partialCmp === 'function'
+      ? beforeVersion.partialCmp(afterVersion)
+      : 'unavailable';
+    throw new Error('duplicate update import was not idempotent after restart: '
+      + JSON.stringify({
+        sameLogicalValue: JSON.stringify(normalized(afterRestart)) === JSON.stringify(normalized(afterDuplicate)),
+        versionOrdering: ordering ?? 'concurrent',
+        beforeVersion: versionDetails(beforeVersion),
+        afterVersion: versionDetails(afterVersion),
+        before: afterRestart['recipe:recipe-1'],
+        after: afterDuplicate['recipe:recipe-1'],
+        beforeTopLevelKeys: Object.keys(afterRestart),
+        afterTopLevelKeys: Object.keys(afterDuplicate)
+      }));
+  }
 
   const structures = new LoroDoc();
   structures.setPeerId(404n);

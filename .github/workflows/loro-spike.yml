@@ -26,6 +26,7 @@ jobs:
           package-manager-cache: false
       - run: npm install --no-audit --no-fund
       - run: npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+      - run: node --test scripts/spikes/loro/parse-native-log.test.mjs
       - run: node scripts/spikes/loro/web-probe.mjs
       - run: node scripts/spikes/loro/run.mjs
       - name: Package footprint
