@@ -63,7 +63,7 @@ Upstream references used for this table are the official repositories/releases:
 | --- | --- | --- |
 | Direct Automerge JS/WASM in current Expo/Hermes | **FAIL as a practical route / PARTIAL runtime probe** | Automerge bundles to Hermes bytecode, but the bundle references `WebAssembly`, `TextEncoder`, `TextDecoder`, and `atob`; RN 0.86.3 exposes `hermesc` to CI but no host Hermes runtime binary. Official Hermes WebAssembly support remains absent. No production claim is based only on compiler acceptance. |
 | Polygen | **FAIL** | Exact Automerge 3.5 WASM is 3,644,225 bytes. `wasm2c` fails with `invalid import tag kind: exceptions not allowed`; Polygen 0.2.1 likewise generates no native files. This matches Polygen’s published “Exceptions: unsupported” matrix. |
-| Official Automerge Swift | **PASS for iOS feasibility** | Build, save/load, conflicts, live sync, JS↔Swift binary interchange, JS↔Swift sync, author-bearing JS document load, and an iOS Simulator package test all pass. |
+| Official Automerge Swift | **PASS for iOS feasibility** | Build, save/load, conflicts, live sync, JS↔Swift binary interchange, JS↔Swift sync, author-bearing JS document load, iOS Simulator compilation, and the complete 18-scenario common contract all pass in an iOS Simulator. |
 | Official Automerge Java/Kotlin/Android 0.0.9 | **PARTIAL** | Java host binding runs the full 18-scenario contract with 17 PASS / 1 PARTIAL; JS→Java→JS binary interchange passes; author-bearing JS 3.5 docs load. However a live JS 3.5 ↔ Java 0.0.9 sync session times out and does not converge, so production cross-platform sync on this version pair is not proven. |
 | `automerge-c` current core for Android | **PARTIAL but promising** | Rust core 0.12.0 / automerge-c 0.2.2 compiles for `aarch64-linux-android`, API 26, producing a 12,932,546-byte static library. A Nitro/Turbo/Expo bridge was not implemented in this bounded spike. |
 | Handwritten TurboModule | **not attempted** | It is not simpler than using the official Swift binding and a generated/small native bridge over the official core. Reimplementing Automerge is explicitly out of scope. |
@@ -98,30 +98,34 @@ This is not a production implementation decision. It is the smallest route consi
 
 The authoritative web harness runs the exact 18 common scenarios with deterministic IDs and simulated `iphone`, `macbook`, and `ipad` identities.
 
-The Java 0.0.9 host binding also runs the same scenario family. Its only semantic downgrade is test 7 source/history detail: conflicting values are available, but the Java `Conflicts` API does not expose the operation/source metadata needed to attribute each alternative as richly as JS 3.5.
+The same scenario contract also runs through Automerge Swift 0.7.2 in an actual iOS Simulator. The Java 0.0.9 host binding runs the same scenario family as an additional Android-binding semantic check; its only semantic downgrade is test 7 source/history detail, because the Java `Conflicts` API does not expose the operation/source metadata needed to attribute each alternative as richly as JS 3.5 or Swift.
 
-| # | Scenario | Web 3.5.0 | Java 0.0.9 | Exact observation |
-| ---: | --- | --- | --- | --- |
-| 1 | Different recipe fields | **PASS** | **PASS** | Title and portions both survive. |
-| 2 | Same nested entity, different properties | **PASS** | **PASS** | Ingredient amount `3` and qualified name `tomatoes (ripe)` both survive. |
-| 3 | Concurrent additions | **PASS** | **PASS** | Both ingredients survive; merge direction yields the same order. Web observed `tomatoes, bread, garlic, basil`. |
-| 4 | Concurrent text editing | **PASS** | **PASS** | Web exact result: `Chop onions finely and cook gently until golden.` |
-| 5 | Chat appends | **PASS** | **PASS** | Neither append disappears; deterministic order is retained. |
-| 6 | Set-like additions | **PASS** | **PASS** | `peanuts` and `sesame` both survive in a map-as-set representation. |
-| 7 | Same scalar disagreement | **PASS** | **PARTIAL** | Web preserves values 4 and 6, op IDs, actor→author/device mapping, concurrent change metadata, and a later resolution depending on both heads. Java preserves values and resolution semantics but not equivalent source metadata. |
-| 8 | Same atomic title | **PASS** | **PASS** | Both title alternatives remain reviewable. |
-| 9 | Delete versus edit | **PASS** | **PASS** | Physical deletion hides the recipe. Tombstone + stable entity preserves both delete intent and concurrent edit for semantic review. |
-| 10 | Duplicate pantry item | **PASS** | **PASS** | Both logical “carrots” items and their distinct preferences survive; application semantic dedupe is required. |
-| 11 | Reorder + edit | **PASS** | **PASS** | Stable-ID map + order list preserves the reorder and the edited step. |
-| 12 | Restart | **PASS** | **PASS** | Save/load/restart followed by new edits works. Java also exercised repeated explicit native frees. |
-| 13 | Out-of-order delivery | **PASS** | **PASS** | Raw encoded changes delivered dependency-last converge after the missing dependency arrives. |
-| 14 | Duplicate delivery | **PASS** | **PASS** | Duplicate encoded changes are idempotent; duplicate sync message is safe in-session on JS. |
-| 15 | Long offline divergence | **PASS** | **PASS** | Eventual convergence with clean edits plus preserved 4/6 disagreement. |
-| 16 | Merge direction | **PASS** | **PASS** | A→B and B→A produce equivalent logical/conflict results. |
-| 17 | Actual sync protocol | **PASS** | **PASS within Java 0.0.9** | JS sync uses actual `SyncState` APIs: 4 messages / 3 rounds. Java same-version sync also converges. Cross-version JS 3.5 ↔ Java 0.0.9 is a separate interoperability failure below. |
-| 18 | Three replicas | **PASS** | **PASS** | Three replicas converge. |
+| # | Scenario | Web 3.5.0 | Swift 0.7.2 / iOS Simulator | Java 0.0.9 host | Exact observation |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | Different recipe fields | **PASS** | **PASS** | **PASS** | Title and portions both survive without a scalar disagreement. |
+| 2 | Same nested entity, different properties | **PASS** | **PASS** | **PASS** | Ingredient amount `3` and qualified name `tomatoes (ripe)` both survive. |
+| 3 | Concurrent additions | **PASS** | **PASS** | **PASS** | Both ingredients survive; merge direction yields the same deterministic order: `tomatoes, bread, garlic, basil`. |
+| 4 | Concurrent text editing | **PASS** | **PASS** | **PASS** | Exact web/iOS result: `Chop onions finely and cook gently until golden.` |
+| 5 | Chat appends | **PASS** | **PASS** | **PASS** | Neither append disappears; the observed native order is seed, laptop, phone. |
+| 6 | Set-like additions | **PASS** | **PASS** | **PASS** | `peanuts` and `sesame` both survive in a map-as-set representation. |
+| 7 | Same scalar disagreement | **PASS** | **PASS** | **PARTIAL** | Web and Swift preserve values 4 and 6, source/device change evidence, concurrency, and a later iPad=5 resolution causally depending on both heads. Java preserves the values and resolution semantics but lacks equivalent source metadata. |
+| 8 | Same atomic title | **PASS** | **PASS** | **PASS** | Both title alternatives remain reviewable. |
+| 9 | Delete versus edit | **PASS** | **PASS** | **PASS** | Physical deletion hides the recipe; tombstone + stable entity preserves both delete intent and concurrent edit for semantic review. |
+| 10 | Duplicate pantry item | **PASS** | **PASS** | **PASS** | Both logical “carrots” items and their distinct preferences survive; application semantic dedupe is required. |
+| 11 | Reorder + edit | **PASS** | **PASS** | **PASS** | Stable-ID map + order list preserves the reorder and the edited step. |
+| 12 | Restart | **PASS** | **PASS** | **PASS** | Save/load/restart followed by new edits works. Java also exercised repeated explicit native frees. |
+| 13 | Out-of-order delivery | **PASS** | **PASS** | **PASS** | Dependency-late encoded changes converge after the missing dependency arrives. |
+| 14 | Duplicate delivery | **PASS** | **PASS** | **PASS** | Duplicate encoded changes are idempotent; duplicate sync messages are safe in-session on JS. |
+| 15 | Long offline divergence | **PASS** | **PASS** | **PASS** | Eventual convergence keeps clean edits plus the preserved 4/6 disagreement. |
+| 16 | Merge direction | **PASS** | **PASS** | **PASS** | A→B and B→A produce equivalent logical/conflict results. |
+| 17 | Actual sync protocol | **PASS** | **PASS** | **PASS within Java 0.0.9** | JS and Swift both use actual `SyncState` APIs and converge in 4 messages / 3 rounds. Java same-version sync converges; direct JS 3.5 ↔ Java 0.0.9 is a separate interoperability failure below. |
+| 18 | Three replicas | **PASS** | **PASS** | **PASS** | Three replicas converge. |
 
 Web summary: **18 PASS / 0 PARTIAL / 0 FAIL**.
+
+Swift host summary: **18 PASS / 0 PARTIAL / 0 FAIL**.
+
+iOS Simulator summary: **18 PASS / 0 PARTIAL / 0 FAIL**. XCTest executed the common-contract test plus the conflict-persistence/sync smoke test with zero failures.
 
 Java host summary: **17 PASS / 1 PARTIAL / 0 FAIL**.
 
@@ -225,9 +229,16 @@ No CRDT can decide whether independently valid field edits form a bad recipe. A 
 
 ## Cross-platform interoperability
 
+| Target / path | Result | What was actually proven |
+| --- | --- | --- |
+| Web / JS 3.5.0 | **PASS** | 18/18 common scenarios, history/conflict evidence, persistence, actual sync protocol, benchmark and bundle probe. |
+| iOS / Automerge Swift 0.7.2 | **PASS** | Clean build, JS↔Swift binary interchange, live JS↔Swift sync, matching scalar disagreement evidence, author-bearing JS document load, iOS Simulator compile, and all 18 common scenarios executed in an iOS Simulator. |
+| Android / Java 0.0.9 | **PARTIAL** | Clean Android app + instrumentation APK compile and 17 PASS / 1 PARTIAL on the Java host semantic contract. Two serious emulator attempts were infrastructure-blocked before the instrumentation suite could execute. Direct JS 3.5 ↔ Java 0.0.9 SyncState interoperability fails. |
+| Android / current Rust/C core | **PARTIAL** | Automerge 0.12.0 / automerge-c 0.2.2 builds for Android arm64 API 26. A React Native bridge/runtime suite was not implemented in this bounded spike. |
+
 ### Web ↔ Swift/iOS
 
-**PASS for the exercised interoperability path.**
+**PASS.**
 
 The spike proves:
 
@@ -241,9 +252,11 @@ The spike proves:
 8. After the same sync, JS sees values `[4, 6]` plus the operation IDs.
 9. Swift 0.7.2 loads a JS 3.5 author-bearing document.
 10. The Swift package compiles for iOS Simulator.
-11. An iOS Simulator test exercises conflict persistence plus a native sync session successfully.
+11. The full common 18-scenario suite runs inside an iOS Simulator with **18 PASS / 0 PARTIAL / 0 FAIL**.
+12. The critical iOS-native disagreement case reports alternatives `[4,6]` from `iphone` / `macbook`, then a resolution to 5 by `ipad` whose change depends on both conflicting heads.
+13. iOS-native actual sync uses Automerge `SyncState` and converges in 4 messages / 3 rounds; the three-replica test also converges.
 
-The iOS simulator test is a backend smoke test, not a port of all 18 scenarios.
+This satisfies the spike requirement that at least one native target run the complete common scenario suite in a simulator/runtime.
 
 ### Web ↔ Java/Android
 
@@ -256,19 +269,25 @@ Proven:
 - JS 3.5 author-bearing document → Java 0.0.9 load: PASS.
 - Java 0.0.9 same-binding sync: PASS.
 - Java host common scenario suite: 17 PASS / 1 PARTIAL.
+- Android app and instrumentation APKs compile cleanly from a fresh Actions checkout against the official Android AAR.
 
 Not proven / failed:
 
-- A live JS 3.5 ↔ Java 0.0.9 sync session does **not** converge. The bounded probe times out after 30 seconds (`syncExitCode=124`).
+- A live direct JS 3.5 ↔ Java 0.0.9 `SyncState` session does **not** converge. The bounded probe times out after 30 seconds (`syncExitCode=124`).
 - Therefore Java 0.0.9 cannot currently be accepted as the Android production sync backend against the web 3.5 binding, even though their persisted document format is interoperable. Java 0.0.9 embeds Rust Automerge 0.8.0, while JS 3.5 uses the newer 0.12.0 core; however Swift 0.7.2 embeds core 0.7.2 and interoperates in the exercised path, so the observed Java failure must be treated as a binding/version-pair wire incompatibility rather than attributed to version skew alone.
 
-### Android target
+### Android runtime qualification
 
-The Android AAR and instrumentation APK compile from a clean Actions checkout. The instrumentation test embeds the same 18-scenario Java contract.
+**PARTIAL due hosted-runner infrastructure; compile is PASS.**
 
-The 2026-10-11 Linux Actions emulator attempt reached `sys.boot_completed=1`, but the unaccelerated emulator did not have the Android `package` service available when Gradle attempted to install the test APK. That failure is runner/runtime infrastructure, not a compile failure. A follow-up rerun adds an explicit package-service readiness wait; its final result should be recorded here before the spike is considered closed.
+Two serious Android runtime attempts were made:
 
-Separately, the current Automerge Rust/C core compiles successfully for Android arm64 API 26, proving a current-core Android bridge is build-feasible.
+- Linux x86_64 emulator: it eventually reached `sys.boot_completed=1`, but the Android `package` service was unavailable when Gradle tried to install the test APK (`Can't find service: package`). This was after the app and instrumentation APKs had compiled.
+- macOS 15 arm64 emulator: the Android app/instrumentation compile again succeeded, but the arm64 emulator failed to become reachable by ADB within the 600-second boot window. GitHub-hosted arm64 macOS runners do not provide nested-virtualization acceleration, making this a poor qualification environment.
+
+The required PR workflow therefore keeps Android **compile evidence** deterministic and green, and retains the emulator qualification as an explicit manual job instead of turning flaky hosted-emulator behavior into required CI.
+
+The instrumentation source still embeds the same 18-scenario Java contract, so a representative local/accelerated Android emulator or device is the remaining runtime qualification for that binding. Independently, the current Automerge Rust/C core compiles successfully for Android arm64 API 26, proving a current-core Android bridge is build-feasible.
 
 ## Persistence findings
 
@@ -373,7 +392,7 @@ A production dependency review must still audit transitive native and build-time
 6. Implement a transport/session layer that recreates sync state on reconnect and can operate fully offline when no network exists.
 7. Implement Merge Analyzer event materialization for clean concurrent merges, scalar disagreements, delete-vs-edit, duplicate pantry items, and suspicious merged recipes.
 8. Preserve unresolved review evidence independently of any future history-pruning policy.
-9. For iOS, wrap Automerge Swift behind the backend boundary and run the full common contract in an iOS runtime.
+9. For iOS, wrap Automerge Swift behind the production Expo/Nitro/native boundary and repeat the already spike-proven 18-scenario iOS runtime contract against that real module lifecycle/persistence integration.
 10. For Android, either wait for/prove a Java binding whose sync protocol interoperates with the chosen web version or build the minimal current-core C/Nitro bridge and run the full common contract plus cross-platform sync in an emulator/device.
 11. Add version-skew interop fixtures to CI: web-produced binary, native-produced binary, bidirectional sync, same-scalar conflict evidence, and resolution.
 12. Re-measure PWA bundle impact, cold load, repeated incremental sync, APK/IPA size, and native memory on representative devices before rollout.
@@ -381,6 +400,16 @@ A production dependency review must still audit transitive native and build-time
 ## CI evidence
 
 The experimental workflow `.github/workflows/automerge-spike.yml` keeps the normal project CI unchanged.
+
+Final qualification evidence on branch commit `7a0ae79c378d2eec81f328009de378bdb96e9e33`:
+
+- Automerge feasibility spike run **#53 / 38153998808**: **SUCCESS** across web, Java, Swift/iOS, Android compile, current-core Android C compile, Hermes probe and Polygen probe; the Android emulator runtime job is deliberately manual.
+- Normal Creative Cooking CI run **#278 / 38153998805**: **SUCCESS**, including Gitleaks, unit tests, typecheck, PWA export/verification and Playwright.
+- Swift native evidence artifact **11708535039** contains the iOS Simulator logs and machine-readable full common-contract result.
+- Android compile evidence artifact **11707931388** contains the built app/instrumentation APK evidence.
+- Web evidence artifact **11707464081** contains scenarios, benchmark and bundle results.
+- Java evidence artifact **11708055450** contains the 17 PASS / 1 PARTIAL native-binding contract plus binary/sync probes.
+- Current-core Android C artifact **11707479259**, Hermes artifact **11707384231**, and Polygen artifact **11707517496** preserve those bounded probe results.
 
 It produces machine-readable artifacts including:
 
@@ -402,6 +431,6 @@ The normal Creative Cooking CI continues to run tests, typecheck, Expo PWA expor
 
 Automerge’s **document semantics are a strong match** for the required product behavior: clean concurrent fields merge, same-value disagreements remain recoverable, causal resolution is detectable, and the JS 3.5 history APIs contain enough evidence for a future low-noise Sync Activity / Merge Analyzer.
 
-Native feasibility is **asymmetric today**. iOS via Automerge Swift is concretely viable and interoperable in the exercised path. Android’s official Java binding is useful but fails the required live sync interoperability against JS 3.5. The current Rust/C core compiles for Android, so a thin current-core native bridge is a credible next step rather than a reimplementation.
+Native feasibility is **asymmetric today**. iOS via Automerge Swift is concretely viable: cross-language interchange/sync works and the full 18-scenario contract passes inside an iOS Simulator. Android’s official Java binding is useful and compiles cleanly for Android, but its direct SyncState protocol fails the required live interoperability against JS 3.5 and hosted Android emulator execution was infrastructure-blocked. The current Rust/C core compiles for Android arm64, so a thin current-core native bridge is a credible next step rather than a reimplementation.
 
 No overall engine winner is declared here, and no production rollout is performed.
