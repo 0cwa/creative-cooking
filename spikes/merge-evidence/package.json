@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node scenarios.mjs",
     "benchmark": "node --expose-gc benchmark.mjs",
-    "typecheck": "tsc --noEmit --strict --target es2022 --module nodenext --moduleResolution nodenext contract.ts"
+    "typecheck": "tsc --ignoreConfig --noEmit --strict --target es2022 --module nodenext --moduleResolution nodenext contract.ts"
   },
   "dependencies": {
     "@automerge/automerge": "3.5.0",
