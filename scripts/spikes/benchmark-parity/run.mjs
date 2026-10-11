@@ -128,12 +128,14 @@ function one(engine, trial, warmup = false) {
 
   const eA = b.edit(b.clone(seed, 'phone'), TRACE.warmA, 'phone');
   const eB = b.edit(b.clone(seed, 'laptop'), TRACE.warmB, 'laptop');
+  // Automerge merge/applyChanges can supersede immutable JS handle ownership.
+  // Work from the untouched fork pair before doing an update exchange.
+  const merged = report('documentMerge', timing(() => b.docMerge(eA, eB)));
+  prove(b.project(merged), warmExpected, 'document merge');
   const exchange = report('rawUpdateExchange', timing(() => b.exchange(seed, eA, eB)));
   prove(b.project(exchange.a), warmExpected, 'raw exchange A');
   prove(b.project(exchange.b), warmExpected, 'raw exchange B');
   if (!warmup) (wireSamples[engine].rawUpdateExchange ??= []).push(exchange.wire);
-  const merged = report('documentMerge', timing(() => b.docMerge(eA, eB)));
-  prove(b.project(merged), warmExpected, 'document merge');
 
   const offlineA = b.edit(b.clone(seed, 'phone'), TRACE.divergenceA, 'phone');
   const offlineB = b.edit(b.clone(seed, 'laptop'), TRACE.divergenceB, 'laptop');
