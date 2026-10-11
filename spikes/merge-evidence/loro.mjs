@@ -123,6 +123,11 @@ export class IncrementalIndex {
     this.items = [...(snapshot?.items ?? [])];
     this.opsDecoded = 0;
     this.changeHeadersVisited = 0;
+    this.cachedFrontier = snapshot?.cachedFrontier ?? null;
+  }
+  ensure(doc) {
+    const now = JSON.stringify(heads(doc));
+    if (now !== this.cachedFrontier) this.update(doc);
   }
   update(doc) {
     let added = 0;
@@ -148,10 +153,11 @@ export class IncrementalIndex {
         this.seen.add(id);
       }
     }
+    this.cachedFrontier = JSON.stringify(heads(doc));
     return { newWrites: added, decodedOps: this.opsDecoded, changeHeadersVisited: this.changeHeadersVisited };
   }
   writes(map, key) { return this.items.filter((item) => item.map === map && item.key === key); }
-  serialize() { return { seen: [...this.seen].sort(), items: this.items }; }
+  serialize() { return { seen: [...this.seen].sort(), items: this.items, cachedFrontier: this.cachedFrontier }; }
 }
 export function compare(doc, a, b) {
   return doc.cmpFrontiers(
@@ -160,7 +166,7 @@ export function compare(doc, a, b) {
   );
 }
 export function latest(doc, index, map, key) {
-  index.update(doc);
+  index.ensure(doc);
   const writes = index.writes(map, key);
   return writes.filter((a) => !writes.some((b) => b !== a && compare(doc, a, b) === -1));
 }
