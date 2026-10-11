@@ -99,28 +99,45 @@ function writesFromJsonExport(d, mapName, key) {
   }
   return result;
 }
+function rawMapWrite(op, mapName, key) {
+  // loro-crdt's WASM getOpsInChange() exposes serde-serialized RemoteOp,
+  // not the normalized JsonOp shape returned by exportJsonUpdates().
+  // Root ContainerID is externally-tagged { Root: { name, container_type } }
+  // and RawOpContent::Map is { Map: { key, value } }.
+  const root = op?.container?.Root ?? op?.container?.root;
+  const rootName = typeof op?.container === 'string'
+    ? (op.container.startsWith('cid:root-') && op.container.endsWith(':Map')
+        ? op.container.slice('cid:root-'.length, -':Map'.length)
+        : null)
+    : root?.name ?? null;
+  const raw = op?.content?.Map ?? op?.content?.map;
+  const normalized = op?.content?.type === 'insert' ? op.content : null;
+  const content = raw ?? normalized;
+  if (rootName !== mapName || !content || content.key !== key) return null;
+  if (raw) {
+    // MapSet.value is Option<LoroValue>; undefined/null here means delete.
+    if (content.value === undefined || content.value === null) return null;
+    return { value: content.value, counter: op.counter };
+  }
+  return { value: content.value, counter: op.counter };
+}
 function writes(d, mapName, key) {
   const result = [];
-  const container = `cid:root-${mapName}:Map`;
   for (const [peerKey, changes] of d.getAllChanges()) {
     const peer = String(peerKey);
     for (const change of changes) {
       const ops = d.getOpsInChange({ peer, counter: change.counter });
       for (const op of ops) {
-        if (
-          op.container === container &&
-          op.content?.type === 'insert' &&
-          op.content?.key === key
-        ) {
-          result.push({
-            value: op.content.value,
-            actor: actorOf(change, peer),
-            peer,
-            counter: op.counter,
-            changeId: `${change.counter}@${peer}`,
-            message: change.message ?? change.msg ?? null
-          });
-        }
+        const write = rawMapWrite(op, mapName, key);
+        if (!write) continue;
+        result.push({
+          value: write.value,
+          actor: actorOf(change, peer),
+          peer,
+          counter: write.counter,
+          changeId: `${change.counter}@${peer}`,
+          message: change.message ?? change.msg ?? null
+        });
       }
     }
   }
@@ -758,3 +775,6 @@ fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(output, null, 2)
 fs.writeFileSync(path.join(OUT, 'benchmark.json'), JSON.stringify(benchmark, null, 2));
 fs.writeFileSync(path.join(OUT, 'web-native-input.json'), JSON.stringify(interop, null, 2));
 console.log(JSON.stringify(output, null, 2));
+if (output.summary.fail > 0) {
+  process.exitCode = 1;
+}
