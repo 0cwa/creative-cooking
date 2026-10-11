@@ -328,7 +328,7 @@ jobs:
 
   android-native-runtime:
     name: Android emulator native contract
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
@@ -342,17 +342,16 @@ jobs:
       - name: Compile Android app and instrumentation APKs
         working-directory: spikes/automerge/native/android
         run: gradle --no-daemon assembleDebug assembleDebugAndroidTest
-      - name: Run all 18 scenarios inside Android emulator
-        id: android-runtime
+      - name: Run all 18 scenarios inside Android arm64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
-          arch: x86_64
+          arch: arm64-v8a
           profile: pixel_6
           disable-animations: true
-          emulator-boot-timeout: 900
+          emulator-boot-timeout: 600
           script: |
-            timeout 240 bash -c 'until adb shell service check package 2>/dev/null | grep -q "found"; do sleep 5; done'
+            timeout 180 bash -c 'until adb shell service check package 2>/dev/null | grep -q "found"; do sleep 3; done'
             adb shell service check package
             cd spikes/automerge/native/android
             gradle --no-daemon connectedDebugAndroidTest
@@ -374,9 +373,9 @@ jobs:
         with:
           name: automerge-android-native-evidence
           path: |
+            spikes/automerge/artifacts/android-dependency-sizes.json
             spikes/automerge/native/android/app/build/outputs/androidTest-results
             spikes/automerge/native/android/app/build/reports/androidTests
-            spikes/automerge/artifacts/android-dependency-sizes.json
           if-no-files-found: warn
 
   swift-native-interop:
