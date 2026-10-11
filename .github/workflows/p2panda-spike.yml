@@ -37,6 +37,12 @@ jobs:
         with:
           workspaces: experiments/p2panda/rust -> target
       - run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets
+      - name: Three isolated Rust processes / offline third-replica catch-up (best effort)
+        continue-on-error: true
+        timeout-minutes: 7
+        run: |
+          cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer
+          node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug/peer
 
   mobile-cross-check:
     name: Rust target check (${{ matrix.target }})

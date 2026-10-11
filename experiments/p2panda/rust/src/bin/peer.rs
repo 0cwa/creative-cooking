@@ -55,7 +55,17 @@ async fn main() -> Result<()> {
             Some(line) = input_rx.recv() => {
                 tx.publish(ReplicatedFrame {
                     document_id: "test/native-peer".into(),
-                    bytes: line.into_bytes()
+                    bytes: if let Some(raw) = line.strip_prefix("hex:") {
+                        if raw.len() % 2 != 0 || raw.len() > 2 * 1024 * 1024 {
+                            eprintln!("hex frame is invalid or too large");
+                            continue;
+                        }
+                        (0..raw.len()).step_by(2)
+                            .map(|i| u8::from_str_radix(&raw[i..i + 2], 16))
+                            .collect::<std::result::Result<Vec<u8>, _>>()?
+                    } else {
+                        line.into_bytes()
+                    }
                 }).await?;
             }
             event = rx.next() => match event {

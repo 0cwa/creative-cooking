@@ -26,6 +26,7 @@ cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets
 cargo run --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer -- new /tmp/panda-a.db <A_64_HEX_SEED>
 # Copy the printed topic, start another peer in a second terminal/host:
 cargo run --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer -- <TOPIC> /tmp/panda-b.db <B_64_HEX_SEED>
+# Write hex:<lowercase-hex-bytes> to send arbitrary binary payloads.
 ```
 
 For a real LAN test use **separate devices**, ensure UDP 5353/mDNS and QUIC UDP pass the firewall, verify direct path with packet capture and record iOS/Android local network permissions. For remote testing pass a known `relay-url` and `bootstrap-node-id`; do not assume public default services. For persistent identity and reconnect use the **same** seed and SQLite path per peer, different for each device. Seed command-line arguments are visible in process listings; debug only.
@@ -41,3 +42,14 @@ This CLI is not proof that iOS/Android targets or Expo integration can compile/r
 No secret credentials, cloud accounts, public relay availability, or app schema migration are required.
 
 See [full report](../../docs/spikes/local-first-p2panda.md) for results and unsupported claims.
+
+## Best-effort three-process same-host test
+
+`process-smoke.mjs` spawns three separate real Rust peer processes: A publishes while B absent and stays online for later B catch-up; a long-lived third peer C receives a second update; A and C are then forcibly killed; C is restarted with the **same persistent SQLite store and identity**; only then is a fresh B brought online to recover the second update. It uses the host's mDNS/multicast path and proves no inter-device simultaneous uptime **only if it actually passes**.
+
+```bash
+cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer
+node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug/peer
+```
+
+This runs on a single machine with three OS processes, not two physical phones or cross-NAT networks. The CI step is `continue-on-error` because GitHub-hosted networking/mDNS may differ from a private LAN. Mark the report as an actual demonstrated native store-and-forward topology only when the log independently confirms A/C shutdown and B's later recovery; otherwise record the precise blocker. Never infer Iroh direct-vs-relayed path from app-layer delivery.
