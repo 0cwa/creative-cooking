@@ -31,4 +31,18 @@ final class BackendTests: XCTestCase {
 
         XCTAssertEqual(Set(try phone.rootConflicts(key: "portions")), Set(try laptop.rootConflicts(key: "portions")))
     }
+
+    func testCompleteCommon18ScenarioContract() throws {
+        let summary = runSwiftNativeCommonScenarioContract()
+        let data = try summary.jsonData()
+        let json = String(decoding: data, as: UTF8.self)
+        print("AUTOMERGE_SWIFT_SCENARIOS_BEGIN")
+        print(json)
+        print("AUTOMERGE_SWIFT_SCENARIOS_END")
+
+        XCTAssertEqual(summary.results.count, 18, "all common scenarios must execute in the iOS runtime")
+        XCTAssertEqual(summary.fail, 0, "no common scenario may fail in the iOS runtime")
+        XCTAssertEqual(summary.partial, 0, "the Swift native runtime should satisfy the complete common contract")
+        XCTAssertEqual(summary.pass, 18)
+    }
 }
