@@ -1,0 +1,9 @@
+{
+  "name": "creative-cooking-subduction-spike",
+  "private": true,
+  "type": "module",
+  "description": "Isolated local-first sync fixture generation; not a production dependency",
+  "dependencies": {
+    "@automerge/automerge": "3.5.0"
+  }
+}
