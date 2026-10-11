@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import * as Automerge from './automerge.mjs';
 import * as Loro from './loro.mjs';
@@ -284,12 +284,16 @@ for (const E of [Automerge, Loro]) {
     const eventAgain = conflictEvent(E, fresh, 'portions', restoredIndex);
     assert.equal(event.id, eventAgain.id);
     ledger.upsert(eventAgain);
+    const secondDeviceLedger = ReviewLedger.fromJSON(new ReviewLedger([event]).toJSON());
     ledger.dismiss(event.id);
     ledger.upsert(event);
     assert.equal(ledger.get(event.id).status, 'dismissed');
+    assert.equal(secondDeviceLedger.get(event.id).status, 'unresolved',
+      'reviewed on one device must not silently overwrite another local device');
     assert.equal(ReviewLedger.fromJSON(ledger.toJSON()).get(event.id).status, 'dismissed');
     return { eventId: event.id, transport: t, eventCount: ledger.list().length,
       duplicateExtractionIsIdempotent: true, persistedDismissalLocalOnly: true,
+      remoteDeviceRemainsUnreviewed: true,
       decodedOperationsOnRepeatedIndexUpdate: secondDecode };
   });
 }
@@ -310,6 +314,10 @@ for (const E of [Automerge, Loro]) {
     assert.equal(conflictEvent(E, afterRestart, 'portions',
       idx ? new E.IncrementalIndex() : undefined).id, event.id);
     const durable = readCheckpoint(checkpointFile);
+    const tampered = checkpointFile + '.tampered';
+    writeFileSync(tampered, JSON.stringify({ ...stored, checksum: 'bad-checksum' }));
+    assert.throws(() => readCheckpoint(tampered), /checksum mismatch/);
+    unlinkSync(tampered);
     assert.deepEqual(durable.frontier, E.heads(doc));
     assert.equal(durable.ledger.get(event.id).status, 'unresolved');
     assert.deepEqual(idOf(durable.ledger.get(event.id).alternatives.map((x) => x.value)), idOf([4, 6]));
