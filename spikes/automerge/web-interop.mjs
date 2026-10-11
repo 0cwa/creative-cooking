@@ -77,6 +77,27 @@ switch (command) {
     A.free(doc);
     break;
   }
+  case 'fork-conflict': {
+    const [input, out, rawValue = '4'] = args;
+    let doc = readDoc(input, { actor: WEB_ACTOR });
+    doc = A.change(doc, { message: 'web concurrent scalar conflict', time: 1700000150 }, (d) => {
+      d.interop.counter = Number(rawValue);
+    });
+    writeDoc(out, doc);
+    console.log(JSON.stringify({ command, out, value: doc.interop.counter, heads: A.getHeads(doc) }));
+    A.free(doc);
+    break;
+  }
+  case 'verify-counter-conflicts': {
+    const [input] = args;
+    const doc = readDoc(input, { actor: WEB_ACTOR });
+    const conflicts = A.getConflicts(doc.interop, 'counter') ?? {};
+    const values = Object.values(conflicts).map(Number).sort((a, b) => a - b);
+    assert.deepEqual(values, [4, 6]);
+    console.log(JSON.stringify({ command, input, values, opIds: Object.keys(conflicts).sort(), heads: A.getHeads(doc) }));
+    A.free(doc);
+    break;
+  }
   case 'sync-generate': {
     const [docPath, statePath, messagePath] = args;
     const doc = readDoc(docPath, { actor: WEB_ACTOR });
@@ -131,6 +152,6 @@ switch (command) {
   default:
     mkdirSync('artifacts', { recursive: true });
     throw new Error(
-      'Usage: web-interop.mjs create|create-authored|verify-native|fork-edit|sync-generate|sync-receive|verify-converged|resolve ...'
+      'Usage: web-interop.mjs create|create-authored|verify-native|fork-edit|fork-conflict|verify-counter-conflicts|sync-generate|sync-receive|verify-converged|resolve ...'
     );
 }
