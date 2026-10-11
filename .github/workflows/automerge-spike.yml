@@ -257,6 +257,17 @@ jobs:
           node web-interop.mjs verify-counter-conflicts artifacts/jni-merged.am | tee artifacts/jni-web-conflicts.json
           node -e "const f=require('fs'); const o=JSON.parse(f.readFileSync('artifacts/jni-native-conflicts.json')); if(JSON.stringify(o.alternatives.map(a=>a.value))!=='[4,6]' || o.alternatives.some(a=>!a.opId))process.exit(1)"
           printf '{"result":"PASS","webBinding":"3.5.0","nativeCore":"0.12.0","method":"JNI host and binary save/merge, not SyncState","alternatives":[4,6]}\n' | tee artifacts/jni-host-result.json
+      - name: Exercise persistent Rust JNI handles and real web SyncState protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          javac -d spikes/automerge/artifacts/current-core-classes \
+            spikes/automerge/native/rust-jni/CurrentCoreBridge.java \
+            spikes/automerge/native/rust-jni/NativeCli.java
+          cd spikes/automerge
+          export AUTOMERGE_JAVA_CLASS_DIR="$PWD/artifacts/current-core-classes"
+          export AUTOMERGE_JNI_LIBRARY="$PWD/native/rust-jni/target/release/libcreative_cooking_automerge_jni.so"
+          node native-bridge-interop.mjs
       - name: Cross-compile same JNI library for Android arm64 API 26
         shell: bash
         run: |
@@ -275,6 +286,12 @@ jobs:
           path: |
             spikes/automerge/artifacts/automerge-c-android-result.json
             spikes/automerge/artifacts/automerge-c-android-build.log
+            spikes/automerge/artifacts/android-bridge-*.json
+            spikes/automerge/artifacts/android-bridge-*.am
+            spikes/automerge/artifacts/jni-host-result.json
+            spikes/automerge/artifacts/jni-android-*.json
+            spikes/automerge/artifacts/jni-android-*.txt
+            spikes/automerge/native/rust-jni/target/aarch64-linux-android/release/libcreative_cooking_automerge_jni.so
           if-no-files-found: warn
 
   java-native-contract:
