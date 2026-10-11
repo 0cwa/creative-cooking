@@ -24,7 +24,7 @@ jobs:
           package-manager-cache: false
       - name: Install exact engine versions in isolated experiment
         working-directory: spikes/merge-evidence
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Typecheck proposed TypeScript MergeEvent contract
         working-directory: spikes/merge-evidence
         run: npm run typecheck
