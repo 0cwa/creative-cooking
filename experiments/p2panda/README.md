@@ -53,3 +53,15 @@ node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug
 ```
 
 This runs on a single machine with three OS processes, not two physical phones or cross-NAT networks. The CI step is `continue-on-error` because GitHub-hosted networking/mDNS may differ from a private LAN. Mark the report as an actual demonstrated native store-and-forward topology only when the log independently confirms A/C shutdown and B's later recovery; otherwise record the precise blocker. Never infer Iroh direct-vs-relayed path from app-layer delivery.
+
+## Real browser check
+
+Unlike the Node-only WebCrypto contract tests, `chromium.smoke.mjs` loads `browser/index.html` and its ordinary ES module into a **real Chromium secure-context page** via a localhost static HTTP server. The publishing context disappears, the independent encrypted file-backed gateway is restarted, and a fresh isolated context catches up using the manually copied demo key and space.
+
+```bash
+npm ci --no-audit --no-fund
+npx playwright install --with-deps chromium
+node --test experiments/p2panda/chromium.smoke.mjs
+```
+
+Even a passing browser test is **not** browser-to-native-p2panda interoperability. The tested gateway is an insecure development-only HTTP prototype.

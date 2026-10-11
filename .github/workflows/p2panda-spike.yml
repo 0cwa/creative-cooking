@@ -24,6 +24,20 @@ jobs:
           package-manager-cache: false
       - run: node --test experiments/p2panda/*.test.mjs
 
+  chromium-static-browser:
+    name: Chromium static-browser encrypted catch-up
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.13"
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: node --test experiments/p2panda/chromium.smoke.mjs
+
   rust-native:
     name: Pinned p2panda native/space tests (Linux)
     runs-on: ubuntu-latest

@@ -34,7 +34,7 @@ This matrix deliberately distinguishes **upstream-documented capability** from *
 | Dimension | Current evidence | Verdict |
 | --- | --- | --- |
 | Opaque update bytes | JS deterministic/random frame roundtrips; real p2panda 0.7.1 Node and three Rust OS processes exchange two independent random binary fixtures | **PASS in GitHub CI, byte-exact** |
-| PWA / static GitHub Pages | Static ESM WebCrypto client uses fetch against separate persistent HTTP mailbox; no p2panda WASM integration | **Partial; actual browser↔p2panda interoperability not demonstrated** |
+| PWA / static GitHub Pages | Static ESM WebCrypto client talks to separate persistent HTTP mailbox; real Chromium fresh browser-context/restarted-mailbox test added; no p2panda WASM integration | **Static Chromium browser execution added as separate CI proof; browser↔p2panda interoperability NOT demonstrated** |
 | iOS | Official Iroh-FFI XCFramework/Swift support; p2panda 0.7.1 `cargo check` on aarch64-apple-ios | **FAIL: transitive `netdev 0.46.3` references missing `libc::in6_ifreq` for iOS. This is an upstream dependency compile blocker; no Expo iOS app build.** |
 | Android | Iroh-FFI Android AAR/Kotlin support; NDK-enabled p2panda 0.7.1 Rust aarch64-linux-android `cargo check --lib` | **PASS Rust target compilation with Android NDK Clang. Linkable AAR/.so and Expo Android device not demonstrated.** |
 | LAN discovery | Active mDNS in three separately launched p2panda Linux processes; discovered and synced on one CI host | **PASS same-host process discovery; no second physical LAN device or direct-path packet trace** |
@@ -62,6 +62,7 @@ experiments/p2panda/
   gateway.mjs                          # LOOPBACK-only file-backed ciphertext mailbox (NOT p2panda)
   browser/interop.mjs, index.html      # static ordinary browser WebCrypto+fetch proof
   browser.test.mjs                     # mailbox restart/catch-up and encrypted fixture integrity
+  chromium.smoke.mjs                   # actual ordinary browser page/client+gateway restart (CI)
   rust/src/lib.rs                      # real p2panda stream of opaque frames (local-node unit)
   rust/src/bin/peer.rs                 # native process mDNS/SQLite/bootstrap CLI, hex frames
   process-smoke.mjs                    # automated 3 OS processes and third-replica restart
@@ -73,6 +74,7 @@ Node 22.13+ and Rust 1.96.0 are required for respective tests. No private secret
 
 ```bash
 node --test experiments/p2panda/*.test.mjs
+node --test experiments/p2panda/chromium.smoke.mjs # requires installed Playwright Chromium
 cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets
 cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer
 node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug/peer
@@ -226,7 +228,7 @@ Independent browser mailboxes use AES-256-GCM through ordinary WebCrypto. This p
 | Self-hostable? | Yes in principle; provided `gateway.mjs` is LOCALHOST-ONLY and **not a deployment guide**. |
 | Browser/service division? | Browser: app CRDT, identity, group crypto, local state, user pairing, encrypt/decrypt, sync client. Service: opaque store, blind routing and auth, quotas, retention, notifications and availability. Native: p2panda/Iroh and compatible cryptographic framing. |
 
-Do not ship a native-only success if the static PWA remains first-class. An actual next proof must demonstrate **one same encrypted p2panda operation roundtripping native Rust ↔ ordinary PWA** using an explicit versioned interoperable format; the current mailbox does not do that.
+The actual ordinary-browser/headless-Chromium smoke is intentionally separated from the native Rust process smoke: no Rust operations are decoded in the browser. The static-browser page is served from a localhost origin, with a second origin for the plaintext-blind ciphertext mailbox, not from GitHub Pages. Do not ship a native-only success if the static PWA remains first-class. An actual next proof must demonstrate **one same encrypted p2panda operation roundtripping native Rust ↔ ordinary PWA** using an explicit versioned interoperable format; the current mailbox does not do that.
 
 ## Scenario 7 — Expo 57 + React Native 0.86.3 feasibility
 
