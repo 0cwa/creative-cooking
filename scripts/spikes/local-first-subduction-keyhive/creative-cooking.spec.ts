@@ -115,7 +115,7 @@ async function push(page: any, index: number) {
     await t.syncer.addCommit(t.sid, new api.CommitId(new Uint8Array(change.head)),
       prev ? [new api.CommitId(new Uint8Array(prev.head))] : [],
       new Uint8Array(change.ciphertext));
-    const result = await t.syncer.syncWithPeer(t.peer, t.sid, false, 15000);
+    const result = await t.syncer.syncWithPeer(t.peer, t.sid, true, 15000);
     return {success: result.success, sent: result.stats.commitsSent,
       received: result.stats.commitsReceived};
   }, {change: fixtures.changes[index], prev: fixtures.changes[index - 1] ?? null});
@@ -123,7 +123,7 @@ async function push(page: any, index: number) {
 async function pull(page: any) {
   return await page.evaluate(async () => {
     const t = (window as any).ccTest;
-    const result = await t.syncer.syncWithPeer(t.peer, t.sid, false, 15000);
+    const result = await t.syncer.syncWithPeer(t.peer, t.sid, true, 15000);
     const commits = await t.syncer.getCommits(t.sid);
     return {
       success: result.success, sent: result.stats.commitsSent,
@@ -196,12 +196,15 @@ test('encrypted real Automerge updates: two browsers, durable offline catch-up, 
     encryptedBlobLengths: fixtures.changes.map(change => change.ciphertextLength)
   };
   try {
-    expect((await push(a.page, 0)).success).toBe(true);
+    const firstPush = await push(a.page, 0);
+    console.log("Initial push stats: " + JSON.stringify(firstPush));
+    expect(firstPush.success).toBe(true);
     const first = await pull(b.page);
+    console.log("Initial receiver stats: " + JSON.stringify(first));
     expect(first.success).toBe(true);
     expect(first.count).toBe(1);
     verifyReconstructed(await encryptedBlobs(b.page), ['pantry']);
-    evidence.first = first;
+    evidence.first = { firstPush, firstPull: first };
 
     // B is disconnected. A edits, uploads and then goes completely offline.
     await b.page.evaluate(async () => (window as any).ccTest.syncer.disconnectAll());
