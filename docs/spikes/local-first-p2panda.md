@@ -8,7 +8,7 @@
 
 p2panda is a credible **native-side signed event delivery, local discovery, and reconnection** candidate. It can carry an *opaque* Automerge or Loro update without parsing a recipe. Iroh substantially reduces work for native NAT traversal and encrypted live fallback. p2panda Spaces supplies useful cryptographic building blocks for personal/household membership, but connecting them securely to the latest high-level node, production-quality key lifecycle, and mobile/native bindings requires significant work.
 
-**The hard gap is asynchronous cross-device catch-up when no participating device stays online.** A normal Iroh relay forwards encrypted traffic between online endpoints; it is not a persistent mailbox. The September 2026 Dash Router work describes a promising future store-and-forward substrate but does not yet establish a release-grade, hosted durable service. An always-on third participant storing and syncing subscribed encrypted operations, or an authenticated persistent ciphertext router/mailbox we operate, is required. A static GitHub Pages app alone cannot provide this service.
+**The hard gap is asynchronous cross-device catch-up when no participating user device stays online.** A normal Iroh relay forwards encrypted traffic between online endpoints; it is not a persistent mailbox. **The spike now demonstrates a viable native alternative: a third p2panda process C receives and persists A's signed opaque frame in SQLite, A and C are SIGKILLed, C restarts, and a freshly started B fetches the exact frame from C.** This proves a persistent full p2panda peer *can* act as an asynchronous intermediary on one Linux host without A/B uptime overlap. It does **not** establish an always-available, costed hosted service, mobile deployment, untrusted replica authorization, or ciphertext-only group encryption. The September 2026 Dash Router work describes a separate promising future store-and-forward strategy. A static GitHub Pages app alone cannot host any of these persistent services.
 
 **The second hard gap is the static PWA.** The high-level p2panda Rust `Node` with SQLite/mDNS/UDP transport is not proven to run as an ordinary browser peer. This spike builds a *browser-compatible HTTPS-style catch-up interface* and a localhost-only encrypted durable mailbox as an alternative topology, **not** browser-to-p2panda interoperability. Do not mark browser interoperability complete.
 
@@ -33,17 +33,17 @@ This matrix deliberately distinguishes **upstream-documented capability** from *
 
 | Dimension | Current evidence | Verdict |
 | --- | --- | --- |
-| Opaque update bytes | JS deterministic/random byte frame encode/decode; Rust real `Node.stream<ReplicatedFrame>` publish/receive assertion added | **Reproducible harness**; native CI results must be checked |
+| Opaque update bytes | JS deterministic/random frame roundtrips; real p2panda 0.7.1 Node and three Rust OS processes exchange two independent random binary fixtures | **PASS in GitHub CI, byte-exact** |
 | PWA / static GitHub Pages | Static ESM WebCrypto client uses fetch against separate persistent HTTP mailbox; no p2panda WASM integration | **Partial; actual browser↔p2panda interoperability not demonstrated** |
-| iOS | Iroh-FFI offers XCFramework/Swift support; best-effort aarch64-apple-ios Rust `cargo check` job added | **0.7.0 pre-update check failed: transitive `netdev 0.46.3` references missing `libc::in6_ifreq` on iOS; 0.7.1 retry pending. No Expo iOS/simulator/device build.** |
-| Android | Iroh-FFI offers Android AAR/Kotlin support; best-effort aarch64-linux-android Rust `cargo check` job added | **Android 0.7.0 pre-update check failed due missing NDK Clang setup; runner fixed for 0.7.1 retry, results not yet verified. Expo device untested.** |
-| LAN discovery | Released `NodeBuilder` defaults to active mDNS; interactive Rust peer CLI uses mDNS | **Upstream-supported; no observed physical LAN path or packet trace** |
+| iOS | Official Iroh-FFI XCFramework/Swift support; p2panda 0.7.1 `cargo check` on aarch64-apple-ios | **FAIL: transitive `netdev 0.46.3` references missing `libc::in6_ifreq` for iOS. This is an upstream dependency compile blocker; no Expo iOS app build.** |
+| Android | Iroh-FFI Android AAR/Kotlin support; NDK-enabled p2panda 0.7.1 Rust aarch64-linux-android `cargo check --lib` | **PASS Rust target compilation with Android NDK Clang. Linkable AAR/.so and Expo Android device not demonstrated.** |
+| LAN discovery | Active mDNS in three separately launched p2panda Linux processes; discovered and synced on one CI host | **PASS same-host process discovery; no second physical LAN device or direct-path packet trace** |
 | LAN direct QUIC | Iroh can connect by local endpoint address | **Upstream-supported; not measured** |
 | Remote direct / NAT traversal | Iroh 1.x relay-assisted address discovery and UDP hole punching | **Upstream-supported; distinct NAT networks not measured** |
 | Relay fallback | `NodeBuilder::relay_url` and `bootstrap` can configure relay support | **Upstream-supported; no public/self-hosted relay fallback test** |
-| A online / B offline / A remains available | p2panda append-only SQLite logs and sync allow catch-up when B meets A | **Supported by design; explicit multi-process scenario not run** |
-| A disappears before B returns | Iroh relay does not store durable updates; would require third persistent subscribed node/router | **Not solved by two peers + Iroh alone** |
-| C: no simultaneous device availability | Separate encrypted persistent mailbox scenario: publisher stops, mailbox restarts, later reader downloads | **Custom gateway demo only, not native p2panda store-and-forward** |
+| A online / B offline / A remains available | A sends 41 random bytes before B process exists; B later starts; A remains online | **PASS actual two-process late-joiner p2panda sync, exact bytes** |
+| A disappears before B returns | A sends second 63-byte random frame; third p2panda peer C receives; A and C both SIGKILL; C restarts with same SQLite and identity; late B syncs A-authored frame | **PASS same-host persistent third p2panda peer; NOT solved by Iroh relay alone, C held UNENCRYPTED fixture bytes** |
+| C: no simultaneous device availability | No overlap of A and late B; restarted third native C serves signed A operation; independent encrypted HTTP mailbox also survives restart | **PASS native p2panda with extra persistent replica + separate ciphertext mailbox proof; not a hosted production service** |
 | Invitation / pairing | Deterministic QR-sized, expiring schema with inviter key, hints, space and nonce | **Encoding proof; no authenticated, redeem-once membership handshake** |
 | Group encryption | Tests exercise real p2panda-spaces crypto; WebCrypto AES-GCM independently protects browser mailbox fixture | **Test harness, not combined cross-platform implementation** |
 | Membership / third legitimate peer | Spaces test adds third member via encrypted control messages | **Test harness; no QR acceptance/verification UI** |
@@ -63,7 +63,8 @@ experiments/p2panda/
   browser/interop.mjs, index.html      # static ordinary browser WebCrypto+fetch proof
   browser.test.mjs                     # mailbox restart/catch-up and encrypted fixture integrity
   rust/src/lib.rs                      # real p2panda stream of opaque frames (local-node unit)
-  rust/src/bin/peer.rs                 # manual real-peer mDNS, SQLite, relay/bootstrap CLI
+  rust/src/bin/peer.rs                 # native process mDNS/SQLite/bootstrap CLI, hex frames
+  process-smoke.mjs                    # automated 3 OS processes and third-replica restart
   rust/tests/spaces.rs                 # p2panda-spaces cryptographic 3-peer add/remove unit
 .github/workflows/p2panda-spike.yml    # isolated experimental checks
 ```
@@ -73,6 +74,8 @@ Node 22.13+ and Rust 1.96.0 are required for respective tests. No private secret
 ```bash
 node --test experiments/p2panda/*.test.mjs
 cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets
+cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer
+node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug/peer
 npm run check
 npm run test:e2e
 ```
@@ -90,6 +93,24 @@ flowchart LR
 ```
 
 This single-node test exercises the real p2panda operation pipeline. The initial **v0.7.0** CI native and Spaces test suite passed before migrating to current **v0.7.1**; revalidate under v0.7.1. It is **not a two-device LAN demonstration**.
+
+### Actually demonstrated topology: three real native peers, persistent third replica
+
+```mermaid
+sequenceDiagram
+    participant A as Native process A
+    participant C as Native process C (SQLite replica)
+    participant B as Native process B (late)
+    A->>C: p2panda signed operation (63 random bytes)
+    C->>C: persist signed operation on disk
+    Note over A: A is SIGKILLed
+    Note over C: C is SIGKILLed, then restarted from same SQLite and signing key
+    B->>C: starts only after A has terminated; p2panda sync
+    C-->>B: original A-authored operation, exact binary bytes
+    Note over B: pass: bytes identical, no user-device overlap
+```
+
+**Passed:** [GitHub Actions isolated Rust job](https://github.com/0cwa/creative-cooking/actions/runs/38183369333/job/114600446193), `process-smoke.mjs`. Before this second scenario, A also sent a first random frame with no B running; B started later and received it while A remained online. The three native processes ran on **one Linux CI host**, not separate phones or NATs. No UDP packet capture was taken, so peer path/direct-versus-relay is not measured; no configured public relay was required. **Important:** C subscribed to ordinary opaque application frames, which were not yet group-encrypted; it could inspect the random test bytes. This proves durable replication, **not** plaintext blindness or end-to-end space authorization. A production untrusted storage node must receive only independently verified client-encrypted frames.
 
 ### Actually represented topology: plaintext-blind offline mailbox demo
 
@@ -126,7 +147,7 @@ Do not confuse a hypothetical relay with a tested durable router. In this design
 
 **Library capability:** p2panda 0.7.1 high-level Node supports mDNS through Iroh. With no explicit relay/bootstrap, `Node::spawn` is LAN-only; `NodeBuilder` defaults to active local advertisement. In low-level `p2panda-net` mDNS configuration the default is *passive*; avoid conflating this with Node default. Active advertisement exposes identity and local address to the LAN and may be inappropriate on untrusted public Wi-Fi.
 
-**Experiment available:** start `rust/src/bin/peer.rs` on two hosts with a shared topic and distinct persistent DB and device seed; let both processes run; publish fixture; restart peer; publish while second offline; rejoin. Manual instructions in [README](../../experiments/p2panda/README.md). No recorded packet capture/two-device results in this PR, therefore no claimed actual direct path. To establish locality inspect UDP traffic and Iroh connection path changes; merely receiving a frame does not distinguish direct vs relay.
+**Actually executed:** GitHub Actions spawned three distinct Rust processes on one Linux host with active mDNS. They discovered each other, p2panda signed and synced byte-exact random frames, and a persistent SQLite replica successfully served a later process after the originating process died. The two-user-endpoint and replica-restart tests passed. [Reproduction and process sequencing](../../experiments/p2panda/README.md). **Not executed:** two physical LAN devices, phone networks, or packet-path capture. Same-host mDNS discovery proves local peer connectivity in this runner but **not** the exact direct-versus-relayed path. To establish locality inspect QUIC UDP traffic and Iroh connection diagnostics.
 
 iOS: local network privacy prompt (`NSLocalNetworkUsageDescription`), Bonjour service declarations if relevant, and multicast entitlement if raw multicast requires it. Background sockets/advertising constrained by OS; testing must use hardware. Android: `INTERNET`, `ACCESS_NETWORK_STATE`, network service discovery/Wi-Fi multicast lock and permissions appropriate to chosen implementation/target SDK; Wi-Fi power management and OEM battery policies affect mDNS. Avoid broad location permissions unless the actual discovery API requires them. Check Apple local network privacy and Android network service discovery policies before implementation.
 
@@ -142,11 +163,11 @@ Metadata visible to Iroh relay: connecting client public endpoint identity, sour
 
 | Case | Producer state when consumer returns | Current outcome |
 | --- | --- | --- |
-| A: B offline, A remains online | A retains its SQLite operations and participates in a later p2panda sync | **Feasible via ordinary reconnect sync**; manual multi-peer test still required. |
-| B: B offline; A sends then disappears | Neither user endpoint available to serve the update unless third participant has previously received it | **Does not work using only two endpoints and an Iroh relay**. Third persistent subscribed replica or durable router must hold it. |
-| C: no overlap between user endpoints | A sends into persistent intermediary before terminating; B fetches much later | **Demonstrated only with this experiment's independent HTTP encrypted mailbox**. Not p2panda or Dash Router integration. |
+| A: B offline, A remains online | A sends 41 random bytes before B exists; B starts later; A alive | **PASS** actual separate Rust peer processes on one CI Linux host. |
+| B: B offline; A sends then disappears | C third peer receives a second 63-byte frame; A is SIGKILLed, C SIGKILLed/restarted from SQLite, fresh B created | **PASS via a third persistent p2panda peer**, not through Iroh relay. C possessed readable test fixture bytes; group E2EE not integrated. |
+| C: no overlap between user endpoints | A terminated before late B was ever created; restarted C serves the A-authored operation | **PASS native p2panda with persistent third participant**, plus a separate WebCrypto HTTP mailbox example. No always-on public infrastructure was deployed. |
 
-A service that only forwards active QUIC packets **cannot** solve B or C. Durable store-and-forward needs all of: a retention model, authenticated read/write/space membership, acknowledgement/cursors, deduplication and replay protection, quotas, encrypted payload storage, pruning/compaction/tombstones, backups and disaster recovery. Offline deletion needs careful retention/version semantics. A continuously online third p2panda peer storing subscribed topic operations **may** serve as a simple persistent replica, but must be deployed and exercised, with access-control and plaintext blindness verified, not assumed.
+A service that only forwards active QUIC packets **cannot** solve B or C. Durable store-and-forward needs all of: a retention model, authenticated read/write/space membership, acknowledgement/cursors, deduplication and replay protection, quotas, encrypted payload storage, pruning/compaction/tombstones, backups and disaster recovery. Offline deletion needs careful retention/version semantics. A third p2panda peer storing subscribed topic operations **has now been exercised** as a simple durable replica, even across a forced C process restart with A already gone. Its durability in the test comes from C's local SQLite disk, not an Iroh relay. It remains a privileged full participant seeing the raw fixture; before using an **untrusted** relay/storage peer, implement verified group-encrypted frames and authorization, durable retention policies, and operational hardening.
 
 The September 2026 [Dash Router post](https://p2panda.org/2026/09/16/dash-router-sync-api.html) describes an architecture and experimental sync primitives toward store-and-forward; it is not evidence that a suitable hosted durable router is generally available today.
 
@@ -230,8 +251,8 @@ Native storage footprint: a long-lived Tokio runtime, Iroh socket/discovery/rela
 | Duplicate | Mailbox content-addressed PUT is idempotent for identical ciphertext; JS memory endpoint emits what it gets | Application CRDT apply dedup by immutable operation ID and membership replay controls |
 | Delayed/reordered | Mailbox publishes two frames in reversed order; recovery lookup by document ID | Causal dependency handling / reorder buffer for real encrypted p2panda operations |
 | Dropped connection | Gateway close makes fetch reject | Mid-flight QUIC/relay drop and retry with acknowledgements |
-| Restart | Gateway stores ciphertext on disk then is recreated with same directory | Persistent real p2panda Node, stream cursor/acked state, and SecureStore identity after process restart |
-| Offline peer | Later separate browser consumer can fetch stored bytes | Two real native devices sync across a disconnect |
+| Restart | Gateway encrypted store survives restart; real native p2panda replica C also SIGKILLed and restarted from SQLite/identity, then serves an A-authored operation | Mobile SecureStore/keychain identity, upgrades/crash migrations not tested |
+| Offline peer | Two separate native Rust processes exercised late-joiner sync; third native SQLite replica also served B after A permanently terminated | Two physical phones, real cellular network and background wakeups untested |
 | Relay unavailable | Mailbox fetch fails cleanly when service stops | Native link fallback/LAN while relay unavailable, queue recovery |
 | LAN→Internet, Internet→LAN | No packet-path tests | Network migration tests + power impact |
 | Tampered bytes | Mailbox SHA-256 content ID validation, AES-GCM decrypt fails with wrong key | Malicious native peer/operation, signature and membership history attack cases |
@@ -261,18 +282,20 @@ Future CRDTs must handle duplicate deliveries, interleavings and divergent local
 ## Ten explicit answers
 
 1. **Can p2panda carry opaque Automerge/Loro bytes?** Yes: the p2panda operation body and generic stream application message allow opaque binary frames. It does not need to parse recipes or merge CRDTs. This branch exercises the boundary.
-2. **Can native devices find/sync directly on LAN?** Upstream offers mDNS and direct Iroh QUIC, high-level Node defaults active; **this spike has not verified a real two-device LAN route**.
+2. **Can native devices find/sync directly on LAN?** **Yes for discovery/sync on a Linux host:** three independent Rust processes used p2panda/mDNS and exchanged signed frames. **Direct QUIC path remains unmeasured**, and physical phones/two LAN hosts remain untested.
 3. **Can remote devices connect without us building NAT traversal?** Iroh handles rendezvous/relay-assisted hole punching and encrypted fallback; still need relay/bootstrap provisioning/configuration and test NAT edge cases.
-4. **Can A disappear before B comes online and B still obtain update?** **No**, not from an Iroh relay alone. **Yes only if** some third persistent subscribed node or durable ciphertext service received and retained it while A was available. HTTP proof demonstrates the latter pattern, not p2panda implementation.
-5. **What infrastructure is needed?** For remote online peers, relay(s), reachable bootstrap/discovery participants as appropriate. For genuinely asynchronous catch-up, durable third-party ciphertext storage/replica with retrieval, authorization, availability and maintenance.
+4. **Can A disappear before B comes online and B still obtain update?** **Yes, demonstrated with a third persistent p2panda peer:** C had stored A's message in SQLite; both A and C were SIGKILLed; C restarted from SQLite; the freshly created B synced the exact signed message. **No** with only A, B and a nonpersistent Iroh relay.
+5. **What infrastructure is needed?** For remote online peers, relays/bootstrap as appropriate. For genuinely asynchronous catch-up, at least one third persistent p2panda subscribed peer (as tested) or compatible durable ciphertext router with scoped authorization, uptime, storage/backup and maintenance. The tested third peer is **not plaintext-blind** until application/group frames are encrypted before it receives them.
 6. **How does ordinary static browser participate?** Currently via an independent browser-side WebCrypto+HTTP mailbox proof; it is **not** a native/full p2panda/Iroh peer and there is no browser↔native operation interoperability yet. Must prototype the compatible gateway/WASM transport.
 7. **Can infrastructure remain plaintext-blind?** Yes in principle if all app updates and group metadata requiring privacy are encrypted *on-device before transport*, with client-only keys; relay still sees metadata and current demo lacks authentic group key management.
 8. **Production-ready vs promising?** Iroh 1.0 native connectivity and FFI are comparatively mature; p2panda 0.7 networking API, p2panda Spaces/auth/encryption (unaudited), Dash Router and the integration are experimental. Never ship experimental crypto without audit and security review.
 9. **How difficult is Expo integration?** Significant custom native work: Rust p2panda/SQLite/Tokio + Swift/Android binaries + bridges + lifecycle/permissions/storage + separate PWA, despite existing Iroh-only FFI. Rust cross-target check does not equal mobile app integration.
-10. **Does it reduce custom code?** **For native networking yes:** discovery, signed logs, causal sync, reconnect semantics and direct/relay transport would otherwise be substantial engineering. **Not yet for the full product:** durable no-overlap delivery, browser compatibility, verified space encryption/authorization, pairing, key recovery, Expo glue and operations remain material custom work.
+10. **Does it reduce custom code?** **For native networking and a simple persistent third p2panda replica yes, as executable tests now verify:** discovery, signed logs, durable operation replay, late catch-up and transport reduce custom engineering. **Not yet end-to-end:** untrusted plaintext-blind storage, cross-network relay/NAT evidence, browser/native interoperability, encrypted authorization, pairing, recovery, Expo glue and operations remain significant work.
 
 ## Decision and follow-up gates
 
-**Keep p2panda + Iroh as a candidate, not the chosen stack.** The following should gate any move beyond an experimental draft: (a) passing real p2panda unit and three-device crypto suite, (b) *measured* two physical-device LAN and two-network direct/relay trials, (c) an isolated local CI test where A terminates before B ever joins and a **persistent unprivileged ciphertext replica** serves B, (d) actual signed/revocable browser↔native encrypted operation interop from a static PWA, (e) linkable iOS + Android native module plus Expo dev-client build, (f) permission/battery/standby audits and security review of unaudited group crypto, (g) stable version/lock pinning and upgrade/migration review, (h) objective comparison with other sync and service architectures and ongoing hosting cost.
+**Keep p2panda + Iroh as a candidate, not the chosen stack.** The following should gate any move beyond an experimental draft: (a) passing real p2panda unit and three-device crypto suite, (b) *measured* two physical-device LAN and two-network direct/relay trials, (c) extend the **passing three-process persistent replica smoke** to an actually **unprivileged ciphertext-only** third node with real Spaces group encryption and no decryption keys, (d) actual signed/revocable browser↔native encrypted operation interop from a static PWA, (e) linkable iOS + Android native module plus Expo dev-client build, (f) permission/battery/standby audits and security review of unaudited group crypto, (g) stable version/lock pinning and upgrade/migration review, (h) objective comparison with other sync and service architectures and ongoing hosting cost.
 
 Keep branch draft. Keep `main` unchanged and green. No production migration or automatic sync switch.
+
+**Measured reference:** [three-process store-and-forward smoke passed](https://github.com/0cwa/creative-cooking/actions/runs/38183369333/job/114600446193). It does not prove the infrastructure can be blind to app plaintext, only that a durable third p2panda node can transfer byte-identical signed operations between non-overlapping user endpoints.
