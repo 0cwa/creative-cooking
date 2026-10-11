@@ -221,6 +221,53 @@ jobs:
           cat ../../artifacts/automerge-c-android-result.json
           tail -n 160 ../../artifacts/automerge-c-android-build.log
           exit 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile and load current-core JNI library on a real host JVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.90.0 build --manifest-path spikes/automerge/native/rust-jni/Cargo.toml --release
+          LIB="$PWD/spikes/automerge/native/rust-jni/target/release/libcreative_cooking_automerge_jni.so"
+          test -s "$LIB"
+          file "$LIB"
+          javac -d spikes/automerge/artifacts/current-core-classes spikes/automerge/native/rust-jni/CurrentCoreNative.java
+      - name: Prove web 3.5.0 to JNI current-core binary interchange and concurrent conflicts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd spikes/automerge
+          npm install --no-audit --no-fund
+          mkdir -p artifacts
+          LIB="$PWD/native/rust-jni/target/release/libcreative_cooking_automerge_jni.so"
+          CP="$PWD/artifacts/current-core-classes"
+          node web-interop.mjs create artifacts/jni-seed.am
+          java -Dautomerge.jni.path="$LIB" -cp "$CP" creative.cooking.automerge.spike.CurrentCoreNative mutate artifacts/jni-seed.am artifacts/jni-mutated.am rust-jni-0.12.0
+          node web-interop.mjs verify-native artifacts/jni-mutated.am rust-jni-0.12.0
+          node web-interop.mjs fork-conflict artifacts/jni-seed.am artifacts/jni-web-4.am 4
+          java -Dautomerge.jni.path="$LIB" -cp "$CP" creative.cooking.automerge.spike.CurrentCoreNative fork-conflict artifacts/jni-seed.am artifacts/jni-native-6.am
+          java -Dautomerge.jni.path="$LIB" -cp "$CP" creative.cooking.automerge.spike.CurrentCoreNative merge artifacts/jni-web-4.am artifacts/jni-native-6.am artifacts/jni-merged.am
+          java -Dautomerge.jni.path="$LIB" -cp "$CP" creative.cooking.automerge.spike.CurrentCoreNative conflicts artifacts/jni-merged.am | tee artifacts/jni-native-conflicts.json
+          node web-interop.mjs verify-counter-conflicts artifacts/jni-merged.am | tee artifacts/jni-web-conflicts.json
+          node -e "const f=require('fs'); const o=JSON.parse(f.readFileSync('artifacts/jni-native-conflicts.json')); if(JSON.stringify(o.alternatives.map(a=>a.value))!=='[4,6]' || o.alternatives.some(a=>!a.opId))process.exit(1)"
+          printf '{"result":"PASS","webBinding":"3.5.0","nativeCore":"0.12.0","method":"JNI host and binary save/merge, not SyncState","alternatives":[4,6]}\n' | tee artifacts/jni-host-result.json
+      - name: Cross-compile same JNI library for Android arm64 API 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.90.0 ndk -t arm64-v8a -P 26 build --manifest-path spikes/automerge/native/rust-jni/Cargo.toml --release
+          LIB="spikes/automerge/native/rust-jni/target/aarch64-linux-android/release/libcreative_cooking_automerge_jni.so"
+          test -s "$LIB"
+          file "$LIB" | tee spikes/automerge/artifacts/jni-android-file.txt
+          (llvm-readelf -h "$LIB" || readelf -h "$LIB") > spikes/automerge/artifacts/jni-android-elf-header.txt
+          BYTES=$(wc -c < "$LIB" | tr -d ' ')
+          printf '{"result":"PASS","target":"aarch64-linux-android","api":26,"soBytes":%s,"note":"cross-compiled, not Android-runtime-tested"}\n' "$BYTES" | tee spikes/automerge/artifacts/jni-android-compile.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
