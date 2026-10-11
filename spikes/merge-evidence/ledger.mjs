@@ -30,7 +30,7 @@ export function makeEvent({ engine, kind, entity, path: fieldPath, alternatives 
 }
 export class ReviewLedger {
   constructor(events = []) {
-    this.byId = new Map(events.map((event) => [event.id, event]));
+    this.byId = new Map(events.map((event) => [event.id, structuredClone(event)]));
     if (this.byId.size !== events.length) throw new Error('Duplicate event IDs in persisted ledger');
   }
   upsert(event) {
