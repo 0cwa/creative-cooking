@@ -91,6 +91,8 @@ jobs:
           name: subduction-native-linux-host
           path: |
             artifacts/subduction-native/
+            spikes/subduction-native/rust/target/release/cc-subduction-host-probe
+            spikes/subduction-native/rust/target/release/libcc_subduction_native.so
             subduction-upstream/subduction_wasm/test-results/
           if-no-files-found: warn
           retention-days: 30
@@ -203,6 +205,8 @@ jobs:
           name: subduction-native-ios-simulator
           path: |
             artifacts/subduction-native/
+            spikes/subduction-native/rust/target/*-apple-ios*/release/libcc_subduction_native.a
+            spikes/subduction-native/expo-probe/modules/cc-subduction-module/ios/libcc_subduction_native.a
             subduction-upstream/subduction_wasm/test-results/
           if-no-files-found: warn
           retention-days: 30
@@ -308,6 +312,7 @@ jobs:
           name: subduction-native-android-runtime
           path: |
             artifacts/subduction-native/
+            spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs/*/libcc_subduction_native.so
             spikes/subduction-native/expo-probe/android/app/build/outputs/apk/
             subduction-upstream/subduction_wasm/test-results/
           if-no-files-found: warn

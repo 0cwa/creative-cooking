@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.platforms    = { :ios => '15.1' }
   s.swift_version = '5.9'
   s.static_framework = true
-  s.source_files = 'ios/**/*.{swift,h}'
-  s.vendored_libraries = 'ios/libcc_subduction_native.a'
+  s.source_files = '**/*.{swift,h}'
+  s.vendored_libraries = 'libcc_subduction_native.a'
   s.dependency 'ExpoModulesCore'
 end

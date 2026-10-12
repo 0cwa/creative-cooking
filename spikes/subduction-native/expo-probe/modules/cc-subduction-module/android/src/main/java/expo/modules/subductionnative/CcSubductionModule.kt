@@ -26,7 +26,7 @@ class CcSubductionModule : Module() {
           val output = File(context.filesDir, "subduction-result.json")
           // The optional test-only Intent carries a disposable fixture to a release APK.
           // Rust, not Kotlin or React Native, implements the Subduction wire protocol.
-          val encodedInput = context.currentActivity?.intent?.getStringExtra("ccSubductionRequestB64")
+          val encodedInput = appContext.currentActivity?.intent?.getStringExtra("ccSubductionRequestB64")
           val request = if (encodedInput != null) {
             String(Base64.decode(encodedInput, Base64.NO_WRAP), Charsets.UTF_8)
           } else input.readText()
