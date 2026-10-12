@@ -113,14 +113,14 @@ function one(engine, trial, warmup = false) {
   prove(b.project(boot.b), expected, 'bootstrap at fresh device');
   if (!warmup) (wireSamples[engine].coldSecondDeviceBootstrap ??= []).push(boot.wire);
 
-  let a = b.clone(seed, 'phone'), c = b.clone(seed, 'laptop'), existing = null;
-  if (engine === 'automerge') {
-    const handshake = b.syncPair(a, c);
-    a = handshake.a; c = handshake.b; existing = handshake.session;
-  }
+  // Use a prior *actual* device bootstrap, not identical local clones. Otherwise
+  // Automerge SyncState may not have acknowledged shared heads and sends full history.
+  let a = boot.a, c = boot.b, existing = boot.session;
   a = b.edit(a, TRACE.warmA, 'phone');
   c = b.edit(c, TRACE.warmB, 'laptop');
   const warm = report('warmIncrementalSync', timing(() => b.syncPair(a, c, existing)));
+  assert.ok(warm.wire.aToB < boot.wire.aToB / 2,
+    engine + ' warm send retransmitted most of snapshot; check retained session heads');
   const warmExpected = expectedAfter(expected, [...TRACE.warmA, ...TRACE.warmB]);
   prove(b.project(warm.a), warmExpected, 'warm A');
   prove(b.project(warm.b), warmExpected, 'warm B');
