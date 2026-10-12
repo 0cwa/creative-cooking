@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 2,
+  "updatedAt": "2026-10-12",
+  "experimental": true,
+  "productionReady": false,
+  "repository": "0cwa/creative-cooking",
+  "branch": "spike/local-first-p2panda",
+  "pr": 39,
+  "umbrellaIssue": 36,
+  "measuredRun": {
+    "url": "https://github.com/0cwa/creative-cooking/actions/runs/38252204267",
+    "nativeScenarioArtifactId": 11749501837,
+    "nativeStatus": "PASS",
+    "chromiumStatus": "PASS",
+    "productionCiUrl": "https://github.com/0cwa/creative-cooking/actions/runs/38252204158"
+  },
+  "baseline": {
+    "p2panda": "0.7.1",
+    "p2panda-spaces": "0.7.1",
+    "iroh-tested": "1.0.3",
+    "iroh-upstream-latest": "1.3.0",
+    "iroh-ffi-upstream-latest": "1.1.0",
+    "rust": "1.96.0",
+    "netdev": "0.46.3",
+    "automerge": "3.5.0",
+    "loro": "1.16.4",
+    "android-ndk": "27.3.13750724",
+    "android-api": 24
+  },
+  "facts": {
+    "chromeToNativeUsingRealP2panda": true,
+    "browserNativeP2panda": false,
+    "realSpacesEndToEndPersistentCatchup": false,
+    "realPhysicalMobileRuntime": false,
+    "durableRelayServiceDeployed": false,
+    "normalCiChanges": false
+  },
+  "scenarios": [
+    {
+      "id": "native-p2panda-opaque-engine-updates",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "2026-10-12 CI #38252204267 Rust native job and artifact #11749501837; actual p2panda 0.7.1 signed operations and SQLite sync of four incremental real Automerge 3.5.0 and Loro 1.16.4 ciphertext change frames; 4/6 conflict and causal 5 verified",
+      "limitations": "Linux same-host process topology, AES-GCM disposable fixture not Spaces"
+    },
+    {
+      "id": "pwa-chromium-to-real-native-gateway",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38252204267 Rust native job; CC_BROWSER=1 actual isolated headless Chromium contexts talking to localhost native-bridge.mjs which publishes and subscribes to real p2panda Rust peers",
+      "limitations": "Development HTTP 127.0.0.1 with shared test token, not production PWA deployment, not browser-native Node, no Spaces identity"
+    },
+    {
+      "id": "native-persistent-third-replica-no-author-overlap",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38252204267; A/C SIGKILL, restart C from same SQLite and identity, late B obtains initial+concurrent frames; repeat second C restart and fresh E recovers resolution; trace JSON",
+      "limitations": "All processes on one Linux host with mDNS; C ciphertext is synthetic AES-GCM not Spaces"
+    },
+    {
+      "id": "native-replay-and-causal-order",
+      "status": "PARTIAL",
+      "confidence": "medium",
+      "evidence": "Native exact wire bytes and engine reimport verify 4/6, later causal 5; bridge same-session SHA-256 dedup; real CRDT fixture tests from PR #43",
+      "limitations": "Native malicious signed replay/forked history and loss/reorder fuzz beyond fixture not tested"
+    },
+    {
+      "id": "real-spaces-authenticated-group-encryption",
+      "status": "PARTIAL",
+      "confidence": "medium",
+      "evidence": "p2panda-spaces 0.7.1 rust/tests/spaces.rs component tests add third peer/read and revoke future ciphertext; tests/spaces_network.rs local-node signed transport added",
+      "limitations": "Not a process-restart same-identity Spaces encrypted control/message protocol; native transport test on latest head pending"
+    },
+    {
+      "id": "spaces-outsider-unwelcomed-read-and-edit",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38252204267 Rust cargo test --all-targets --locked, outsider_has_no_welcome_key_and_cannot_publish_or_read passed",
+      "limitations": "TestPeer component test only; upstream processor assumes independently verified signatures/dependencies"
+    },
+    {
+      "id": "spaces-member-add-and-future-revocation",
+      "status": "PASS",
+      "confidence": "medium",
+      "evidence": "CI #38252204267 Rust cargo test passes third_device_joins_and_removed_peer_cannot_decrypt_future_data",
+      "limitations": "Past ciphertext/keys cannot be clawed back; no real offline malicious device under attack"
+    },
+    {
+      "id": "spaces-wrong-space-ciphertext",
+      "status": "PARTIAL",
+      "confidence": "medium",
+      "evidence": "Bridge wrong space rejected in node:test and outsider Spaces lack of welcome key rejects read/edit",
+      "limitations": "Not tested forged valid signed cross-space Spaces operation against production validator"
+    },
+    {
+      "id": "spaces-unauthorized-forward-remote",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "No access-controlled Spaces node forwarding filter or independent revocable requester proof",
+      "limitations": "Bridge X-Spike-Token is not a signed member grant; any subscribed native p2panda peer could forward raw bytes"
+    },
+    {
+      "id": "spaces-replay-authenticated-operations",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "Bridge content-SHA duplicate POST test passed but is not a native Spaces malicious signed message replay test",
+      "limitations": "Need validated operation signature/dependency and key epochs in production ingress/replication"
+    },
+    {
+      "id": "spaces-stale-device-after-rotation",
+      "status": "PARTIAL",
+      "confidence": "medium",
+      "evidence": "Revoked Bob cannot obtain future payload from component Spaces test",
+      "limitations": "No malicious stale device operating through persistent native C or verifying durable key epoch cutover"
+    },
+    {
+      "id": "ios-cross-compile-original",
+      "status": "FAIL",
+      "confidence": "high",
+      "evidence": "CI #38183965313 iOS cargo check: netdev 0.46.3 libc::in6_ifreq unavailable",
+      "limitations": "Previously unpatched dependency graph"
+    },
+    {
+      "id": "ios-netdev-scoped-source-patch",
+      "status": "PARTIAL",
+      "confidence": "medium",
+      "evidence": "ios-netdev-workaround.py gates original ioctl to macOS, iOS defaults unknown IPv6 flags, designed to run in macos-15 native CI job",
+      "limitations": "Latest iOS job queued when report drafted; not a confirmed link, upstream-compatible design must be upstreamed and verified"
+    },
+    {
+      "id": "ios-iphone-expo-runtime",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "No linked iOS custom Expo dev-client execution/simulator/device results",
+      "limitations": "Needs XCFramework/package and Swift binding, code-sign, lifecycle, local network/Bonjour privacy"
+    },
+    {
+      "id": "android-arm64-linkable-native-lib",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38252204267 mobile android job compiled release ELF64 AArch64 33 MB shared library / 121 MB static library, Rust 1.96.0, Android NDK 27.3.13750724 target API 24, JNI entrypoint exists in earlier job #114818115988",
+      "limitations": "ABI inspection reporting job failed due missing grep file argument, subsequently fixed in workflow; not Android JNI execution or AAR"
+    },
+    {
+      "id": "android-expo-runtime",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "No emulator or physical device loaded JNI probe or ran Expo custom module",
+      "limitations": "Need Java/Kotlin wrapper, load test, APK/AAR packaging, lifecycle and permissions"
+    },
+    {
+      "id": "same-host-mdns",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38252204267 process smoke and native CRDT scenarios discovered peers and synced on one Linux runner",
+      "limitations": "Does not measure actual two-host LAN, direct UDP/QUIC packet path"
+    },
+    {
+      "id": "two-physical-host-lan",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "No two physical hosts, packet capture or firewall-cases",
+      "limitations": "Requires test equipment and captured Iroh connection diagnostics"
+    },
+    {
+      "id": "cross-nat-direct-and-public-relay",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "Only upstream Iroh 1.x support documented; no distinct ISP/carrier topologies tested",
+      "limitations": "Cannot infer direct/relay choice from same-host application-level receipt"
+    },
+    {
+      "id": "self-hosted-relay-and-service-outage",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "Existing independent mailbox restarts and actual p2panda persisted C restart pass",
+      "limitations": "Self-hosted Iroh live relay is NOT durable storage; no TLS or hosted persistent peer"
+    },
+    {
+      "id": "mobile-background-recovery",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "No actual mobile app process or OS background testing",
+      "limitations": "iOS/Android suspension and foreground resync must be tested on hardware"
+    },
+    {
+      "id": "cargo-fully-locked-dependencies",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "experimental Cargo.lock committed from successful Linux native CI #38251330862, 539 [[package]] records; workflow uses --locked",
+      "limitations": "Locks experiment not production; upstream netdev local patch is non-frozen registry mutation on macOS runner and needs upstream fix"
+    },
+    {
+      "id": "current-upstream-compatibility-review",
+      "status": "PASS",
+      "confidence": "medium",
+      "evidence": "2026-10-12 GitHub releases p2panda/Spaces v0.7.1 2026-08-21, Iroh v1.3.0 2026-09-28, FFI v1.1.0 2026-07-16; tested transitive Iroh remains =1.0.3",
+      "limitations": "Latest Iroh 1.3.0 not substituted into pinned p2panda v0.7.1 or runtime-tested"
+    },
+    {
+      "id": "deployable-durable-accountless-service",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "Native process C persisted encrypted test fixtures, no public service",
+      "limitations": "No real scoped member auth, quotas, TLS, abuse prevention, uptime SLO, pruning, backups or operations"
+    },
+    {
+      "id": "independent-security-qualification",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "p2panda Spaces upstream warns encryption not audited; component tests and prototype do not constitute audit",
+      "limitations": "Withhold production security claims"
+    }
+  ]
+}
