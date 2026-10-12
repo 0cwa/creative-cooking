@@ -210,8 +210,12 @@ export function apply(engine,doc,bytes) {
 export function actualAlternatives(engine,doc,recipeId,field) {
   if(engine==='automerge'){
     const alternatives=A.getConflicts(doc.state.recipes[recipeId],field)??{};
-    return {values:Object.values(alternatives),operationIds:Object.keys(alternatives),frontier:frontier(engine,doc),
-      evidence:'getConflicts real Automerge operation IDs'};
+    const values=Object.values(alternatives);
+    // Automerge getConflicts deliberately returns an empty map for ordinary
+    // non-conflicting scalar state; that is not a missing/deleted visible value.
+    return {values:values.length?values:[doc.state.recipes[recipeId][field]],
+      operationIds:Object.keys(alternatives),frontier:frontier(engine,doc),
+      evidence:'getConflicts real Automerge operation IDs; visible scalar when no conflict'};
   }
   const name='recipe:'+recipeId,writes=[];
   for(const [peer,changes] of doc.getAllChanges()) for(const change of changes) {
