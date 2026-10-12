@@ -7,7 +7,6 @@ on:
     paths:
       - '.github/workflows/local-first-evaluation-readiness.yml'
       - 'spikes/evaluation-readiness/**'
-      - 'docs/spikes/local-first-evaluation-readiness.md'
 
 permissions:
   contents: read
@@ -80,6 +79,8 @@ jobs:
           echo "CC_EVAL_OUTPUT=$GITHUB_WORKSPACE/artifacts/evaluation-readiness" >> "$GITHUB_ENV"
       - name: Execute Chromium against live server, restart and late peers
         run: |
+          # Upstream Playwright webServer runs the http-server binary.
+          npm install --global http-server@14.1.1
           cd subduction-upstream/subduction_wasm
           pnpm exec playwright install --with-deps chromium
           pnpm exec playwright test evaluation-readiness.spec.ts --project=chromium --reporter=line
