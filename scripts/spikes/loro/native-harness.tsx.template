@@ -361,25 +361,62 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   nativeStage('lifecycle-48-documents');
   const lifecycleStart = Date.now();
   const lifecycleCycles = 24;
+  let disposedNativeObjects = 0;
+  const dispose = (object: any, label: string) => {
+    if (typeof object?.uniffiDestroy !== 'function') {
+      throw new Error('Published UniFFI binding lacks explicit uniffiDestroy: ' + label);
+    }
+    object.uniffiDestroy();
+    disposedNativeObjects += 1;
+  };
   for (let i = 0; i < lifecycleCycles; i++) {
     const created = new LoroDoc();
-    created.import_(baseSnapshot);
-    created.import_(webUpdate);
-    const snap = created.export({ mode: 'snapshot' });
-    const loaded = new LoroDoc();
-    loaded.import_(snap);
-    if (!semanticEqual(created.toJSON(), loaded.toJSON())) {
-      throw new Error('lifecycle create/load/export mismatch at cycle ' + i);
+    let loaded: any = null;
+    let initialVersion: any = null;
+    let afterVersion: any = null;
+    try {
+      created.import_(baseSnapshot);
+      created.import_(webUpdate);
+      const snap = created.export({ mode: 'snapshot' });
+      loaded = new LoroDoc();
+      loaded.import_(snap);
+      if (!semanticEqual(created.toJSON(), loaded.toJSON())) {
+        throw new Error('lifecycle create/load/export mismatch at cycle ' + i);
+      }
+      initialVersion = loaded.oplogVersion();
+      loaded.import_(webUpdate);
+      afterVersion = loaded.oplogVersion();
+      assertSemanticAndVersion(created.toJSON(), loaded.toJSON(),
+        initialVersion, afterVersion, 'lifecycle duplicate import cycle ' + i);
+    } finally {
+      // All four values are backed by native Rust Arc objects. Free each in
+      // reverse dependency order, including on failed assertions.
+      for (const [label, obj] of [
+        ['afterVersion', afterVersion],
+        ['initialVersion', initialVersion],
+        ['loaded', loaded],
+        ['created', created]
+      ] as const) {
+        if (obj) dispose(obj, label);
+      }
     }
-    const initialVersion = loaded.oplogVersion();
-    loaded.import_(webUpdate);
-    assertSemanticAndVersion(created.toJSON(), loaded.toJSON(),
-      initialVersion, loaded.oplogVersion(), 'lifecycle duplicate import cycle ' + i);
+  }
+  const invalidated = new LoroDoc();
+  dispose(invalidated, 'invalidated');
+  let useAfterDestroyRejected = false;
+  try {
+    invalidated.getMap('should-not-work');
+  } catch {
+    useAfterDestroyRejected = true;
+  }
+  if (!useAfterDestroyRejected) {
+    throw new Error('Native document accepted operation after uniffiDestroy()');
   }
   const lifecycle = {
-    status: 'PASS', cycles: lifecycleCycles, documentsCreated: lifecycleCycles * 2,
-    elapsedMs: Date.now() - lifecycleStart,
-    explicitNativeDisposeAvailable: false,
+    status: 'PASS', cycles: lifecycleCycles, documentsCreated: lifecycleCycles * 2 + 1,
+    nativeObjectsExplicitlyDestroyed: disposedNativeObjects,
+    useAfterDestroyRejected, elapsedMs: Date.now() - lifecycleStart,
+    explicitNativeDisposeAvailable: true,
     heapGrowthMeasured: false
   };
 
