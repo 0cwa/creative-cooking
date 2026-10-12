@@ -1,4 +1,4 @@
-//! p2panda-spaces 0.7.0 group encryption exercised via upstream public test
+//! p2panda-spaces 0.7.1 group encryption exercised via upstream public test
 //! helpers (without any network). This is NOT an audited production stack.
 use p2panda_auth::Access;
 use std::borrow::Borrow;
@@ -68,5 +68,27 @@ async fn third_device_joins_and_removed_peer_cannot_decrypt_future_data() {
     let bob_result = bob.manager.process_persisted(&future_msg).await;
     assert!(!matches!(bob_result, Ok(ref events) if events.iter().any(|e| matches!(
         e, Event::Application { data, .. } if data == &future
+    ))));
+}
+
+
+#[tokio::test]
+async fn outsider_has_no_welcome_key_and_cannot_publish_or_read() {
+    let alice = TestPeer::new(71).await;
+    let outsider = TestPeer::new(72).await;
+    let space_id = SpaceId::digest(b"creative-cooking-neg-outside-space");
+    let (space, controls) = alice.manager.create_space_persisted(space_id, &[])
+        .await.unwrap();
+    for message in &controls {
+        outsider.persist_operation(message).await.unwrap();
+        outsider.manager.process_persisted(message).await.unwrap();
+    }
+    let outsider_space = outsider.manager.space(space_id).await.unwrap().unwrap();
+    assert!(outsider_space.publish_persisted(b"unauthorized edit").await.is_err());
+    let sealed = space.publish_persisted(b"opaque outsider must not read").await.unwrap();
+    outsider.persist_operation(&sealed).await.unwrap();
+    let result = outsider.manager.process_persisted(&sealed).await;
+    assert!(!matches!(result, Ok(ref events) if events.iter().any(|e| matches!(
+        e, Event::Application { data, .. } if data == b"opaque outsider must not read"
     ))));
 }

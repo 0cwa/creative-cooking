@@ -96,8 +96,9 @@ async function killed(peer,scenario){
 async function bridgeFor(peer,topic){
   const token=randomBytes(24).toString('hex');
   const handle=await startNativeBridge(peer,topic,token);
-  bridges.add(handle);
-  return {...handle,token};
+  const connected={...handle,token};
+  bridges.add(connected);
+  return connected;
 }
 async function stopBridge(bridge){
   if(bridges.has(bridge)){await bridge.close();bridges.delete(bridge);}
