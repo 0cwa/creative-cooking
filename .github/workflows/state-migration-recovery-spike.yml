@@ -31,6 +31,9 @@ jobs:
       - name: Actual CRDT binaries, migration, failure injection, leak scans
         working-directory: spikes/state-migration-recovery
         run: npm test
+      - name: Portable baseline handoff between engines with fresh replication epochs
+        working-directory: spikes/state-migration-recovery
+        run: npm run test:exit
       - name: Upload machine-readable proof and failures
         if: always()
         uses: actions/upload-artifact@v4
