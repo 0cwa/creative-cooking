@@ -1,0 +1,25 @@
+name: Household key and mailbox contract (research)
+on:
+  pull_request:
+    paths:
+      - 'spikes/household-security-options/**'
+      - '.github/workflows/household-key-options.yml'
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: node --test spikes/household-security-options/mailbox.test.mjs
+      - name: Check out the exact household repository contract
+        uses: actions/checkout@v7
+        with:
+          ref: 9f5a0c9930f207bd182d9052473ee89bea119b3b
+          path: household-foundation
+      - run: npm ci --prefix household-foundation/packages/household-replication --no-audit --no-fund
+      - run: node spikes/household-security-options/automerge-interop.mjs household-foundation/packages/household-replication/index.mjs
