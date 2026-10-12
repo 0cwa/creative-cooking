@@ -263,6 +263,30 @@ node scripts/spikes/loro/parse-native-log.mjs \
 
 The physical-device path additionally needs Metro available/forwarded on port 8081 and the native web fixture materialized into the isolated app. Otherwise the APK may launch without running the JS harness; the parser correctly returns FAIL.
 
+#### Opt-in hardware runner: genuine ARM64 Android process evidence
+
+The isolated workflow now also has a **manually dispatched** `arm64_physical` input. Set this to `true` only after registering a **Linux x64 GitHub Actions self-hosted runner with the label `android-arm64-device`**, a locally accessible and authorized **physical ARM64 Android** device, Android SDK/NDK (set `ANDROID_HOME`), and functioning `adb`. This job is **skipped for all pull requests** and all ordinary workflow dispatches; it never holds up main CI. An offline self-hosted runner will leave an explicitly requested hardware job queued rather than producing false results.
+
+The [hardware test script](https://github.com/0cwa/creative-cooking/blob/spike/local-first-loro/scripts/spikes/loro/run-android-arm64-physical.sh) and [experimental workflow](https://github.com/0cwa/creative-cooking/actions/workflows/loro-spike.yml) compile the exact same pinned 1.10.3 Expo test APK and require an actual `lib/arm64-v8a/libloro-react-native.so`, `ro.product.cpu.abi=arm64-v8a`, a real Android API level, and `ro.kernel.qemu != 1` (no emulator masquerading as physical-device evidence). They establish a single selected device by `adb devices -l`, install the app, forward Metro 8081, poll **complete fail-closed V2 frames** from real `adb logcat`, require a first-process `PARTIAL` result, perform `am force-stop` and prove that PID disappears, then launch a distinct second OS process and require persisted restart `PASS`. The existing independent `loro-crdt@1.16.4` verifier then imports native-produced binary updates and must produce `web-verification.json` PASS. The job always uploads raw logs, ABI/API, device-identity, actual APK hash, pid evidence, meminfo, both results, verifier JSON when reached and a `SHA256SUMS.txt` manifest, including on failure.
+
+For manual execution on an already built isolated fixture, with exactly one authorized USB device and Metro available:
+
+```sh
+# Only once the dedicated test APK exists and no other adb targets are selected:
+LORO_ANDROID_APK=android/app/build/outputs/apk/debug/app-debug.apk \
+  bash scripts/spikes/loro/run-android-arm64-physical.sh
+npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+node scripts/spikes/loro/verify-native-update.mjs \
+  artifacts/loro/web-native-input.json \
+  artifacts/loro/android-arm64-physical/result.json \
+  artifacts/loro/android-arm64-physical/first-result.json \
+  > artifacts/loro/android-arm64-physical/web-verification.json
+node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64-physical
+```
+
+This is a reproducible hardware **qualification path**, not a claimed hardware runtime result. Until a real connected device executes it successfully, Android remains **PARTIAL** overall. The TCG ARM64 emulator opt-in is also explicitly unsupported/slow under Google's Android Emulator documentation; a real device is preferred to avoid GitHub-hosted `HV_UNSUPPORTED` and false x86_64 inferences.
+
+
 ## Performance fixture
 
 Fixture matches the requested/common logical shape:
