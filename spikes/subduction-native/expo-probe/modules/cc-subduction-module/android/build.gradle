@@ -1,0 +1,17 @@
+apply plugin: 'com.android.library'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'dev.creativecooking'
+version = '0.0.1'
+
+android {
+  namespace 'expo.modules.subductionnative'
+  defaultConfig {
+    minSdkVersion 26
+  }
+  sourceSets {
+    main {
+      jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+  }
+}
