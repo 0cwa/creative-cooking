@@ -1,0 +1,347 @@
+{
+  "schemaVersion": 1,
+  "classification": "BOUNDED EXECUTABLE OPAQUE BYTE COMPOSABILITY; NEVER E2EE OR ACL",
+  "capturedAt": "2026-10-12T00:54:00Z",
+  "readinessSourceBranch": "spike/local-first-evaluation-readiness",
+  "baseMainSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+  "testedBranchCommit": "566f29001929f89a219021d40a3ae831a6c9df26",
+  "workflow": {
+    "name": "Local-first evaluator readiness (experimental)",
+    "runId": 38189374913,
+    "conclusion": "success",
+    "startedAt": "2026-10-12T00:47:42Z",
+    "completedAt": "2026-10-12T00:53:53Z",
+    "url": "https://github.com/0cwa/creative-cooking/actions/runs/38189374913",
+    "artifactId": 11721296689,
+    "artifactName": "local-first-evaluation-composability",
+    "artifactUrl": "https://github.com/0cwa/creative-cooking/actions/runs/38189374913/artifacts/11721296689",
+    "resultPath": "artifacts/evaluation-readiness/subduction-composability.json"
+  },
+  "pins": {
+    "automerge": "@automerge/automerge@3.5.0",
+    "loro": "loro-crdt@1.16.4",
+    "subduction": "f0af1aab5f2fd44e5b224c22fc8b62660d50bc01",
+    "rust": "1.91.0",
+    "node": "22.13.0",
+    "wasmPack": "0.14.0",
+    "pnpm": "9"
+  },
+  "methodology": {
+    "engineUpdateType": "real incremental binary CRDT changes, not JSON state or random bytes",
+    "schema": "each engine base, concurrent recipe portions=4 and 6, and causal resolution=5; stable pantry",
+    "authorization": "--auth open, unsafe research only",
+    "encryption": "disposable fixture AES-256-GCM, does NOT prove ARK or Keyhive",
+    "runtimes": [
+      "Chromium Subduction WASM WebSocket publisher",
+      "Chromium WASM receiver",
+      "pinned Rust Subduction CLI redb server with hard stop and restart",
+      "fresh Chromium HTTP long-poll peer"
+    ],
+    "platformsNotTested": [
+      "actual Expo iOS native runtime",
+      "actual Expo Android runtime",
+      "production hosted TLS relay",
+      "actual Keyhive/ARK ACLs"
+    ]
+  },
+  "verifiedFacts": {
+    "realRelayRestart": true,
+    "senderAndReceiverOfflineBeforeRestart": true,
+    "receiverLateCatchup": true,
+    "thirdHttpLongPollCatchup": true,
+    "exactOriginalCiphertextBytes": true,
+    "eachEngineConflictAlternativesPreservedAfterSnapshot": true,
+    "eachEngineCausalResolvedValue": 5,
+    "eachEnginePastAlternativesRecoverableAfterResolution": [
+      4,
+      6
+    ],
+    "duplicateNoNewBlobs": true,
+    "idleRoundNoNewBlobs": true,
+    "plaintextCookingSentinelsAbsentFromRelayDisk": true
+  },
+  "scenarios": [
+    {
+      "engine": "automerge",
+      "spaceId": "space:personal:automerge",
+      "plaintextChangeBytes": [
+        288,
+        142,
+        142,
+        217
+      ],
+      "ciphertextStoredBytes": [
+        316,
+        170,
+        170,
+        245
+      ],
+      "changeHashes": [
+        "2957fd0e694e7ba7e0823eeaa3d4b226bdc156fc1f71f6a7eeaaf640f7e556d2",
+        "3fce0f8d621b102d8f6b6c1768765c6eab40be487b1510b1bcd63d84543691b7",
+        "c0a746d086a9cc4250a102832873aa5ebbc1c03a2e838d51dec636020a579c1f",
+        "12c80e9c4c6b7d2925c5e49db327bb1a12d061c0c4e833639504d122ccb98fc9"
+      ],
+      "initial": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 1,
+        "count": 1
+      },
+      "lateCatchup": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 2,
+        "count": 3
+      },
+      "conflict": {
+        "engine": "automerge",
+        "spaceId": "space:personal:automerge",
+        "documentId": "doc:recipe-1",
+        "phase": "conflict",
+        "exactCiphertextBytes": true,
+        "actualEngineChangeSha256": [
+          "e0366f0f146416bea905fb4d83af1ba390ba76a2ff3f7efd17577b15ac535a86",
+          "6d48888871814d6ef5d1e93c8b396d00a0663e9c44003673444138b5d1cebedb",
+          "da7067f6e203765be54ae6e353577d2b767bd21e60c46db2b7d45655eef2942e"
+        ],
+        "wireLengths": [
+          316,
+          170,
+          170
+        ],
+        "portionsAlternatives": [
+          4,
+          6
+        ],
+        "conflictPersistedAfterSnapshot": true,
+        "frontier": [
+          "4fb99968400d1aa427f5ceac19be495e93579db5e711430da1213e3a6a536daf",
+          "dfe99d058421da324edab13b41853af39e395ccd41066ebd352ecfd15e1a22f0"
+        ]
+      },
+      "resolution": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 0,
+        "count": 4
+      },
+      "resolved": {
+        "engine": "automerge",
+        "spaceId": "space:personal:automerge",
+        "documentId": "doc:recipe-1",
+        "phase": "resolved",
+        "exactCiphertextBytes": true,
+        "actualEngineChangeSha256": [
+          "e0366f0f146416bea905fb4d83af1ba390ba76a2ff3f7efd17577b15ac535a86",
+          "6d48888871814d6ef5d1e93c8b396d00a0663e9c44003673444138b5d1cebedb",
+          "da7067f6e203765be54ae6e353577d2b767bd21e60c46db2b7d45655eef2942e",
+          "20835b091ce0ecd8ad028cbf163fc9f38c6138753d4dfd871bf1a8acf99bdc11"
+        ],
+        "wireLengths": [
+          316,
+          170,
+          170,
+          245
+        ],
+        "portions": 5,
+        "historicalAlternatives": [
+          4,
+          6
+        ],
+        "resolutionCausal": true
+      },
+      "duplicateAndIdle": {
+        "duplicate": {
+          "success": true,
+          "commitsSent": 0,
+          "commitsReceived": 0,
+          "count": 4
+        },
+        "idle": {
+          "success": true,
+          "commitsSent": 0,
+          "commitsReceived": 0,
+          "count": 4
+        }
+      },
+      "lateHttpPeer": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 4,
+        "count": 4
+      },
+      "longPollVerified": {
+        "engine": "automerge",
+        "spaceId": "space:personal:automerge",
+        "documentId": "doc:recipe-1",
+        "phase": "resolved",
+        "exactCiphertextBytes": true,
+        "actualEngineChangeSha256": [
+          "e0366f0f146416bea905fb4d83af1ba390ba76a2ff3f7efd17577b15ac535a86",
+          "6d48888871814d6ef5d1e93c8b396d00a0663e9c44003673444138b5d1cebedb",
+          "da7067f6e203765be54ae6e353577d2b767bd21e60c46db2b7d45655eef2942e",
+          "20835b091ce0ecd8ad028cbf163fc9f38c6138753d4dfd871bf1a8acf99bdc11"
+        ],
+        "wireLengths": [
+          316,
+          170,
+          170,
+          245
+        ],
+        "portions": 5,
+        "historicalAlternatives": [
+          4,
+          6
+        ],
+        "resolutionCausal": true
+      }
+    },
+    {
+      "engine": "loro",
+      "spaceId": "space:personal:loro",
+      "plaintextChangeBytes": [
+        221,
+        123,
+        123,
+        140
+      ],
+      "ciphertextStoredBytes": [
+        249,
+        151,
+        151,
+        168
+      ],
+      "changeHashes": [
+        "cd9b7119104301df771781695c9c880e3dc4ffb58173c3af40850ba3cb3c84bc",
+        "8d100f62638a2e02229ade08202d746d6d4d3c5f33f9eddc754050ec0891e8d0",
+        "b130bce597d11475f466b85b552b8392b88c7ee78f1bc232ecf4b99dba287e5e",
+        "2eddbe6aa8eec1a285952b98bdd14ed706f09eec3ef272c12d3f4f7d74bee977"
+      ],
+      "initial": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 0,
+        "count": 1
+      },
+      "lateCatchup": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 2,
+        "count": 3
+      },
+      "conflict": {
+        "engine": "loro",
+        "spaceId": "space:personal:loro",
+        "documentId": "doc:recipe-1",
+        "phase": "conflict",
+        "exactCiphertextBytes": true,
+        "actualEngineChangeSha256": [
+          "bc4abaeac3cbb3ce7343bc41ad6d394d6c61c4cfd70f4a0d07606da903ec257d",
+          "1740ffd1945ad9fbabcb4963bd5b8f6b4e6d432230682450bf111ebadedd9926",
+          "c7bcc7b907cb309b1218fd6b4c669907e4b80b6bba350891d9ae88229efad6f8"
+        ],
+        "wireLengths": [
+          249,
+          151,
+          151
+        ],
+        "portionsAlternatives": [
+          4,
+          6
+        ],
+        "conflictPersistedAfterSnapshot": true,
+        "frontiers": [
+          "0@101",
+          "0@202"
+        ]
+      },
+      "resolution": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 0,
+        "count": 4
+      },
+      "resolved": {
+        "engine": "loro",
+        "spaceId": "space:personal:loro",
+        "documentId": "doc:recipe-1",
+        "phase": "resolved",
+        "exactCiphertextBytes": true,
+        "actualEngineChangeSha256": [
+          "bc4abaeac3cbb3ce7343bc41ad6d394d6c61c4cfd70f4a0d07606da903ec257d",
+          "1740ffd1945ad9fbabcb4963bd5b8f6b4e6d432230682450bf111ebadedd9926",
+          "c7bcc7b907cb309b1218fd6b4c669907e4b80b6bba350891d9ae88229efad6f8",
+          "8f67e13a04613e98128a9128eec2b42183ad209ce54234a878c81e4525fa6cd2"
+        ],
+        "wireLengths": [
+          249,
+          151,
+          151,
+          168
+        ],
+        "portions": 5,
+        "historicalAlternatives": [
+          4,
+          6
+        ],
+        "resolutionCausal": true
+      },
+      "duplicateAndIdle": {
+        "duplicate": {
+          "success": true,
+          "commitsSent": 0,
+          "commitsReceived": 0,
+          "count": 4
+        },
+        "idle": {
+          "success": true,
+          "commitsSent": 0,
+          "commitsReceived": 0,
+          "count": 4
+        }
+      },
+      "lateHttpPeer": {
+        "success": true,
+        "commitsSent": 0,
+        "commitsReceived": 4,
+        "count": 4
+      },
+      "longPollVerified": {
+        "engine": "loro",
+        "spaceId": "space:personal:loro",
+        "documentId": "doc:recipe-1",
+        "phase": "resolved",
+        "exactCiphertextBytes": true,
+        "actualEngineChangeSha256": [
+          "bc4abaeac3cbb3ce7343bc41ad6d394d6c61c4cfd70f4a0d07606da903ec257d",
+          "1740ffd1945ad9fbabcb4963bd5b8f6b4e6d432230682450bf111ebadedd9926",
+          "c7bcc7b907cb309b1218fd6b4c669907e4b80b6bba350891d9ae88229efad6f8",
+          "8f67e13a04613e98128a9128eec2b42183ad209ce54234a878c81e4525fa6cd2"
+        ],
+        "wireLengths": [
+          249,
+          151,
+          151,
+          168
+        ],
+        "portions": 5,
+        "historicalAlternatives": [
+          4,
+          6
+        ],
+        "resolutionCausal": true
+      }
+    }
+  ],
+  "pairingClassification": {
+    "Automerge + Subduction (opaque fixture, NO Keyhive)": "PASS",
+    "Loro + Subduction (opaque fixture, NO Keyhive)": "PASS",
+    "Automerge + p2panda/Iroh (real engine update path)": "NOT TESTED",
+    "Loro + p2panda/Iroh (real engine update path)": "NOT TESTED",
+    "Automerge + Subduction/Keyhive E2EE ACL": "NOT TESTED",
+    "Loro + Subduction/Keyhive E2EE ACL": "NOT TESTED",
+    "productionOverall": "FAIL"
+  },
+  "evaluatorDecision": "WITHHOLD final production stack selection; native app, authenticated security/revocation, migrations and operational maturity gates remain open"
+}
