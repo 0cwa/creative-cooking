@@ -6,7 +6,7 @@
 //! All identities, documents and plaintext are disposable test fixtures.
 use keyhive_core::{
     access::Access::{Admin, Edit, Read, Relay},
-    test_utils::{TestContext, TestError, TestResult as Result},
+    test_utils::{TestContext, TestResult as Result},
 };
 
 #[tokio::test]
@@ -39,26 +39,40 @@ async fn independent_identities_relay_read_edit_admin_and_other_household() -> R
 }
 
 #[tokio::test]
-async fn admin_delegation_allowed_reader_delegation_denied() -> Result<()> {
+async fn capability_attenuation_allows_reader_subdelegation_but_not_edit_escalation() -> Result<()> {
+    // Keyhive *intentionally* allows any grantee to pass onward a capability
+    // bounded by its own strength. Admin is NOT required for subdelegation.
+    // See pinned design/glossary.md PoLA ("never restricts sub-delegation").
     let mut ctx = TestContext::new().await;
     let owner = ctx.individual("owner").await?;
     let reader = ctx.individual("reader").await?;
     let admin = ctx.individual("admin").await?;
     let newcomer = ctx.individual("newcomer").await?;
+    let second = ctx.individual("second").await?;
     let pantry = ctx.doc(&owner, "cc-delegation").await?;
     owner.add_member(reader.id(), pantry, Read, &[]).await?;
     owner.add_member(admin.id(), pantry, Admin, &[]).await?;
     ctx.sync_all_unsent().await?;
 
-    match reader.add_member(newcomer.id(), pantry, Read, &[]).await.map_err(TestError::from) {
-        Err(TestError::NoAuthority) => {},
-        other => panic!("SECURITY FAIL: Reader delegated without Admin: {other:?}"),
-    }
-    assert_eq!(owner.access_for_doc(newcomer.id(), pantry).await, None);
-    admin.add_member(newcomer.id(), pantry, Read, &[]).await?;
+    reader.add_member(newcomer.id(), pantry, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
     assert_eq!(owner.access_for_doc(newcomer.id(), pantry).await, Some(Read));
-    println!("CC_KEYHIVE_CORE={{\"case\":\"signed-delegation\",\"expected\":\"reader cannot grant, admin can grant\",\"observed\":\"PASS\"}}");
+    // Whether the API rejects this request or attenuates it, it must never
+    // make the target an editor through a Read-only delegation.
+    let upgrade_result = reader.add_member(newcomer.id(), pantry, Edit, &[]).await;
+    ctx.sync_all_unsent().await?;
+    let effective = owner.access_for_doc(newcomer.id(), pantry).await;
+    assert_eq!(effective, Some(Read),
+        "SECURITY FAIL: Read holder's Edit attempted escalation became effective");
+    if let Ok(op) = upgrade_result {
+        println!("CC_KEYHIVE_CORE={{\"case\":\"attenuation-attempt\",\"observed\":\"API returned signed op but effective authorization remained Read\",\"note\":\"not evidence of Edit escalation\"}}");
+        drop(op);
+    }
+
+    admin.add_member(second.id(), pantry, Edit, &[]).await?;
+    ctx.sync_all_unsent().await?;
+    assert_eq!(owner.access_for_doc(second.id(), pantry).await, Some(Edit));
+    println!("CC_KEYHIVE_CORE={{\"case\":\"capability-attenuation\",\"expected\":\"Read holder can delegate Read but not escalate Edit; Admin delegates Edit\",\"observed\":\"PASS\",\"model\":\"Keyhive PoLA intentionally permits attenuated subdelegation\"}}");
     Ok(())
 }
 
