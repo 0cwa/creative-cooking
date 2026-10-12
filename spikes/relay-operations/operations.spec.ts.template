@@ -423,12 +423,17 @@ test('actual persistent Rust relay: quiescent backup, kill, late catch-up, TLS, 
     await delay(milliseconds);
    }
    await boot(cli,restored);
+   // /unavailable is an intentionally invalid protocol path. The actual
+   // upstream can respond 502 even when healthy, so its HTTP status is NOT
+   // an availability check. A fresh authenticated-protocol sync round-trip
+   // is the recovery oracle, not an unrelated GET.
    const available=await httpsProbe(proxyPort,'/unavailable','GET','http://127.0.0.1:9891');
-   expect(available.status).not.toBe(502);
    const returned=await tracked();const result=await eventually(returned.page,fixture.commits.length);
+   expect(result.success).toBe(true);
    return {downstreamStatus:probe.status,returningPeerCount:result.count,
-     proxyHttpRetryProbe:backoffProbe,recoveredHttpStatus:available.status,
-     qualification:'Actual bounded HTTP client probe backoff; no production browser/native sync SDK retry implementation.',
+     proxyHttpRetryProbe:backoffProbe,invalidPathStatusAfterRestart:available.status,
+     actualProtocolRecovered:true,
+     qualification:'Bounded HTTP probe backoff; invalid-path status does not prove availability. Fresh real WASM/Subduction sync does. No production browser/native SDK retry proof.',
      recommendedClientBackoffMs:[250,500,1000,2000,4000,8000]};
   });
   evidence.actualChecks.unavailableAndRecover=unavailable;
