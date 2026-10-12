@@ -129,10 +129,17 @@ fn conflicts_json(doc: &mut AutoCommit, keys: &[String]) -> Result<String> {
     let mut alternatives: Vec<JsonValue> = doc.get_all(&object, leaf.as_str())
         .map_err(|e| e.to_string())?.into_iter()
         .map(|(value, op_id)| {
+            // A Web 3.5 string may be a CRDT Text object, not a scalar Str.
+            let actual_value = match value {
+                Value::Object(ObjType::Text) => {
+                    json!(doc.text(&op_id).map_err(|e| format!("Conflict text read: {e}"))?)
+                }
+                other => scalar_json(other),
+            };
             let op = op_id.to_string();
             let actor = op.split_once('@').map(|(_, a)| a).unwrap_or("");
-            json!({"value":scalar_json(value),"opId":op,"actor":actor})
-        }).collect();
+            Ok(json!({"value":actual_value,"opId":op,"actor":actor}))
+        }).collect::<Result<Vec<_>>>()?;
     alternatives.sort_by_key(|a| a["opId"].as_str().unwrap_or("").to_owned());
     Ok(json!({"alternatives":alternatives}).to_string())
 }

@@ -65,6 +65,7 @@ function makeSeed() {
   });
 }
 function logical(doc) { return JSON.parse(JSON.stringify(doc)); }
+function rawText(value) { return typeof value === 'object' && value !== null ? String(value) : value; }
 function edit(doc, author, callback) {
   return A.change(A.clone(doc, { author: Buffer.from(author).toString('hex') }),
     {message: 'edit from ' + author, time: 1700000200}, callback);
@@ -119,9 +120,9 @@ try {
     await call('putString', id, chat('content'), txt('Try basil tomato toast'));
     await call('putString', id, recipe('ingredientsById','ingredient-tomato','amount'), txt('3'));
     const fromNative = A.load(await nativeSave(id));
-    assert.equal(fromNative.recipesById['recipe-1'].title, 'Tomato toast with basil');
+    assert.equal(rawText(fromNative.recipesById['recipe-1'].title), 'Tomato toast with basil');
     assert.equal(fromNative.pantryById['item-1'].preference, 5);
-    assert.equal(fromNative.conversationsById['conversation-1'].messagesById['message-1'].content, 'Try basil tomato toast');
+    assert.equal(rawText(fromNative.conversationsById['conversation-1'].messagesById['message-1'].content), 'Try basil tomato toast');
     writeFileSync(resultDir + '/android-bridge-native-modified.am', await nativeSave(id));
   });
 
@@ -132,7 +133,7 @@ try {
     const webChanges=A.getChanges(seed, web);
     for (const c of webChanges) await call('apply', id, b64(c));
     const native=A.load(await nativeSave(id));
-    assert.equal(native.recipesById['recipe-1'].title, 'Herbed toast');
+    assert.equal(rawText(native.recipesById['recipe-1'].title), 'Herbed toast');
     assert.equal(native.recipesById['recipe-1'].portions, 4);
     assert.equal((await nativeConflicts(id, recipe('title'))).length, 1);
     assert.equal((await nativeConflicts(id, recipe('portions'))).length, 1);
@@ -195,7 +196,7 @@ try {
     await call('apply',id,b64(diffs[1]));
     assert.equal(await call('heads',id),beforeDuplicate);
     const loaded=A.load(await nativeSave(id));
-    assert.equal(loaded.recipesById['recipe-1'].title,'Step one');
+    assert.equal(rawText(loaded.recipesById['recipe-1'].title),'Step one');
     assert.equal(loaded.recipesById['recipe-1'].portions,9);
   });
 
@@ -206,7 +207,7 @@ try {
     const state=await newSession();
     const {web:converged,messages,rounds}=await sync(web,native,state);
     assert.ok(messages>0 && rounds>0);
-    assert.equal(converged.recipesById['recipe-1'].title,'Android title');
+    assert.equal(rawText(converged.recipesById['recipe-1'].title),'Android title');
     assert.equal(converged.pantryById['item-1'].preference,1);
     writeFileSync(resultDir+'/android-bridge-sync-result.json',JSON.stringify({result:'PASS',messages,rounds},null,2));
   });
@@ -220,7 +221,7 @@ try {
     assert.equal(await nativeGet(id,pantry('name')),'red tomatoes');
     const session=await newSession();
     const {web}=await sync(seed,id,session);
-    assert.equal(web.pantryById['item-1'].name,'red tomatoes');
+    assert.equal(rawText(web.pantryById['item-1'].name),'red tomatoes');
   });
 
   await scenario(9, 'three replicas converge by real sync messages', async () => {
@@ -236,8 +237,8 @@ try {
     const s3=await newSession();
     const c=await sync(b.web,first,s3);
     assert.equal(c.web.recipesById['recipe-1'].portions,7);
-    assert.equal(c.web.recipesById['recipe-1'].title,'Shared toast');
-    assert.equal(c.web.pantryById['item-1'].name,'cherry tomatoes');
+    assert.equal(rawText(c.web.recipesById['recipe-1'].title),'Shared toast');
+    assert.equal(rawText(c.web.pantryById['item-1'].name),'cherry tomatoes');
   });
 
   await scenario(10, 'bad data, stale handle and repeated allocate/free', async () => {
@@ -260,25 +261,113 @@ try {
     assert.deepEqual(JSON.parse(await call('counts')),before);
   });
 
+
+  await scenario(11, 'concurrent edits to different properties of one stable-ID ingredient', async () => {
+    const id=await open(seed);
+    await call('putString',id,recipe('ingredientsById','ingredient-tomato','amount'),txt('5'));
+    const web=edit(seed,'web-ingredient',d=>{d.recipesById['recipe-1'].ingredientsById['ingredient-tomato'].name='garden tomatoes';});
+    const result=await sync(web,id,await newSession());
+    const ingredient=result.web.recipesById['recipe-1'].ingredientsById['ingredient-tomato'];
+    assert.equal(rawText(ingredient.amount),'5');
+    assert.equal(rawText(ingredient.name),'garden tomatoes');
+  });
+
+  await scenario(12, 'concurrent map-as-set allergen additions are preserved', async () => {
+    const id=await open(seed);
+    await call('putBool',id,'allergiesByValue/peanuts','true');
+    const web=edit(seed,'web-allergy',d=>{d.allergiesByValue.sesame=true;});
+    const result=await sync(web,id,await newSession());
+    assert.equal(result.web.allergiesByValue.peanuts,true);
+    assert.equal(result.web.allergiesByValue.sesame,true);
+  });
+
+  await scenario(13, 'same recipe title disagreement exposes both Text and scalar alternatives', async () => {
+    const id=await open(seed);
+    await call('putString',id,recipe('title'),txt('Native basil toast'));
+    const web=edit(seed,'web-title',d=>{d.recipesById['recipe-1'].title='Web basil toast';});
+    const result=await sync(web,id,await newSession());
+    const actual=await nativeConflicts(id,recipe('title'));
+    assert.deepEqual(actual.map(x=>x.value).sort(),['Native basil toast','Web basil toast']);
+    assert.deepEqual(Object.values(A.getConflicts(result.web.recipesById['recipe-1'],'title')??{}).map(String).sort(),
+      ['Native basil toast','Web basil toast']);
+    assert.ok(actual.every(x=>x.opId.includes('@')));
+  });
+
+  await scenario(14, 'tombstone delete-versus-edit survives with a stable recipe ID', async () => {
+    const id=await open(seed);
+    await call('putBool',id,recipe('lifecycle','deleted'),'true');
+    const web=edit(seed,'web-edit-during-delete',d=>{d.recipesById['recipe-1'].title='Edited while deleted';});
+    const result=await sync(web,id,await newSession());
+    assert.equal(result.web.recipesById['recipe-1'].lifecycle.deleted,true);
+    assert.equal(rawText(result.web.recipesById['recipe-1'].title),'Edited while deleted');
+  });
+
+  await scenario(15, 'stable-ID concurrent chat appends preserve both message maps', async () => {
+    const id=await open(seed);
+    await call('putString',id,'conversationsById/conversation-1/messagesById/native-message/content',
+      txt('Native suggests tomato soup'));
+    const web=edit(seed,'web-chat',d=>{
+      d.conversationsById['conversation-1'].messagesById['web-message']={
+        id:'web-message',role:'user',content:'Any other ideas?'};
+    });
+    const result=await sync(web,id,await newSession());
+    const messages=result.web.conversationsById['conversation-1'].messagesById;
+    assert.equal(rawText(messages['native-message'].content),'Native suggests tomato soup');
+    assert.equal(rawText(messages['web-message'].content),'Any other ideas?');
+  });
+
+  await scenario(16, 'logical duplicate pantry items retain distinct stable IDs', async () => {
+    const id=await open(seed);
+    await call('putString',id,'pantryById/native-carrots/name',txt('carrots'));
+    await call('putInt',id,'pantryById/native-carrots/preference',1);
+    const web=edit(seed,'web-pantry',d=>{
+      d.pantryById['web-carrots']={id:'web-carrots',name:'carrots',preference:5};
+    });
+    const result=await sync(web,id,await newSession());
+    assert.equal(rawText(result.web.pantryById['native-carrots'].name),'carrots');
+    assert.equal(rawText(result.web.pantryById['web-carrots'].name),'carrots');
+    assert.notEqual(result.web.pantryById['native-carrots'].preference,
+      result.web.pantryById['web-carrots'].preference);
+  });
+
+  await scenario(17, 'multi-edit offline divergence and new sessions converge', async () => {
+    const id=await open(seed);
+    await call('putInt',id,recipe('portions'),8);
+    await call('putString',id,recipe('title'),txt('Native herbed toast'));
+    await call('putBool',id,'allergiesByValue/peanuts','true');
+    const web=edit(seed,'web-multi-offline',d=>{
+      d.pantryById['item-1'].preference=2;
+      d.recipesById['recipe-1'].ingredientsById['ingredient-tomato'].amount='6';
+      d.allergiesByValue.sesame=true;
+    });
+    const result=await sync(web,id,await newSession());
+    assert.equal(result.web.recipesById['recipe-1'].portions,8);
+    assert.equal(rawText(result.web.recipesById['recipe-1'].title),'Native herbed toast');
+    assert.equal(result.web.allergiesByValue.peanuts,true);
+    assert.equal(result.web.allergiesByValue.sesame,true);
+    assert.equal(result.web.pantryById['item-1'].preference,2);
+    assert.equal(rawText(result.web.recipesById['recipe-1'].ingredientsById['ingredient-tomato'].amount),'6');
+  });
+
   // The mapping to the authoritative 18 scenario contract is explicit.
   // A map+scalar bridge cannot claim same-character text/list API coverage.
   const contract = [
-    ['different recipe fields','PASS',1,3],
-    ['same nested entity different properties','PASS',2],
-    ['concurrent additions to ordered lists','PARTIAL',2],
+    ['different recipe fields','PASS',3],
+    ['same nested entity different properties','PASS',11],
+    ['concurrent additions to ordered lists','PARTIAL',16],
     ['concurrent text editing','NOT_IMPLEMENTED'],
-    ['chat appends','PARTIAL',2],
-    ['set-like additions','PASS',2],
+    ['chat appends (map entries; ordered chat list excluded)','PARTIAL',15],
+    ['set-like additions','PASS',12],
     ['same scalar disagreement','PASS',4,5],
-    ['same atomic title','PASS',4],
-    ['delete-vs-edit with tombstone','PARTIAL',2],
-    ['duplicate pantry item','PARTIAL',2],
+    ['same atomic title','PASS',13],
+    ['delete-vs-edit with tombstone (no physical delete)','PARTIAL',14],
+    ['duplicate pantry item (no explicit order)','PARTIAL',16],
     ['reorder + edit','NOT_IMPLEMENTED'],
     ['restart','PASS',8],
     ['out-of-order changes','PASS',6],
     ['duplicate delivery','PASS',6],
-    ['long offline divergence','PASS',7],
-    ['merge direction','PARTIAL',3],
+    ['long offline divergence','PASS',17],
+    ['merge direction (bidirectional change apply)','PARTIAL',3],
     ['live sync protocol','PASS',7],
     ['three replicas','PASS',9]
   ].map(([name,status,...tests],i)=>({number:i+1,name,status,correspondingNativeTests:tests}));

@@ -32,6 +32,7 @@ function remote(command, extras={}) {
   return value;
 }
 function logical(doc){return JSON.parse(JSON.stringify(doc));}
+function textValue(value){return value === null || value === undefined ? value : String(value);}
 const seedBytes=readFileSync('artifacts/android-bridge-web-seed.am');
 const seed=A.load(seedBytes);
 const author='web-device';
@@ -76,14 +77,14 @@ try {
     remote('putString',{path:recipe('title'),data:b64('Basil tomato toast')});
     remote('putInt',{path:pantry('preference'),number:5});
     const native=A.load(un64(remote('save')));
-    assert.equal(native.recipesById['recipe-1'].title,'Basil tomato toast');
+    assert.equal(textValue(native.recipesById['recipe-1'].title),'Basil tomato toast');
     assert.equal(native.pantryById['item-1'].preference,5);
     return {heads:A.getHeads(native).length};
   });
   await test('Actual web↔Android live SyncState session after offline divergence',()=>{
     const web=change(seed,d=>{d.recipesById['recipe-1'].portions=3;});
     const result=sync(web);
-    assert.equal(result.web.recipesById['recipe-1'].title,'Basil tomato toast');
+    assert.equal(textValue(result.web.recipesById['recipe-1'].title),'Basil tomato toast');
     assert.equal(result.web.pantryById['item-1'].preference,5);
     assert.equal(result.web.recipesById['recipe-1'].portions,3);
     return {messages:result.messages,rounds:result.rounds};
@@ -122,7 +123,7 @@ try {
     assert.equal(toJson(remote('get',{path:recipe('portions')})),5);
     const changed=change(web,d=>{d.pantryById['item-1'].name='cherry tomatoes';});
     const result=sync(changed);
-    assert.equal(result.web.pantryById['item-1'].name,'cherry tomatoes');
+    assert.equal(textValue(result.web.pantryById['item-1'].name),'cherry tomatoes');
     return {messages:result.messages};
   });
   await test('Three replicas converge through Android when web peers do not overlap',()=>{
@@ -134,7 +135,7 @@ try {
     const convergedB=sync(b);
     remote('resetSession');
     convergedA=sync(convergedA.web);
-    assert.equal(convergedA.web.recipesById['recipe-1'].title,'Web A toast');
+    assert.equal(textValue(convergedA.web.recipesById['recipe-1'].title),'Web A toast');
     assert.equal(convergedA.web.pantryById['item-1'].preference,2);
     assert.deepEqual(logical(convergedA.web),logical(convergedB.web));
     return {messages:convergedA.messages+convergedB.messages};
