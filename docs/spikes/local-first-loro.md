@@ -199,13 +199,38 @@ This continuation does not restart or weaken the 18 web scenarios. It adds fail-
 | iOS true app terminate/relaunch and persisted snapshot restore | **PASS** | distinct `first-result.json` and `result.json` run IDs |
 | iOS causal 8 resolution and retained conflict provenance | **PASS** | `0@101` and `0@303` concurrent; `0@505` later |
 | iOS text and native movable-list FFI, repeated load/export | **PASS** | 24 cycles, 48 documents; **published list-push convenience wrapper broken** |
-| iOS explicit native Rust release and use-after-release detection | **PENDING fresh CI** | Added `uniffiDestroy()` calls to cycle; don't infer from earlier successful run |
+| iOS out-of-order native delivery and full/shallow history retention | **PASS** | Run 38252473679, 15 checks; native trim loses unresolved review evidence and independent checkpoint survives OS restart |
+| Native RN falsy-value writes and web import | **PENDING** | Published 1.10.3 source has `if (!value)`; isolated one-line JS fix + authentic native regression newly added, requires fresh paired JSON evidence |
+| iOS explicit native Rust release and use-after-release detection | **PASS (functional, not heap-leak bound)** | Run 38252473679: 97 explicit destroys, use-after-destroy rejected |
 | Native heap-leak bounds and foreground/background | **NOT MEASURED / PARTIAL** | Only restart + lifecycle smoke shown |
 | Android ARM64 native library + APK integration | **PASS (compile only)** | 87,498,593-byte APK; actual ARM64 library present |
 | Android ARM64 real app start, restart and web interchange | **PARTIAL — blocked by accessible environment** | Apple Silicon hosted emulator: `HV_UNSUPPORTED` even `-accel off`; use device or suitable remote host |
 | Android x86_64 with published release | **UNSUPPORTED / NOT EXECUTED** | No x86_64 Rust archive in published npm package |
 
 Source artifacts: [iOS full native + web verification](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11744245324), [Android ARM64 emulator/build logs](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11743346589), and [CI run index](https://github.com/0cwa/creative-cooking/actions/workflows/loro-spike.yml). **Experimental workflow remains red for missing Android runtime proof**; normal production app CI is unaffected. Never infer PASS from logs, prebuild, IPA/APK compilation or an x86_64 emulator lacking Loro native code.
+
+### Additional *executed* iOS qualification: run 38252473679
+
+[Real simulator job 114835341943](https://github.com/0cwa/creative-cooking/actions/runs/38252473679/job/114835341943) **PASS** on the *unmodified published* `loro-react-native@1.10.3` binding. The first iOS process returned `PARTIAL` only because it could not already prove an OS restart. After a real second process launched, [`ios/result.json` and `ios/web-verification.json`](https://github.com/0cwa/creative-cooking/actions/runs/38252473679/artifacts/11752248335) both returned **PASS**, with all 15 native feature checks passing. This extends, rather than replaces, earlier run 38240053849.
+
+- **Real native out-of-order delivery:** 99-byte first incremental update and 101-byte causally dependent second update. The second update did not apply without its predecessor; importing the first caused convergence. Duplicates preserved content and Rust version vector identity.
+- **Real retained-history probe:** the public native history APIs reconstructed `4/iphone/0@101` and `6/ipad/0@303` after full native snapshot import. A later edit followed by real native `shallowSnapshot` export/import preserved current state but lost those old alternatives from normal operation-history inspection. **This is a directly observed data-loss-for-review hazard**, not theoretical.
+- **Durable checkpoint:** the spike wrote an independent versioned review record to its disposable AsyncStorage fixture. A true `simctl terminate` and launch reconstructed it from the next OS process and verified the original alternatives. This tests the feasibility requirement; it is not a production review persistence implementation.
+- **Lifecycle:** 24 native import/export/reload/duplicate-import cycles, 49 documents, and **97 explicit UniFFI object destroys**. Calling the destroyed document was rejected. No instrumented native heap-growth bound or memory-leak certification is claimed.
+- **Minimal real defective API reproducer:** `LoroMovableList.push('should-not-insert')` emitted `undefined is not a function` in iOS, directly corroborating published `extension.ts`'s nonexistent `this.length()` against generated `len()`. The failed invocation left the list empty, while generated FFI `insert/len/mov` worked.
+- [Actions artifact ZIP 11752248335](https://github.com/0cwa/creative-cooking/actions/runs/38252473679/artifacts/11752248335): **SHA-256 `2e1a84c607b9763270f949f3030563a4a09b038d6e5b7a8d6485716addd718f7`**, independently checked. It includes raw logs, two parsed results, independent web verification, native/size metadata, screenshot and per-file `SHA256SUMS.txt`.
+
+The same [experimental workflow run](https://github.com/0cwa/creative-cooking/actions/runs/38252473679) compiled ARM64 Android again but its emulator still failed `HV_UNSUPPORTED` **even with `ANDROID_I_WANT_MY_TCG=yes` and `-accel off`**; that job never executed the Loro app. [Android ARM64 artifact 11751309489](https://github.com/0cwa/creative-cooking/actions/runs/38252473679/artifacts/11751309489) ZIP SHA-256 `c3fffdb570d17ba44b1b39c63feee17af1bdac14520d19c4dc58dccda3f36959`. The unsupported x86_64 archive is reported compile-only by [artifact 11751185642](https://github.com/0cwa/creative-cooking/actions/runs/38252473679/artifacts/11751185642), ZIP SHA-256 `7b9f31963fee78224ce9115bd478a22ecf36cebb0606236251fcf6d18eb2c427`. **Overall remains PARTIAL on iOS+Android coverage**, not an engine winner.
+
+### New adversarial native falsy-value gate (awaiting native CI artifact)
+
+The *published* `loro-react-native@1.10.3` JS `jsValueToLoroValue` converter starts with `if (!value)`, which maps valid **`false`, `0`, and `''`** and nested appearances to `LoroValue.Null` before reaching the type-specific branches. Exactly the same flaw is present in official RN source 1.13.2. This is an independent source-level binding defect affecting Creative Cooking's boolean flags and structured state, distinct from the confirmed list-push bug; the source audit alone does **not** count as a native runtime failure.
+
+The isolated spike adds a real iOS/Android native probe that writes literal `false`, numeric zero, empty string, nested map and movable-list values through the actual RN binding, exports its native binary snapshot, and requires an independent `loro-crdt@1.16.4` verifier to import the resulting bytes and reproduce the expected structure and type/value identities. If any value becomes null, `checks.falsyValues=FAIL` and the fail-closed V2 parser refuses PASS; no tests replace the native engine with mocks.
+
+To test the **smallest compatible remedy**, only this experimental workflow runs [`patch-published-falsy-adapter.mjs`](https://github.com/0cwa/creative-cooking/blob/spike/local-first-loro/scripts/spikes/loro/patch-published-falsy-adapter.mjs) immediately after pinning npm RN **1.10.3**. It replaces *one JavaScript guard* with `value === null || value === undefined` and records before/after SHA-256 hashes in `value-adapter-patch.json`. No Rust CRDT, UniFFI-generated code, native archives, app dependencies or production files are altered. A successful native artifact must identify **`loro-react-native@1.10.3+falsy-compat`**, not misrepresent patched code as untouched npm. The correction **does not fix** the separate list-push wrapper defect.
+
+**Status of this additional test: PENDING genuine native artifact.** The prior confirmed iOS 4/6 binary pass is narrowly valid and not a blanket approval of falsy-value correctness. Any new success must include `native checks.falsyValues=PASS`, the genuine `falsySnapshotBytes`, `web-verification.json` from those exact native bytes, and the recorded patch hash. The experiment must remain a research PR, and application-level migration is still prohibited.
 
 ### Native API/version delta and operational maintenance
 
@@ -356,7 +381,8 @@ Web requires explicit WASM asset handling in Expo static export. Native benefits
 - **iOS Simulator native/web round-trip is proven. Android ARM64 execution is unproven** because hosted ARM64 emulator virtualization is unsupported; use a physical/remote device.
 - RN package list convenience-wrapper mismatch (`this.length()` versus generated `len()`) affects published 1.10.3 and official source 1.13.2; native `mov()`/`lenUnicode()` differ from web names.
 - Low-level operation-shape dependency for disagreement indexing (public native FFI does reconstruct the actual 4-versus-6 provenance).
-- Explicit unresolved-review retention policy before shallow compaction.
+- Explicit unresolved-review retention policy before shallow compaction. iOS runtime now demonstrates exactly why: native shallow-history trim loses the 4/6 alternatives; its disposable durable review checkpoint survives an OS restart.
+- Published native JS converter loses falsy domain values according to the pinned source. The isolated `false/0/''` native round-trip probe and one-line JS compatibility correction are **pending actual native CI confirmation**, not a reason to overclaim general state correctness.
 - Expo web static export must carry the Loro WASM asset.
 - Device identity/authorship metadata belongs to Creative Cooking; peer IDs alone are not human device names.
 - Sync transport, pairing/authentication, and encryption remain outside this engine spike.
@@ -375,6 +401,6 @@ Subsequent experimental native CI jobs also write SHA256SUMS.txt for raw output 
 
 ## CI, artifacts, and isolation
 
-Normal Creative Cooking CI is unchanged and green on this branch: Gitleaks, unit tests, TypeScript, production PWA export/verification, and Playwright E2E pass. Experimental Loro jobs are separate and do not weaken those checks.
+Normal Creative Cooking CI is unchanged and passed on the last completed branch run ([38264287845](https://github.com/0cwa/creative-cooking/actions/runs/38264287845)): Gitleaks, unit tests, TypeScript and production PWA export/verification. Fresh commits must be checked independently; the experimental Loro workflow is separate and expected to fail closed on unqualified ARM64 runtime. Experimental Loro jobs are separate and do not weaken those checks.
 
 The Loro workflow uploads result JSON, benchmark JSON, API probes, static web screenshots/logs, **actual successful iOS runtime and independent web-verification artifacts**, and failed Android ARM64 host-emulator logs. [Normal app CI #38240054120](https://github.com/0cwa/creative-cooking/actions/runs/38240054120) passed at the successful iOS binary-roundtrip commit. Experimental workflow is intentionally still red due to nonqualified Android runtime. Production AppState/storage/backups/credentials remain untouched. The PR remains draft and must not be merged as a production migration.
