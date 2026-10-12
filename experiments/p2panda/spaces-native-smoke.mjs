@@ -183,5 +183,8 @@ try{
  writeFileSync(output,JSON.stringify(observations,null,2));
  rmSync(root,{recursive:true,force:true});
  console.log('SPACES_NATIVE_PERSISTENT_SUMMARY='+JSON.stringify({status:observations.status,
-  scenario:output,bytes:observations.wire?.map(x=>x.bytes),actualSpacesE2EE:observations.status==='PASS'}));
+  scenario:output,bytes:observations.wire?.map(x=>x.bytes),actualSpacesE2EE:observations.status==='PASS',
+  keylessC:observations.keylessC,signatureTamperRejected:observations.lateBob?.signedHeaderTamperRejected,
+  outsiderDecrypts:observations.lateBob?.outsiderDecrypts,
+  readOnlyCanLocallyEncryptWithoutIngressACL:observations.lateBob?.readOnlyCanLocallyEncryptWithoutIngressACL}));
 }
