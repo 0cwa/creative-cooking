@@ -97,7 +97,7 @@ All times in **milliseconds**. Latency values are the **median (p95)** of five s
 
 | Operation | Automerge latency (median / p95) | Loro latency (median / p95) | Automerge wire bytes A→B / B→A | Loro wire bytes A→B / B→A |
 | --- | ---: | ---: | ---: | ---: |
-| **Bootstrap from a truly empty second device** | 1,380.438 / 1,449.906 | 317.529 / 447.269 | 739,371 / 126 (SyncState) | 678,010 / 0 (full snapshot) |
+| **Bootstrap from a truly empty second device** | 1,390.607 / 1,409.886 | 142.076 / 386.915 | 739,371 / 126 (SyncState) | 678,010 / 0 (full snapshot) |
 | **First warm exchange after acknowledged bootstrap** | 1,118.890 / 1,120.487 | 121.463 / 269.356 | 369,995 / 369,909 (history-sized resend) | 194 / 152 (deltas) |
 | **Follow-up exchange in the established session** | 2.569 / 3.085 | 146.259 / 271.699 | 498 / 423 (incremental) | 193 / 150 (incremental) |
 | **Plain change/update exchange (not SyncState)** | 8.081 / 9.138 | 146.944 / 252.371 | 242 / 167 (getChanges) | 194 / 152 (version vectors) |
