@@ -2,6 +2,16 @@
 
 **Not a production feature. Do not deploy the gateway publicly.** No changes are made to the existing Creative Cooking application, data storage, backups, or credential handling.
 
+## 2026-10-12: actual native ↔ Chromium proof
+
+[CI #38252204267](https://github.com/0cwa/creative-cooking/actions/runs/38252204267) passed signed p2panda 0.7.1 native Rust/SQLite A→C→B→E handoff under SIGKILL/restart, real Automerge 3.5.0 and Loro 1.16.4 incremental binary changes (concurrent 4/6 portions, causal 5) and a **real headless Chromium** session using the dev-only loopback-to-native p2panda bridge. [Exact wire/process JSON](https://github.com/0cwa/creative-cooking/actions/runs/38252204267/artifacts/11749501837).
+
+Run: `npm ci --prefix experiments/p2panda/engine-fixtures --omit=dev`, then `node experiments/p2panda/engine-fixtures/fixtures.mjs generate experiments/p2panda/engine-fixtures/artifacts/fixtures.json`, then `cargo test --locked --all-targets --manifest-path experiments/p2panda/rust/Cargo.toml`, `cargo build --locked --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer`, and `node experiments/p2panda/real-engine-smoke.mjs experiments/p2panda/rust/target/debug/peer`. For Chromium (Playwright/Chromium installed), prepend `CC_BROWSER=1` to that last command.
+
+**Scope:** `native-bridge.mjs` sends HTTP POST bytes to an actual p2panda Rust peer process, and GET returns real native received bytes, **not** the standalone mailbox in `gateway.mjs`. This is a localhost gateway test, not browser-native p2panda or deployable accountless secure relay. `rust/tests/spaces_network.rs` is a separate in-memory Spaces ciphertext/native stream test; it is NOT full authenticated Spaces persistent replication. Android ARM64 `.so` linked (no JNI on device); iOS upstream `netdev` compatibility patch remains experimental. See [status/confidence](evidence-status.json) and [full report](../../docs/spikes/local-first-p2panda.md).
+
+---
+
 ## Evidence boundaries
 
 - **Actual upstream p2panda:** `rust/src/lib.rs` publishes an opaque binary envelope through a real p2panda 0.7.1 local `Node`. `rust/src/bin/peer.rs` is an interactive two-process native discovery/sync harness. Running a process locally does **not** prove direct LAN, NAT traversal, or relay fallback; capture traffic separately.
