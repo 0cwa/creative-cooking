@@ -153,8 +153,11 @@ jobs:
           npx expo prebuild --platform ios --no-install
           cd ios
           pod install --repo-update
-          xcodebuild -list -json -workspace CcSubductionNativeSpike.xcworkspace > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild-projects.json"
-          xcodebuild -workspace CcSubductionNativeSpike.xcworkspace -scheme CcSubductionNativeSpike \
+          WORKSPACE="$(find . -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          test -d "$WORKSPACE"
+          xcodebuild -list -json -workspace "$WORKSPACE" > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild-projects.json"
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
             -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/cc-ios-derived" CODE_SIGNING_ALLOWED=NO build \
             > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild.log" 2>&1 || {

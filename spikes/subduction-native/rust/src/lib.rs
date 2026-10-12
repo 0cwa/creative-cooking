@@ -81,7 +81,7 @@ async fn run_one(request: &Request, scenario: &Scenario) -> Result<ScenarioEvide
     let id = SedimentreeId::new(bytes32(&scenario.sedimentree_id_hex)?);
     let signer = MemorySigner::generate(); // ephemeral test identity, NOT Keyhive
     type Conn = TokioWebSocketClient<MemorySigner>;
-    let (syncer, _handler, listener, manager) = SubductionBuilder::new()
+    let (syncer, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
         .signer(signer.clone())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
