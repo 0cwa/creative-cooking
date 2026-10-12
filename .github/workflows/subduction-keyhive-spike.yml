@@ -182,3 +182,33 @@ jobs:
             ark-upstream/test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+  keyhive-core-adversarial:
+    name: Pinned Keyhive Rust core real crypto, pairing and revocation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Creative Cooking research only
+        uses: actions/checkout@v4
+      - name: Checkout exactly pinned unaudited Keyhive source
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/keyhive
+          ref: b7968be799705492428c94226ca28042c733a9e0
+          path: keyhive-upstream
+      - name: Install pinned Rust compiler and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          cache: true
+          cache-workspaces: keyhive-upstream
+      - name: Insert independent Creative Cooking adversarial Keyhive test
+        run: |
+          cp scripts/spikes/local-first-subduction-keyhive/keyhive-core-security.rs keyhive-upstream/keyhive_core/tests/creative_cooking_security.rs
+          cd keyhive-upstream
+          git diff -- keyhive_core/tests/
+      - name: Execute actual native Keyhive identity, permissions, rekey and archive controls
+        run: |
+          cd keyhive-upstream
+          cargo test -p keyhive_core --test creative_cooking_security -- --nocapture
+      # A deny/grant failure must fail this job, never continue-on-error.
