@@ -246,19 +246,24 @@ jobs:
         run: |
           set -o pipefail
           cd keyhive-old
-          cargo test --locked -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-old-forged-revocation.log"
+          # Pinned upstream source Cargo.lock is out of sync; cargo resolves and logs it.
+          # Artifact includes the exact resolved lockfile for reproducibility.
+          cargo test -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-old-forged-revocation.log"
       - name: FIXED — run identical test after baseline assertion
         # If original is unsafe, this runs too while the overall job stays red.
         if: always()
         run: |
           set -o pipefail
           cd keyhive-fixed
-          cargo test --locked -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-fixed-forged-revocation.log"
+          cargo test -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-fixed-forged-revocation.log"
       - name: Preserve before/after evidence, including intentional failures
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cc-keyhive-revocation-before-after
-          path: ${{ runner.temp }}/keyhive-*-forged-revocation.log
+          path: |
+            ${{ runner.temp }}/keyhive-*-forged-revocation.log
+            keyhive-old/Cargo.lock
+            keyhive-fixed/Cargo.lock
           retention-days: 30
           if-no-files-found: warn
