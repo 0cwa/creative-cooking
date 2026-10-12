@@ -64,6 +64,12 @@ jobs:
       - name: Build a real native p2panda process
         timeout-minutes: 12
         run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer --locked
+      - name: Build real p2panda Spaces signed CBOR fixture producer and independent Bob verifier
+        run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --example spaces_wire --locked
+      - name: Persist/restart keyless C, late-B/E real signed encrypted Spaces headers and authorize Bob
+        timeout-minutes: 10
+        continue-on-error: true
+        run: node experiments/p2panda/spaces-native-smoke.mjs experiments/p2panda/rust/target/debug/peer experiments/p2panda/rust/target/debug/examples/spaces_wire
       - name: Persisted real p2panda Automerge/Loro late-peer integration
         continue-on-error: true
         timeout-minutes: 12
