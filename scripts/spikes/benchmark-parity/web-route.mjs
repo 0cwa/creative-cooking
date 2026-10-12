@@ -9,11 +9,12 @@ const fixed = (ok: boolean, detail: string) => ({ ok, detail });
 const encode = (bytes: Uint8Array) => btoa(Array.from(bytes, n => String.fromCharCode(n)).join(''));
 const decode = (value: string) => Uint8Array.from(atob(value), c => c.charCodeAt(0));
 `;
-const auto = `import * as A from '@automerge/automerge';
+const auto = `import * as A from '@automerge/automerge/slim';
 const KEY = 'parity-automerge-v1';
 const actors = { seed: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', phone: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   laptop: 'cccccccccccccccccccccccccccccccc', tablet: 'dddddddddddddddddddddddddddddddd' };
-function engineRun() {
+async function engineRun() {
+  await A.initializeWasm('/creative-cooking/_expo/static/js/web/automerge.wasm');
   let seed = A.init({ actor: actors.seed });
   seed = A.change(seed, { message: 'web seed' }, d => {
     d.recipe = { id: 'recipe-0000', title: 'Kitchen supper', revision: 0 };
@@ -93,14 +94,13 @@ const component = `
 export default function BenchmarkParityWeb() {
   const [result, setResult] = useState<{ ok: boolean; detail: string }>(fixed(false,'pending'));
   useEffect(() => {
-    try {
-      const output = engineRun();
+    Promise.resolve().then(() => engineRun()).then(output => {
       (window as any).__parityResult = output;
       setResult(fixed(true, JSON.stringify(output)));
-    } catch (err) {
+    }).catch(err => {
       (window as any).__parityError = String(err);
       setResult(fixed(false, String(err instanceof Error ? err.stack : err)));
-    }
+    });
   }, []);
   return <View style={{ padding: 24 }}><Text testID="parity-marker">{result.ok ? 'PARITY PASS' : 'PARITY ' + (result.detail === 'pending' ? 'PENDING' : 'FAIL')}</Text>
     <Text testID="parity-detail">{result.detail}</Text></View>;
