@@ -38,8 +38,24 @@ if [[ "$ABI" != "arm64-v8a" || ! "$API" =~ ^[0-9]+$ || "$API" -lt 26 ]]; then
   echo "Genuine ARM64 native ABI/API gate failed: ABI=$ABI API=$API" >&2
   exit 1
 fi
-if [[ "$EMULATOR" == "1" || "$SERIAL" == emulator-* ]]; then
-  echo "Android VM is not accepted as physical-device runtime evidence" >&2
+# Default: demand physical hardware. Only the separate, explicitly labelled
+# Linux TCG ARM64 guest job sets LORO_ANDROID_EXPECT_EMULATOR=1, where the
+# emulator must REALLY boot aarch64 Android and expose ro.product.cpu.abi.
+EXPECT_EMULATOR="${LORO_ANDROID_EXPECT_EMULATOR:-0}"
+if [[ "$EXPECT_EMULATOR" == "1" ]]; then
+  if [[ "$EMULATOR" != "1" || "$SERIAL" != emulator-* ]]; then
+    echo "Expected real Android ARM64 emulator, got serial=$SERIAL ro.kernel.qemu=$EMULATOR" >&2
+    exit 1
+  fi
+  printf '%s\n' 'Emulated ARM64 Android guest; not a physical device' > "$OUT/runtime-kind.txt"
+elif [[ "$EXPECT_EMULATOR" == "0" ]]; then
+  if [[ "$EMULATOR" == "1" || "$SERIAL" == emulator-* ]]; then
+    echo "Android VM is not accepted as physical-device runtime evidence" >&2
+    exit 1
+  fi
+  printf '%s\n' 'Physical ARM64 Android device' > "$OUT/runtime-kind.txt"
+else
+  echo "Invalid LORO_ANDROID_EXPECT_EMULATOR value; require 0 or 1" >&2
   exit 1
 fi
 
