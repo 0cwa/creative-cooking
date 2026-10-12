@@ -47,7 +47,8 @@ async function subject(): Promise<Subject> {
   const keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
   const signer = await Signer.webCryptoSigner(keyPair);
   const keyhive = await Keyhive.init(signer, CiphertextStore.newInMemory(), () => {});
-  return { signer, keyhive, card: await keyhive.contactCard() };
+  // Match ARK createActive: reuse the signer-bound, existing signed card.
+  return { signer, keyhive, card: await keyhive.getExistingContactCard() };
 }
 let owner: Subject;
 let relay: Subject;
@@ -185,7 +186,8 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
   });
 
 
-  it("rejects tampered signed contact-card pairing", async () => {
+
+  it("rejects tampered signed contact-card pairing (verify admission, not just no exception)", async () => {
     const malformed = JSON.parse(outsider.card.toJson());
     const part = malformed.Rotate ?? malformed;
     if (!part.signature || !Array.isArray(part.signature)) {
@@ -193,9 +195,24 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
     }
     part.signature[0] ^= 1;
     const modified = JSON.stringify(malformed);
-    await assertPermission("forged-contact-card", "deny", async () => {
-      await owner.keyhive.receiveContactCard(ContactCard.fromJson(modified));
-    }, { bytes: modified.length, cryptography: "Ed25519 signed Rotate contact card, one signature byte corrupted" });
+    const tampered = ContactCard.fromJson(modified);
+    const before = await owner.keyhive.getAgent(tampered.id);
+    expect(before, "a supposedly untrusted signed card was already known").toBeUndefined();
+    let returnedWithoutThrow = false;
+    let error: string | undefined;
+    try {
+      await owner.keyhive.receiveContactCard(tampered);
+      returnedWithoutThrow = true;
+    } catch(e) { error = String(e); }
+    // Keyhive can queue or ignore rejected events without throwing.
+    // An exception alone is NOT the security predicate: verified *admission* is.
+    const after = await owner.keyhive.getAgent(tampered.id);
+    const actual = after ? "grant" : "deny";
+    record("forged-contact-card-admission", "deny", actual,
+      { returnedWithoutThrow, error, bytes: modified.length,
+        signatureTamper: "first Ed25519 signature byte flipped", 
+        scope: "Keyhive accepted agent in live graph, not just contact-card parser" });
+    expect(actual, "tampered signed contact card must not become a trusted identity").toBe("deny");
   });
 
   it("delivers genuine signed Keyhive membership to separate reader and relay identities", async () => {
@@ -216,6 +233,13 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
     const outgoing = await new KeyhiveBlobInterceptor(owner.keyhive, new PromiseQueue())
       .transformOutgoing(docUrl.slice("automerge:".length) as never, commitId, [], payload);
     expect(outgoing).not.toBeNull();
+    // tryEncryptKeyed is allowed to emit a PCS rotation *during encryption*.
+    // A member needs those newly signed key-epoch events, not just the
+    // pre-encryption authorization archive.
+    const postEncryption = await owner.keyhive.toArchive();
+    for (const participant of [reader, relay, outsider]) {
+      await participant.keyhive.ingestArchive(new Archive(postEncryption.toBytes()));
+    }
     const read = async (participant: Subject) => {
       const interceptor = new KeyhiveBlobInterceptor(participant.keyhive, new PromiseQueue());
       return interceptor.transformIncoming(docUrl.slice("automerge:".length) as never, commitId, outgoing!);
@@ -224,7 +248,9 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
     const relayValue = await read(relay);
     const strangerValue = await read(outsider);
     record("cross-device-read", "reader decrypts", readerValue ? "reader decrypts" : "reader cannot decrypt",
-      { plaintextBytes: payload.length, ciphertextBytes: outgoing!.byteLength, archiveSync: true });
+      { plaintextBytes: payload.length, ciphertextBytes: outgoing!.byteLength, archiveSync: true,
+        postEncryptionKeyEventsBytes: postEncryption.toBytes().length,
+        readerDocumentKnown: await reader.keyhive.hasDocument(new DocumentId(docId)) });
     record("no-key-relay", "relay cannot decrypt", relayValue ? "relay decrypts" : "relay cannot decrypt",
       { ciphertextBytes: outgoing!.byteLength });
     record("cross-household-decrypt", "outsider cannot decrypt", strangerValue ? "outsider decrypts" : "outsider cannot decrypt");
@@ -267,13 +293,13 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
 
   it("probes revoked reader's fresh-key access after real Keyhive archive propagation", async () => {
     expect(previouslyEncrypted).toBeDefined();
-    const latestArchive = await owner.keyhive.toArchive();
-    await reader.keyhive.ingestArchive(new Archive(latestArchive.toBytes()));
     const post = new TextEncoder().encode("never disclose this post-revocation recipe");
     const postCommit = createHash("sha256").update(post).digest("hex");
     const outgoing = await new KeyhiveBlobInterceptor(owner.keyhive, new PromiseQueue())
       .transformOutgoing(docUrl.slice("automerge:".length) as never, postCommit, [], post);
     expect(outgoing).not.toBeNull();
+    const latestArchive = await owner.keyhive.toArchive();
+    await reader.keyhive.ingestArchive(new Archive(latestArchive.toBytes()));
     const readerInterceptor = new KeyhiveBlobInterceptor(reader.keyhive, new PromiseQueue());
     const current = await readerInterceptor.transformIncoming(docUrl.slice("automerge:".length) as never,
       postCommit, outgoing!);
