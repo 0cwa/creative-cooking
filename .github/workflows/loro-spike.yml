@@ -231,12 +231,11 @@ jobs:
           path: artifacts/loro/android/
 
   android-arm64-runtime:
-    name: Android ARM64 simulator runtime + web interop (macOS ARM host)
+    name: Android ARM64 actual guest + native interop (Linux x86_64 TCG fallback)
     needs: web-scenarios
-    # A physical-device dispatch does not also burn a hosted Mac on TCG.
-    if: always() && !(github.event_name == 'workflow_dispatch' && inputs.arm64_physical == true)
-    runs-on: macos-26
-    timeout-minutes: 85
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -247,132 +246,121 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Capture actual ARM64 host and Android SDK capabilities
+      - name: Record Linux host/Android SDK and emulator host binary inventory
         run: |
-          mkdir -p artifacts/loro/android-arm64
-          uname -a | tee artifacts/loro/android-arm64/host.txt
-          printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}" | tee -a artifacts/loro/android-arm64/host.txt
-          df -h . | tee artifacts/loro/android-arm64/storage.txt
-          test "$(uname -m)" = arm64
-          test -x "${ANDROID_HOME}/emulator/emulator"
-          "${ANDROID_HOME}/emulator/emulator" -version | tee artifacts/loro/android-arm64/emulator-version.txt
+          set -euo pipefail
+          OUT=artifacts/loro/android-arm64-linux-tcg
+          mkdir -p "$OUT"
+          uname -a | tee "$OUT/host.txt"
+          df -h . | tee "$OUT/storage.txt"
+          printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}" | tee "$OUT/sdk-home.txt"
+          test "$(uname -m)" = x86_64
+          test -x "${ANDROID_HOME:?}/emulator/emulator"
+          "${ANDROID_HOME}/emulator/emulator" -version > "$OUT/emulator-version.txt"
+          ls -l "${ANDROID_HOME}/emulator/qemu/linux-x86_64/qemu-system-aarch64"* > "$OUT/arm64-host-qemu-binaries.txt"
       - run: npm install --no-audit --no-fund
-      - name: Install actual published RN binding (with ARM64 Rust binary)
+      - name: Install exact published 1.10.3 native Rust/UniFFI binding
         run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
-      - name: Apply one-line value-converter compatibility patch (pinned JS only)
+      - name: Patch ONLY published one-line falsy JS adapter; retain SHA256 proof
         run: |
-          mkdir -p artifacts/loro/android-arm64
-          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/android-arm64/value-adapter-patch.json
+          mkdir -p artifacts/loro/android-arm64-linux-tcg
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/android-arm64-linux-tcg/value-adapter-patch.json
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
           path: artifacts/loro
-      - name: Prepare isolated native fixture
+      - name: Materialize fully isolated real Expo native test app
         run: |
+          set -euo pipefail
           node scripts/spikes/loro/materialize-native-fixture.mjs
           mv app app-production
           mkdir app
           cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
           cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
           cp scripts/spikes/loro/app.config.native.ts app.config.ts
-      - name: Expo prebuild and actual ARM64 APK
+      - name: Build genuine arm64-v8a Loro Android APK (not x86_64)
         run: |
-          set -euxo pipefail
-          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo prebuild --clean --platform android --no-install
-          (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > artifacts/loro/android-arm64/build.log 2>&1 || {
-            tail -180 artifacts/loro/android-arm64/build.log
+          set -euo pipefail
+          OUT=artifacts/loro/android-arm64-linux-tcg
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat \
+            npx expo prebuild --clean --platform android --no-install > "$OUT/prebuild.log" 2>&1 || {
+              tail -150 "$OUT/prebuild.log"
+              exit 1
+            }
+          (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > "$OUT/build.log" 2>&1 || {
+            tail -180 "$OUT/build.log"
             exit 1
           }
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-          stat -f '%z' "$APK" | tee artifacts/loro/android-arm64/apk-bytes.txt
-          unzip -l "$APK" | grep -E 'lib/arm64-v8a/.*\.so' > artifacts/loro/android-arm64/native-libraries.txt
-          grep -q 'lib/arm64-v8a/libloro-react-native.so' artifacts/loro/android-arm64/native-libraries.txt
-      - name: Run ARM64 Android software emulator (TCG opt-in); verify real native binary twice
+          test -n "$APK"
+          echo "$APK" > "$OUT/apk-path.txt"
+          unzip -l "$APK" | tee "$OUT/apk-entries.txt" | grep -q 'lib/arm64-v8a/libloro-react-native.so'
+      - name: Run Linux x86_64 TCG as a real aarch64 Android guest, two OS processes
+        timeout-minutes: 45
+        env:
+          ANDROID_I_WANT_MY_TCG: 'yes'
         run: |
-          set -euxo pipefail
-          OUTPUT=artifacts/loro/android-arm64
+          set -euo pipefail
+          OUT=artifacts/loro/android-arm64-linux-tcg
           SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f -print -quit)
           AVDMANAGER=$(command -v avdmanager || find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f -print -quit)
-          echo "sdkmanager=$SDKMANAGER avdmanager=$AVDMANAGER" | tee "$OUTPUT/sdk-tools.txt"
-          # macOS ARM hosted SDK images have an unaccepted Google APIs image license
-          # even though the SDK manager may return exit 0 after silently skipping it.
-          yes | "$SDKMANAGER" --licenses > "$OUTPUT/licenses.log" 2>&1 || true
-          "$SDKMANAGER" 'system-images;android-35;google_apis;arm64-v8a' > "$OUTPUT/image-install.log" 2>&1 || {
-            tail -100 "$OUTPUT/image-install.log"
+          test -n "$SDKMANAGER" && test -n "$AVDMANAGER"
+          yes | "$SDKMANAGER" --licenses > "$OUT/licenses.log" 2>&1 || true
+          "$SDKMANAGER" 'system-images;android-35;google_apis;arm64-v8a' > "$OUT/image-install.log" 2>&1 || {
+            tail -100 "$OUT/image-install.log"
             exit 1
           }
-          SYSTEM_IMAGE="$ANDROID_HOME/system-images/android-35/google_apis/arm64-v8a/system.img"
-          if [ ! -f "$SYSTEM_IMAGE" ]; then
-            tail -80 "$OUTPUT/image-install.log"
-            echo "Android ARM64 Google APIs system image missing after SDK install"
-            exit 1
-          fi
-          "$SDKMANAGER" --list_installed > "$OUTPUT/installed-packages.txt"
-          echo no | "$AVDMANAGER" create avd --force --name loro-spike-arm64 --package 'system-images;android-35;google_apis;arm64-v8a'
-          # GitHub-hosted Apple Silicon VMs report HV_UNSUPPORTED; exercise
-          # the software (TCG) fallback instead of mistaking a failed HVF
-          # boot for the native Loro runtime result.
-          "$ANDROID_HOME/emulator/emulator" -accel-check > "$OUTPUT/acceleration-check.log" 2>&1 || true
-          ANDROID_I_WANT_MY_TCG=yes "$ANDROID_HOME/emulator/emulator" -avd loro-spike-arm64 -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -accel off > "$OUTPUT/emulator.log" 2>&1 &
-          EMULATOR_PID=$!
-          METRO_PID=''
-          cleanup() { kill "$METRO_PID" "$EMULATOR_PID" 2>/dev/null || true; }
-          trap cleanup EXIT
+          test -f "$ANDROID_HOME/system-images/android-35/google_apis/arm64-v8a/system.img"
+          "$SDKMANAGER" --list_installed > "$OUT/installed-packages.txt"
+          echo no | "$AVDMANAGER" create avd --force --name loro-linux-arm64-tcg \
+            --package 'system-images;android-35;google_apis;arm64-v8a'
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          "$ANDROID_HOME/emulator/emulator" -avd loro-linux-arm64-tcg \
+            -no-window -no-snapshot -noaudio -no-boot-anim \
+            -gpu swiftshader_indirect -accel off -cores 2 -memory 2560 \
+            > "$OUT/emulator.log" 2>&1 &
+          EMU_PID=$!
+          cleanup() { kill "$EMU_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
           BOOTED=0
-          for i in {1..900}; do
-            if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
-              echo "ARM64 emulator exited before boot; captured log:"; tail -100 "$OUTPUT/emulator.log"; exit 1
+          for i in {1..480}; do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              echo "ARM64 TCG emulator exited before Android boot"; tail -130 "$OUT/emulator.log"; exit 1
             fi
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then BOOTED=1; break; fi
-            sleep 2
+            if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = '1' ]]; then
+              BOOTED=1
+              break
+            fi
+            sleep 3
           done
-          adb devices -l | tee "$OUTPUT/devices.txt"
-          test "$BOOTED" = 1 || { tail -120 "$OUTPUT/emulator.log"; exit 1; }
-          adb shell getprop ro.product.cpu.abi | tee "$OUTPUT/device-abi.txt"
-          adb shell getprop ro.build.version.sdk | tee "$OUTPUT/device-api.txt"
-          grep -q '^arm64-v8a' "$OUTPUT/device-abi.txt"
-          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo start --localhost --port 8081 > "$OUTPUT/metro.log" 2>&1 &
-          METRO_PID=$!
-          sleep 8
-          adb reverse tcp:8081 tcp:8081
-          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-          adb install -r "$APK" | tee "$OUTPUT/install.txt"
-          adb logcat -c
-          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1 | tee "$OUTPUT/first-launch.txt"
-          for i in {1..90}; do
-            if adb logcat -d | grep -q 'LORO_NATIVE_RESULT_V2:'; then break; fi
-            sleep 2
-          done
-          adb logcat -d > "$OUTPUT/first-runtime.log"
-          node scripts/spikes/loro/parse-native-log.mjs "$OUTPUT/first-runtime.log" "$OUTPUT/first-result.json" --allow-partial
-          adb shell dumpsys meminfo com.creativecooking.lorospike > "$OUTPUT/meminfo-first.txt" 2>&1 || true
-          adb shell am force-stop com.creativecooking.lorospike
-          adb logcat -c
-          adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1 | tee "$OUTPUT/second-launch.txt"
-          for i in {1..90}; do
-            if adb logcat -d | grep -q 'LORO_NATIVE_RESULT_V2:'; then break; fi
-            sleep 2
-          done
-          adb logcat -d > "$OUTPUT/runtime.log"
-          adb exec-out screencap -p > "$OUTPUT/runtime.png"
-          node scripts/spikes/loro/parse-native-log.mjs "$OUTPUT/runtime.log" "$OUTPUT/result.json"
-          adb shell dumpsys meminfo com.creativecooking.lorospike > "$OUTPUT/meminfo-restart.txt" 2>&1 || true
-      - name: Verify Android-produced real Loro updates on Loro 1.16.4 web
+          adb devices -l | tee "$OUT/boot-devices.txt"
+          if [[ "$BOOTED" != 1 ]]; then
+            echo "A real ARM64 Android guest did not reach boot_completed"; tail -130 "$OUT/emulator.log"; exit 1
+          fi
+          export LORO_ANDROID_EXPECT_EMULATOR=1
+          export LORO_ANDROID_OUTPUT="$OUT"
+          export LORO_ANDROID_APK
+          LORO_ANDROID_APK=$(cat "$OUT/apk-path.txt")
+          bash scripts/spikes/loro/run-android-arm64-physical.sh
+      - name: Independent web 1.16.4 read of the actual Android ARM64 native binary
         run: |
           set -euo pipefail
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
-          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android-arm64/result.json artifacts/loro/android-arm64/first-result.json | tee artifacts/loro/android-arm64/web-verification.json
-      - name: Hash ARM64 native evidence
+          node scripts/spikes/loro/verify-native-update.mjs \
+            artifacts/loro/web-native-input.json \
+            artifacts/loro/android-arm64-linux-tcg/result.json \
+            artifacts/loro/android-arm64-linux-tcg/first-result.json \
+            | tee artifacts/loro/android-arm64-linux-tcg/web-verification.json
+      - name: SHA-256 every actual Linux ARM64 runtime artifact, including failures
         if: always()
         run: |
-          mkdir -p artifacts/loro/android-arm64
-          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64
+          mkdir -p artifacts/loro/android-arm64-linux-tcg
+          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64-linux-tcg
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: loro-android-arm64-runtime
-          path: artifacts/loro/android-arm64/
+          name: loro-android-arm64-linux-tcg-runtime
+          path: artifacts/loro/android-arm64-linux-tcg/
 
   android-arm64-physical:
     name: Physical Android ARM64 runtime + OS restart + web interop (opt-in hardware)
