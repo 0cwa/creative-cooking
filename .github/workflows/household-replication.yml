@@ -1,0 +1,29 @@
+name: Household replication feasibility
+on:
+  pull_request:
+    paths:
+      - 'packages/household-replication/**'
+      - '.github/workflows/household-replication.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/household-replication
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13'
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - run: npm run evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: household-replication-evidence
+          path: packages/household-replication/artifacts/household-replication.json
+          if-no-files-found: error
