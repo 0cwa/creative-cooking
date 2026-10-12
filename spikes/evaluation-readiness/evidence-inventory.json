@@ -1,0 +1,510 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-12T00:25:00Z",
+  "interpretation": "Frozen evidence snapshot; refresh against live PR heads and run conclusions. PENDING/FAIL are not PASS.",
+  "baseline": {
+    "sha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+    "ci": {
+      "runId": 35992984449,
+      "result": "PASS"
+    },
+    "pages": {
+      "runId": 35992984724,
+      "result": "PASS"
+    },
+    "expo": "~57.0.17",
+    "reactNative": "0.86.3",
+    "node": ">=22.13"
+  },
+  "sourcePins": {
+    "automerge": "@automerge/automerge@3.5.0",
+    "automergeSwift": "0.7.2",
+    "automergeAndroidJava": "0.0.9",
+    "automergeRust": "0.12.0",
+    "automergeC": "0.2.2",
+    "loro": "loro-crdt@1.16.4",
+    "loroNativeNpm": "1.10.3",
+    "loroNativeSource": "8fad8d61c11c23e7c57999533d637d316465ffc1",
+    "p2panda": "=0.7.1",
+    "iroh": "1.0.3",
+    "p2pandaLock": "no Cargo.lock in spike; transitive resolutions may drift",
+    "subduction": "f0af1aab5f2fd44e5b224c22fc8b62660d50bc01",
+    "keyhive": {
+      "repository": "inkandswitch/keyhive",
+      "commit": "b7968be799705492428c94226ca28042c733a9e0"
+    },
+    "ark": "5d09e8c8cfdebd5656b1426b66aea6b1395f83da",
+    "arkAutomergeSubductionBridge": "0.16.1",
+    "subductionHeadAutomergeBridge": "0.19.0",
+    "experimentToolchain": "Node 22.13.0, Rust 1.91.0, wasm-pack 0.14.0, pnpm 9, headless Chromium"
+  },
+  "sources": [
+    {
+      "pr": 37,
+      "name": "Automerge",
+      "head": "f494db6e74087afff54ace956cf287d60bb3252c",
+      "report": "docs/spikes/local-first-automerge.md",
+      "ci": {
+        "runId": 38187390329,
+        "result": "PASS"
+      },
+      "experimental": {
+        "runId": 38187390144,
+        "result": "FAIL",
+        "failedJobId": 114612571545
+      },
+      "artifacts": [
+        {
+          "runId": 38187390144,
+          "id": 11720507510,
+          "name": "Swift iOS"
+        },
+        {
+          "runId": 38187390144,
+          "id": 11720108131,
+          "name": "JNI host FAIL + Android C compile"
+        },
+        {
+          "runId": 38187390144,
+          "id": 11720167527,
+          "name": "Android compile"
+        },
+        {
+          "runId": 38153998808,
+          "id": 11708535039,
+          "name": "prior passing Swift iOS"
+        }
+      ],
+      "claims": [
+        "web 18/18",
+        "Swift simulator 18/18 and JS↔Swift interoperability",
+        "Android ARM64 C core compiles"
+      ],
+      "limits": [
+        "Latest JNI host test expected cherry tomatoes but got red tomatoes after 8 prior PASS",
+        "Java 0.0.9 JS 3.5 SyncState failed",
+        "Android Expo physical runtime unproven"
+      ]
+    },
+    {
+      "pr": 38,
+      "name": "Loro",
+      "head": "0bdf202505e68080803e63bd4e50a9c81c813772",
+      "report": "docs/spikes/local-first-loro.md",
+      "ci": {
+        "runId": 38187581329,
+        "result": "PASS"
+      },
+      "experimental": {
+        "runId": 38187581383,
+        "result": "PENDING"
+      },
+      "artifacts": [
+        {
+          "runId": 38187581383,
+          "id": 11719444311,
+          "name": "web results"
+        },
+        {
+          "runId": 38154451810,
+          "id": 11708655956,
+          "name": "prior failing iOS native"
+        }
+      ],
+      "claims": [
+        "web 18/18",
+        "iOS RN module reached partial runtime execution",
+        "Android ARM64 APK compiles"
+      ],
+      "limits": [
+        "no qualifying new iOS/Android live artifact yet",
+        "RN 1.10.3 vs JS 1.16.4 skew",
+        "shallow compaction destroys some losing-write history"
+      ]
+    },
+    {
+      "pr": 39,
+      "name": "p2panda/Iroh",
+      "head": "3567a1f297a1826deec5f52ed9c39a439a36e393",
+      "report": "docs/spikes/local-first-p2panda.md",
+      "ci": {
+        "runId": 38183965328,
+        "result": "PASS"
+      },
+      "experimental": {
+        "runId": 38183965313,
+        "result": "PASS"
+      },
+      "otherRuns": [
+        38183369333,
+        38183837293
+      ],
+      "artifacts": [],
+      "claims": [
+        "3 same-host Rust peers and persisted third replica recover random binary",
+        "browser ciphertext HTTP mailbox works separately",
+        "Spaces component add/revoke",
+        "Android Rust check"
+      ],
+      "limits": [
+        "Iroh online relays not durable",
+        "browser mailbox not native p2panda browser↔native",
+        "iOS netdev/libc build blocker",
+        "no Expo mobile runtime",
+        "no locked Rust transitive dependency tree"
+      ]
+    },
+    {
+      "pr": 40,
+      "name": "Subduction/Keyhive/ARK",
+      "head": "519a6c4a7766c67dde4896cba7537d9d1df15b1e",
+      "report": "docs/spikes/local-first-subduction-keyhive.md",
+      "ci": {
+        "runId": 38184052069,
+        "result": "PASS"
+      },
+      "experimental": {
+        "runId": 38184052071,
+        "result": "PASS"
+      },
+      "otherRuns": [
+        38183684382
+      ],
+      "artifacts": [],
+      "claims": [
+        "actual Automerge binary changes through two Chromium Subduction WS peers and persistent redb catch-up",
+        "third Chromium long poll reconstructs test fixture"
+      ],
+      "limits": [
+        "AES fixture --auth open not E2EE/ACL",
+        "Keyhive pre-alpha unaudited; Subduction explicitly not production",
+        "legacy doc ID policy bypass, missing forwarding requester Relay check",
+        "no Expo mobile bridge"
+      ]
+    },
+    {
+      "pr": 41,
+      "name": "Merge Analyzer evidence",
+      "head": "b013b64e51a4f5bfe382ba2acd67e7f5f571ac54",
+      "report": "docs/spikes/local-first-merge-evidence.md",
+      "ci": {
+        "runId": 38186593573,
+        "result": "PASS"
+      },
+      "experimental": {
+        "runId": 38186593589,
+        "result": "PASS"
+      },
+      "artifacts": [
+        {
+          "runId": 38186593589,
+          "id": 11719467915,
+          "name": "Node scenarios and review ledger"
+        }
+      ],
+      "claims": [
+        "13/13 each engine scenario/retention",
+        "derived review checkpoint semantics"
+      ],
+      "limits": [
+        "Node JS only; native review APIs not qualified",
+        "Loro shallow prune loses unresolved history"
+      ]
+    },
+    {
+      "pr": 42,
+      "name": "Benchmark parity",
+      "head": "4add471c51eda06ff6c03d20cd5104c292be05b4",
+      "report": "docs/spikes/local-first-comparison-benchmarks.md",
+      "ci": {
+        "runId": 38187827555,
+        "result": "PASS"
+      },
+      "experimental": {
+        "runId": 38187827563,
+        "result": "PASS"
+      },
+      "artifacts": [
+        {
+          "runId": 38187827563,
+          "id": 11719724009,
+          "name": "Node JSON CSV and versions"
+        },
+        {
+          "runId": 38187827563,
+          "id": 11719939129,
+          "name": "real Expo Chromium static assets"
+        }
+      ],
+      "claims": [
+        "matched logical fixtures/traces, five Node trials",
+        "real Expo static Chromium both engines"
+      ],
+      "limits": [
+        "native runtime timing parity unavailable",
+        "Automerge first warm SyncState resend differs from Loro version-vector bytes"
+      ]
+    }
+  ],
+  "combinations": [
+    {
+      "id": "AP",
+      "engine": "Automerge",
+      "substrate": "p2panda/Iroh",
+      "independentComponents": "PASS",
+      "actualEngineThroughSubstrate": "NOT TESTED",
+      "mobile": "PARTIAL",
+      "e2eeAcl": "FAIL",
+      "futureProof": "web↔native actual Automerge changes through a p2panda persistent encrypted authorized link"
+    },
+    {
+      "id": "LP",
+      "engine": "Loro",
+      "substrate": "p2panda/Iroh",
+      "independentComponents": "PASS",
+      "actualEngineThroughSubstrate": "NOT TESTED",
+      "mobile": "PARTIAL",
+      "e2eeAcl": "FAIL",
+      "futureProof": "web↔native Loro changes through p2panda persistent encrypted authorized link"
+    },
+    {
+      "id": "AS",
+      "engine": "Automerge",
+      "substrate": "Subduction/Keyhive",
+      "independentComponents": "PASS",
+      "actualEngineThroughSubstrate": "PASS",
+      "mobile": "PARTIAL",
+      "e2eeAcl": "FAIL",
+      "futureProof": "production Keyhive/ARK identity/ACL and native Expo in a version-matched stack; current integration only unprotected test Subduction"
+    },
+    {
+      "id": "LS",
+      "engine": "Loro",
+      "substrate": "Subduction/Keyhive",
+      "independentComponents": "PARTIAL",
+      "actualEngineThroughSubstrate": "NOT TESTED",
+      "mobile": "PARTIAL",
+      "e2eeAcl": "FAIL",
+      "futureProof": "execute new genuine Loro→Subduction integration CI; genuine Keyhive/ARK doc binding is Automerge-focused and would require a separate design"
+    }
+  ],
+  "hardGates": [
+    {
+      "id": "G01",
+      "name": "fully offline and accountless local cooking",
+      "status": "PARTIAL",
+      "owner": "app",
+      "missing": "current main PASS; future opted-in sync schema not integrated"
+    },
+    {
+      "id": "G02",
+      "name": "actual web+iOS+Android engine roundtrip",
+      "status": "PARTIAL",
+      "owner": "native engines",
+      "missing": "Android device runtimes unproven; Loro native final pending; Automerge latest JNI host failure"
+    },
+    {
+      "id": "G03",
+      "name": "device-only secrets excluded from sync and backups",
+      "status": "PARTIAL",
+      "owner": "app/security",
+      "missing": "main vault & whitelist test only; not yet full transport audit"
+    },
+    {
+      "id": "G04",
+      "name": "personal/household ACL and namespace isolation",
+      "status": "NOT TESTED",
+      "owner": "security",
+      "missing": "not enforced by real malicious peers"
+    },
+    {
+      "id": "G05",
+      "name": "verified QR/device identity pairing",
+      "status": "NOT TESTED",
+      "owner": "security",
+      "missing": "no authenticated handshake/end-to-end invitation proof"
+    },
+    {
+      "id": "G06",
+      "name": "unauthorized read/write/forward denies",
+      "status": "FAIL",
+      "owner": "security/upstream",
+      "missing": "--auth open; documented legacy doc bypass and missing requester Relay check"
+    },
+    {
+      "id": "G07",
+      "name": "post-revoke future-key isolation",
+      "status": "NOT TESTED",
+      "owner": "security",
+      "missing": "component add/revoke only, not adversarial delayed rejoin"
+    },
+    {
+      "id": "G08",
+      "name": "durable ciphertext store-forward/restart",
+      "status": "PARTIAL",
+      "owner": "replication",
+      "missing": "Automerge+Subduction fixture PASS; p2panda same-host plaintext third replica; Loro Subduction pending"
+    },
+    {
+      "id": "G09",
+      "name": "replay/dedup and low-noise optional review",
+      "status": "PARTIAL",
+      "owner": "review",
+      "missing": "Node 13/13 each; no native integrated provenance/retention transaction"
+    },
+    {
+      "id": "G10",
+      "name": "device-loss/backup/restore/schema migration",
+      "status": "NOT TESTED",
+      "owner": "app",
+      "missing": "existing JSON backup fine but future replicated/key schema untested"
+    },
+    {
+      "id": "G11",
+      "name": "version skew/reconnect and operations",
+      "status": "NOT TESTED",
+      "owner": "ops/native",
+      "missing": "Loro binding and ARK/Subduction bridges skew; no staged upgrades"
+    },
+    {
+      "id": "G12",
+      "name": "upstream production security/operational maturity",
+      "status": "FAIL",
+      "owner": "security/ops",
+      "missing": "Subduction not for production, Keyhive unaudited pre-alpha, p2panda Spaces pre-1.0 unaudited"
+    }
+  ],
+  "risks": [
+    {
+      "id": "R1",
+      "severity": "CRITICAL",
+      "likelihood": "HIGH",
+      "confidence": "HIGH",
+      "owner": "security/upstream",
+      "risk": "auth bypass or unaudited crypto",
+      "mitigation": "adversarial ACL+E2EE test and audit, harden protected IDs and requester check"
+    },
+    {
+      "id": "R2",
+      "severity": "HIGH",
+      "likelihood": "HIGH",
+      "confidence": "HIGH",
+      "owner": "native engine",
+      "risk": "Android runtime/native protocol missing or failing",
+      "mitigation": "finish #37 failing JNI regression and #38 native result, run real arm64 Expo build"
+    },
+    {
+      "id": "R3",
+      "severity": "HIGH",
+      "likelihood": "HIGH",
+      "confidence": "HIGH",
+      "owner": "replication",
+      "risk": "browser-native p2panda path missing, iOS netdev blocker",
+      "mitigation": "upstream patch+actual two-runtime byte qualification"
+    },
+    {
+      "id": "R4",
+      "severity": "HIGH",
+      "likelihood": "MEDIUM",
+      "confidence": "HIGH",
+      "owner": "review",
+      "risk": "Loro losing alternatives after shallow trim",
+      "mitigation": "atomic pre-prune local unresolved review checkpoint and recovery"
+    },
+    {
+      "id": "R5",
+      "severity": "HIGH",
+      "likelihood": "HIGH",
+      "confidence": "HIGH",
+      "owner": "Automerge native",
+      "risk": "Java 0.0.9 vs JS 3.5 incompatible SyncState",
+      "mitigation": "qualify current-core Rust JNI or compatible Java binding"
+    },
+    {
+      "id": "R6",
+      "severity": "HIGH",
+      "likelihood": "MEDIUM",
+      "confidence": "HIGH",
+      "owner": "ops",
+      "risk": "native/bridge version skew and migration failures",
+      "mitigation": "coherent pinned matrix, mixed-version smoke tests and rollback"
+    },
+    {
+      "id": "R7",
+      "severity": "MEDIUM",
+      "likelihood": "HIGH",
+      "confidence": "MEDIUM",
+      "owner": "ops",
+      "risk": "durable hosted service requires TLS, backups, quotas and abuse management",
+      "mitigation": "exercise disaster recovery and capacity tests"
+    },
+    {
+      "id": "R8",
+      "severity": "HIGH",
+      "likelihood": "MEDIUM",
+      "confidence": "HIGH",
+      "owner": "app/security",
+      "risk": "overly broad document sync leaks personal settings/allergies/chats/provider credentials",
+      "mitigation": "per-namespace field whitelist and integration sentinel assertions"
+    },
+    {
+      "id": "R9",
+      "severity": "MEDIUM",
+      "likelihood": "MEDIUM",
+      "confidence": "MEDIUM",
+      "owner": "product",
+      "risk": "too much sync review or setup detracts from cooking",
+      "mitigation": "silent compatible merging and optional low priority Sync Activity"
+    }
+  ],
+  "remainingExperiments": [
+    {
+      "priority": 1,
+      "owner": "native engine agents",
+      "information": "VERY HIGH",
+      "effort": "MEDIUM",
+      "name": "Real Expo iOS+Android web-native interop; native release qualification"
+    },
+    {
+      "priority": 2,
+      "owner": "security",
+      "information": "VERY HIGH",
+      "effort": "HIGH",
+      "name": "Secure authenticated malicious-peer roles, key rotation and revoke/rejoin E2E"
+    },
+    {
+      "priority": 3,
+      "owner": "replication/native",
+      "information": "HIGH",
+      "effort": "HIGH",
+      "name": "Real web↔native end-to-end byte path using p2panda or Subduction with durable encrypted store"
+    },
+    {
+      "priority": 4,
+      "owner": "app/security",
+      "information": "HIGH",
+      "effort": "MEDIUM",
+      "name": "Future replicated schema backup/restore, key recovery and namespace escape negative tests"
+    },
+    {
+      "priority": 5,
+      "owner": "ops",
+      "information": "MEDIUM",
+      "effort": "MEDIUM",
+      "name": "Version skew and server recovery+upgrade/hosted capacity rehearsal"
+    }
+  ],
+  "decisionReadiness": {
+    "canSelectFinalProductionStack": false,
+    "instruction": "WITHHOLD. An evaluator may outline conditional research paths, but no fully qualified secure + web + iOS + Android stack currently passes all hard gates.",
+    "newCompositionTest": "NOT TESTED until an actual successful independent Actions artifact is verified",
+    "leaveDraftUnmerged": [
+      37,
+      38,
+      39,
+      40,
+      41,
+      42
+    ]
+  }
+}
