@@ -179,40 +179,56 @@ function runOnNative(phase:'first'|'relaunch',expectedCount:number,publishIndex:
     execFileSync(hostBin!,[req,res],{encoding:'utf8',timeout:130000});
     response=readFileSync(res,'utf8');
   }else if(mode==='android'){
-    // Android emulator 10.0.2.2 reaches the host's loopback relay. Protocol
-    // executes inside the installed Expo Android process, NOT a Node proxy.
-    const nativeRequest=join(root,phase+'-android-request.json');
-    writeFileSync(nativeRequest,input);
+    // A signed release APK carries the JS trigger; no Metro or Node on device.
+    // The Android Intent injects disposable test data into the Expo module,
+    // whose JNI Rust implementation performs the real Subduction handshake.
+    const fixtureB64=Buffer.from(input,'utf8').toString('base64');
     execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
-    execFileSync('adb',['push',nativeRequest,'/data/local/tmp/cc-native-request.json'],{timeout:12000});
-    execFileSync('adb',['shell','run-as',androidPackage,'cp',
-      '/data/local/tmp/cc-native-request.json','files/subduction-request.json'],{timeout:12000});
-    execFileSync('adb',['shell','run-as',androidPackage,'rm',
-      '-f','files/subduction-result.json'],{timeout:12000});
+    execFileSync('adb',['logcat','-c'],{timeout:12000});
     execFileSync('adb',['shell','am','start','-n',
-      androidPackage+'/'+androidPackage+'.MainActivity'],{timeout:20000});
-    let observed:string|undefined;
+      androidPackage+'/'+androidPackage+'.MainActivity',
+      '--es','ccSubductionRequestB64',fixtureB64],{timeout:20000});
     const deadline=Date.now()+150000;
+    let observed:string|undefined, logcat='';
     while(Date.now()<deadline){
-      try{
-        const out=execFileSync('adb',['shell','run-as',androidPackage,'cat',
-          'files/subduction-result.json'],{encoding:'utf8',timeout:12000});
-        if(out.includes('"status"')){observed=out;break;}
-      }catch{/* Rust app is still starting. */}
+      logcat=execFileSync('adb',['logcat','-d','-s','CCSubductionNative:I','*:S'],
+        {encoding:'utf8',timeout:12000});
+      const parts=new Map<number,string>();
+      let total=0;
+      for(const line of logcat.split('\n')){
+        const match=line.match(/CC_NATIVE_RESULT_V1:(\d+)\/(\d+):([A-Za-z0-9+/=]+)/);
+        if(!match)continue;
+        const index=Number(match[1]), count=Number(match[2]);
+        if(total!==0&&total!==count)throw new Error('Inconsistent JNI JSON chunk count');
+        total=count;
+        if(index<1||index>count)throw new Error('Invalid JNI JSON chunk index');
+        if(parts.has(index)&&parts.get(index)!==match[3])
+          throw new Error('Contradictory native JSON log chunk');
+        parts.set(index,match[3]);
+      }
+      if(total>0&&parts.size===total){
+        observed=Buffer.from(Array.from({length:total},(_,i)=>parts.get(i+1)??'').join(''),'base64').toString('utf8');
+        break;
+      }
       execFileSync('sleep',['0.35']);
     }
-    try{
-      if(!observed){
-        let logs='logcat unavailable';
-        try{logs=execFileSync('adb',['logcat','-d','-t','250'],
-          {encoding:'utf8',timeout:12000}).slice(-25000);}catch{/* ignore */}
-        writeFileSync(join(outputDir!,'android-logcat-failure.txt'),logs);
-        throw new Error('Android Expo JNI process never wrote real Subduction JSON');
-      }
-      response=observed;
-    }finally{
-      execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
+    mkdirSync(outputDir!,{recursive:true});
+    writeFileSync(join(outputDir!,'android-'+phase+'-native-logcat.txt'),logcat);
+    if(!observed){
+      try{
+        const errors=execFileSync('adb',['logcat','-d','-t','700'],
+          {encoding:'utf8',timeout:12000});
+        writeFileSync(join(outputDir!,'android-'+phase+'-error-logcat.txt'),errors);
+      }catch{/* best effort diagnostics */}
+      throw new Error('Android app never emitted complete Rust Subduction JSON');
     }
+    const observedPid=String(JSON.parse(observed).pid??'');
+    const devicePid=execFileSync('adb',['shell','pidof',androidPackage],
+      {encoding:'utf8',timeout:10000}).trim();
+    if(!devicePid.split(/\s+/).includes(observedPid))
+      throw new Error('Rust JNI PID does not match real Android application: '+observedPid+' vs '+devicePid);
+    execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
+    response=observed;
   }else{
     // Real iOS Simulator application process. No Node or WebView runs the native protocol.
     const directory=execFileSync('xcrun',['simctl','get_app_container','booted',iosBundleId,'data'],
