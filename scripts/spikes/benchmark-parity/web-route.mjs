@@ -9,11 +9,13 @@ const fixed = (ok: boolean, detail: string) => ({ ok, detail });
 const encode = (bytes: Uint8Array) => btoa(Array.from(bytes, n => String.fromCharCode(n)).join(''));
 const decode = (value: string) => Uint8Array.from(atob(value), c => c.charCodeAt(0));
 `;
-const auto = `import * as A from '@automerge/automerge/slim';
-const KEY = 'parity-automerge-v1';
+const auto = `const KEY = 'parity-automerge-v1';
 const actors = { seed: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', phone: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   laptop: 'cccccccccccccccccccccccccccccccc', tablet: 'dddddddddddddddddddddddddddddddd' };
 async function engineRun() {
+  // Both engines lazy-load their JS/WASM-backed code after hydration so the
+  // same benchmark route exercises real client-side code splitting.
+  const A = await import('@automerge/automerge/slim');
   await A.initializeWasm('/creative-cooking/_expo/static/js/web/automerge.wasm');
   let seed = A.init({ actor: actors.seed });
   seed = A.change(seed, { message: 'web seed' }, d => {
