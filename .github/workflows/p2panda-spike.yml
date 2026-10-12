@@ -57,6 +57,8 @@ jobs:
       - name: Enforce checked-in exact experimental Cargo resolution
         run: cargo metadata --locked --manifest-path experiments/p2panda/rust/Cargo.toml --format-version 1 --no-deps > /dev/null
       - run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets --locked
+      - name: Surface Spaces read-only signed-write negative findings
+        run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --test spaces --locked -- --nocapture
       - name: Download pinned real-engine test dependencies
         run: npm ci --prefix experiments/p2panda/engine-fixtures --omit=dev --no-audit --no-fund
       - name: Generate exact real CRDT incremental encrypted fixture hashes

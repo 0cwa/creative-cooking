@@ -92,3 +92,44 @@ async fn outsider_has_no_welcome_key_and_cannot_publish_or_read() {
         e, Event::Application { data, .. } if data.as_slice() == b"opaque outsider must not read"
     ))));
 }
+
+
+/// Adversarial access-control distinction: p2panda Spaces encryption alone
+/// does NOT necessarily enforce Access::write on a forged application message.
+/// Record actual upstream 0.7.1 behavior. This test is a security-negative
+/// OBSERVATION, not a claim of successful write authorization or a gate pass.
+#[tokio::test]
+async fn read_only_space_member_can_attempt_signed_ciphertext_publish() {
+    let alice=TestPeer::new(81).await;
+    let bob=TestPeer::new(82).await;
+    alice.manager.register_member(&bob.manager.me().await.unwrap()).await.unwrap();
+    bob.manager.register_member(&alice.manager.me().await.unwrap()).await.unwrap();
+    let id=SpaceId::digest(b"creative-cooking-security-readonly-member");
+    let (_alice_space, controls)=alice.manager
+        .create_space_persisted(id,&[(bob.manager.id(),Access::read())])
+        .await.unwrap();
+    for control in &controls {
+        bob.persist_operation(control).await.unwrap();
+        bob.manager.process_persisted(control).await.unwrap();
+    }
+    let bob_space=bob.manager.space(id).await.unwrap().unwrap();
+    let actual_read_only_grant=bob_space.members().await.unwrap();
+    assert!(actual_read_only_grant.iter().any(|(member,access)|
+        *member==bob.manager.id() && access==&Access::read()
+    ));
+    let forged_plain=b"CC_NEGATIVE_READ_ONLY_WRITE_MUST_NOT_BE_ACCEPTED";
+    let forged=bob_space.publish_persisted(forged_plain).await;
+    let forged_locally=forged.is_ok();
+    let mut delivered_to_owner=false;
+    if let Ok(message)=forged {
+        alice.persist_operation(&message).await.unwrap();
+        let result=alice.manager.process_persisted(&message).await;
+        delivered_to_owner=matches!(result,Ok(ref events) if events.iter().any(|e| matches!(
+            e,Event::Application {data,..} if data.as_slice()==forged_plain
+        )));
+    }
+    println!(
+        "CC_SPACES_READ_ONLY_ACCESS_NEGATIVE=read_only_can_forge:{};owner_receives:{}",
+        forged_locally,delivered_to_owner
+    );
+}
