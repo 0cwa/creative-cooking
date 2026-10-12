@@ -84,6 +84,13 @@ METRO_PID="$!"
 sleep 8
 "${ADB[@]}" reverse tcp:8081 tcp:8081
 "${ADB[@]}" install -r "$APK" | tee "$OUT/install.txt"
+# This disposable spike package must start with no prior AsyncStorage record;
+# otherwise a previous test session could masquerade as the first process.
+"${ADB[@]}" shell pm clear "$PACKAGE" | tee "$OUT/pm-clear.txt"
+grep -q 'Success' "$OUT/pm-clear.txt" || {
+  echo 'Could not reset isolated native test app before first launch' >&2
+  exit 1
+}
 
 # Parse complete result V2 frames, not merely the presence of a frame prefix.
 # The existing fail-closed parser must exit successfully. Never replace it
