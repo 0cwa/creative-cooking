@@ -93,6 +93,60 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+
+  android-emulator-runtime:
+    name: Android emulator calls real p2panda JNI (x86_64, not Expo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: x86_64-linux-android
+      - name: Configure Android emulator target NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_HOME:-}"
+          if [ -z "$ndk" ]; then
+            sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+            ndk="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          llvm="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$llvm/x86_64-linux-android24-clang"
+          echo "CC_x86_64_linux_android=$llvm/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_x86_64_linux_android=$llvm/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$llvm/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+      - name: Link x86_64 Android Rust JNI p2panda Node library
+        run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --release --lib --target x86_64-linux-android --locked
+      - name: Package native .so into isolated Android app (no Expo)
+        run: |
+          mkdir -p experiments/p2panda/android-runtime/src/main/jniLibs/x86_64
+          cp experiments/p2panda/rust/target/x86_64-linux-android/release/libcreative_cooking_p2panda_spike.so experiments/p2panda/android-runtime/src/main/jniLibs/x86_64/
+          test -s experiments/p2panda/android-runtime/src/main/jniLibs/x86_64/libcreative_cooking_p2panda_spike.so
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Build isolated native Java APK
+        run: gradle -p experiments/p2panda/android-runtime assembleDebug --no-daemon
+      - uses: reactivecircus/android-emulator-runner@v2
+        name: Boot Android emulator and actually execute signed-operation JNI probe
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          script: bash experiments/p2panda/android-runtime/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p2panda-real-android-emulator-jni-evidence
+          path: experiments/p2panda/artifacts/android-emulator-*
+          if-no-files-found: warn
+          retention-days: 14
+
   mobile-cross-check:
     name: Native linkable artifact (${{ matrix.target }})
     strategy:

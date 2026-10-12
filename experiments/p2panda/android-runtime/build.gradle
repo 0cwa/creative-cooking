@@ -1,0 +1,14 @@
+plugins {
+    id 'com.android.application' version '8.10.1'
+}
+android {
+    namespace 'org.creativecooking.spike'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'org.creativecooking.spike'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '0.0.1-spike'
+    }
+}
