@@ -220,7 +220,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: 0cwa/creative-cooking
-          ref: 9c74e74247b926d9e0e6e3339739ad6882ea3e
+          ref: spike/local-first-evaluation-readiness
           path: read-only-fixture
       - uses: actions/setup-node@v4
         with:
