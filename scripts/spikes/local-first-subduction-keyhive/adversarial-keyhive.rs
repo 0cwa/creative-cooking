@@ -39,9 +39,9 @@ async fn cc_protected_role_matrix_real_ciphertext_and_cross_household() -> Resul
     let cleartext = b"cooked chickpea and lemon synthetic recipe";
     let encrypted = ctx.encrypt(&owner, recipe, cleartext).await?;
     ctx.sync_all_unsent().await?;
-    assert_eq!(reader.try_decrypt_content(recipe, &encrypted).await?, cleartext);
-    assert_eq!(editor.try_decrypt_content(recipe, &encrypted).await?, cleartext);
-    assert_eq!(admin.try_decrypt_content(recipe, &encrypted).await?, cleartext);
+    assert_eq!(reader.try_decrypt_content(recipe, &encrypted).await?, cleartext.to_vec());
+    assert_eq!(editor.try_decrypt_content(recipe, &encrypted).await?, cleartext.to_vec());
+    assert_eq!(admin.try_decrypt_content(recipe, &encrypted).await?, cleartext.to_vec());
     assert!(!no_key_relay.can_decrypt_content(recipe, &encrypted).await?,
         "Relay may move ciphertext, not derive cooking plaintext");
     assert!(!stranger.can_decrypt_content(recipe, &encrypted).await?,
@@ -156,7 +156,7 @@ async fn cc_archive_restart_retains_owner_rights_but_stale_snapshot_must_sync() 
     assert_eq!(restored.access_for_doc(reader.id(), recipe).await, Some(Read));
     assert_eq!(
         restored.try_decrypt_content(recipe, &encrypted).await?,
-        b"synthetic retained cooking data"
+        b"synthetic retained cooking data".to_vec()
     );
     println!(
         "CC_SECURITY_MATRIX case=keyhive-archive-rebuild expected=grant-owner-read observed=grant-owner-read ciphertext_bytes={}",
