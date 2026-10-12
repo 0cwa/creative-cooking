@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: 0cwa/creative-cooking
-          ref: 9c74e74247b926d9e0e6e3339739ad6882ea3e3e
+          ref: spike/local-first-evaluation-readiness
           path: read-only-fixture
       - uses: actions/setup-node@v4
         with:
@@ -50,6 +50,7 @@ jobs:
           mkdir -p artifacts/subduction-native
           git -C subduction-upstream rev-parse HEAD > artifacts/subduction-native/sources.txt
           git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
+          test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
           rustc --version >> artifacts/subduction-native/sources.txt
           cargo install wasm-pack --locked --version 0.14.0
           (cd subduction-upstream/subduction_wasm && pnpm install --frozen-lockfile)
@@ -108,7 +109,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: 0cwa/creative-cooking
-          ref: 9c74e74247b926d9e0e6e3339739ad6882ea3e3e
+          ref: spike/local-first-evaluation-readiness
           path: read-only-fixture
       - uses: actions/setup-node@v4
         with:
@@ -128,6 +129,7 @@ jobs:
           mkdir -p artifacts/subduction-native
           git -C subduction-upstream rev-parse HEAD > artifacts/subduction-native/sources.txt
           git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
+          test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
           xcodebuild -version >> artifacts/subduction-native/sources.txt
           rustc --version >> artifacts/subduction-native/sources.txt
           uname -m >> artifacts/subduction-native/sources.txt
