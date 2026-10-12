@@ -8,6 +8,7 @@ PACKAGE="com.creativecooking.lorospike"
 mkdir -p "$OUT"
 command -v adb >/dev/null
 command -v node >/dev/null
+command -v unzip >/dev/null
 adb version > "$OUT/adb-version.txt"
 adb devices -l | tee "$OUT/devices.txt"
 
@@ -15,12 +16,15 @@ adb devices -l | tee "$OUT/devices.txt"
 if [[ -n "${LORO_ANDROID_SERIAL:-}" ]]; then
   SERIAL="$LORO_ANDROID_SERIAL"
 else
-  mapfile -t DEVICES < <(adb devices | awk 'NR>1 && $2=="device" {print $1}')
-  if [[ "${#DEVICES[@]}" -ne 1 ]]; then
-    echo "Expected exactly one authorized ARM64 physical Android device, found ${#DEVICES[@]}" >&2
+  # macOS ships Bash 3.2 without mapfile/readarray. A physical serial is a
+  # single token, so count authorized devices portably on macOS and Linux.
+  DEVICE_LIST=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+  DEVICE_COUNT=$(printf '%s\n' "$DEVICE_LIST" | awk 'NF {count++} END {print count+0}')
+  if [[ "$DEVICE_COUNT" -ne 1 ]]; then
+    echo "Expected exactly one authorized ARM64 physical Android device, found $DEVICE_COUNT" >&2
     exit 1
   fi
-  SERIAL="${DEVICES[0]}"
+  SERIAL="$DEVICE_LIST"
 fi
 printf '%s\n' "$SERIAL" > "$OUT/device-serial.txt"
 ADB=(adb -s "$SERIAL")
@@ -49,8 +53,25 @@ grep -q 'lib/arm64-v8a/libloro-react-native.so' "$OUT/apk-file-list.txt" || {
   echo "Real ARM64 Loro JNI/Rust native library absent in APK" >&2
   exit 1
 }
-sha256sum "$APK" | tee "$OUT/apk-sha256.txt"
-stat -c '%s' "$APK" > "$OUT/apk-bytes.txt"
+# Linux sha256sum/stat -c are absent on default macOS; Node works on both.
+node - "$APK" "$OUT" <<'NODE'
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = require('node:path');
+const apk = process.argv[2], dir = process.argv[3];
+const bytes = fs.readFileSync(apk);
+const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+fs.writeFileSync(path.join(dir, 'apk-sha256.txt'), hash + '  ' + apk + '\n');
+fs.writeFileSync(path.join(dir, 'apk-bytes.txt'), bytes.byteLength + '\n');
+console.log('ARM64 APK SHA-256:', hash, 'bytes:', bytes.byteLength);
+NODE
+
+WEB_NATIVE_INPUT="${LORO_WEB_NATIVE_FIXTURE:-artifacts/loro/web-native-input.json}"
+if [[ ! -f "$WEB_NATIVE_INPUT" ]]; then
+  echo "Missing authoritative web/native binary fixture: $WEB_NATIVE_INPUT" >&2
+  echo "Generate it with: npm install --no-save loro-crdt@1.16.4 && node scripts/spikes/loro/run.mjs" >&2
+  exit 1
+fi
 
 METRO_PID=''
 cleanup() {
@@ -83,6 +104,21 @@ capture_native_result() {
         "$raw" "$result" > "$OUT/parse-restart.log" 2>&1; then
         return 0
       fi
+    fi
+    # The collector marks incomplete framing as platform='collector', which
+    # should be retried. A COMPLETE real Android FAIL/PARTIAL must not be
+    # swallowed until a timeout or replaced by a stale earlier PASS.
+    if node - "$result" <<'NODE'
+const fs = require('node:fs');
+try {
+  const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  process.exit(value.platform === 'android' && value.status !== 'PASS' ? 0 : 1);
+} catch { process.exit(1); }
+NODE
+    then
+      echo "Native Android completed with non-PASS result: $result" >&2
+      cat "$result" >&2
+      return 1
     fi
     sleep 4
   done
@@ -141,4 +177,13 @@ if (!second.ok || second.status !== 'PASS'
 }
 NODE
 
-echo 'Real physical Android ARM64 native harness and separate process restart: PASS.'
+# A native-only result is insufficient: independently import its real 1.10.3
+# binary updates on web Loro 1.16.4 before declaring interoperability PASS.
+kill "$METRO_PID" 2>/dev/null || true
+METRO_PID=''
+npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+node scripts/spikes/loro/verify-native-update.mjs \
+  "$WEB_NATIVE_INPUT" "$OUT/result.json" "$OUT/first-result.json" \
+  | tee "$OUT/web-verification.json"
+node scripts/spikes/loro/hash-evidence.mjs "$OUT"
+echo 'Real physical Android ARM64 native harness, process restart and independent web interoperability: PASS.'
