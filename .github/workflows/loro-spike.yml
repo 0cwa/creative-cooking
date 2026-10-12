@@ -1,0 +1,573 @@
+name: Loro feasibility spike
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/loro-spike.yml'
+      - 'scripts/spikes/loro/**'
+      - 'docs/spikes/local-first-loro.md'
+  workflow_dispatch:
+    inputs:
+      arm64_physical:
+        description: 'Use a connected real Android ARM64 device on a self-hosted Linux x64 runner labelled android-arm64-device'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# Several full native builds are expensive. Keep only the latest experimental
+# attempt for a draft PR; canceled predecessors remain visible in Actions.
+concurrency:
+  group: loro-spike-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  LORO_RN_COMMIT: 8fad8d61c11c23e7c57999533d637d316465ffc1
+
+jobs:
+  web-scenarios:
+    name: Loro web scenarios + benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+      - run: node --test scripts/spikes/loro/parse-native-log.test.mjs
+      - run: node scripts/spikes/loro/web-probe.mjs
+      - run: node scripts/spikes/loro/run.mjs
+      - name: Package footprint
+        run: |
+          du -sh node_modules/loro-crdt
+          du -sh node_modules/loro-crdt/* | sort -h | tail -20
+          find node_modules/loro-crdt/browser -type f -maxdepth 2 -printf '%p %s bytes\n' | sort -k2 -n
+      - name: Build control and Loro static Expo pages
+        run: |
+          set -euxo pipefail
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/web-control.tsx.template app/index.tsx
+          EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir dist-control
+          cp scripts/spikes/loro/web-harness.tsx.template app/index.tsx
+          EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir dist-loro
+          # Loro's browser package loads this relative WASM URL at runtime. Its upstream
+          # README explicitly requires esbuild/Rollup-style static builds to copy the
+          # asset beside emitted JS; Expo static export does not currently do so.
+          install -D node_modules/loro-crdt/browser/loro_wasm_bg.wasm dist-loro/_expo/static/js/web/loro_wasm_bg.wasm
+          CONTROL=$(du -sb dist-control | cut -f1)
+          LORO=$(du -sb dist-loro | cut -f1)
+          DELTA=$((LORO - CONTROL))
+          printf '{"controlBytes":%s,"loroBytes":%s,"deltaBytes":%s}\n' "$CONTROL" "$LORO" "$DELTA" | tee artifacts/loro/web-bundle.json
+          find dist-control -type f -printf '%s %p\n' | sort -nr | head -30 > artifacts/loro/web-control-files.txt
+          find dist-loro -type f -printf '%s %p\n' | sort -nr | head -30 > artifacts/loro/web-loro-files.txt
+      - name: Run Loro static export in Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          mkdir -p serve-root/creative-cooking
+          cp -R dist-loro/. serve-root/creative-cooking/
+          python3 -m http.server 4173 --directory serve-root > artifacts/loro/web-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID || true' EXIT
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173/creative-cooking/ > artifacts/loro/web-served-index.html; then break; fi
+            sleep 1
+          done
+          node scripts/spikes/loro/web-browser-verify.mjs
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-web-results
+          path: artifacts/loro/
+
+  native-package:
+    name: Loro native publication + source probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - name: Inspect registry publication
+        run: |
+          echo "latest=$(npm view loro-react-native version)"
+          npm view loro-react-native versions --json
+      - name: Install exact current official source commit
+        run: npm install --no-save --no-audit --no-fund "github:loro-dev/loro-react-native#${LORO_RN_COMMIT}"
+      - name: Inspect source package
+        run: |
+          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({variant:'current-source',version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
+          grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
+          grep -R "loro-ffi" node_modules/loro-react-native/loro-rs/Cargo.toml node_modules/loro-react-native/loro-rs/Cargo.lock | head -20 || true
+          du -sh node_modules/loro-react-native
+          find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
+      - name: Inspect latest published native package
+        run: |
+          rm -rf node_modules/loro-react-native
+          npm install --no-save --no-audit --no-fund loro-react-native@1.10.3
+          node -e "const p=require('./node_modules/loro-react-native/package.json'); console.log(JSON.stringify({variant:'published',version:p.version,peerDependencies:p.peerDependencies,dependencies:p.dependencies},null,2))"
+          grep -R "ensureMergeable\|cmpFrontiers\|getAllChanges\|getOpsInChange\|exportJsonUpdates" node_modules/loro-react-native/src || true
+          grep -R "loro-ffi" node_modules/loro-react-native/loro-rs/Cargo.toml node_modules/loro-react-native/loro-rs/Cargo.lock | head -20 || true
+          du -sh node_modules/loro-react-native
+          find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
+      - name: Verify exact pristine 1.10.3 converter and one-line JS-only compatibility fix
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/loro/native-binding-probe
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --check artifacts/loro/native-binding-probe/unpatched-converter.json
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/native-binding-probe/patched-converter.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const before = JSON.parse(fs.readFileSync('artifacts/loro/native-binding-probe/unpatched-converter.json'));
+          const after = JSON.parse(fs.readFileSync('artifacts/loro/native-binding-probe/patched-converter.json'));
+          if (before.status !== 'confirmed-unpatched' || after.status !== 'patched'
+              || before.publishedVersion !== '1.10.3' || after.publishedVersion !== '1.10.3'
+              || JSON.stringify(before.affectedFiles) !== JSON.stringify(after.affectedFiles)) {
+            throw new Error('Published value-adapter correction source-level audit changed between steps');
+          }
+          const source = fs.readFileSync('node_modules/loro-react-native/src/extension.ts','utf8');
+          const converter = source.slice(source.indexOf('const jsValueToLoroValue'));
+          if (!converter.startsWith('const jsValueToLoroValue')
+              || !converter.slice(0, 160).includes('if (value === null || value === undefined) {')) {
+            throw new Error('Exact published TypeScript adapter not patched');
+          }
+          console.log('One-line adapter correction confirmed in published 1.10.3 source; still not native runtime evidence.');
+          NODE
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-native-binding-probe
+          path: artifacts/loro/native-binding-probe/
+
+  android-runtime:
+    name: Android ARM64 compile + x86_64 ABI inventory (compile only)
+    needs: web-scenarios
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm install --no-audit --no-fund
+      - name: Install latest published official RN package for autolinking
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+        env:
+          EXPO_PUBLIC_LORO_NATIVE_LABEL: loro-react-native@1.10.3
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Prepare isolated native harness
+        run: |
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Expo prebuild Android
+        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
+      - name: Build Android arm64 debug APK
+        run: |
+          mkdir -p artifacts/loro/android
+          cd android
+          ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a | tee ../artifacts/loro/android/arm64-build.log
+          cd ..
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          stat -c '%s' "$APK" | tee artifacts/loro/android/arm64-apk-bytes.txt
+          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/arm64-native-library-list.txt || true
+      - name: Build Android x86_64 emulator APK
+        id: android_x86_build
+        run: |
+          cd android
+          ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=x86_64 | tee ../artifacts/loro/android/x86_64-build.log
+          cd ..
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          stat -c '%s' "$APK" | tee artifacts/loro/android/x86_64-apk-bytes.txt
+          unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/x86_64-native-library-list.txt || true
+      - name: Record ABI inventory without claiming native runtime qualification
+        run: |
+          set -euo pipefail
+          grep -q 'lib/arm64-v8a/libloro-react-native.so' artifacts/loro/android/arm64-native-library-list.txt
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const x86 = fs.readFileSync('artifacts/loro/android/x86_64-native-library-list.txt', 'utf8');
+          const hasX86NativeLoro = /lib\/x86_64\/libloro-react-native\.so/.test(x86);
+          const evidence = {
+            status: 'PARTIAL', platform: 'android-x86_64', scope: 'ABI inventory ONLY',
+            publishedPackage: 'loro-react-native@1.10.3', hasX86NativeLoro,
+            runtimeAttempted: false, runtimeQualified: false,
+            reason: hasX86NativeLoro
+              ? 'Native archive detected but needs a real x86_64 runtime test'
+              : 'Published native Rust archive absent; compiled APK is NOT native-runtime proof'
+          };
+          fs.writeFileSync('artifacts/loro/android/x86_64-native-capability.json',
+            JSON.stringify(evidence, null, 2));
+          console.log(JSON.stringify(evidence));
+          NODE
+      - name: Hash Android ABI inventory artifacts
+        if: always()
+        run: |
+          mkdir -p artifacts/loro/android
+          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-android-runtime
+          path: artifacts/loro/android/
+
+  android-arm64-runtime:
+    name: Android ARM64 actual guest + native interop (Linux x86_64 TCG fallback)
+    needs: web-scenarios
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Record Linux host/Android SDK and emulator host binary inventory
+        run: |
+          set -euo pipefail
+          OUT=artifacts/loro/android-arm64-linux-tcg
+          mkdir -p "$OUT"
+          uname -a | tee "$OUT/host.txt"
+          df -h . | tee "$OUT/storage.txt"
+          printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}" | tee "$OUT/sdk-home.txt"
+          test "$(uname -m)" = x86_64
+          # Hosted images may provide cmdline-tools without the emulator package.
+          # Install before requiring its executable or QEMU inventory.
+          SDKMANAGER=$(command -v sdkmanager || find "${ANDROID_HOME:?}/cmdline-tools" -name sdkmanager -type f -print -quit)
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" 'emulator' > "$OUT/emulator-install.log" 2>&1 || {
+            tail -100 "$OUT/emulator-install.log"
+            exit 1
+          }
+          test -x "${ANDROID_HOME:?}/emulator/emulator"
+          "${ANDROID_HOME}/emulator/emulator" -version > "$OUT/emulator-version.txt"
+          ls -l "${ANDROID_HOME}/emulator/qemu/linux-x86_64/qemu-system-aarch64"* > "$OUT/arm64-host-qemu-binaries.txt"
+      - run: npm install --no-audit --no-fund
+      - name: Install exact published 1.10.3 native Rust/UniFFI binding
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - name: Patch ONLY published one-line falsy JS adapter; retain SHA256 proof
+        run: |
+          mkdir -p artifacts/loro/android-arm64-linux-tcg
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/android-arm64-linux-tcg/value-adapter-patch.json
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Materialize fully isolated real Expo native test app
+        run: |
+          set -euo pipefail
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Build genuine arm64-v8a Loro Android APK (not x86_64)
+        run: |
+          set -euo pipefail
+          OUT=artifacts/loro/android-arm64-linux-tcg
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat \
+            npx expo prebuild --clean --platform android --no-install > "$OUT/prebuild.log" 2>&1 || {
+              tail -150 "$OUT/prebuild.log"
+              exit 1
+            }
+          (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > "$OUT/build.log" 2>&1 || {
+            tail -180 "$OUT/build.log"
+            exit 1
+          }
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          test -n "$APK"
+          echo "$APK" > "$OUT/apk-path.txt"
+          unzip -l "$APK" > "$OUT/apk-entries.txt"
+          grep -q 'lib/arm64-v8a/libloro-react-native.so' "$OUT/apk-entries.txt"
+      - name: Run Linux x86_64 TCG as a real aarch64 Android guest, two OS processes
+        timeout-minutes: 45
+        env:
+          ANDROID_I_WANT_MY_TCG: 'yes'
+        run: |
+          set -euo pipefail
+          OUT=artifacts/loro/android-arm64-linux-tcg
+          SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f -print -quit)
+          AVDMANAGER=$(command -v avdmanager || find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f -print -quit)
+          test -n "$SDKMANAGER" && test -n "$AVDMANAGER"
+          yes | "$SDKMANAGER" --licenses > "$OUT/licenses.log" 2>&1 || true
+          "$SDKMANAGER" 'system-images;android-35;google_apis;arm64-v8a' > "$OUT/image-install.log" 2>&1 || {
+            tail -100 "$OUT/image-install.log"
+            exit 1
+          }
+          test -f "$ANDROID_HOME/system-images/android-35/google_apis/arm64-v8a/system.img"
+          "$SDKMANAGER" --list_installed > "$OUT/installed-packages.txt"
+          echo no | "$AVDMANAGER" create avd --force --name loro-linux-arm64-tcg \
+            --package 'system-images;android-35;google_apis;arm64-v8a'
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          "$ANDROID_HOME/emulator/emulator" -avd loro-linux-arm64-tcg \
+            -no-window -no-snapshot -noaudio -no-boot-anim \
+            -gpu swiftshader_indirect -accel off -cores 2 -memory 2560 \
+            > "$OUT/emulator.log" 2>&1 &
+          EMU_PID=$!
+          cleanup() { kill "$EMU_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          BOOTED=0
+          for i in {1..480}; do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              echo "ARM64 TCG emulator exited before Android boot"; tail -130 "$OUT/emulator.log"; exit 1
+            fi
+            if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = '1' ]]; then
+              BOOTED=1
+              break
+            fi
+            sleep 3
+          done
+          adb devices -l | tee "$OUT/boot-devices.txt"
+          if [[ "$BOOTED" != 1 ]]; then
+            echo "A real ARM64 Android guest did not reach boot_completed"; tail -130 "$OUT/emulator.log"; exit 1
+          fi
+          export LORO_ANDROID_EXPECT_EMULATOR=1
+          export LORO_ANDROID_OUTPUT="$OUT"
+          export LORO_ANDROID_APK
+          LORO_ANDROID_APK=$(cat "$OUT/apk-path.txt")
+          bash scripts/spikes/loro/run-android-arm64-physical.sh
+      - name: Independent web 1.16.4 read of the actual Android ARM64 native binary
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+          node scripts/spikes/loro/verify-native-update.mjs \
+            artifacts/loro/web-native-input.json \
+            artifacts/loro/android-arm64-linux-tcg/result.json \
+            artifacts/loro/android-arm64-linux-tcg/first-result.json \
+            | tee artifacts/loro/android-arm64-linux-tcg/web-verification.json
+      - name: SHA-256 every actual Linux ARM64 runtime artifact, including failures
+        if: always()
+        run: |
+          mkdir -p artifacts/loro/android-arm64-linux-tcg
+          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64-linux-tcg
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-android-arm64-linux-tcg-runtime
+          path: artifacts/loro/android-arm64-linux-tcg/
+
+  android-arm64-physical:
+    name: Physical Android ARM64 runtime + OS restart + web interop (opt-in hardware)
+    # Only runs if explicitly dispatched AND the repo has a self-hosted
+    # Linux x64 runner with an authorized physical ARM64 Android device.
+    # The job is SKIPPED on all PRs and ordinary manual workflow runs.
+    if: github.event_name == 'workflow_dispatch' && inputs.arm64_physical == true
+    needs: web-scenarios
+    runs-on: [self-hosted, linux, x64, android-arm64-device]
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check physical device runner prerequisites
+        run: |
+          set -euo pipefail
+          test -d "${ANDROID_HOME:?Install Android SDK/NDK and set ANDROID_HOME on the self-hosted runner}"
+          command -v adb
+          command -v unzip
+          command -v sha256sum
+          adb devices -l
+      - run: npm install --no-audit --no-fund
+      - name: Install exact official RN 1.10.3 native package
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - name: Apply one-line value-converter compatibility patch (pinned JS only)
+        run: |
+          mkdir -p artifacts/loro/android-arm64-physical
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/android-arm64-physical/value-adapter-patch.json
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Materialize isolated test app, without touching production files
+        run: |
+          set -euo pipefail
+          test -d app
+          test ! -e app-production
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Compile and package genuine ARM64 Loro JNI/Rust APK
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/loro/android-arm64-physical
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo prebuild --clean --platform android --no-install
+          (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > artifacts/loro/android-arm64-physical/build.log 2>&1 || {
+            tail -200 artifacts/loro/android-arm64-physical/build.log
+            exit 1
+          }
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          test -n "$APK"
+          echo "$APK" > artifacts/loro/android-arm64-physical/apk-path.txt
+      - name: Qualify real connected ARM64 device and two OS processes
+        run: |
+          set -euo pipefail
+          export LORO_ANDROID_OUTPUT=artifacts/loro/android-arm64-physical
+          export LORO_ANDROID_APK
+          LORO_ANDROID_APK=$(cat "$LORO_ANDROID_OUTPUT/apk-path.txt")
+          bash scripts/spikes/loro/run-android-arm64-physical.sh
+      - name: Verify physical Android native updates on web Loro 1.16.4
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+          node scripts/spikes/loro/verify-native-update.mjs \
+            artifacts/loro/web-native-input.json \
+            artifacts/loro/android-arm64-physical/result.json \
+            artifacts/loro/android-arm64-physical/first-result.json \
+            | tee artifacts/loro/android-arm64-physical/web-verification.json
+      - name: Hash physical Android native evidence, including failed attempts
+        if: always()
+        run: |
+          mkdir -p artifacts/loro/android-arm64-physical
+          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64-physical
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-android-arm64-physical-runtime
+          path: artifacts/loro/android-arm64-physical/
+
+  ios-runtime:
+    name: iOS compile + runtime + web interop
+    needs: web-scenarios
+    if: always()
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - name: Install latest published official RN package for autolinking
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - name: Apply one-line value-converter compatibility patch (pinned JS only)
+        run: |
+          mkdir -p artifacts/loro/ios
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/ios/value-adapter-patch.json
+        env:
+          EXPO_PUBLIC_LORO_NATIVE_LABEL: loro-react-native@1.10.3+falsy-compat
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Prepare isolated native harness
+        run: |
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Expo prebuild iOS
+        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo prebuild --clean --platform ios --no-install
+      - name: Install CocoaPods
+        run: cd ios && pod install
+      - name: Build iOS simulator app
+        run: |
+          set -euxo pipefail
+          WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)
+          SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list -json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.workspace.schemes[0])})")
+          UDID=$(xcrun simctl list devices available -j | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);const ds=Object.values(j.devices).flat().filter(d=>d.isAvailable&&/^iPhone/.test(d.name));if(!ds[0])process.exit(2);console.log(ds[0].udid)})")
+          echo "workspace=$WORKSPACE scheme=$SCHEME simulator=$UDID"
+          mkdir -p artifacts/loro/ios
+          xcrun simctl list devices available -j > artifacts/loro/ios/simulator-devices.json
+          uname -a > artifacts/loro/ios/host.txt
+          xcodebuild -version > artifacts/loro/ios/xcode-version.txt
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build | tee artifacts/loro/ios-build.log
+          APP=$(find ios-build/Build/Products/Release-iphonesimulator -name '*.app' -print -quit)
+          mkdir -p artifacts/loro/ios
+          du -sk "$APP" | tee artifacts/loro/ios/app-kib.txt
+          find "$APP" -type f -maxdepth 5 -print | grep -Ei 'loro|framework|\.dylib$' > artifacts/loro/ios/native-library-list.txt || true
+          echo "$UDID" > artifacts/loro/ios/simulator-udid.txt
+          echo "$APP" > artifacts/loro/ios/app-path.txt
+      - name: Run on iOS simulator
+        run: |
+          set -euxo pipefail
+          UDID=$(cat artifacts/loro/ios/simulator-udid.txt)
+          APP=$(cat artifacts/loro/ios/app-path.txt)
+          mkdir -p artifacts/loro/ios
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl spawn "$UDID" log stream --style compact --level debug --predicate 'process == "CreativeCookingLoroSpike" OR eventMessage CONTAINS[c] "LORO_NATIVE" OR eventMessage CONTAINS[c] "TurboModule" OR eventMessage CONTAINS[c] "loro"' > artifacts/loro/ios/live.log 2>&1 &
+          LOG_PID=$!
+          cleanup() {
+            kill "$LOG_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          xcrun simctl launch "$UDID" com.creativecooking.lorospike | tee artifacts/loro/ios/launch.log
+          sleep 15
+          cat artifacts/loro/ios/live.log > artifacts/loro/ios/first-runtime.log
+          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/ios/first-runtime.log artifacts/loro/ios/first-result.json --allow-partial
+          xcrun simctl terminate "$UDID" com.creativecooking.lorospike
+          xcrun simctl launch "$UDID" com.creativecooking.lorospike | tee artifacts/loro/ios/relaunch.log
+          sleep 15
+          xcrun simctl io "$UDID" screenshot artifacts/loro/ios/runtime.png
+          xcrun simctl spawn "$UDID" log show --last 5m --style compact --level debug --predicate 'process == "CreativeCookingLoroSpike" OR eventMessage CONTAINS[c] "LORO_NATIVE" OR eventMessage CONTAINS[c] "TurboModule" OR eventMessage CONTAINS[c] "loro"' > artifacts/loro/ios/system.log 2>&1 || true
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -mmin -10 -print -exec cat {} \; > artifacts/loro/ios/diagnostic-reports.log 2>&1 || true
+          cleanup
+          trap - EXIT
+          cat artifacts/loro/ios/live.log artifacts/loro/ios/system.log artifacts/loro/ios/launch.log > artifacts/loro/ios/runtime.log
+          node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/ios/runtime.log artifacts/loro/ios/result.json
+      - name: Capture source context around iOS Hermes error line numbers
+        if: always()
+        run: |
+          mkdir -p artifacts/loro/ios
+          node scripts/spikes/loro/extract-ios-bundle-trace.mjs \
+            ios-build/Build/Products/Release-iphonesimulator/main.jsbundle \
+            artifacts/loro/ios/first-result.json \
+            artifacts/loro/ios/bundle-trace.txt
+      - name: Verify native-produced update in web Loro
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/ios/result.json artifacts/loro/ios/first-result.json | tee artifacts/loro/ios/web-verification.json
+      - name: Hash iOS native evidence
+        if: always()
+        run: |
+          mkdir -p artifacts/loro/ios
+          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/ios
+          if test -f artifacts/loro/ios-build.log; then
+            (cd artifacts/loro && shasum -a 256 ios-build.log) >> artifacts/loro/ios/SHA256SUMS.txt
+          fi
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-ios-runtime
+          path: |
+            artifacts/loro/ios/
+            artifacts/loro/ios-build.log
