@@ -92,6 +92,7 @@ jobs:
         run: |
           node scripts/spikes/local-first-subduction-keyhive/make-fixtures.mjs "$RUNNER_TEMP/cc-subduction-fixtures.json"
           cp scripts/spikes/local-first-subduction-keyhive/creative-cooking.spec.ts subduction-upstream/subduction_wasm/e2e/creative-cooking.spec.ts
+          cp scripts/spikes/local-first-subduction-keyhive/adversarial-relay.spec.ts subduction-upstream/subduction_wasm/e2e/adversarial-relay.spec.ts
           # Playwright executes inside the pinned upstream checkout; resolve the fixture's
           # exact test-only Automerge dependency without modifying upstream manifests.
           mkdir -p subduction-upstream/subduction_wasm/node_modules/@automerge
@@ -110,6 +111,13 @@ jobs:
           cd subduction-upstream/subduction_wasm
           pnpm exec playwright test creative-cooking.spec.ts --project=chromium --reporter=line
 
+      - name: Attack real Keyhive-authenticated relay with valid protected and legacy IDs
+        # Intentionally a hard failure on unauthorized fetch/put. This is NOT
+        # open auth, not a fixture-AES proof, and not continue-on-error.
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright test adversarial-relay.spec.ts --project=chromium --reporter=line
+
       - name: Upload experimental browser diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -120,3 +128,57 @@ jobs:
             subduction-upstream/subduction_wasm/playwright-report/
           if-no-files-found: ignore
           retention-days: 7
+
+  ark-cryptography-and-acl:
+    name: Pinned ARK + authentic Keyhive security invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout isolated Creative Cooking harness
+        uses: actions/checkout@v4
+
+      # Do not substitute newer bridge and newer Subduction WASM for the
+      # exact alpha package graph that ARK v0.6.0-alpha.1 actually declares.
+      - name: Checkout exact ARK upstream source and locked dependency graph
+        uses: actions/checkout@v4
+        with:
+          repository: automerge/automerge-repo-keyhive
+          ref: 5d09e8c8cfdebd5656b1426b66aea6b1395f83da
+          path: ark-upstream
+
+      - name: Node 22 / pinned pnpm 10.15
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.15.0'
+
+      - name: Install ARK exact alpha lockfile, build and check actual APIs
+        run: |
+          cd ark-upstream
+          pnpm install --frozen-lockfile
+          pnpm build
+          node -p "'ARK loaded: ' + require('./package.json').version"
+
+      - name: Copy owned adversarial probe into exact upstream test environment
+        run: |
+          cp scripts/spikes/local-first-subduction-keyhive/ark-adversarial.test.ts ark-upstream/test/creative-cooking-adversarial.test.ts
+
+      - name: Execute genuine protected-document/ACL/Keyhive E2EE probes
+        # Known unsafe negative cases must FAIL this job loudly and retain
+        # evidence. Never waive with continue-on-error.
+        run: |
+          cd ark-upstream
+          CC_ARK_SECURITY_EVIDENCE="$GITHUB_WORKSPACE/cc-ark-security-matrix.json" pnpm exec vitest run test/creative-cooking-adversarial.test.ts --reporter=verbose
+
+      - name: Publish exact executed security matrix, even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyhive-ark-adversarial-matrix
+          path: |
+            cc-ark-security-matrix.json
+            ark-upstream/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
