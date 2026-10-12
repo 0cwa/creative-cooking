@@ -2,6 +2,26 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compileChefSystemPrompt } from './promptCompiler.ts';
 
+test('applies only selected household requirements alongside private personal allergies', () => {
+  const households = [
+    { id: 'home', name: 'Home', requirements: { allergies: ['Milk'], diet: 'vegan' } },
+    { id: 'other', name: 'Other home', requirements: { allergies: ['OTHER_ALLERGY_SENTINEL'], diet: 'vegetarian' } }
+  ];
+  const value = state({ households, activeHouseholdId: 'home' });
+  value.settings.allergies = ['peanuts', 'milk'];
+  const original = JSON.stringify(value);
+  const prompt = compileChefSystemPrompt(value, '- carrots', { localTime: 'unused', timeZone: 'unused' });
+  assert.match(prompt, /Cooking for household: Home/);
+  assert.match(prompt, /Household dietary requirement: vegan/);
+  assert.match(prompt, /- peanuts/);
+  assert.match(prompt, /- milk/i);
+  assert.doesNotMatch(prompt, /OTHER_ALLERGY_SENTINEL|Other home/);
+  assert.equal(JSON.stringify(value), original, 'personal allergy union must not mutate shared requirements');
+  const personal = compileChefSystemPrompt({ ...value, activeHouseholdId: null }, '- carrots', { localTime: '', timeZone: '' });
+  assert.match(personal, /Cooking for: personal context/);
+  assert.match(personal, /Household dietary requirement: none selected/);
+});
+
 function state(overrides = {}) {
   return {
     pantry: [],
