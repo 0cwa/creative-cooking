@@ -224,7 +224,7 @@ jobs:
     needs: web-scenarios
     if: always()
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 85
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -297,14 +297,14 @@ jobs:
           # the software (TCG) fallback instead of mistaking a failed HVF
           # boot for the native Loro runtime result.
           "$ANDROID_HOME/emulator/emulator" -accel-check > "$OUTPUT/acceleration-check.log" 2>&1 || true
-          "$ANDROID_HOME/emulator/emulator" -avd loro-spike-arm64 -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -accel off > "$OUTPUT/emulator.log" 2>&1 &
+          ANDROID_I_WANT_MY_TCG=yes "$ANDROID_HOME/emulator/emulator" -avd loro-spike-arm64 -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -accel off > "$OUTPUT/emulator.log" 2>&1 &
           EMULATOR_PID=$!
           METRO_PID=''
           cleanup() { kill "$METRO_PID" "$EMULATOR_PID" 2>/dev/null || true; }
           trap cleanup EXIT
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
           BOOTED=0
-          for i in {1..450}; do
+          for i in {1..900}; do
             if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
               echo "ARM64 emulator exited before boot; captured log:"; tail -100 "$OUTPUT/emulator.log"; exit 1
             fi
