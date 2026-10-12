@@ -17,6 +17,16 @@
     "android": {
       "package": "dev.creativecooking.subductionnative",
       "usesCleartextTraffic": true
-    }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ]
   }
 }

@@ -97,7 +97,7 @@ jobs:
 
   ios-simulator:
     name: Expo iOS Simulator Rust runtime + simulator/device libraries
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
@@ -131,6 +131,7 @@ jobs:
           git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
           test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
           xcodebuild -version >> artifacts/subduction-native/sources.txt
+          swift --version >> artifacts/subduction-native/sources.txt
           rustc --version >> artifacts/subduction-native/sources.txt
           uname -m >> artifacts/subduction-native/sources.txt
           if [ "$(uname -m)" = "arm64" ]; then echo "RUST_SIM_TARGET=aarch64-apple-ios-sim" >> "$GITHUB_ENV";
@@ -161,7 +162,7 @@ jobs:
           xcodebuild -list -json -workspace "$WORKSPACE" > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild-projects.json"
           xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
             -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/cc-ios-derived" CODE_SIGNING_ALLOWED=NO build \
+            -derivedDataPath "$RUNNER_TEMP/cc-ios-derived" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build \
             > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild.log" 2>&1 || {
               tail -200 "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild.log"; exit 1;
             }
@@ -259,9 +260,10 @@ jobs:
           npx expo prebuild --platform android --no-install
           cd android
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --stacktrace > "$GITHUB_WORKSPACE/artifacts/subduction-native/android-gradle.log" 2>&1 || {
+          ./gradlew :app:assembleRelease --stacktrace > "$GITHUB_WORKSPACE/artifacts/subduction-native/android-gradle.log" 2>&1 || {
             tail -250 "$GITHUB_WORKSPACE/artifacts/subduction-native/android-gradle.log"; exit 1;
           }
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep 'libcc_subduction_native.so' > "$GITHUB_WORKSPACE/artifacts/subduction-native/android-packaging.txt"
           find app/build/outputs/apk -name '*.apk' -exec sha256sum {} \; \
             >> "$GITHUB_WORKSPACE/artifacts/subduction-native/sources.txt"
       - name: Compile genuine Subduction CLI, browser WASM and two engine fixtures
@@ -295,7 +297,7 @@ jobs:
           ram-size: 3072M
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
           script: |
-            adb install -r "$GITHUB_WORKSPACE/spikes/subduction-native/expo-probe/android/app/build/outputs/apk/debug/app-debug.apk"
+            adb install -r "$GITHUB_WORKSPACE/spikes/subduction-native/expo-probe/android/app/build/outputs/apk/release/app-release.apk"
             echo "android-os=$(adb shell getprop ro.build.version.release)" >> "$GITHUB_WORKSPACE/artifacts/subduction-native/sources.txt"
             cd subduction-upstream/subduction_wasm
             pnpm exec playwright test native-interop.spec.ts --project=chromium --reporter=line
