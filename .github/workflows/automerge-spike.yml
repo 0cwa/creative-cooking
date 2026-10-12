@@ -319,6 +319,13 @@ jobs:
           path: spikes/automerge/native/expo-fixture/android/app/build/outputs/apk
           if-no-files-found: warn
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-web-device-fixtures
+          path: spikes/automerge/artifacts/android-bridge-*.am
+          if-no-files-found: warn
+
   android-expo-runtime:
     name: Android Expo 57 Hermes runtime and native instrumentation (qualified only on device)
     needs: automerge-c-android-core
@@ -331,6 +338,17 @@ jobs:
         with:
           name: automerge-expo-apks
           path: spikes/automerge/native/expo-fixture/android/app/build/outputs/apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: automerge-web-device-fixtures
+          path: spikes/automerge/artifacts
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - name: Install the pinned JS Automerge 3.5.0 peer for on-device sync
+        working-directory: spikes/automerge
+        run: npm install --no-audit --no-fund
       - name: Verify device acceleration capability
         shell: bash
         run: |
@@ -350,7 +368,10 @@ jobs:
         if: always()
         with:
           name: automerge-expo-device-evidence
-          path: spikes/automerge/artifacts/expo-*
+          path: |
+            spikes/automerge/artifacts/expo-*
+            spikes/automerge/artifacts/android-device-*.json
+            spikes/automerge/artifacts/android-device-*.log
           if-no-files-found: warn
 
   java-native-contract:

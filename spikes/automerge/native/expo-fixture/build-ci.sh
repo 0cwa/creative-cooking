@@ -26,6 +26,21 @@ mkdir -p android/app/src/androidTest/java/creative/cooking/automerge/spike
 mkdir -p android/app/src/androidTest/assets
 cp android-tests/AutomergeBridgeInstrumentedTest.java \
   android/app/src/androidTest/java/creative/cooking/automerge/spike/
+# ADB-only export is confined to the generated throwaway Expo fixture.
+mkdir -p android/app/src/main/java/creative/cooking/automerge/spike/expo
+cp android-tests/AutomergeInteropReceiver.java \
+  android/app/src/main/java/creative/cooking/automerge/spike/expo/
+python3 - <<'PY'
+from pathlib import Path
+manifest = Path("android/app/src/main/AndroidManifest.xml")
+source = manifest.read_text()
+receiver = ('<receiver android:name="creative.cooking.automerge.spike.expo.AutomergeInteropReceiver" '
+            'android:exported="true">'
+            '<intent-filter><action android:name="creative.cooking.automerge.spike.EXCHANGE"/>'
+            '</intent-filter></receiver>')
+assert "</application>" in source
+manifest.write_text(source.replace("</application>", receiver + "</application>"))
+PY
 cp "$OUTPUT/android-bridge-web-seed.am" android/app/src/androidTest/assets/web-seed.am
 cp "$OUTPUT/android-bridge-conflicted.am" android/app/src/androidTest/assets/conflicted.am
 cat >> android/app/build.gradle <<'GRADLE'

@@ -29,6 +29,9 @@ for attempt in $(seq 1 30); do
   sleep 2
 done
 test -s "$OUTPUT/expo-device-result.json" || { tail -n 100 "$OUTPUT/expo-device-logcat.txt"; exit 1; }
+# Real browser-equivalent JS binding to actual Android Rust JNI exchange.
+# Run while the release Expo Activity is foreground to retain receiver state.
+( cd ../.. && node android-device-sync.mjs | tee artifacts/android-device-sync.log )
 if [ -f android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk ]; then
   adb install -r android/app/build/outputs/apk/debug/app-debug.apk
   adb install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk

@@ -21,7 +21,6 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, String>;
-const JNI_PREFIX: &str = "creative.cooking.automerge.spike.CurrentCoreBridge";
 
 #[derive(Default)]
 struct Registry {
@@ -116,8 +115,13 @@ fn scalar_json(value: Value<'_>) -> JsonValue {
 }
 fn get_json(doc: &mut AutoCommit, keys: &[String]) -> Result<String> {
     let (object, leaf) = parent(doc, keys, false)?;
-    let value = doc.get(&object, leaf.as_str()).map_err(|e| e.to_string())?
-        .map(|(v, _)| scalar_json(v)).unwrap_or(JsonValue::Null);
+    let value = match doc.get(&object, leaf.as_str()).map_err(|e| e.to_string())? {
+        Some((Value::Object(ObjType::Text), id)) => {
+            json!(doc.text(&id).map_err(|e| format!("Text read: {e}"))?)
+        }
+        Some((v, _)) => scalar_json(v),
+        None => JsonValue::Null,
+    };
     Ok(value.to_string())
 }
 fn conflicts_json(doc: &mut AutoCommit, keys: &[String]) -> Result<String> {
