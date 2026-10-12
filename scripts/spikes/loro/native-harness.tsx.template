@@ -18,6 +18,8 @@ type HarnessResult = {
   nativeUpdateIdentity?: unknown;
   duplicateDiagnostics?: unknown;
   lifecycle?: unknown;
+  outOfOrder?: unknown;
+  historyRetention?: unknown;
   platform: string;
   platformApi: string;
   webPackage: string;
@@ -40,7 +42,8 @@ type HarnessResult = {
 };
 
 
-const PERSISTED_RESTART_KEY = 'creative-cooking-loro-spike-restart-v2';
+const PERSISTED_RESTART_KEY = 'creative-cooking-loro-spike-restart-v3';
+const PERSISTED_REVIEW_KEY = 'creative-cooking-loro-spike-review-v1';
 let activeNativeStage = 'before-module-import';
 function nativeStage(stage: string) {
   activeNativeStage = stage;
@@ -220,6 +223,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   let processRestart: { status: 'PASS' | 'PARTIAL'; previousRunId?: string; reason?: string } = {
     status: 'PARTIAL', reason: 'First process launch; persisted native data awaits an OS process relaunch'
   };
+  let reviewCheckpointRestored = false;
   nativeStage('persisted-read-start');
   if (typeof AsyncStorage?.getItem !== 'function') {
     throw new Error('AsyncStorage.getItem is unavailable; observed typeof=' + typeof AsyncStorage?.getItem);
@@ -249,6 +253,20 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     reloaded.import_(webUpdate);
     assertSemanticAndVersion(firstReload, reloaded.toJSON(), beforeReplay,
       reloaded.oplogVersion(), 'prior-process snapshot duplicate import');
+    // Review evidence is stored separately from the replicated document.
+    // A compacted CRDT cannot be trusted to reconstruct older losing writes.
+    const priorCheckpointRaw = await AsyncStorage.getItem(PERSISTED_REVIEW_KEY);
+    if (!priorCheckpointRaw) throw new Error('OS restart lost durable unresolved-review checkpoint');
+    const priorCheckpoint = JSON.parse(priorCheckpointRaw);
+    const priorValues = (priorCheckpoint.alternatives ?? [])
+      .map((alt: any) => alt.value).sort((a: number, b: number) => a - b);
+    if (priorCheckpoint.schema !== 1 || priorCheckpoint.concurrent !== true
+        || !semanticEqual(priorValues, [4, 6])
+        || !(priorCheckpoint.alternatives ?? []).every((alt: any) =>
+          typeof alt.actor === 'string' && typeof alt.changeId === 'string')) {
+      throw new Error('OS restart corrupted unresolved-review checkpoint');
+    }
+    reviewCheckpointRestored = true;
     processRestart = { status: 'PASS', previousRunId: previous.runId };
   }
 
@@ -294,6 +312,69 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
       + JSON.stringify({ before: afterMerge, after: afterRestart }));
   }
 
+  nativeStage('full-snapshot-review-history');
+  const fullSnapshotEvidence = reconstructNativeDisagreement(restarted, loro);
+  const alternatives = (fullSnapshotEvidence as any).alternatives ?? [];
+  if (!fullSnapshotEvidence.supported || !fullSnapshotEvidence.concurrent
+      || !semanticEqual(alternatives.map((alt: any) => alt.value).sort(), [4, 6])) {
+    throw new Error('full native snapshot lost unresolved scalar alternatives: '
+      + JSON.stringify(fullSnapshotEvidence));
+  }
+  const durableReview = {
+    schema: 1, concurrent: true,
+    alternatives: alternatives.map((alt: any) => ({
+      value: alt.value, actor: alt.actor, changeId: alt.changeId
+    })),
+    originalFullSnapshot: byteIdentity(snapshot)
+  };
+  nativeStage('durable-review-checkpoint-write');
+  await AsyncStorage.setItem(PERSISTED_REVIEW_KEY, JSON.stringify(durableReview));
+  if (!semanticEqual(JSON.parse((await AsyncStorage.getItem(PERSISTED_REVIEW_KEY)) ?? 'null'), durableReview)) {
+    throw new Error('durable unresolved-review checkpoint failed to read back');
+  }
+
+  // Exercise the published 1.10.3 ExportMode spelling (shallowSnapshot),
+  // not the web 1.16.4 spelling (shallow-snapshot). Trim only this expendable
+  // replica; the retained checkpoint is deliberately NOT part of its CRDT.
+  nativeStage('native-shallow-history-probe');
+  let shallowHistory: Record<string, unknown> = { status: 'PARTIAL' };
+  try {
+    const trimSource = new LoroDoc();
+    trimSource.import_(snapshot);
+    trimSource.setPeerId(909n);
+    trimSource.getMap('history-probe').set('later', 'edit');
+    trimSource.commit();
+    const shallowBytes = trimSource.export({
+      mode: 'shallowSnapshot', frontiers: trimSource.oplogFrontiers()
+    });
+    const trimmed = new LoroDoc();
+    trimmed.import_(shallowBytes);
+    if (!semanticEqual(trimSource.toJSON(), trimmed.toJSON())) {
+      throw new Error('native shallow snapshot lost current semantic state');
+    }
+    const trimmedEvidence = reconstructNativeDisagreement(trimmed, loro);
+    const remaining = (trimmedEvidence as any).alternatives ?? [];
+    const losingAlternativesStillInspectable =
+      trimmedEvidence.concurrent === true
+      && semanticEqual(remaining.map((alt: any) => alt.value).sort(), [4, 6]);
+    shallowHistory = {
+      status: 'PASS', shallowBytes: shallowBytes.byteLength,
+      currentStatePreserved: true, losingAlternativesStillInspectable,
+      requiresDurableReviewCheckpoint: !losingAlternativesStillInspectable
+    };
+  } catch (error) {
+    shallowHistory = {
+      status: 'PARTIAL', error: error instanceof Error ? error.message : String(error)
+    };
+  }
+  const historyRetention = {
+    fullSnapshot: 'PASS',
+    fullSnapshotAlternatives: durableReview.alternatives,
+    shallowSnapshot: shallowHistory,
+    checkpointWrittenAndReadBack: true,
+    checkpointRestoredAfterOsRestart: reviewCheckpointRestored
+  };
+
   // Reproduce the exact earlier failure, recording real vector identities and
   // operation history. A reordered JSON object is not a CRDT mutation.
   nativeStage('duplicate-prestate');
@@ -332,6 +413,41 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     beforeHistory: historyBefore,
     afterHistory: historyAfter,
     updateIdentity: byteIdentity(webUpdate)
+  };
+
+  // Two real Rust/UniFFI updates from one peer, delivered backwards and then
+  // repeated, must apply only when their causal dependency becomes available.
+  nativeStage('native-out-of-order-import');
+  const writer = new LoroDoc();
+  writer.setPeerId(707n);
+  const emptyVersion = writer.oplogVersion();
+  writer.getMap('causal-order').set('first', 'A');
+  writer.commit();
+  const firstIncrement = writer.export({ mode: 'updates', from: emptyVersion });
+  const afterFirstVersion = writer.oplogVersion();
+  writer.getMap('causal-order').set('second', 'B');
+  writer.commit();
+  const secondIncrement = writer.export({ mode: 'updates', from: afterFirstVersion });
+  const importer = new LoroDoc();
+  importer.import_(secondIncrement);
+  if ((importer.toJSON() as Record<string, any> | null)?.['causal-order']?.second === 'B') {
+    throw new Error('out-of-order native update applied without missing predecessor');
+  }
+  importer.import_(firstIncrement);
+  const expectedOrdered = writer.toJSON();
+  if (!semanticEqual(importer.toJSON(), expectedOrdered)
+      || !importer.oplogVersion().eq(writer.oplogVersion())) {
+    throw new Error('native out-of-order import failed to converge after predecessor');
+  }
+  const orderedVersion = importer.oplogVersion();
+  importer.import_(secondIncrement);
+  importer.import_(firstIncrement);
+  assertSemanticAndVersion(expectedOrdered, importer.toJSON(), orderedVersion,
+    importer.oplogVersion(), 'native out-of-order duplicate imports');
+  const outOfOrder = {
+    status: 'PASS', firstUpdateBytes: firstIncrement.byteLength,
+    secondUpdateBytes: secondIncrement.byteLength,
+    heldCausalSuccessorUntilPredecessor: true, duplicateImportsIdempotent: true
   };
 
   // A third native operation is causally AFTER both conflicting writes. Web
@@ -455,6 +571,22 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     throw new Error('Published native movable-list FFI len/insert/mov unavailable: '
       + JSON.stringify(movableListBindingGap));
   }
+  // Minimal real-runtime reproducer for the broken published extension.ts:
+  // push() is present but invokes absent this.length() instead of FFI len().
+  const pushReproducer: { invoked: boolean; error?: string } = { invoked: false };
+  if (movableListBindingGap.publishedPushCallsMissingLength) {
+    pushReproducer.invoked = true;
+    try {
+      movable.push('should-not-insert');
+      throw new Error('published movable-list push unexpectedly succeeded');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/length|not a function|undefined/u.test(message) || movable.len() !== 0) {
+        throw new Error('unexpected published push failure: ' + message);
+      }
+      pushReproducer.error = message;
+    }
+  }
   movable.insert(movable.len(), 'step-a');
   movable.insert(movable.len(), 'step-b');
   movable.mov(1, 0);
@@ -494,6 +626,10 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     concurrentMerge: 'PASS',
     snapshotReload: 'PASS',
     duplicateImport: 'PASS',
+    outOfOrderImport: 'PASS',
+    fullHistoryRetention: 'PASS',
+    shallowHistoryProbe: shallowHistory.status === 'PASS' ? 'PASS' : 'PARTIAL',
+    durableReviewCheckpoint: reviewCheckpointRestored ? 'PASS' : 'PARTIAL',
     causalResolution: 'PASS',
     movableList: 'PASS',
     text: 'PASS',
@@ -515,6 +651,8 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     nativeResolutionUpdateBytes: Array.from(new Uint8Array(nativeResolutionUpdate)),
     nativeUpdateIdentity: byteIdentity(nativeUpdate),
     duplicateDiagnostics,
+    outOfOrder,
+    historyRetention,
     lifecycle,
     platform: Platform.OS,
     platformApi: nativePackageLabel,
@@ -526,7 +664,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     afterRestart: afterRestart['recipe:recipe-1'],
     duplicateImportIdempotent,
     movableList: structureJson.steps,
-    movableListBindingGap,
+    movableListBindingGap: { ...movableListBindingGap, pushReproducer },
     text: structureJson.method,
     mergeableMap,
     nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),
