@@ -8,6 +8,8 @@ android {
   namespace 'expo.modules.subductionnative'
   defaultConfig {
     minSdkVersion 26
+    versionCode 1
+    versionName "0.0.1"
   }
   sourceSets {
     main {

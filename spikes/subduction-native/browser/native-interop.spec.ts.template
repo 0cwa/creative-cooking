@@ -21,9 +21,10 @@ const cli=process.env.CC_NATIVE_CLI, fixturesPath=process.env.CC_NATIVE_FIXTURE;
 const fixtureVerifier=process.env.CC_NATIVE_VERIFIER, outputDir=process.env.CC_NATIVE_OUTPUT;
 const mode=process.env.CC_NATIVE_MODE??'host', hostBin=process.env.CC_NATIVE_HOST_BIN;
 const iosBundleId=process.env.CC_NATIVE_IOS_BUNDLE??'dev.creativecooking.subductionnative';
+const androidPackage=process.env.CC_NATIVE_ANDROID_PACKAGE??'dev.creativecooking.subductionnative';
 if(!cli||!fixturesPath||!fixtureVerifier||!outputDir)
   throw new Error('Missing CC_NATIVE_{CLI,FIXTURE,VERIFIER,OUTPUT} environment');
-if(!['host','ios'].includes(mode))throw new Error('CC_NATIVE_MODE must be host or ios');
+if(!['host','ios','android'].includes(mode))throw new Error('CC_NATIVE_MODE must be host, ios or android');
 if(mode==='host'&&!hostBin)throw new Error('Missing CC_NATIVE_HOST_BIN');
 const fixtures=JSON.parse(readFileSync(fixturesPath,'utf8')) as Fixtures;
 expect(fixtures.scenarios.map(s=>s.engine)).toEqual(['automerge','loro']);
@@ -169,13 +170,49 @@ function request(phase:'first'|'relaunch',count:number,publishIndex:number|null)
     }))};
 }
 function runOnNative(phase:'first'|'relaunch',expectedCount:number,publishIndex:number|null){
-  const input=JSON.stringify(request(phase,expectedCount,publishIndex));
+  const input=JSON.stringify({...request(phase,expectedCount,publishIndex),
+    relayWs:mode==='android'?'ws://10.0.2.2:'+port:ws});
   let response:string;
   if(mode==='host'){
     const req=join(root,phase+'-host-request.json'),res=join(root,phase+'-host-result.json');
     writeFileSync(req,input);
     execFileSync(hostBin!,[req,res],{encoding:'utf8',timeout:130000});
     response=readFileSync(res,'utf8');
+  }else if(mode==='android'){
+    // Android emulator 10.0.2.2 reaches the host's loopback relay. Protocol
+    // executes inside the installed Expo Android process, NOT a Node proxy.
+    const nativeRequest=join(root,phase+'-android-request.json');
+    writeFileSync(nativeRequest,input);
+    execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
+    execFileSync('adb',['push',nativeRequest,'/data/local/tmp/cc-native-request.json'],{timeout:12000});
+    execFileSync('adb',['shell','run-as',androidPackage,'cp',
+      '/data/local/tmp/cc-native-request.json','files/subduction-request.json'],{timeout:12000});
+    execFileSync('adb',['shell','run-as',androidPackage,'rm',
+      '-f','files/subduction-result.json'],{timeout:12000});
+    execFileSync('adb',['shell','am','start','-n',
+      androidPackage+'/'+androidPackage+'.MainActivity'],{timeout:20000});
+    let observed:string|undefined;
+    const deadline=Date.now()+150000;
+    while(Date.now()<deadline){
+      try{
+        const out=execFileSync('adb',['shell','run-as',androidPackage,'cat',
+          'files/subduction-result.json'],{encoding:'utf8',timeout:12000});
+        if(out.includes('"status"')){observed=out;break;}
+      }catch{/* Rust app is still starting. */}
+      execFileSync('sleep',['0.35']);
+    }
+    try{
+      if(!observed){
+        let logs='logcat unavailable';
+        try{logs=execFileSync('adb',['logcat','-d','-t','250'],
+          {encoding:'utf8',timeout:12000}).slice(-25000);}catch{/* ignore */}
+        writeFileSync(join(outputDir!,'android-logcat-failure.txt'),logs);
+        throw new Error('Android Expo JNI process never wrote real Subduction JSON');
+      }
+      response=observed;
+    }finally{
+      execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
+    }
   }else{
     // Real iOS Simulator application process. No Node or WebView runs the native protocol.
     const directory=execFileSync('xcrun',['simctl','get_app_container','booted',iosBundleId,'data'],
