@@ -182,7 +182,7 @@ jobs:
               : 'Published native Rust archive absent; compiled APK is NOT native-runtime proof'
           };
           fs.writeFileSync('artifacts/loro/android/x86_64-native-capability.json',
-            JSON.stringify(evidence, null, 2) + '\\n');
+            JSON.stringify(evidence, null, 2));
           console.log(JSON.stringify(evidence));
           NODE
       - name: Hash Android ABI inventory artifacts
