@@ -1,0 +1,16 @@
+{
+  "name": "creative-cooking-automerge-expo-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "prebuild:android": "expo prebuild --platform android --no-install --clean"
+  },
+  "dependencies": {
+    "@creative-cooking/automerge-spike": "file:../expo-module",
+    "expo": "~57.0.17",
+    "expo-modules-core": "~57.0.17",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  }
+}

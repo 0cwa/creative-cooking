@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'creative.cooking.automerge.spike'
+version = '0.0.0'
+
+android {
+  namespace 'creative.cooking.automerge.spike.expo'
+  defaultConfig {
+    minSdkVersion 26
+    versionCode 1
+    versionName '0.0.0'
+  }
+  // The JNI facade is single-sourced from the current-core spike. The
+  // Expo fixture root is native/expo-fixture/android on this research branch.
+  sourceSets {
+    main {
+      java.srcDir(rootProject.file('../../rust-jni'))
+    }
+  }
+}

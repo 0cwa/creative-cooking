@@ -1,0 +1,9 @@
+{
+  "name": "creative-cooking-automerge-polygen-probe",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@callstack/polygen-cli": "0.2.1",
+    "@callstack/polygen-config": "0.2.1"
+  }
+}

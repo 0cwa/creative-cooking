@@ -1,0 +1,17 @@
+{
+  "name": "creative-cooking-automerge-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "scenarios": "node scenarios.mjs",
+    "benchmark": "node --expose-gc benchmark.mjs",
+    "bundle": "node bundle-impact.mjs",
+    "test": "npm run scenarios && npm run benchmark && npm run bundle"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.0"
+  }
+}

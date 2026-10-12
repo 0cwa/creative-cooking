@@ -1,0 +1,11 @@
+{
+  "name": "@creative-cooking/automerge-spike",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.js",
+  "files": ["android", "expo-module.config.json", "index.js"],
+  "peerDependencies": {
+    "expo": "~57.0.17",
+    "react-native": "0.86.3"
+  }
+}
