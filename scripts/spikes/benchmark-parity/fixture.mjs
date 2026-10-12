@@ -76,6 +76,8 @@ export const TRACE = Object.freeze({
   ],
   warmA: [{ type: 'recipe', id: 'recipe-0040', field: 'title', value: fixed('Phone edit', 48) }],
   warmB: [{ type: 'pantry', id: 'pantry-0040', field: 'preference', value: 5 }],
+  warmFollowupA: [{ type: 'recipe', id: 'recipe-0041', field: 'title', value: fixed('Phone followup edit', 48) }],
+  warmFollowupB: [{ type: 'pantry', id: 'pantry-0041', field: 'preference', value: 4 }],
   divergenceA: [
     { type: 'recipe', id: 'recipe-0045', field: 'portions', value: 4 },
     ...Array.from({ length: 20 }, (_, i) => ({ type: 'pantry', id: 'pantry-' + pad(80 + i, 4),
