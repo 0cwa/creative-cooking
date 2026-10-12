@@ -29,7 +29,7 @@ for (const engine of ['automerge','loro']) {
   }
   assert.equal(e.memory.length, n);
   assert.equal(e.moduleInitialization.samples.length, 5);
-  for (const key of ['coldSecondDeviceBootstrap','warmIncrementalSync','warmFollowupSync','rawUpdateExchange','longOfflineCatchUp','thirdDeviceBootstrap','history60EditCatchUp']) {
+  for (const key of ['coldSecondDeviceBootstrap','warmIncrementalSync','warmFollowupSync','rawUpdateExchange','longOfflineCatchUp','thirdDeviceBootstrap','duplicateUpdateDelivery','syncAfterReload','history60EditCatchUp']) {
     const samples = e.scenarioEvidence[key];
     assert.equal(samples.length, n, engine + ' missing transfer samples ' + key);
     for (const sample of samples) {
@@ -39,6 +39,10 @@ for (const engine of ['automerge','loro']) {
     }
   }
   assert.ok(e.scenarioEvidence.singleFieldEdit.every(s => s.incrementalBytes > 0));
+  assert.ok(e.scenarioEvidence.history60EditCatchUp.every(s =>
+    s.snapshotBytesAtEdits20_40_60.length === 3 &&
+    s.historyMemoryByBlock.length === 3 &&
+    s.historyMemoryByBlock.every(m => m.rssBytes > 0 && m.v8HeapUsedBytes > 0)));
   assert.ok(e.scenarioEvidence.longOfflineCatchUp.every(s =>
     JSON.stringify(s.conflictValues) === JSON.stringify([4,6])));
 }
