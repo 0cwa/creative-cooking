@@ -85,27 +85,27 @@ The build must be inspected for which scripts actually load on initial route nav
 
 ## Results and exact executable run artifacts
 
-**Passing dual-engine CI evidence:** [GitHub Actions run #38187058455](https://github.com/0cwa/creative-cooking/actions/runs/38187058455), from benchmark PR head `bfb61fce67fc82bb2a7050bd32c4ee788a185994` (five measured Node trials, Node 22.13.0 on hosted Linux/x64; all three real static Chromium exports passed). The latest harness additionally includes per-history-block memory observations and equivalent client-only lazy module import in both browser probes. Those subsequent changes must use their own new artifacts, not the historical timings below.
+**Passing dual-engine CI evidence for current harness (including per-history memory and both engines lazy-loaded):** [GitHub Actions run #38187392524](https://github.com/0cwa/creative-cooking/actions/runs/38187392524), from benchmark PR head `4da61d280f68ca18a1d4d34d4fa00538aecc5b32` (five measured Node trials, Node 22.13.0 on hosted Linux/x64; all three real static Chromium exports passed, including equivalent client-only lazy imports and per-20-edit process-memory samples).
 
 Exact passing artifacts:
-- **[Node JSON/CSV + dependency lockfile](https://github.com/0cwa/creative-cooking/actions/runs/38187058455/artifacts/11719947744)** — exact raw times, 5-trial median/p95, transfer bytes, sync rounds, snapshots, process-memory categories, package-tree hashes, npm integrity strings, deterministic fixture and trace SHA-256.
-- **[Chromium browser results, static asset inventories and three screenshots](https://github.com/0cwa/creative-cooking/actions/runs/38187058455/artifacts/11720580442)** — control/Automerge/Loro browser JSON, console/errors, WASM requests, offline/reload checks, network bytes and raw/gzip/Brotli static asset totals.
+- **[Node JSON/CSV + dependency lockfile](https://github.com/0cwa/creative-cooking/actions/runs/38187392524/artifacts/11720396970)** — exact raw times, 5-trial median/p95, transfer bytes, sync rounds, snapshots, process-memory categories, package-tree hashes, npm integrity strings, deterministic fixture and trace SHA-256.
+- **[Chromium browser results, static asset inventories and three screenshots](https://github.com/0cwa/creative-cooking/actions/runs/38187392524/artifacts/11719893915)** — control/Automerge/Loro browser JSON, console/errors, WASM requests, offline/reload checks, network bytes and raw/gzip/Brotli static asset totals.
 
-### Node latency and actual wire counts — passing evidence from #38187058455
+### Node latency and actual wire counts — passing evidence from #38187392524
 
 All times in **milliseconds**. Latency values are the **median (p95)** of five samples; tail statistics with five samples are exploratory. Transfer bytes are **A → B / B → A** from `scenarioEvidence` (the common trace yields the same payload bytes across this run). The engines use different APIs/wire formats; this table is a boundary-aware record **not a speed ranking**.
 
 | Operation | Automerge latency (median / p95) | Loro latency (median / p95) | Automerge wire bytes A→B / B→A | Loro wire bytes A→B / B→A |
 | --- | ---: | ---: | ---: | ---: |
-| **Bootstrap from a truly empty second device** | 1,390.607 / 1,409.886 | 142.076 / 386.915 | 739,371 / 126 (SyncState) | 678,010 / 0 (full snapshot) |
-| **First warm exchange after acknowledged bootstrap** | 1,118.890 / 1,120.487 | 121.463 / 269.356 | 369,995 / 369,909 (history-sized resend) | 194 / 152 (deltas) |
-| **Follow-up exchange in the established session** | 2.569 / 3.085 | 146.259 / 271.699 | 498 / 423 (incremental) | 193 / 150 (incremental) |
-| **Plain change/update exchange (not SyncState)** | 8.081 / 9.138 | 146.944 / 252.371 | 242 / 167 (getChanges) | 194 / 152 (version vectors) |
-| Snapshot serialize | 37.176 / 37.334 | 77.818 / 83.271 | — | — |
-| Cold snapshot load | 811.741 / 816.708 | 2.567 / 2.585 | — | — |
-| Prepare usable full logical projection | 9.475 / 10.035 | 310.095 / 450.309 | — | — |
-| Single-field edit | 2.938 / 2.959 | 41.138 / 105.465 | — | — |
-| Long offline divergent catch-up | 14.996 / 15.452 | 1,352.177 / 2,405.262 | Raw changes (see JSON) | Version-vector deltas (see JSON) |
+| **Bootstrap from a truly empty second device** | 1,050.015 / 1,162.561 | 227.406 / 430.237 | 739,371 / 126 (SyncState) | 678,010 / 0 (full snapshot) |
+| **First warm exchange after acknowledged bootstrap** | 825.018 / 825.344 | 70.958 / 292.624 | 369,995 / 369,909 (history-sized resend) | 194 / 152 (deltas) |
+| **Follow-up exchange in the established session** | 1.647 / 1.782 | 165.844 / 237.355 | 498 / 423 (incremental) | 193 / 150 (incremental) |
+| **Plain change/update exchange (not SyncState)** | 7.059 / 7.909 | 257.738 / 326.537 | 242 / 167 (getChanges) | 194 / 152 (version vectors) |
+| Snapshot serialize | 29.068 / 29.441 | 65.063 / 68.589 | — | — |
+| Cold snapshot load | 597.634 / 606.522 | 2.305 / 2.419 | — | — |
+| Prepare usable full logical projection | 8.869 / 9.448 | 290.511 / 417.792 | — | — |
+| Single-field edit | 2.510 / 2.766 | 76.705 / 177.365 | — | — |
+| Long offline divergent catch-up | 11.785 / 12.964 | 1,963.059 / 2,822.058 | Raw changes (see JSON) | Version-vector deltas (see JSON) |
 
 **Complete logical snapshot bytes:** Automerge 369,612; Loro 678,010. Cold readiness should consider **both** load and full-view preparation, not one API's low-level decode time in isolation. The canonical logical dataset hashes to `50c6c264865aab9a134de07cc7ba784fb6bafe0b8d6da4a1eaa337e0572e04d2`.
 
@@ -113,17 +113,17 @@ The first SyncState exchange after initial bootstrap transmitted unexpectedly la
 
 ### Real Expo static export and initial Chromium transfer
 
-**Passing Chromium run:** same [run #38187058455](https://github.com/0cwa/creative-cooking/actions/runs/38187058455). All engines initialized and loaded their WASM from `/creative-cooking/`, persisted and reloaded snapshots, applied new edits while `context.setOffline(true)`, and produced **zero JavaScript page errors and failed requests**. Browser service workers were blocked intentionally; this verifies browser-local CRDT function, *not* installed-PWA offline shell behavior.
+**Passing Chromium run:** same [run #38187392524](https://github.com/0cwa/creative-cooking/actions/runs/38187392524). All engines initialized and loaded their WASM from `/creative-cooking/`, persisted and reloaded snapshots, applied new edits while `context.setOffline(true)`, and produced **zero JavaScript page errors and failed requests**. Browser service workers were blocked intentionally; this verifies browser-local CRDT function, *not* installed-PWA offline shell behavior.
 
 | Static export / HTTP traffic | Control | Automerge probe | Loro probe |
 | --- | ---: | ---: | ---: |
-| Entire Expo export, raw bytes | 13,869,250 | 17,585,008 | 17,403,752 |
-| Entire export, gzip bytes (offline recompression) | 4,785,180 | 5,948,277 | 5,931,775 |
-| Entire export, Brotli bytes (offline recompression) | 3,272,480 | 4,078,659 | 4,079,002 |
-| Brotli delta from control | — | +806,179 | +806,522 |
-| Initial route load, CDP encoded network bytes (including HTTP headers) | 302,082 | 1,108,186 | 1,108,111 |
+| Entire Expo export, raw bytes | 13,869,379 | 17,584,924 | 17,403,752 |
+| Entire export, gzip bytes (offline recompression) | 4,784,091 | 5,948,214 | 5,931,775 |
+| Entire export, Brotli bytes (offline recompression) | 3,271,966 | 4,079,784 | 4,078,976 |
+| Brotli delta from control | — | +807,818 | +807,010 |
+| Initial route load, CDP encoded network bytes (including HTTP headers) | 302,111 | 1,109,672 | 1,108,111 |
 
-These static export sizes include the **unchanged app shell plus each temporary experimental benchmark route**, not a production-integrated migration or installed npm archive size. Initial network transfer is a separate Chromium measurement and is not the sum of all exported files. The browser JSON contains the actual Brotli asset transfer sizes, WASM URLs and code-splitting/chunk requests; the more recent branch also probes explicit lazy imports for both engines. A production lazy-loaded route and service-worker cache strategy still require an integration-specific qualification.
+These static export sizes include the **unchanged app shell plus each temporary experimental benchmark route**, not a production-integrated migration or installed npm archive size. Initial network transfer is a separate Chromium measurement and is not the sum of all exported files. The browser JSON contains the actual Brotli asset transfer sizes, WASM URLs and code-splitting/chunk requests; this run actually loads separate engine JS chunks only after browser hydration for both engines. A production lazy-loaded route and service-worker cache strategy still require an integration-specific qualification.
 
 ## Native worklane evidence (no manufactured parity)
 
