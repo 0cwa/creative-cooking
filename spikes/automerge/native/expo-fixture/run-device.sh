@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 OUTPUT="../../artifacts"
+mkdir -p "$OUTPUT"
 APK="android/app/build/outputs/apk/release/app-release.apk"
 if printenv AUTOMERGE_EXPO_APK >/dev/null; then APK="$AUTOMERGE_EXPO_APK"; fi
 test -s "$APK"

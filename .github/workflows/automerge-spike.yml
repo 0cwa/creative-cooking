@@ -312,6 +312,13 @@ jobs:
             spikes/automerge/artifacts/expo-gradle-build.log
           if-no-files-found: warn
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automerge-expo-apks
+          path: spikes/automerge/native/expo-fixture/android/app/build/outputs/apk
+          if-no-files-found: warn
+
   android-expo-runtime:
     name: Android Expo 57 Hermes runtime and native instrumentation (qualified only on device)
     needs: automerge-c-android-core

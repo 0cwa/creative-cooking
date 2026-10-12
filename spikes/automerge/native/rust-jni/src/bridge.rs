@@ -281,7 +281,7 @@ pub extern "system" fn Java_creative_cooking_automerge_spike_CurrentCoreBridge_a
         let data=bytes(env, data)?;
         with_doc(id, |doc| {
             // Failure must not leave a partially applied payload in the live document.
-            let mut next=doc.fork();
+            let mut next=doc.clone();
             let applied=next.load_incremental(&data).map_err(|e| format!("Apply changes: {e}"))?;
             *doc=next;
             Ok(applied as jint)
@@ -332,7 +332,7 @@ pub extern "system" fn Java_creative_cooking_automerge_spike_CurrentCoreBridge_r
             let Registry{docs, sessions, ..}=&mut *r;
             let doc=docs.get_mut(&doc_id).ok_or(format!("Unknown doc: {doc_id}"))?;
             let state=sessions.get_mut(&session_id).ok_or(format!("Unknown session: {session_id}"))?;
-            let mut next=doc.fork();
+            let mut next=doc.clone();
             let mut next_state=state.clone();
             next.sync().receive_sync_message(&mut next_state, message).map_err(|e| format!("Sync receive: {e}"))?;
             *doc=next;
