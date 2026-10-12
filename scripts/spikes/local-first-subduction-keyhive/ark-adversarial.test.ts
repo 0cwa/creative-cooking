@@ -14,7 +14,7 @@ import { Repo } from "@automerge/automerge-repo/slim";
 import { initFromBase64Wasm } from "@automerge/automerge-subduction/slim";
 import { wasmBase64 } from "@automerge/automerge-subduction/wasm-base64";
 import {
-  Access, CiphertextStore, ContactCard, DocumentId, Keyhive, Signer,
+  Access, Archive, ChangeId, CiphertextStore, ContactCard, DocumentId, Keyhive, Signer,
 } from "@keyhive/keyhive/slim";
 import {
   isUnprotectedDoc, initKeyhiveWasm, peerIdFromSigner,
@@ -56,6 +56,8 @@ let docId: Uint8Array;
 let hive: LegacyAutomergeRepoKeyhive;
 let repo: Repo;
 let policy: ReturnType<LegacyAutomergeRepoKeyhive["buildServerSubductionPolicy"]>;
+let previouslyEncrypted: { commitId: string; plaintext: Uint8Array; ciphertext: Uint8Array } | undefined;
+let archiveDelivered = false;
 
 async function assertPermission(
   id: string, expected: "grant" | "deny", operation: () => Promise<unknown>, 
@@ -179,11 +181,103 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
         caveat: "not a relay server or second-device decryption proof" });
   });
 
+
+  it("rejects tampered signed contact-card pairing", async () => {
+    const malformed = JSON.parse(outsider.card.toJson());
+    const part = malformed.Rotate ?? malformed;
+    if (!part.signature || !Array.isArray(part.signature)) {
+      throw new Error("Upstream contact-card signature format changed; do not silently skip authentication");
+    }
+    part.signature[0] ^= 1;
+    const modified = JSON.stringify(malformed);
+    await assertPermission("forged-contact-card", "deny", async () => {
+      await owner.keyhive.receiveContactCard(ContactCard.fromJson(modified));
+    }, { bytes: modified.length, cryptography: "Ed25519 signed Rotate contact card, one signature byte corrupted" });
+  });
+
+  it("delivers genuine signed Keyhive membership to separate reader and relay identities", async () => {
+    const archive = await owner.keyhive.toArchive();
+    const archiveBytes = archive.toBytes();
+    for (const participant of [reader, relay, outsider, editor]) {
+      await participant.keyhive.ingestArchive(new Archive(archiveBytes));
+    }
+    archiveDelivered = true;
+    record("signed-membership-propagation", "separate identities ingest archive", "separate identities ingest archive",
+      { archiveBytes: archiveBytes.length, format: "Keyhive WASM Archive; *not* a network sync session" });
+  });
+
+  it("verifies a second device can decrypt but a no-key relay and outsider cannot", async () => {
+    expect(archiveDelivered).toBe(true);
+    const payload = new TextEncoder().encode("synthetic family cooking secret - protected cross-client");
+    const commitId = createHash("sha256").update(payload).digest("hex");
+    const outgoing = await new KeyhiveBlobInterceptor(owner.keyhive, new PromiseQueue())
+      .transformOutgoing(docUrl.slice("automerge:".length) as never, commitId, [], payload);
+    expect(outgoing).not.toBeNull();
+    const read = async (participant: Subject) => {
+      const interceptor = new KeyhiveBlobInterceptor(participant.keyhive, new PromiseQueue());
+      return interceptor.transformIncoming(docUrl.slice("automerge:".length) as never, commitId, outgoing!);
+    };
+    const readerValue = await read(reader);
+    const relayValue = await read(relay);
+    const strangerValue = await read(outsider);
+    record("cross-device-read", "reader decrypts", readerValue ? "reader decrypts" : "reader cannot decrypt",
+      { plaintextBytes: payload.length, ciphertextBytes: outgoing!.byteLength, archiveSync: true });
+    record("no-key-relay", "relay cannot decrypt", relayValue ? "relay decrypts" : "relay cannot decrypt",
+      { ciphertextBytes: outgoing!.byteLength });
+    record("cross-household-decrypt", "outsider cannot decrypt", strangerValue ? "outsider decrypts" : "outsider cannot decrypt");
+    expect(readerValue && bytes(readerValue)).toEqual(bytes(payload));
+    expect(relayValue).toBeNull();
+    expect(strangerValue).toBeNull();
+    previouslyEncrypted = { commitId, plaintext: payload, ciphertext: outgoing! };
+  });
+
+  it("rotates a role from Read -> Edit -> revoked -> Read without residual Edit", async () => {
+    const device = await subject();
+    const card = ContactCard.fromJson(device.card.toJson());
+    await hive.addMemberToDoc(docUrl, card, Access.read());
+    await assertPermission("upgrade-start-read", "deny", () =>
+      policy.authorizePut(asPeer(device.signer.verifyingKey) as never,
+        asAuthor(device.signer.verifyingKey) as never, asSid(docId) as never));
+    await hive.addMemberToDoc(docUrl, card, Access.edit());
+    await assertPermission("upgrade-edit", "grant", () =>
+      policy.authorizePut(asPeer(device.signer.verifyingKey) as never,
+        asAuthor(device.signer.verifyingKey) as never, asSid(docId) as never));
+    await hive.revokeMemberFromDoc(docUrl, device.card.id);
+    await assertPermission("downgrade-revoked", "deny", () =>
+      policy.authorizePut(asPeer(device.signer.verifyingKey) as never,
+        asAuthor(device.signer.verifyingKey) as never, asSid(docId) as never));
+    await hive.addMemberToDoc(docUrl, card, Access.read());
+    await assertPermission("downgrade-read", "deny", () =>
+      policy.authorizePut(asPeer(device.signer.verifyingKey) as never,
+        asAuthor(device.signer.verifyingKey) as never, asSid(docId) as never));
+    await assertPermission("downgrade-fetch", "grant", () =>
+      policy.authorizeFetch(asPeer(device.signer.verifyingKey) as never, asSid(docId) as never));
+  });
+
   it("revokes Read from an authorized identity at the policy boundary", async () => {
     await hive.revokeMemberFromDoc(docUrl, reader.card.id);
     await assertPermission("read-revoked", "deny", () =>
       policy.authorizeFetch(asPeer(reader.signer.verifyingKey) as never, asSid(docId) as never));
     // An offline device's old plaintext and old keys are *not* erasable.
+  });
+
+
+  it("probes revoked reader's fresh-key access after real Keyhive archive propagation", async () => {
+    expect(previouslyEncrypted).toBeDefined();
+    const latestArchive = await owner.keyhive.toArchive();
+    await reader.keyhive.ingestArchive(new Archive(latestArchive.toBytes()));
+    const post = new TextEncoder().encode("never disclose this post-revocation recipe");
+    const postCommit = createHash("sha256").update(post).digest("hex");
+    const outgoing = await new KeyhiveBlobInterceptor(owner.keyhive, new PromiseQueue())
+      .transformOutgoing(docUrl.slice("automerge:".length) as never, postCommit, [], post);
+    expect(outgoing).not.toBeNull();
+    const readerInterceptor = new KeyhiveBlobInterceptor(reader.keyhive, new PromiseQueue());
+    const current = await readerInterceptor.transformIncoming(docUrl.slice("automerge:".length) as never,
+      postCommit, outgoing!);
+    record("revoked-reader-future-key", "deny", current ? "grant" : "deny",
+      { archiveBytes: latestArchive.toBytes().length, ciphertextBytes: outgoing!.length,
+        note: "archived historical plaintext is not remotely erasable" });
+    expect(current, "revoked reader must not decrypt future key epoch").toBeNull();
   });
 
   it("rejects forwarding of an editor's signed write by an ungranted requester (KNOWN UPSTREAM GAP)", async () => {
