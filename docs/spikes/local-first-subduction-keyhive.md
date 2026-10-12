@@ -248,18 +248,18 @@ The *old* AES-GCM fixtures with `--auth open` never established Keyhive E2EE. Th
 
 ### 10.3.1. New independent forged-revocation proof: pinned FAIL, upstream fix PASS
 
-The **same** unmodified owned test, [revocation-proof-regression.rs](../../scripts/spikes/local-first-subduction-keyhive/revocation-proof-regression.rs), was copied to two *separate* exact upstream Keyhive checkouts (no upstream authorization patches). Mallory, a distinct genuine Ed25519 signer, submitted a signed \`StaticRevocation\` to evict Bob from a synthetic cooking document, fraudulently citing Alice's founding delegation as its proof. The test insists that \`receive_revocation\` reject the operation *and* Bob retain Read. Independent [run #38267512881](https://github.com/0cwa/creative-cooking/actions/runs/38267512881), [reproduction transcripts and resolved Cargo.lock files](https://github.com/0cwa/creative-cooking/actions/runs/38267512881/artifacts/11755023440):
+The **same** unmodified owned test, [revocation-proof-regression.rs](../../scripts/spikes/local-first-subduction-keyhive/revocation-proof-regression.rs), was copied to two *separate* exact upstream Keyhive checkouts (no upstream authorization patches). Mallory, a distinct genuine Ed25519 signer, submitted a signed `StaticRevocation` to evict Bob from a synthetic cooking document, fraudulently citing Alice's founding delegation as its proof. The test insists that `receive_revocation` reject the operation *and* Bob retain Read. Independent [run #38267512881](https://github.com/0cwa/creative-cooking/actions/runs/38267512881), [reproduction transcripts and resolved Cargo.lock files](https://github.com/0cwa/creative-cooking/actions/runs/38267512881/artifacts/11755023440):
 
 | Pin used at runtime | Actual signed-revocation outcome | Strict test result |
 | --- | --- | --- |
-| **Pinned candidate** Keyhive \`b7968be799705492428c94226ca28042c733a9e0\` | \`observed=UNAUTHORIZED_REVOKE_ACCEPTED\` | **FAIL, 0/1 passed.** Prior security expectation violated |
-| **Official upstream security fix** \`a864f5c8159215a03fbdc5f0d042dff47f3ac0c0\` (PR #250) | \`observed=DENY\`, original Read retained | **PASS, 1/1 passed.** Same regression test |
+| **Pinned candidate** Keyhive `b7968be799705492428c94226ca28042c733a9e0` | `observed=UNAUTHORIZED_REVOKE_ACCEPTED` | **FAIL, 0/1 passed.** Prior security expectation violated |
+| **Official upstream security fix** `a864f5c8159215a03fbdc5f0d042dff47f3ac0c0` (PR #250) | `observed=DENY`, original Read retained | **PASS, 1/1 passed.** Same regression test |
 
-Rust **1.91.0**; \`cargo test -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture\`; the source revisions are pinned, but *both upstream Cargo.lock files were stale when using \`--locked\`*, so Cargo resolved dependencies in temporary CI checkouts, captured both resulting lockfiles in the artifact, and tested the resulting executable graphs. Exact transitive dependency resolution therefore must be preserved with the attached locks for archival reproducibility. The first attempted run with \`--locked\` was correctly classified as **dependency setup failure**, **not** security evidence. The later successful comparison proves only the concrete Keyhive-core revocation witness acceptance at these source revisions; it does not demonstrate a forged Subduction wire request, remote key exfiltration, or any exploit against a production service. The security-red original test MUST NOT be suppressed.
+Rust **1.91.0**; `cargo test -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture`; the source revisions are pinned, but *both upstream Cargo.lock files were stale when using `--locked`*, so Cargo resolved dependencies in temporary CI checkouts, captured both resulting lockfiles in the artifact, and tested the resulting executable graphs. Exact transitive dependency resolution therefore must be preserved with the attached locks for archival reproducibility. The first attempted run with `--locked` was correctly classified as **dependency setup failure**, **not** security evidence. The later successful comparison proves only the concrete Keyhive-core revocation witness acceptance at these source revisions; it does not demonstrate a forged Subduction wire request, remote key exfiltration, or any exploit against a production service. The security-red original test MUST NOT be suppressed.
 
 To rerun just these security gates in independent local checkouts:
 
-\`\`\`bash
+```bash
 git clone https://github.com/inkandswitch/keyhive keyhive-old
 git -C keyhive-old checkout b7968be799705492428c94226ca28042c733a9e0
 git clone https://github.com/inkandswitch/keyhive keyhive-fixed
@@ -270,9 +270,9 @@ for d in keyhive-old keyhive-fixed; do
   (cd "$d" && cargo +1.91.0 test -p keyhive_core \
     --test creative_cooking_revocation_proof -- --nocapture)
 done
-\`\`\`
+```
 
-**Production gate:** update *coherently* with upstream-reviewed revocation hardening **and** retest across ARK/Keyhive, browser, Subduction Rust, persistence, device invite, offline queue, and downgrade semantics. Keyhive's \`a864f5c\` fix **does not eliminate** the proven legacy-ID or requester-Relay bypass, and is not a reviewed production cryptosystem.
+**Production gate:** update *coherently* with upstream-reviewed revocation hardening **and** retest across ARK/Keyhive, browser, Subduction Rust, persistence, device invite, offline queue, and downgrade semantics. Keyhive's `a864f5c` fix **does not eliminate** the proven legacy-ID or requester-Relay bypass, and is not a reviewed production cryptosystem.
 
 ### 10.4. Reproduction (security-red is the expected outcome on unsafe upstream)
 
