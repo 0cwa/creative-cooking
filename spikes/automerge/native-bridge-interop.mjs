@@ -220,13 +220,19 @@ try {
     id=Number(await call('open',b64(data),101,'restarted-android'));handles.push(id);
     assert.equal(await nativeGet(id,pantry('name')),'red tomatoes');
     const session=await newSession();
-    const {web}=await sync(seed,id,session);
+    const {web}=await sync(A.clone(seed),id,session);
     assert.equal(rawText(web.pantryById['item-1'].name),'red tomatoes');
+    // Receiving sync frames must not mutate the canonical test fixture.
+    assert.equal(rawText(seed.pantryById['item-1'].name),'tomatoes');
+    assert.deepEqual(A.getHeads(seed),seedHeads);
+    assert.deepEqual(Buffer.from(A.save(seed)),Buffer.from(seedBytes));
   });
 
     await scenario(9, 'three replicas converge without cross-handle contamination', async () => {
-    const first=await open(seed,102,'android-a');
-    const second=await open(seed,103,'android-b');
+    assert.equal(rawText(seed.pantryById['item-1'].name),'tomatoes');
+    assert.deepEqual(Buffer.from(A.save(seed)),Buffer.from(seedBytes));
+    const first=await open(A.load(seedBytes),102,'android-a');
+    const second=await open(A.load(seedBytes),103,'android-b');
     // Scenario 8 wrote red tomatoes to a different handle. New handles must
     // start from the seed, independent of previously disposed native state.
     assert.equal(await nativeGet(first,pantry('name')),'tomatoes');
