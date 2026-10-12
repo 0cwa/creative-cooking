@@ -68,7 +68,10 @@ jobs:
             rm -rf .expo dist
             CI=1 EXPO_PUBLIC_BASE_URL=/creative-cooking npx expo export --platform web --output-dir "dist-$engine" --clear
           done
-          # Expo does not emit the Loro binary by itself. It loads this relative to emitted entry JS.
+          # Expo/Metro cannot resolve Automerge's default ESM .wasm import.
+          # Use its supported /slim browser entrypoint + explicit URL initialized at runtime.
+          install -D node_modules/@automerge/automerge/dist/automerge.wasm dist-automerge/_expo/static/js/web/automerge.wasm
+          # Expo does not emit Loro's browser WASM automatically either.
           install -D node_modules/loro-crdt/browser/loro_wasm_bg.wasm dist-loro/_expo/static/js/web/loro_wasm_bg.wasm
           rm -f app/benchmark-parity.tsx
           node scripts/spikes/benchmark-parity/static-cost.mjs
