@@ -14,8 +14,9 @@ assert.ok(native.status === 'PASS' || native.status === 'PARTIAL',
   'Native app did not produce a valid functional result');
 for (const feature of [
   'importWebBinary', 'nativeBinaryExport', 'concurrentMerge',
-  'snapshotReload', 'duplicateImport', 'causalResolution',
-  'movableList', 'text', 'lifecycle', 'processRestart'
+  'snapshotReload', 'duplicateImport', 'outOfOrderImport',
+  'fullHistoryRetention', 'shallowHistoryProbe', 'durableReviewCheckpoint',
+  'causalResolution', 'movableList', 'text', 'lifecycle', 'processRestart'
 ]) {
   assert.equal(native.checks?.[feature], 'PASS', feature + ' must be actually proven');
 }
@@ -26,6 +27,15 @@ if (native.status === 'PARTIAL') {
     'Unknown native PARTIAL capability gap');
 }
 assert.equal(native.duplicateImportIdempotent, true);
+assert.equal(native.outOfOrder?.status, 'PASS');
+assert.equal(native.outOfOrder?.heldCausalSuccessorUntilPredecessor, true);
+assert.equal(native.outOfOrder?.duplicateImportsIdempotent, true);
+assert.equal(native.historyRetention?.fullSnapshot, 'PASS');
+assert.equal(native.historyRetention?.shallowSnapshot?.status, 'PASS');
+assert.equal(native.historyRetention?.checkpointWrittenAndReadBack, true);
+assert.equal(native.historyRetention?.checkpointRestoredAfterOsRestart, true);
+assert.deepEqual(new Set(native.historyRetention?.fullSnapshotAlternatives?.map((a) => a.value)), new Set([4, 6]));
+assert.equal(native.nativeDisagreementEvidence?.concurrent, true);
 if (firstLaunchPath) {
   const firstLaunch = JSON.parse(fs.readFileSync(firstLaunchPath, 'utf8'));
   assert.equal(firstLaunch.status, 'PARTIAL');
@@ -129,6 +139,8 @@ const result = {
   alternatives: writes.map(({ value, changeId, message }) => ({ value, changeId, message })),
   snapshotImportedOnNative: native.importedWebSnapshot,
   nativeRestart: native.afterRestart,
-  duplicateImportIdempotent: native.duplicateImportIdempotent
+  duplicateImportIdempotent: native.duplicateImportIdempotent,
+  outOfOrder: native.outOfOrder,
+  historyRetention: native.historyRetention
 };
 console.log(JSON.stringify(result, null, 2));
