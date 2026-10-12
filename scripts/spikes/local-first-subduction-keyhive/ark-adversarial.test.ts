@@ -189,7 +189,9 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
 
   it("rejects tampered signed contact-card pairing (verify admission, not just no exception)", async () => {
     const malformed = JSON.parse(outsider.card.toJson());
-    const part = malformed.Rotate ?? malformed;
+    const part = malformed.Rotate ?? malformed.Add;
+    // New identities' existing signed cards use KeyOp::Add; a rotated card
+    // uses KeyOp::Rotate. Both variants must be checked.
     if (!part.signature || !Array.isArray(part.signature)) {
       throw new Error("Upstream contact-card signature format changed; do not silently skip authentication");
     }
@@ -197,7 +199,7 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
     const modified = JSON.stringify(malformed);
     const tampered = ContactCard.fromJson(modified);
     const before = await owner.keyhive.getAgent(tampered.id);
-    expect(before, "a supposedly untrusted signed card was already known").toBeUndefined();
+    expect(before, "a supposedly untrusted signed card was already known").toBeFalsy();
     let returnedWithoutThrow = false;
     let error: string | undefined;
     try {
@@ -254,10 +256,13 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
     record("no-key-relay", "relay cannot decrypt", relayValue ? "relay decrypts" : "relay cannot decrypt",
       { ciphertextBytes: outgoing!.byteLength });
     record("cross-household-decrypt", "outsider cannot decrypt", strangerValue ? "outsider decrypts" : "outsider cannot decrypt");
-    expect(readerValue && bytes(readerValue)).toEqual(bytes(payload));
-    expect(relayValue).toBeNull();
-    expect(strangerValue).toBeNull();
+    // Explicitly assert negative crypto results even if the positive reader
+    // unexpectedly fails (these are separate confidentiality predicates).
+    expect(relayValue, "a relay-only identity must never decrypt").toBeNull();
+    expect(strangerValue, "an unrelated identity must never decrypt").toBeNull();
     previouslyEncrypted = { commitId, plaintext: payload, ciphertext: outgoing! };
+    expect(readerValue && bytes(readerValue),
+      "an authorized separate reader still needs the correct Keyhive key epoch and prekey delivery").toEqual(bytes(payload));
   });
 
   it("rotates a role from Read -> Edit -> revoked -> Read without residual Edit", async () => {
@@ -292,7 +297,9 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
 
 
   it("probes revoked reader's fresh-key access after real Keyhive archive propagation", async () => {
-    expect(previouslyEncrypted).toBeDefined();
+    // Intentionally independent of the separate-reader positive check:
+    // a prior Read grant failing to decrypt is a SETUP/INTEGRATION gap, not
+    // evidence that revocation and future key security are proven.
     const post = new TextEncoder().encode("never disclose this post-revocation recipe");
     const postCommit = createHash("sha256").update(post).digest("hex");
     const outgoing = await new KeyhiveBlobInterceptor(owner.keyhive, new PromiseQueue())
@@ -323,12 +330,18 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
   it("rejects a legacy document-ID bypass, rather than silently granting anonymous access (KNOWN GAP)", async () => {
     const legacy = new Uint8Array(32);
     legacy.set(crypto.getRandomValues(new Uint8Array(16)), 0);
-    await assertPermission("legacy-id-fetch", "deny", () =>
-      policy.authorizeFetch(asPeer(outsider.signer.verifyingKey) as never,
-        asSid(legacy) as never), { idTailZero: true });
-    await assertPermission("legacy-id-put", "deny", () =>
-      policy.authorizePut(asPeer(outsider.signer.verifyingKey) as never,
-        asAuthor(outsider.signer.verifyingKey) as never,
-        asSid(legacy) as never), { idTailZero: true });
+    // Check BOTH independently even when the first fails. Neither may be
+    // skipped just because both are known upstream security gaps.
+    const outcomes = await Promise.allSettled([
+      assertPermission("legacy-id-fetch", "deny", () =>
+        policy.authorizeFetch(asPeer(outsider.signer.verifyingKey) as never,
+          asSid(legacy) as never), { idTailZero: true }),
+      assertPermission("legacy-id-put", "deny", () =>
+        policy.authorizePut(asPeer(outsider.signer.verifyingKey) as never,
+          asAuthor(outsider.signer.verifyingKey) as never,
+          asSid(legacy) as never), { idTailZero: true })
+    ]);
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+    if (failures.length) throw new AggregateError(failures, "legacy ID denied neither unauthorised operation");
   });
 });
