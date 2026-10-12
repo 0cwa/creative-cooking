@@ -204,7 +204,7 @@ This continuation does not restart or weaken the 18 web scenarios. It adds fail-
 | iOS explicit native Rust release and use-after-release detection | **PASS (functional, not heap-leak bound)** | Run 38252473679: 97 explicit destroys, use-after-destroy rejected |
 | Native heap-leak bounds and foreground/background | **NOT MEASURED / PARTIAL** | Only restart + lifecycle smoke shown |
 | Android ARM64 native library + APK integration | **PASS (compile only)** | 87,498,593-byte APK; actual ARM64 library present |
-| Android ARM64 real app start, restart and web interchange | **PARTIAL — blocked by accessible environment** | Apple Silicon hosted emulator: `HV_UNSUPPORTED` even `-accel off`; use device or suitable remote host |
+| Android ARM64 real app start, restart and web interchange | **PARTIAL until new runtime evidence** | macOS hosted emulator failed `HV_UNSUPPORTED`; new Linux x86_64→ARM64 guest TCG fallback pending, physical device optional |
 | Android x86_64 with published release | **UNSUPPORTED / NOT EXECUTED** | No x86_64 Rust archive in published npm package |
 
 Source artifacts: [iOS full native + web verification](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11744245324), [Android ARM64 emulator/build logs](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11743346589), and [CI run index](https://github.com/0cwa/creative-cooking/actions/workflows/loro-spike.yml). **Experimental workflow remains red for missing Android runtime proof**; normal production app CI is unaffected. Never infer PASS from logs, prebuild, IPA/APK compilation or an x86_64 emulator lacking Loro native code.
@@ -266,7 +266,7 @@ node scripts/spikes/loro/verify-native-update.mjs \
   artifacts/loro/web-native-input.json artifacts/loro/ios/result.json
 ```
 
-Native iOS/Android workflow steps generate a disposable Expo Router app from `scripts/spikes/loro/native-harness.tsx.template`, and `ios/result.json` / `android-arm64/result.json` only count as platform proofs when the real app returned complete V2 frames. To qualify on an external physical Android ARM64 device if hosted emulators fail: build the `arm64-v8a` debug APK with `./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a` after isolated Expo prebuild, then:
+Native iOS/Android workflow steps generate a disposable Expo Router app from `scripts/spikes/loro/native-harness.tsx.template`; `ios/result.json`, `android-arm64-linux-tcg/result.json` or `android-arm64-physical/result.json` only count as platform proofs when real apps return complete V2 frames **and** corresponding web-verification JSON succeeds. To qualify on an external physical Android ARM64 device if hosted emulators fail: build the `arm64-v8a` debug APK with `./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a` after isolated Expo prebuild, then:
 
 ```sh
 adb devices -l
@@ -287,6 +287,16 @@ node scripts/spikes/loro/parse-native-log.mjs \
 ```
 
 The physical-device path additionally needs Metro available/forwarded on port 8081 and the native web fixture materialized into the isolated app. Otherwise the APK may launch without running the JS harness; the parser correctly returns FAIL.
+
+#### New isolated Linux x86_64 → ARM64 Android software-emulator experiment
+
+After recording that **GitHub-hosted Apple Silicon ARM64 macOS lacks the Hypervisor Framework capability required to boot the Android 35 ARM64 guest** (including `-accel off` and explicit TCG opt-in), the experimental workflow now replaces the repeatedly failing hosted-macOS job with an **x86_64 Ubuntu guest-machine experiment**. The Linux Android Emulator distribution ships `qemu/linux-x86_64/qemu-system-aarch64[-headless]`, and Google's documented `ANDROID_I_WANT_MY_TCG=yes` plus `-accel off` selects CPU software emulation. This is an unsupported/slow developer-emulator fallback, **not production capacity evidence** or equivalent to running natively on physical ARM64 hardware. It avoids assuming unavailable nested Apple HVF/KVM acceleration; the guest is still required to be actual ARM64 Android.
+
+The [isolated Linux ARM64 guest job](https://github.com/0cwa/creative-cooking/actions/workflows/loro-spike.yml) installs Google's Android 35 ARM64 system image on `ubuntu-latest`, builds a genuine `arm64-v8a` APK including the official pinned RN 1.10.3 ARM64 Rust library, and boots the Android guest with software QEMU. It uses the existing fail-closed [native device runner](https://github.com/0cwa/creative-cooking/blob/spike/local-first-loro/scripts/spikes/loro/run-android-arm64-physical.sh) in **explicit emulator-only mode**: requires `ro.product.cpu.abi=arm64-v8a`, `ro.kernel.qemu=1`, `emulator-*` serial, a real Android API level, `pm clear` before the first process, an actual PID, complete V2 native frames, `am force-stop`/PID disappearance and a distinct second PID, persisted review checkpoint and legitimate native binary updates. It then runs the independent web 1.16.4 verifier and uploads `android-arm64-linux-tcg/result.json`, `web-verification.json`, raw build/boot/runtime logs, ABI/API inventory, memory snapshots, value-adapter patch manifest and SHA-256 file list.
+
+The separate **physical-device** mode still strictly refuses emulator serials and `ro.kernel.qemu=1` by default. Both modes require *genuine Loro operations in the reported guest ABI*, not merely an AVD image download, `adb` boot, APK packaging, an x86_64 container or a synthetic result.
+
+**Status: PENDING actual Linux TCG job and artifacts.** Do not count the new attempt as an Android PASS until real ARM64 guest `result.json` and its independent web `web-verification.json` both exist and pass from the same build. If Linux TCG fails to start the ARM64 guest or is too slow, Android stays PARTIAL and the opt-in real ARM64 hardware runner remains the best qualification route.
 
 #### Opt-in hardware runner: genuine ARM64 Android process evidence
 
@@ -309,7 +319,7 @@ node scripts/spikes/loro/verify-native-update.mjs \
 node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64-physical
 ```
 
-This is a reproducible hardware **qualification path**, not a claimed hardware runtime result. Until a real connected device executes it successfully, Android remains **PARTIAL** overall. The TCG ARM64 emulator opt-in is also explicitly unsupported/slow under Google's Android Emulator documentation; a real device is preferred to avoid GitHub-hosted `HV_UNSUPPORTED` and false x86_64 inferences.
+This is a reproducible hardware **qualification path**, not a claimed hardware runtime result. Until a real connected device executes it successfully, Android remains **PARTIAL** overall. The Linux x86_64→ARM64 TCG emulator experiment is explicitly unsupported/slow under Google's Android Emulator documentation. Real device testing remains preferred; even a successful software guest proves logical compatibility, not representative ARM64 hardware performance.
 
 
 ## Performance fixture
@@ -401,6 +411,6 @@ Subsequent experimental native CI jobs also write SHA256SUMS.txt for raw output 
 
 ## CI, artifacts, and isolation
 
-Normal Creative Cooking CI is unchanged and passed on the last completed branch run ([38264287845](https://github.com/0cwa/creative-cooking/actions/runs/38264287845)): Gitleaks, unit tests, TypeScript and production PWA export/verification. Fresh commits must be checked independently; the experimental Loro workflow is separate and expected to fail closed on unqualified ARM64 runtime. Experimental Loro jobs are separate and do not weaken those checks.
+Normal Creative Cooking CI is unchanged and passed on the last completed branch run ([38264287845](https://github.com/0cwa/creative-cooking/actions/runs/38264287845)): Gitleaks, unit tests, TypeScript and production PWA export/verification. Fresh commits must be checked independently; the experimental Loro workflow is separate and expected to fail closed on unqualified ARM64 runtime. Experimental Loro jobs are separate and do not weaken those checks. The newly configured Linux ARM64 guest experiment is **unverified** until its exact native and web output files are published.
 
 The Loro workflow uploads result JSON, benchmark JSON, API probes, static web screenshots/logs, **actual successful iOS runtime and independent web-verification artifacts**, and failed Android ARM64 host-emulator logs. [Normal app CI #38240054120](https://github.com/0cwa/creative-cooking/actions/runs/38240054120) passed at the successful iOS binary-roundtrip commit. Experimental workflow is intentionally still red due to nonqualified Android runtime. Production AppState/storage/backups/credentials remain untouched. The PR remains draft and must not be merged as a production migration.
