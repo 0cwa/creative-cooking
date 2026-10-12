@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import {spawn, execFileSync} from 'node:child_process';
-import {mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync,copyFileSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve,dirname} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
@@ -106,11 +106,11 @@ function recoveredHeaders(x,expected) {
  assert.equal(new Set(result).size,expected.length);
  return result;
 }
-function verifyBob(x,stage,expected,fixturePath) {
+function verifyBob(x,stage,expected,fixturePath,privateDb) {
  const actual=recoveredHeaders(x,expected);
  const receivedPath=join(root,stage+'.json');
  writeFileSync(receivedPath,JSON.stringify({signedHeadersHex:actual}));
- const stdout=execFileSync(spacesBin,['verify',fixturePath,receivedPath],
+ const stdout=execFileSync(spacesBin,['verify',fixturePath,receivedPath,privateDb],
    {encoding:'utf8',timeout:90000});
  const prefix='SPACES_PERSISTENT_NATIVE_VERIFICATION=';
  const line=stdout.split('\n').find(y=>y.startsWith(prefix));
@@ -126,11 +126,22 @@ function verifyBob(x,stage,expected,fixturePath) {
 }
 try{
  const fp=join(root,'generated-spaces-fixture.json');
- const generation=execFileSync(spacesBin,['generate',fp],{encoding:'utf8',timeout:90000});
+ const privateDb=join(root,'bob-private-initial.sqlite');
+ const generation=execFileSync(spacesBin,['generate',fp,privateDb],{encoding:'utf8',timeout:90000});
  assert.match(generation,/SPACES_SIGNED_WIRE_GENERATED=/);
  fixture=JSON.parse(readFileSync(fp,'utf8'));
  assert.equal(fixture.signedMessageCount,3);
  assert.equal(fixture.signedHeadersHex.length,3);
+ assert.ok(existsSync(privateDb),'Bob private prekey SQLite required; C never sees it');
+ function cloneBobSecrets(name) {
+   const dest=join(root,name+'.sqlite');
+   copyFileSync(privateDb,dest);
+   if(existsSync(privateDb+'-wal'))copyFileSync(privateDb+'-wal',dest+'-wal');
+   return dest;
+ }
+ const bobLateDb=cloneBobSecrets('bob-late-private');
+ const bobEvenLaterDb=cloneBobSecrets('bob-even-later-private');
+ trace('bob_secret_database_persisted_outside_native_C',{keyCustody:'isolated TestPeer sqlite file; not replicated to C'});
  observations.wire=fixture.signedHeadersHex.map((hex,i)=>({phase:['auth','welcome','application'][i],
    bytes:hex.length/2,sha256:sha(frameBuf(hex))}));
  const a=start('A-origin',51,'A');await ready(a);
@@ -145,12 +156,12 @@ try{
  const restartedC=start('C-restart-from-SQLite',52,'C');await ready(restartedC);
  const b=start('B-late-fresh-native',53,'B');await ready(b);
  for(const header of fixture.signedHeadersHex)await waitFor(b,header);
- observations.lateBob=verifyBob(b,'B-late',fixture.signedHeadersHex,fp);
+ observations.lateBob=verifyBob(b,'B-late',fixture.signedHeadersHex,fp,bobLateDb);
  await kill(b);await kill(restartedC);
  const c2=start('C-second-SQLite-restart',52,'C');await ready(c2);
  const e=start('E-very-late-fresh-native',54,'E');await ready(e);
  for(const header of fixture.signedHeadersHex)await waitFor(e,header);
- observations.lateE=verifyBob(e,'E-second-late',fixture.signedHeadersHex,fp);
+ observations.lateE=verifyBob(e,'E-second-late',fixture.signedHeadersHex,fp,bobEvenLaterDb);
  const disk=readFileSync(join(root,'C.sqlite'));
  const sentinel=Buffer.from(fixture.plaintextSentinel,'utf8');
  observations.keylessC={sqliteBytes:disk.length,hasCleartextSentinel:disk.includes(sentinel),

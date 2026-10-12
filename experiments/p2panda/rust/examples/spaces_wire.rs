@@ -9,7 +9,10 @@
 use p2panda_auth::Access;
 use p2panda_core::{Header, Operation};
 use p2panda_core::traits::Digest;
-use p2panda_spaces::test_utils::{TestOperation, TestPeer};
+use p2panda_spaces::test_utils::{TestForge, TestManager, TestOperation, TestPeer, TestSpacesStore};
+use p2panda_spaces::{Config, Credentials};
+use p2panda_encryption::Rng;
+use p2panda_store::SqliteStoreBuilder;
 use p2panda_spaces::{Event, SpaceId, SpacesArgs};
 use serde_json::{json, Value};
 use std::{env, error::Error, fs, path::Path};
@@ -32,9 +35,22 @@ fn read_headers(value: &Value, field: &str) -> Result<Vec<String>, Box<dyn Error
         || -> Box<dyn Error> { "invalid header type".into() }
     )).collect()
 }
-async fn generate(path: &Path) -> Result<(), Box<dyn Error>> {
+
+async fn bob_with_persisted_private_keys(private_db:&Path)->Result<TestPeer,Box<dyn Error>>{
+    let rng=Rng::from_seed([42;32]);
+    let credentials=Credentials::from_rng(&rng)?;
+    let url=format!("sqlite://{}",private_db.display());
+    let store=SqliteStoreBuilder::new().database_url(&url).build().await?;
+    let forge=TestForge::new(store.clone(),credentials.signing_key());
+    let manager=TestManager::new_with_config(
+       TestSpacesStore::new(store.clone()),forge,credentials.clone(),
+       &Config::default(),rng)?;
+    Ok(TestPeer{id:42,manager,credentials,store})
+}
+
+async fn generate(path: &Path, private_db:&Path) -> Result<(), Box<dyn Error>> {
     let alice=TestPeer::new(41).await;
-    let bob=TestPeer::new(42).await;
+    let bob=bob_with_persisted_private_keys(private_db).await?;
     alice.manager.register_member(&bob.manager.me().await?).await?;
     bob.manager.register_member(&alice.manager.me().await?).await?;
     let space_id=SpaceId::digest(TEST_DOCUMENT.as_bytes());
@@ -47,7 +63,8 @@ async fn generate(path: &Path) -> Result<(), Box<dyn Error>> {
     for s in &signed_headers {let _=decode_authentic_header(s)?;}
     let doc=json!({
         "schemaVersion":1,"upstream":"p2panda-spaces 0.7.1 signed CBOR header extensions",
-        "fixtureIdentities":"only deterministic TestPeer 41/42; not real user secrets",
+        "fixtureIdentities":"only deterministic TestPeer 41/42; Bob pre-key state persisted separately, not real user credentials",
+        "bobPrivateKeyRecovery":"separate local SQLite; never forwarded to native p2panda C",
         "documentId":TEST_DOCUMENT,
         "spaceId":format!("{space_id:?}"),
         "signedHeadersHex":signed_headers,
@@ -58,7 +75,7 @@ async fn generate(path: &Path) -> Result<(), Box<dyn Error>> {
     println!("SPACES_SIGNED_WIRE_GENERATED={{\"count\":3,\"format\":\"signed-cbor-header\",\"keylessReplica\":true}}");
     Ok(())
 }
-async fn verify(fixture_path:&Path,received_path:&Path)->Result<(),Box<dyn Error>> {
+async fn verify(fixture_path:&Path,received_path:&Path,private_db:&Path)->Result<(),Box<dyn Error>> {
     let fixture:Value=serde_json::from_slice(&fs::read(fixture_path)?)?;
     let received:Value=serde_json::from_slice(&fs::read(received_path)?)?;
     let expected=read_headers(&fixture,"signedHeadersHex")?;
@@ -67,8 +84,8 @@ async fn verify(fixture_path:&Path,received_path:&Path)->Result<(),Box<dyn Error
         return Err("native replica changed, lost, reordered or duplicated signed Spaces wire ops".into());
     }
     let alice=TestPeer::new(41).await;
-    let bob=TestPeer::new(42).await;
-    bob.manager.register_member(&alice.manager.me().await?).await?;
+    let bob=bob_with_persisted_private_keys(private_db).await?;
+    // Alice's bundle and Bob's pre-key secret registry were persisted at generation.
     let outsider=TestPeer::new(99).await;
     outsider.manager.register_member(&alice.manager.me().await?).await?;
     let mut delivered=0;
@@ -114,6 +131,7 @@ async fn verify(fixture_path:&Path,received_path:&Path)->Result<(),Box<dyn Error
       "readOnlyCanLocallyEncryptWithoutIngressACL":read_only_can_encrypt,
       "signatureValidation":"p2panda-core Header::decode Ed25519 + canonical CBOR",
       "encryption":"genuine p2panda Spaces 0.7.1 for Alice/Bob",
+      "recipientPrivateKeyStoreRecovered":true,
       "limitations":["TestPeer synthetic seeded identities","membership authorization preconditions are out-of-band in fixture setup",
         "p2panda native republish outer signature is separate from inner Spaces header signature",
         "no public relay and no iOS/Android runtime",
@@ -125,10 +143,10 @@ async fn verify(fixture_path:&Path,received_path:&Path)->Result<(),Box<dyn Error
 #[tokio::main]
 async fn main()->Result<(),Box<dyn Error>> {
     let args:Vec<String>=env::args().collect();
-    if args.len()<3 {return Err("Usage: spaces_wire generate fixture.json | verify fixture.json actual-native-headers.json".into());}
+    if args.len()<4 {return Err("Usage: spaces_wire generate fixture.json bob-private.sqlite | verify fixture.json actual-native-headers.json bob-private.sqlite".into());}
     match args[1].as_str() {
-      "generate" if args.len()==3=>generate(Path::new(&args[2])).await,
-      "verify" if args.len()==4=>verify(Path::new(&args[2]),Path::new(&args[3])).await,
+      "generate" if args.len()==4=>generate(Path::new(&args[2]),Path::new(&args[3])).await,
+      "verify" if args.len()==5=>verify(Path::new(&args[2]),Path::new(&args[3]),Path::new(&args[4])).await,
       _=>Err("unknown spaces_wire command".into())
     }
 }
