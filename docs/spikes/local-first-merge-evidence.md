@@ -52,25 +52,27 @@ Events can be low priority. Clean field merges and non-overlapping text/reorder 
 
 This is **illustrative**: the actual code-generated hashes, change counters/frontiers, identities and status examples are in the machine-readable workflow artifact. `<...>` placeholders above are not literal fixture output. Automatic event identity excludes local review status.
 
-## Deterministic scenario ledger
+## Deterministic scenario ledger — observed results
 
-Both engine adapters exercise identical human-visible outcomes. Each row produces a separate machine-readable `PASS` or `FAIL` with evidence and timing; no score is inferred merely from normal LWW reads.
+**[Latest full scenario+retention PASS run #38186451482](https://github.com/0cwa/creative-cooking/actions/runs/38186451482)** at `28ecd972`: **13 PASS / 0 FAIL for each engine** (12 numbered product scenarios + R). The [machine-readable results and exact event alternatives](https://github.com/0cwa/creative-cooking/actions/runs/38186451482/artifacts/11720240531) are authoritative for change IDs, timings and individual assertions. PASS here means executable **Node web-engine evidence**, not native parity.
 
-| # | Scenario | Required ledger outcome |
-|---:|---|---|
-| 1 | Different recipe fields | Both edits survive; zero interrupting events; optional activity history only |
-| 2 | Different ingredient properties | Amount and qualified name both preserved by stable ingredient ID |
-| 3 | Concurrent portions=4/6 | **Unresolved** scalar event, both values/authors/change IDs, restart-stable fingerprint |
-| 4 | Later causal portions=5 | Proved new change follows both alternatives; old event becomes **resolved**, retains 4/6 |
-| 5 | Concurrent atomic title | Distinct full title alternatives preserved, no unapproved winner |
-| 6 | Non-overlapping method text | Merged prefix and suffix retained; no false scalar conflict |
-| 7 | Reorder vs content edit | Step IDs and new order survive, content change retained |
-| 8 | Delete vs edit | Tombstone and edited entity coexist; semantic event offers keep/delete |
-| 9 | Two independent carrot items | Both distinct IDs and preference 5 versus 2 remain, semantic dedupe suggested |
-| 10 | Suspicious yet valid yield | Separate policy heuristic, not an automatic CRDT conflict |
-| 11 | Three replicas/merge direction | Same alternatives and stable event ID across orders |
-| 12 | Duplicate/out-of-order/restart | Real engine updates converge; event replay and local dismissal are idempotent |
-| R | Destructive-history retention | Both ordinary full snapshots retain 4/6; Loro shallow trim loses raw losing-write evidence; durable checkpoint remains unresolved |
+| # | Scenario | Automerge | Loro | Observed product outcome |
+|---:|---|:---:|:---:|---|
+| 1 | Different recipe fields | PASS | PASS | Independent title and portions edits preserved, no interrupting event |
+| 2 | Different ingredient properties | PASS | PASS | Amount `3` and name `tomatoes (ripe)` preserved under one stable ID |
+| 3 | Concurrent portions=4/6 | PASS | PASS | **Unresolved** scalar event; 4 and 6, author and actual change IDs, stable fingerprint after full restart |
+| 4 | Later causal portions=5 | PASS | PASS | Causal proof closes dispute as **resolved**, historic alternatives 4/6 remain in event ledger |
+| 5 | Concurrent atomic title | PASS | PASS | Both complete titles remain accessible despite one displayed winner |
+| 6 | Non-overlapping method text | PASS | PASS | Both prefix `Gently ` and suffix ` Simmer for 10 minutes.` retained |
+| 7 | Reorder vs content edit | PASS | PASS | Step order `step-2, step-1`, edited `step-1` note survives |
+| 8 | Delete vs edit | PASS | PASS | `deleted=true` plus offline title edit, both authored intentions retained; no physical deletion |
+| 9 | Two independent carrot items | PASS | PASS | Both IDs and preference **2 versus 5**, no destructive silent dedup |
+| 10 | Suspicious yet valid yield | PASS | PASS | Separate **application-policy** event with source change IDs, not a CRDT conflict |
+| 11 | Three replicas/merge direction | PASS | PASS | Same 4/6 alternatives and identical event fingerprint across merger orders |
+| 12 | Duplicate/out-of-order/restart | PASS | PASS | Real engine updates converge; event replay dedup; local dismissal does not change other device's review status |
+| R | History/persistence policy | PASS | PASS | Both ordinary full snapshots retain alternatives; Loro shallow loses raw alternative evidence, while pre-prune checkpoint remains unresolved; corrupted checkpoint rejected |
+
+The Loro artifact identifies the portions alternatives as `0@101` (4) and `0@202` (6), with causal resolution `0@303` (5). Automerge's op IDs/change hashes are distinct opaque actor/hash tokens included in the artifact, not mapped to fabricated universal IDs. The visible Loro portions value of 6 in this fixture is **not** a user-approved choice.
 
 ## Implementation and correctness boundaries
 
