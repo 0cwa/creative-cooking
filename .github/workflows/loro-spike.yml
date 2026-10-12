@@ -255,6 +255,14 @@ jobs:
           df -h . | tee "$OUT/storage.txt"
           printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}" | tee "$OUT/sdk-home.txt"
           test "$(uname -m)" = x86_64
+          # Hosted images may provide cmdline-tools without the emulator package.
+          # Install before requiring its executable or QEMU inventory.
+          SDKMANAGER=$(command -v sdkmanager || find "${ANDROID_HOME:?}/cmdline-tools" -name sdkmanager -type f -print -quit)
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" 'emulator' > "$OUT/emulator-install.log" 2>&1 || {
+            tail -100 "$OUT/emulator-install.log"
+            exit 1
+          }
           test -x "${ANDROID_HOME:?}/emulator/emulator"
           "${ANDROID_HOME}/emulator/emulator" -version > "$OUT/emulator-version.txt"
           ls -l "${ANDROID_HOME}/emulator/qemu/linux-x86_64/qemu-system-aarch64"* > "$OUT/arm64-host-qemu-binaries.txt"
