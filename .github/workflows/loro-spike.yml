@@ -278,10 +278,20 @@ jobs:
           SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f -print -quit)
           AVDMANAGER=$(command -v avdmanager || find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f -print -quit)
           echo "sdkmanager=$SDKMANAGER avdmanager=$AVDMANAGER" | tee "$OUTPUT/sdk-tools.txt"
+          # macOS ARM hosted SDK images have an unaccepted Google APIs image license
+          # even though the SDK manager may return exit 0 after silently skipping it.
+          yes | "$SDKMANAGER" --licenses > "$OUTPUT/licenses.log" 2>&1 || true
           "$SDKMANAGER" 'system-images;android-35;google_apis;arm64-v8a' > "$OUTPUT/image-install.log" 2>&1 || {
             tail -100 "$OUTPUT/image-install.log"
             exit 1
           }
+          SYSTEM_IMAGE="$ANDROID_HOME/system-images/android-35/google_apis/arm64-v8a/system.img"
+          if [ ! -f "$SYSTEM_IMAGE" ]; then
+            tail -80 "$OUTPUT/image-install.log"
+            echo "Android ARM64 Google APIs system image missing after SDK install"
+            exit 1
+          fi
+          "$SDKMANAGER" --list_installed > "$OUTPUT/installed-packages.txt"
           echo no | "$AVDMANAGER" create avd --force --name loro-spike-arm64 --package 'system-images;android-35;google_apis;arm64-v8a'
           "$ANDROID_HOME/emulator/emulator" -avd loro-spike-arm64 -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -accel auto > "$OUTPUT/emulator.log" 2>&1 &
           EMULATOR_PID=$!
