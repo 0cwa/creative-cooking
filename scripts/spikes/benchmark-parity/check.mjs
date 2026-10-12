@@ -13,7 +13,7 @@ assert.equal(data.environment.packages.length, 2);
 const n = data.repetitions.measuredTrials;
 const required = ['populate','saveSnapshot','loadSnapshot','prepareLogicalView','warmRead100Records',
   'singleFieldEdit','smallBatchEdit','coldSecondDeviceBootstrap','warmIncrementalSync',
-  'rawUpdateExchange','documentMerge','longOfflineCatchUp','thirdDeviceBootstrap',
+  'warmFollowupSync','rawUpdateExchange','documentMerge','longOfflineCatchUp','thirdDeviceBootstrap',
   'duplicateUpdateDelivery','reloadAfterDispose','syncAfterReload',
   'history20Edits','historySnapshotSave','history60EditCatchUp'];
 for (const engine of ['automerge','loro']) {
@@ -29,7 +29,7 @@ for (const engine of ['automerge','loro']) {
   }
   assert.equal(e.memory.length, n);
   assert.equal(e.moduleInitialization.samples.length, 5);
-  for (const key of ['coldSecondDeviceBootstrap','warmIncrementalSync','rawUpdateExchange','longOfflineCatchUp','thirdDeviceBootstrap','history60EditCatchUp']) {
+  for (const key of ['coldSecondDeviceBootstrap','warmIncrementalSync','warmFollowupSync','rawUpdateExchange','longOfflineCatchUp','thirdDeviceBootstrap','history60EditCatchUp']) {
     const samples = e.scenarioEvidence[key];
     assert.equal(samples.length, n, engine + ' missing transfer samples ' + key);
     for (const sample of samples) {
