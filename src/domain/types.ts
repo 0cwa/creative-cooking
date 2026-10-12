@@ -1,3 +1,4 @@
+import type { HouseholdWorkspace } from './households';
 export type IngredientPreference = 1 | 2 | 3 | 4 | 5;
 
 export const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'gemini', 'mistral', 'webllm'] as const;
@@ -50,6 +51,8 @@ export type Recipe = {
   updatedAt: string;
 };
 
+export type { HouseholdRecipeCopy, HouseholdRequirements, HouseholdWorkspace } from './households';
+
 export type ChefToolProposalStatus = 'pending' | 'applied';
 
 export type ChefToolProposal = {
@@ -94,6 +97,8 @@ export type AppSettings = {
 };
 
 export type PersistedState = {
+  households: HouseholdWorkspace[];
+  activeHouseholdId: string | null;
   pantry: PantryItem[];
   shoppingList: ShoppingItem[];
   recipes: Recipe[];

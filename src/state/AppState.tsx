@@ -1,3 +1,4 @@
+import { effectiveHouseholdAllergies, createHousehold as makeHousehold, normalizeHouseholdState, normalizeHouseholdSelection, addHouseholdRecipe, removeHouseholdRecipe as removeRecipeCopy, updateHouseholdRequirements as setRequirements } from '@/domain/households';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversations';
@@ -11,6 +12,8 @@ import type {
   ChefToolProposalStatus,
   CookEnergy,
   IngredientPreference,
+  HouseholdRequirements,
+  HouseholdWorkspace,
   MealContext,
   PersistedState,
   Recipe,
@@ -47,6 +50,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   return {
     ...DEFAULT_STATE,
     ...saved,
+    ...normalizeHouseholdState(saved),
     shoppingList,
     chatMessages,
     chatHistory: sortChatHistory(chatHistory),
@@ -107,6 +111,16 @@ function mergeShoppingItems(current: ShoppingItem[], incoming: ShoppingItemInput
   return next;
 }
 
+function scopedShoppingList(state: PersistedState): ShoppingItem[] {
+  return state.households.find((household) => household.id === state.activeHouseholdId)?.shoppingList ?? state.shoppingList;
+}
+
+function withShoppingList(state: PersistedState, shoppingList: ShoppingItem[]): PersistedState {
+  if (!state.households.some((household) => household.id === state.activeHouseholdId)) return { ...state, shoppingList };
+  return { ...state, households: state.households.map((household) => household.id === state.activeHouseholdId
+    ? { ...household, shoppingList, updatedAt: new Date().toISOString() } : household) };
+}
+
 function archiveActiveChat(current: PersistedState): PersistedState['chatHistory'] {
   if (!current.chatMessages.length) return current.chatHistory;
   const id = current.activeConversationId ?? `chat-${current.chatMessages[0]?.id ?? Date.now()}`;
@@ -119,6 +133,14 @@ function archiveActiveChat(current: PersistedState): PersistedState['chatHistory
 }
 
 type AppStateApi = PersistedState & {
+  activeHousehold: HouseholdWorkspace | null;
+  effectiveAllergies: string[];
+  personalShoppingList: ShoppingItem[];
+  createHousehold(name: string): void;
+  selectHousehold(id: string | null): void;
+  copyRecipeToHousehold(householdId: string, recipeId: string): void;
+  updateHouseholdRequirements(householdId: string, requirements: HouseholdRequirements): void;
+  removeHouseholdRecipe(householdId: string, copyId: string): void;
   hydrated: boolean;
   storageError: string | null;
   retryStorage(): Promise<boolean>;
@@ -280,28 +302,19 @@ export function AppStateProvider({ children }: PropsWithChildren) {
 
   const addShoppingItems = useCallback((items: ShoppingItemInput[]) => {
     if (!items.length) return;
-    setState((current) => ({
-      ...current,
-      shoppingList: mergeShoppingItems(current.shoppingList, items)
-    }));
+    setState((current) => withShoppingList(current, mergeShoppingItems(scopedShoppingList(current), items)));
   }, []);
 
   const removeShoppingItem = useCallback((id: string) => {
-    setState((current) => ({
-      ...current,
-      shoppingList: current.shoppingList.filter((item) => item.id !== id)
-    }));
+    setState((current) => withShoppingList(current, scopedShoppingList(current).filter((item) => item.id !== id)));
   }, []);
 
   const toggleShoppingItem = useCallback((id: string) => {
     setState((current) => {
       const now = new Date().toISOString();
-      return {
-        ...current,
-        shoppingList: current.shoppingList.map((item) => (
+      return withShoppingList(current, scopedShoppingList(current).map((item) => (
           item.id === id ? { ...item, checked: !item.checked, updatedAt: now } : item
-        ))
-      };
+        )));
     });
   }, []);
 
@@ -311,17 +324,13 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       if (!item) return current;
       const pantry = current.pantry.filter((entry) => entry.id !== id);
       pantryRef.current = pantry;
-      return {
-        ...current,
-        pantry,
-        shoppingList: mergeShoppingItems(current.shoppingList, [{ name: item.name, pantryPreference: item.preference }])
-      };
+      return withShoppingList({ ...current, pantry }, mergeShoppingItems(scopedShoppingList(current), [{ name: item.name, pantryPreference: item.preference }]));
     });
   }, []);
 
   const moveCheckedShoppingToPantry = useCallback(() => {
     setState((current) => {
-      const purchased = current.shoppingList.filter((item) => item.checked);
+      const purchased = scopedShoppingList(current).filter((item) => item.checked);
       if (!purchased.length) return current;
 
       const existing = new Set(current.pantry.map((item) => item.name.toLocaleLowerCase()));
@@ -335,7 +344,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
 
       const purchasedNames = new Set(purchased.map((item) => normalizeIngredientName(item.name).toLocaleLowerCase()));
       const now = new Date().toISOString();
-      const recipes = current.recipes.map((recipe) => {
+      const recipes = current.activeHouseholdId ? current.recipes : current.recipes.map((recipe) => {
         let changed = false;
         const ingredients = recipe.ingredients.map((ingredient) => {
           if (!purchasedNames.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase()) || !ingredient.needsShopping) {
@@ -347,19 +356,17 @@ export function AppStateProvider({ children }: PropsWithChildren) {
         return changed ? { ...recipe, ingredients, updatedAt: now } : recipe;
       });
 
-      return {
-        ...current,
-        pantry,
-        recipes,
-        shoppingList: current.shoppingList.filter((item) => !item.checked)
-      };
+      return withShoppingList({ ...current, pantry, recipes }, scopedShoppingList(current).filter((item) => !item.checked));
     });
   }, []);
 
+  const activeHousehold = state.households.find((household) => household.id === state.activeHouseholdId) ?? null;
+  const effectiveAllergies = useMemo(() => effectiveHouseholdAllergies(state.settings.allergies, activeHousehold), [state.settings.allergies, activeHousehold]);
+
   const validateRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
+    const validation = validateRecipeAllergies(input.ingredients, effectiveAllergies);
     if (!validation.ok) throw new RecipeAllergyError(validation.matches);
-  }, [state.settings.allergies]);
+  }, [effectiveAllergies]);
 
   const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     validateRecipe(input);
@@ -385,7 +392,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       ));
 
     if (ingredientNamesChanged) {
-      const validation = validateRecipeAllergies(input.ingredients, state.settings.allergies);
+      const validation = validateRecipeAllergies(input.ingredients, effectiveAllergies);
       if (!validation.ok) throw new RecipeAllergyError(validation.matches);
     }
 
@@ -397,7 +404,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
           : recipe
       ))
     }));
-  }, [state.recipes, state.settings.allergies]);
+  }, [state.recipes, effectiveAllergies]);
 
   const deleteRecipe = useCallback((id: string) => {
     setState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
@@ -490,9 +497,44 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     setState(next);
   }, []);
 
+  const createHousehold = useCallback((name: string) => {
+    const now = new Date().toISOString();
+    const household = makeHousehold(`household-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, name.trim(), now);
+    setState((current) => ({ ...current, households: [...current.households, household], activeHouseholdId: household.id }));
+  }, []);
+
+  const selectHousehold = useCallback((id: string | null) => {
+    setState((current) => ({ ...current, activeHouseholdId: normalizeHouseholdSelection(current.households, id) }));
+  }, []);
+
+  const changeHousehold = useCallback((id: string, update: (household: HouseholdWorkspace) => HouseholdWorkspace) => {
+    setState((current) => ({ ...current, households: current.households.map((household) => household.id === id ? update(household) : household) }));
+  }, []);
+
+  const copyRecipeToHousehold = useCallback((householdId: string, recipeId: string) => {
+    setState((current) => {
+      const recipe = current.recipes.find((entry) => entry.id === recipeId);
+      if (!recipe) return current;
+      const now = new Date().toISOString();
+      return { ...current, households: current.households.map((household) => household.id === householdId
+        ? addHouseholdRecipe(household, recipe, `copy-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, now) : household) };
+    });
+  }, []);
+
+  const updateHouseholdRequirements = useCallback((id: string, requirements: HouseholdRequirements) => {
+    changeHousehold(id, (household) => setRequirements(household, requirements, new Date().toISOString()));
+  }, [changeHousehold]);
+  const removeHouseholdRecipe = useCallback((id: string, copyId: string) => {
+    changeHousehold(id, (household) => removeRecipeCopy(household, copyId, new Date().toISOString()));
+  }, [changeHousehold]);
+
   const value = useMemo<AppStateApi>(
     () => ({
       ...state,
+      shoppingList: scopedShoppingList(state),
+      personalShoppingList: state.shoppingList,
+      activeHousehold, effectiveAllergies,
+      createHousehold, selectHousehold, copyRecipeToHousehold, updateHouseholdRequirements, removeHouseholdRecipe,
       hydrated,
       storageError,
       retryStorage,
@@ -523,7 +565,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       restoreState
     }),
     [
-      state,
+      state, activeHousehold, effectiveAllergies,
+      createHousehold, selectHousehold, copyRecipeToHousehold, updateHouseholdRequirements, removeHouseholdRecipe,
       hydrated,
       storageError,
       retryStorage,

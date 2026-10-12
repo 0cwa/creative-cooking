@@ -11,11 +11,14 @@ export default function ShoppingScreen() {
   const router = useRouter();
   const {
     shoppingList,
+    households,
+    activeHouseholdId,
     addShoppingItems,
     removeShoppingItem,
     toggleShoppingItem,
     moveCheckedShoppingToPantry
   } = useAppState();
+  const household = households.find((entry) => entry.id === activeHouseholdId);
   const [input, setInput] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -43,12 +46,14 @@ export default function ShoppingScreen() {
         </Pressable>
       </View>
 
+      <Pressable accessibilityRole="button" accessibilityLabel="Choose household shopping list" onPress={() => router.push('/households')} style={styles.scopeButton}><Text style={styles.scopeText}>{household ? `${household.name} · On this device` : 'Personal list'} · Change</Text></Pressable>
+
       {!!shoppingList.length && (
         <View style={styles.summaryCard}>
           <View style={styles.summaryIcon}><Text accessible={false} style={styles.summaryIconText}>🛒</Text></View>
           <View style={styles.summaryText}>
             <Text style={styles.summaryTitle}>{remainingCount ? `${remainingCount} to pick up` : 'Everything is checked off'}</Text>
-            <Text style={styles.summaryHelp}>Check things off while you shop. Purchased items can move straight into Pantry.</Text>
+            <Text style={styles.summaryHelp}>{household ? 'Purchased household items move into your personal Pantry.' : 'Check things off while you shop. Purchased items can move straight into Pantry.'}</Text>
           </View>
         </View>
       )}
@@ -101,7 +106,7 @@ export default function ShoppingScreen() {
         <View style={styles.purchasedBar}>
           <View style={styles.purchasedTextWrap}>
             <Text style={styles.purchasedTitle}>{checkedCount === 1 ? '1 item purchased' : `${checkedCount} items purchased`}</Text>
-            <Text style={styles.purchasedHelp}>Move checked items into Pantry and remove them from this list.</Text>
+            <Text style={styles.purchasedHelp}>{household ? 'Move checked items into your personal Pantry and remove them from this household list.' : 'Move checked items into Pantry and remove them from this list.'}</Text>
           </View>
           <Pressable
             accessibilityRole="button"
@@ -147,6 +152,8 @@ export default function ShoppingScreen() {
 }
 
 const styles = StyleSheet.create({
+  scopeButton: { marginHorizontal: 20, marginBottom: 12, minHeight: 44, justifyContent: 'center' },
+  scopeText: { color: '#475569', fontWeight: '600' },
   header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },

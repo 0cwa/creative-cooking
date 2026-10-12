@@ -3,6 +3,8 @@ import test from 'node:test';
 import { freshStateFromDefaults, parseBackupEnvelope, serializeBackupEnvelope } from './backupFormat.ts';
 
 const defaults = {
+  households: [],
+  activeHouseholdId: null,
   pantry: [],
   shoppingList: [],
   recipes: [],
@@ -169,4 +171,29 @@ test('fresh default state does not share mutable nested arrays with defaults', (
   assert.deepEqual(defaults.settings.allergies, []);
   assert.deepEqual(defaults.chatHistory, []);
   assert.deepEqual(defaults.shoppingList, []);
+});
+
+test('backup preserves separate personal and household shopping lists and safely resets invalid selection', () => {
+  const now = '2026-10-12T12:00:00.000Z';
+  const item = (id, name) => ({ id, name, checked: false, createdAt: now, updatedAt: now });
+  const state = { ...defaults, shoppingList: [item('personal', 'coffee')], households: [{
+    id: 'home', name: 'Home', shoppingList: [item('shared', 'rice')], recipes: [],
+    requirements: { allergies: ['peanuts'], diet: 'vegan' }, createdAt: now, updatedAt: now
+  }], activeHouseholdId: 'home' };
+  assert.deepEqual(parseBackupEnvelope(serializeBackupEnvelope(state, now), defaults), state);
+  const invalid = { ...state, activeHouseholdId: 'missing' };
+  const restored = parseBackupEnvelope(serializeBackupEnvelope(invalid, now), defaults);
+  assert.equal(restored.activeHouseholdId, null);
+  assert.deepEqual(restored.shoppingList, state.shoppingList);
+  assert.deepEqual(restored.households, state.households);
+});
+
+test('legacy backups restore empty households and malformed household backups reject before restore', () => {
+  const legacy = { ...defaults };
+  delete legacy.households;
+  delete legacy.activeHouseholdId;
+  const restored = parseBackupEnvelope(serializeBackupEnvelope(legacy, '2026-10-12T12:00:00.000Z'), defaults);
+  assert.deepEqual(restored.households, []);
+  assert.equal(restored.activeHouseholdId, null);
+  assert.throws(() => parseBackupEnvelope(serializeBackupEnvelope({ ...defaults, households: [{ id: 'incomplete' }] }, '2026-10-12T12:00:00.000Z'), defaults), /Invalid/);
 });
