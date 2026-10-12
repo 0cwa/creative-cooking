@@ -187,3 +187,100 @@ No benchmarked RAM/CPU/throughput/disk budget, tenancy density or vendor cost ha
 - Keep the existing app usable forever offline and do not replicate credentials/device-only settings.
 
 **No overall local-first architecture winner is declared.** Automerge with a simpler interim transport while waiting for Subduction/Keyhive maturity is a valid future choice.
+
+---
+
+## 10. Adversarial Keyhive/ARK security investigation — 12 October 2026
+
+**Outcome: NOT PRODUCTION READY; the current transport and ACL architecture is **unsafe if legacy document IDs are accepted as private/shared household documents**.** This is an intentionally **failing security experiment**, NOT a blanket assertion that protected documents can be decrypted by outsiders. A negative test failing here means the upstream authorization boundary was shown to permit an operation that the hypothetical private-household service must reject.
+
+This follow-up did **not** repeat the real Automerge/Loro binary opacity proof in [PR #43](https://github.com/0cwa/creative-cooking/pull/43). Its purpose is identity, protected-document generation, cryptographic access, authorization, pairing and revocation—not engine selection.
+
+### 10.1. Executed, independently pinned dependency sets (do not combine them blindly)
+
+| Scope | Exact source/dependency graph | Executed/runtime | What is *not* established |
+| --- | --- | --- | --- |
+| **ARK JS + Keyhive WASM** | ARK [`5d09e8c8cfdebd5656b1426b66aea6b1395f83da`](https://github.com/automerge/automerge-repo-keyhive/tree/5d09e8c8cfdebd5656b1426b66aea6b1395f83da), version **0.6.0-alpha.1**; **frozen upstream `pnpm-lock.yaml`**, `@automerge/automerge-repo 2.6.0-subduction.48`, `@automerge/automerge-subduction 0.16.1`, `@keyhive/keyhive 0.3.0-alpha.1`, Node **22**, pnpm **10.15.0** | Exact graph installs and builds; actual WASM identity, protected document, crypto and ARK `buildServerSubductionPolicy` exercised with Vitest in [security run #38251954609](https://github.com/0cwa/creative-cooking/actions/runs/38251954609) | Not an authenticated HTTP/WS/QUIC transfer to a Rust CLI, not an end-to-end package compatibility certification |
+| **Rust Subduction CLI and Chromium WASM** | Subduction [`f0af1aab5f2fd44e5b224c22fc8b62660d50bc01`](https://github.com/inkandswitch/subduction/tree/f0af1aab5f2fd44e5b224c22fc8b62660d50bc01), native CLI/core **0.19.0**, Subduction browser WASM **0.24.0**, Rust **1.91.0**, wasm-pack **0.14.0**, Node **22**, pnpm **9** | Real pinned CLI started with **`--auth keyhive`** (NEVER `--auth open`), stable test signer, redb persistence and different signed Ed25519 WebCrypto Chromium clients in [security run #38251954609](https://github.com/0cwa/creative-cooking/actions/runs/38251954609) | Test clients are not ARK-managed protected document owners; no new-device grant was replicated onto the Rust relay |
+| **Native Keyhive core, independently isolated** | Keyhive [`b7968be799705492428c94226ca28042c733a9e0`](https://github.com/inkandswitch/keyhive/tree/b7968be799705492428c94226ca28042c733a9e0); `keyhive_core` crate **0.6.0**, workspace Rust **1.91.0** | Separate [owned executable core adversarial suite](../../scripts/spikes/local-first-subduction-keyhive/keyhive-core-security.rs), compiled and executed in dedicated isolated workflow job. **Execution status recorded by CI, not assumed** | Native library tests are not a browser/Expo/ARK integration or remote server enforcement test |
+
+**Version-skew gate:** At the pinned ARK revision its bridge is `@automerge/automerge-subduction 0.16.1`, whereas the pinned Rust Subduction source builds bridge **0.19.0**. An accidental mix of these releases is **not** a coherent proven ARK→Rust E2EE stack. The ARK package graph *itself* builds with its lockfile; the native CLI/browser graph *itself* builds. We must prove the combined signed-wire protocols at exact compatible versions before claiming end-to-end E2EE, pairing or revocation. No upstream sources have been patched.
+
+**Upstream update check on 12 October 2026:** Subduction's `main` remains the pinned `f0af1aa` (7 October), ARK's `main` remains `5d09e8c` (25 September), while Keyhive's `main` advanced to `83e079d` (12 October) with the `keyline`/`keyline_memory` addition. This later Keyhive commit does **not** establish an audit or a fix to the pinned ARK/Subduction legacy-ID and forwarding-requester policies. The current [Keyhive upstream README](https://github.com/inkandswitch/keyhive/blob/main/README.md) **still explicitly says DO NOT use in production**, code not security-audited and nonce/key commitments not independently reviewed. Subduction still calls itself unstable early preview/not production ready; ARK remains alpha. No independently verified crypto audit or production-ready statement is available from this inspection.
+
+### 10.2. Fail-closed adversarial matrix — expected versus observed
+
+Evidence labels are strict: **EXECUTED JS POLICY** invokes ARK's actual policy with genuine Keyhive WASM keys and grant events (the caller/author tuple is passed directly; no signed-wire author verification); **EXECUTED RUST WIRE** runs two cryptographically distinct clients through a live `--auth keyhive` Subduction CLI; **EXECUTED WASM** invokes actual Keyhive cryptographic API; **UNPROVEN** means not independently demonstrated. `FAIL` means an explicit security invariant was violated, not that the harness should be made green.
+
+| Attack / permission scenario | Required/expected outcome | Observed outcome and evidence level |
+| --- | --- | --- |
+| Protected owner creates cooking document | Generate protected 32-byte ID with real Keyhive factory, not legacy `Repo.create` | **PASS — EXECUTED WASM/ARK.** `Repo.create2` with `keyhiveIdFactory`, generated actual **32-byte** ID with nonzero tail; `hasDocument` true |
+| Owner encrypts and decrypts synthetic cooking bytes | Plaintext inaccessible without content keys; owner decrypts | **PASS — EXECUTED WASM.** **57 plaintext bytes → 286 ciphertext/envelope bytes**, owner recovered original, ciphertext did not contain literal plaintext; independently authenticated owner secret |
+| Relay fetch, no read key | Relay may retrieve ciphertext; cannot decrypt | **PASS at JS policy**: Relay fetch granted. **PASS at WASM crypto boundary**: separate Relay-only Keyhive identity unable to decrypt **285-byte envelope**; no remote no-key relay E2E proven |
+| Read fetch/decrypt | Authorized separate reader can decrypt | **PASS policy** for Read fetch; **UNPROVEN/INTEGRATION FAILURE cryptography**: independent reader with signed archive ingested *could not decrypt* a 56-byte content/285-byte envelope, although protected document known; full pairing/event/key epoch propagation incomplete |
+| Edit or Admin fetch/put | Both can read and write; only Admin delegates | **PASS JS policy**: Edit and Admin fetch and put allowed, Edit requirement rejects Read/Relay authors. Native Keyhive delegation needs separate executed core proof |
+| Read or Relay attempts Edit put | Deny | **PASS — EXECUTED JS POLICY**: both rejected `insufficient access ... requires at least Edit` |
+| Cross-household outsider fetches protected ID | Deny | **PASS — EXECUTED JS POLICY**: rejected, requires at least Relay. Separate outsider Keyhive identity could not decrypt sampled envelope (WASM) |
+| New-device signed membership propagation | Verified contact card plus entitlement and **actual key** available to recipient | **PARTIAL — EXECUTED WASM**: signed membership archive ingested by distinct identities (**13,430 bytes**) but recipient positive decryption **not achieved** in ARK experiment; this is not successful verified pairing |
+| Signed contact-card tampering | Reject a modified `KeyOp::Add` or `Rotate` signature and disallow identity admission | **UNPROVEN** pending valid parser/admission probe; *absence of an exception from `receiveContactCard` is not acceptance*. A previous probe expected `Rotate` only, but existing new cards use `Add`; this is a **harness distinction**, not evidence of forged identity acceptance |
+| Role change Read→Edit, revoke, regrant Read | Read denied put, Edit allowed put, removed denied, regranted Read still denied put/allowed fetch | **PASS — EXECUTED JS POLICY** for all five grant/revoke/downgrade checks |
+| Removed reader receives future group keys | Deny decryption after fresh rotation and authorization propagation | **UNPROVEN at ARK**: baseline second reader could not decrypt even before revocation, so a post-revoke denial cannot prove forward-secrecy; native Keyhive test is a separately executed core control |
+| Historical plaintext and old backups on revoked device | Cannot be erased remotely | **BY DESIGN**, not a passing erase test. Assume old ciphertext/plaintext/keys remain available and protect only future epochs |
+| Offline rejoin and queued stale-author writes | Latest ACL converges, revoked device does not regain future keys, queued unauthorized edits denied | **UNPROVEN as full Rust/ARK signed-wire E2E**. Core test exercises a stale archive offline rejoin, but cannot stand in for durable relay queued edit authorization |
+| Unauthenticated forwarding with an authorized editor identity | Requester lacking Relay must **not** forward even when author is authorized to Edit | **FAIL — EXECUTED JS POLICY**: `authorizePut` **granted** an ungranted requester presenting a real Edit author's identity; Rust [`subduction_keyhive` policy](https://github.com/inkandswitch/subduction/blob/f0af1aab5f2fd44e5b224c22fc8b62660d50bc01/subduction_keyhive/src/policy.rs) has corresponding TODO for separate requester validation. A cryptographically forged-author wire submission has **not** been demonstrated |
+| Legacy/unprotected 16-byte ID zero-padded to 32 | In a private-household namespace, ungranted client put and fetch both **DENY** | **FAIL — EXECUTED JS POLICY**: ARK fetch allowed without any Keyhive grant. **FAIL — EXECUTED RUST WIRE**: ungranted signer A uploaded a legacy commit, relay restarted, independent ungranted signer B retrieved **one** commit. Native policy is explicit about allowing legacy IDs |
+| Unknown *protected-shaped* document ID not granted to client | Reject put and fetch | **PASS — EXECUTED RUST WIRE**: no server grant/known tree, upload sync failed and second client received **0** commits. This does not prove successful authorized protected-ID sync |
+
+**Exact critical Rust wire execution:** [Actions run #38251954609](https://github.com/0cwa/creative-cooking/actions/runs/38251954609), Chromium test `adversarial-relay.spec.ts`, pinned commit `f0af1aab5f2fd44e5b224c22fc8b62660d50bc01`, real CLI `server --auth keyhive`, 2 distinct Ed25519 handshake signers and persistent `sedimentree.redb`. `pushOutcome={success:true,sent:1}` → stop/restart server with same test signing seed and redb → B `receiver={success:true,received:1,commitCount:1}`; both original and retry **reproduced**. Expected `commitCount=0`. The job **FAILED on purpose** with `SECURITY FAIL: ungranted legacy ID accepted across Keyhive-authenticated server restart`. [Playwright diagnostic artifact](https://github.com/0cwa/creative-cooking/actions/runs/38251954609/artifacts/11748377615) retained. The unrelated unknown protected-looking ID control denied upload/fetch. Actual Rust wire traffic, not just an inferred source branch, demonstrated the legacy bypass.
+
+**Precise separate ARK result:** same run's native Node/WASM Vitest job; protected factory and owner E2EE passed, Relay/Read/Edit/Admin policy matrix and upgrade/downgrade passed, but direct policy **granted** an unauthorized forwarding requester and unprotected document fetch. Separate reader still could not open content. The test was intentionally **RED (7 passing, 5 failing cases at captured revision)** rather than suppressing negative failures, and uploaded an [ARK matrix artifact](https://github.com/0cwa/creative-cooking/actions/runs/38251954609). Subsequent harness changes must be judged by their own CI runs; a failed expected-denial assertion remains a security finding until upstream or a verified isolated mitigation fixes it.
+
+### 10.3. Visibility, cryptography and authorization boundaries
+
+The *old* AES-GCM fixtures with `--auth open` never established Keyhive E2EE. This follow-up executed real Keyhive envelope encryption and independent identity decryption attempts, but the **Rust** legacy bypass uploaded random test bytes to an **unprotected** ID. Therefore the Rust relay test does **not** prove it could read **protected** ARK recipe plaintext. The no-key Relay identity's inability to decrypt a synthetic Keyhive envelope is genuine but is not a live relay storage-side test. Similarly, a 32-byte unknown-ID denial is not authorization propagation success.
+
+**Observed bytes/metadata:** protected document ID **32 bytes** (nonzero final 16 bytes); legacy ID **16 random + 16 zero bytes**; standalone Keyhive envelope **57→286** and **56→285** bytes; Keyhive WASM authorization archive **13,430 bytes**; durable legacy relay redb file `sedimentree.redb` survived restart, with **one ciphertext-or-opaque commit received by independent client**. No end-to-end total bytes, packet timing distribution or full relay key/secret snapshot measured. A relay can observe document identifiers, peer/contact/member/authorization metadata, blob sizes, event ordering, timing, access pattern, and the count of changes even when document content ciphertext hides recipe/pantry/chat plaintext. No device/provider credential or personal cooking data was used.
+
+**Authorized publish is not network identity:** a signed peer connection may authenticate *who connects* but does not make that identity a household member. The JS policy `authorizePut(requester, author, document)` checks Edit for **author**, not Relay for **requester**; this is **not equivalent to validating an Ed25519 signature over actual published commit bytes**. A separate forged-author wire attack, unsolicited writes to a granted protected ID and queued offline edits are still needed. Protected ID admission must be default deny and explicit, rather than letting zero-padded legacy IDs silently fall through.
+
+**No upstream patch was applied.** No unpatched-versus-patched comparison can be claimed. Production choices would first need audited, upstream-maintained fixes with a strict protected-only tenancy boundary and independent requester Relay enforcement, plus fresh end-to-end replay tests proving previously seen edits and stale ACL snapshots cannot bypass revocation. Until then, the private/shared model MUST NOT deploy on this stack.
+
+### 10.4. Reproduction (security-red is the expected outcome on unsafe upstream)
+
+**Code ownership:** `scripts/spikes/local-first-subduction-keyhive/ark-adversarial.test.ts`, `adversarial-relay.spec.ts`, `keyhive-core-security.rs`, this report, and `.github/workflows/subduction-keyhive-spike.yml` only. The ARK and Keyhive Rust test files are copied into **detached pinned upstream checkouts in ephemeral CI workspaces**; upstream repos are not committed or patched. The browser test runs the actual pinned Rust CLI as a disposable localhost-only service. No production app state, Expo code, credentials, persistence, normal workflows or other spike PR was modified.
+
+For exact pinned platform setup/repro **use the experimental workflow**, because it installs Rust 1.91, Node 22, wasm-pack 0.14.0, Playwright Chromium and the pinned package managers. Its steps are independently reproducible:
+
+```bash
+# From root of the PR #40 experimental checkout.
+git clone https://github.com/automerge/automerge-repo-keyhive ark-upstream
+git -C ark-upstream checkout 5d09e8c8cfdebd5656b1426b66aea6b1395f83da
+cp scripts/spikes/local-first-subduction-keyhive/ark-adversarial.test.ts ark-upstream/test/creative-cooking-adversarial.test.ts
+(cd ark-upstream && pnpm install --frozen-lockfile && pnpm build && \
+ CC_ARK_SECURITY_EVIDENCE="$PWD/cc-ark-security-matrix.json" pnpm exec vitest run test/creative-cooking-adversarial.test.ts --reporter=verbose)
+
+git clone https://github.com/inkandswitch/keyhive keyhive-upstream
+git -C keyhive-upstream checkout b7968be799705492428c94226ca28042c733a9e0
+cp scripts/spikes/local-first-subduction-keyhive/keyhive-core-security.rs keyhive-upstream/keyhive_core/tests/creative_cooking_security.rs
+(cd keyhive-upstream && cargo +1.91.0 test -p keyhive_core --test creative_cooking_security -- --nocapture)
+
+git clone https://github.com/inkandswitch/subduction subduction-upstream
+git -C subduction-upstream checkout f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+(cd subduction-upstream && cargo +1.91.0 build -p subduction_cli && \
+ wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
+cp scripts/spikes/local-first-subduction-keyhive/adversarial-relay.spec.ts subduction-upstream/subduction_wasm/e2e/
+# After installing Subduction WASM's frozen pnpm dependencies, the Playwright
+# browser and local http-server (all steps in .github/workflows/subduction-keyhive-spike.yml):
+(cd subduction-upstream/subduction_wasm && \
+ CC_SUBDUCTION_CLI="$PWD/../target/debug/subduction_cli" pnpm exec playwright test adversarial-relay.spec.ts --project=chromium --reporter=line)
+```
+
+The two currently vulnerable negative tests should return **nonzero exit codes**. Keep full reporter output and attached machine-readable JSON as evidence; **do not enable `--auth open`, remove assertions, apply `continue-on-error` or merge a red security spike to main**. The existing baseline fixture test remains separated and continues to demonstrate only Subduction transport, not cryptographic authorization. The normal [Creative Cooking CI](https://github.com/0cwa/creative-cooking/actions/workflows/ci.yml) runs on this PR independently; no production CI workflow edits were made.
+
+### 10.5. Production gates and operational work owned by a future stack
+
+A usable implementation would require (1) a coherent signed-wire ARK and Subduction version set with protocol/serialization compatibility and migration tests; (2) real protected-document ownership with recipient-scoped signed contact-card onboarding, prekeys and explicit verified invitation UX; (3) server enforcement of **both** author Edit and requester Relay with an exhaustive negative matrix, and an explicit choice to reject or completely isolate legacy IDs; (4) deterministic positive Read/decrypt after pairing, genuine Relay without data key and scoped encrypted historical-key access; (5) real revocation rekey, stale archive and queued offline edit denial across restart and restore; (6) independent audit before adopting unaudited Keyhive; (7) Keyhive secret, archive, issuer key and redb/blob backup/restore crash-consistency tests; (8) traffic-size, member metadata, timing, quota/abuse, event-spoofing and cross-household risk analysis; (9) native Expo iOS/Android integration under background/locked-device lifecycle; (10) hosted TLS/identity stable signers, quotas, backups, version rollout, rotation and monitoring.
+
+A small self-hosted deployment must maintain stable Ed25519 server key and `--data-dir` together with the **full** redb, filesystem blob tree and `.keyhive` state, with **consistent point-in-time backup** and a tested restore. Without a reliable key-recovery flow, a device reset can strand encrypted recipes, and restoring an old authorization snapshot may dangerously resurrect access until recent signed events converge. No recovery cutover or production cost/performance test has been executed by this branch. Application provider credentials remain *outside* any replicated state. Offline-first cooking must continue working with or without this experimental sync system.
+
+**Decision: DO NOT SHIP; retain #40 as DRAFT/UNMERGED.** Positive encryption and Keyhive core capabilities do not overturn reproduced missing authorization constraints or the explicit early-preview/pre-alpha/unaudited warnings. No Automerge/Loro/p2panda architectural winner is selected here.
