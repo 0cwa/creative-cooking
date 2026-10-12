@@ -11,8 +11,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Repo } from "@automerge/automerge-repo/slim";
-import { initFromBase64Wasm } from "@automerge/automerge-subduction/slim";
-import { wasmBase64 } from "@automerge/automerge-subduction/wasm-base64";
+// The pinned package's Node entrypoint initializes the same wasm used by
+// Repo's slim import. The later 0.19.x initFromBase64Wasm helper does NOT
+// exist in our coherent ARK lockfile's @automerge/automerge-subduction 0.16.1.
+import "@automerge/automerge-subduction";
 import {
   Access, Archive, ChangeId, CiphertextStore, ContactCard, DocumentId, Keyhive, Signer,
 } from "@keyhive/keyhive/slim";
@@ -73,9 +75,8 @@ async function assertPermission(
 describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", () => {
   beforeAll(async () => {
     initKeyhiveWasm();
-    // Repo/slim's Subduction wasm is NOT automatically initialized in Node.
-    // Match ARK's exact installed 0.16.1 slim binding; no newer bridge.
-    initFromBase64Wasm(wasmBase64);
+    // Side-effect Node entrypoint above initializes the shared WASM before
+    // constructing Repo. See upstream Onomancy ARK Node integration guide.
     [owner, relay, reader, editor, admin, outsider] = await Promise.all(
       Array.from({length: 6}, () => subject())
     );
