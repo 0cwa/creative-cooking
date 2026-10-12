@@ -557,6 +557,7 @@ name = "creative-cooking-p2panda-spike"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "hex",
  "iroh",
  "iroh-base",
  "iroh-gossip",
@@ -566,6 +567,7 @@ dependencies = [
  "p2panda-core",
  "p2panda-spaces",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
