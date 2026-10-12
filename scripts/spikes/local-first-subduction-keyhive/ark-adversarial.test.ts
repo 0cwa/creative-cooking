@@ -12,13 +12,13 @@ import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Repo } from "@automerge/automerge-repo/slim";
 import {
-  Access, CiphertextStore, ContactCard, Keyhive, Signer, Identifier,
+  Access, CiphertextStore, ContactCard, DocumentId, Keyhive, Signer,
 } from "@keyhive/keyhive/slim";
 import {
-  isUnprotectedDoc, initKeyhiveWasm, uint8ArrayToHex,
+  isUnprotectedDoc, initKeyhiveWasm, peerIdFromSigner,
 } from "../src/index.js";
 import {
-  generateDoc, keyhiveIdFactory, LegacyAutomergeRepoKeyhive,
+  keyhiveIdFactory, LegacyAutomergeRepoKeyhive,
 } from "../src/keyhive/automerge-repo-keyhive.js";
 import { KeyhiveEventEmitter } from "../src/keyhive/emitter.js";
 import { KeyhiveBlobInterceptor } from "../src/keyhive/blob-interceptor.js";
@@ -75,18 +75,16 @@ describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", ()
     // This is the exact factory that ARK's initialize* API installs into
     // RepoConfig. Use the real asynchronous Repo.create2 path; NEVER create().
     repo = new Repo({
-      peerId: "creative-cooking-security-local" as PeerId,
+      peerId: peerIdFromSigner(owner.signer),
       idFactory: keyhiveIdFactory(owner.keyhive),
     });
     const handle = await repo.create2({ pantry: ["synthetic chickpeas"] });
     docUrl = handle.url;
-    docId = new Uint8Array(owner.signer.verifyingKey.length);
     // Parse the actual protected document ID using ARK's canonical parser.
     const { parseAutomergeUrl } = await import("@automerge/automerge-repo/slim");
     docId = parseAutomergeUrl(docUrl).binaryDocumentId;
     expect(isUnprotectedDoc(docUrl)).toBe(false);
-    expect(await owner.keyhive.hasDocument((await import("@keyhive/keyhive/slim")).DocumentId
-      ? new (await import("@keyhive/keyhive/slim")).DocumentId(docId) : null as never)).toBe(true);
+    expect(await owner.keyhive.hasDocument(new DocumentId(docId))).toBe(true);
 
     // The policy we exercise is the genuine pinned ARK implementation. No
     // synthetic allowlist; only the network adapter is an inert test double.
