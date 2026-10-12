@@ -55,7 +55,7 @@ dependencies {
   androidTestImplementation 'androidx.test:runner:1.7.0'
 }
 GRADLE
-./android/gradlew -p android --no-daemon :app:assembleRelease :app:assembleDebugAndroidTest \
+./android/gradlew -p android --no-daemon :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest \
   > "$OUTPUT/expo-gradle-build.log" 2>&1 || {
     tail -n 220 "$OUTPUT/expo-gradle-build.log"; exit 1;
   }
