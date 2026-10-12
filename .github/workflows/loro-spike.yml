@@ -117,6 +117,34 @@ jobs:
           grep -R "loro-ffi" node_modules/loro-react-native/loro-rs/Cargo.toml node_modules/loro-react-native/loro-rs/Cargo.lock | head -20 || true
           du -sh node_modules/loro-react-native
           find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
+      - name: Verify exact pristine 1.10.3 converter and one-line JS-only compatibility fix
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/loro/native-binding-probe
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --check artifacts/loro/native-binding-probe/unpatched-converter.json
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/native-binding-probe/patched-converter.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const before = JSON.parse(fs.readFileSync('artifacts/loro/native-binding-probe/unpatched-converter.json'));
+          const after = JSON.parse(fs.readFileSync('artifacts/loro/native-binding-probe/patched-converter.json'));
+          if (before.status !== 'confirmed-unpatched' || after.status !== 'patched'
+              || before.publishedVersion !== '1.10.3' || after.publishedVersion !== '1.10.3'
+              || JSON.stringify(before.affectedFiles) !== JSON.stringify(after.affectedFiles)) {
+            throw new Error('Published value-adapter correction source-level audit changed between steps');
+          }
+          const source = fs.readFileSync('node_modules/loro-react-native/src/extension.ts','utf8');
+          const converter = source.slice(source.indexOf('const jsValueToLoroValue'));
+          if (!converter.startsWith('const jsValueToLoroValue')
+              || !converter.slice(0, 160).includes('if (value === null || value === undefined) {')) {
+            throw new Error('Exact published TypeScript adapter not patched');
+          }
+          console.log('One-line adapter correction confirmed in published 1.10.3 source; still not native runtime evidence.');
+          NODE
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-native-binding-probe
+          path: artifacts/loro/native-binding-probe/
 
   android-runtime:
     name: Android ARM64 compile + x86_64 ABI inventory (compile only)
