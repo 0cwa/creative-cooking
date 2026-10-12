@@ -294,7 +294,8 @@ jobs:
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
           test -n "$APK"
           echo "$APK" > "$OUT/apk-path.txt"
-          unzip -l "$APK" | tee "$OUT/apk-entries.txt" | grep -q 'lib/arm64-v8a/libloro-react-native.so'
+          unzip -l "$APK" > "$OUT/apk-entries.txt"
+          grep -q 'lib/arm64-v8a/libloro-react-native.so' "$OUT/apk-entries.txt"
       - name: Run Linux x86_64 TCG as a real aarch64 Android guest, two OS processes
         timeout-minutes: 45
         env:
