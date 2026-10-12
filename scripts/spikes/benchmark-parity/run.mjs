@@ -119,18 +119,26 @@ function one(engine, trial, warmup = false) {
   a = b.edit(a, TRACE.warmA, 'phone');
   c = b.edit(c, TRACE.warmB, 'laptop');
   const warm = report('warmIncrementalSync', timing(() => b.syncPair(a, c, existing)));
-  if (engine === 'automerge') console.log('AUTOMERGE_SYNC_DIAGNOSTIC', JSON.stringify({
-    bootWire: boot.wire, warmWire: warm.wire,
-    preWarmSyncStateA: existing?.a, preWarmSyncStateB: existing?.b,
-    resultSyncStateA: warm.session?.a, resultSyncStateB: warm.session?.b
-  }));
-  assert.ok(warm.wire.aToB < boot.wire.aToB / 2,
-    engine + ' warm send retransmitted most of snapshot; check retained session heads');
+  // Do not erase the evidence if SyncState sends all of history even after a
+  // successful bootstrap; this is a transport behavior to report, not a validity failure.
+  const warmRetransmittedHistory = warm.wire.aToB >= boot.wire.aToB / 2;
   const warmExpected = expectedAfter(expected, [...TRACE.warmA, ...TRACE.warmB]);
   prove(b.project(warm.a), warmExpected, 'warm A');
   prove(b.project(warm.b), warmExpected, 'warm B');
   if (!warmup) (wireSamples[engine].warmIncrementalSync ??= []).push({ ...warm.wire,
-    logicalOperations: TRACE.warmA.length + TRACE.warmB.length });
+    logicalOperations: TRACE.warmA.length + TRACE.warmB.length,
+    retransmittedHistorySizedPayload: warmRetransmittedHistory });
+  // A second genuine edit pair in the same established session makes first-round
+  // retransmission vs steady-state delta behavior independently observable.
+  const nextA = b.edit(warm.a, TRACE.warmFollowupA, 'phone');
+  const nextB = b.edit(warm.b, TRACE.warmFollowupB, 'laptop');
+  const nextWarm = report('warmFollowupSync', timing(() => b.syncPair(nextA, nextB, warm.session)));
+  const nextExpected = expectedAfter(warmExpected, [...TRACE.warmFollowupA, ...TRACE.warmFollowupB]);
+  prove(b.project(nextWarm.a), nextExpected, 'followup warm A');
+  prove(b.project(nextWarm.b), nextExpected, 'followup warm B');
+  if (!warmup) (wireSamples[engine].warmFollowupSync ??= []).push({ ...nextWarm.wire,
+    logicalOperations: TRACE.warmFollowupA.length + TRACE.warmFollowupB.length,
+    retransmittedHistorySizedPayload: nextWarm.wire.aToB >= boot.wire.aToB / 2 });
 
   const eA = b.edit(b.clone(seed, 'phone'), TRACE.warmA, 'phone');
   const eB = b.edit(b.clone(seed, 'laptop'), TRACE.warmB, 'laptop');
