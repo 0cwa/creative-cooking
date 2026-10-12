@@ -118,9 +118,12 @@ function chatMessageRows(rows, conversationId, dropped) {
     if (x.role !== 'assistant' && x.role !== 'user') throw Error('unsupported chat role');
     for (const key of Object.keys(x)) if (!['id','role','content','createdAt','proposals'].includes(key)) dropped.push('chat.messages.' + key);
     if (x.proposals !== undefined) dropped.push('chat.messages.proposals:private-action-payload');
-    byId[item.id] = { id:item.id, role:x.role, content:text(x.content, 'message.content'),
+    // v1 message IDs can repeat in DIFFERENT conversations. Give each message a
+    // conversation-scoped stable ID to prevent shared CRDT root-container aliasing.
+    const id=stableId('message',conversationId + '\0' + item.id);
+    byId[id] = { id, role:x.role, content:text(x.content, 'message.content'),
       createdAt:timestamp(x.createdAt), deleted:false };
-    order.push(item.id);
+    order.push(id);
   }
   return { byId, order };
 }

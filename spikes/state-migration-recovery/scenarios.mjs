@@ -187,12 +187,15 @@ scenario('policy','chronological-chat-import-and-active-id-collision',()=>{
   data.chatMessages.push({id:'msg-live-second',role:'assistant',content:'Serve with basil.',createdAt:when});
   data.chatHistory[0].messages.push({id:'msg-older-second',role:'user',content:'Maybe soup later.',createdAt:when});
   data.chatHistory[0].id='old-active'; // archival and active v1 ID collide with different content
+  data.chatHistory[0].messages[0].id='msg-live'; // original message ID also reused across conversations
   const m=importV1(legacyRaw(data),personal);
   const v=projectView(m.document);
   assert.deepEqual(v.chatMessages.map(x=>x.content),['Can we make toast tonight?','Serve with basil.']);
   assert.equal(v.chatHistory.length,1);
   assert.deepEqual(v.chatHistory[0].messages.map(x=>x.content),['Try a tomato soup.','Maybe soup later.']);
   assert.notEqual(v.chatHistory[0].id,v.activeConversationId);
+  assert.notEqual(v.chatHistory[0].messages[0].id,v.chatMessages[0].id,
+    'same legacy message ID must produce distinct conversation-scoped identities');
   assert.ok(m.diagnostics.droppedPaths.some(x=>x.includes('colliding-legacy-identifier')));
   comparable(importV1(legacyRaw(data),personal).document,m.document);
   migrationResults.push({engine:'policy',chronologicalMessagesPreserved:true,activeIdCollisionClearlySeparated:true});
@@ -213,11 +216,15 @@ for(const engine of Object.keys(E.ENGINE_VERSIONS)) {
   scenario(engine,'chronological-chat-order-roundtrips-real-binary',()=>{
     const data=exampleState();
     data.chatMessages.push({id:'msg-second',role:'assistant',content:'Then add olives',createdAt:when});
+    data.chatHistory[0].messages[0].id='msg-live'; // same legacy ID in a different conversation
     const doc=importV1(legacyRaw(data),personal).document;
     const restored=E.read(engine,E.load(engine,E.snapshot(engine,E.seed(engine,doc))),personal);
     const v=projectView(restored);
     assert.deepEqual(v.chatMessages.map(x=>x.content),['Can we make toast tonight?','Then add olives']);
-    return {messages:v.chatMessages.length,chronological:true,realBinary:true};
+    assert.equal(v.chatHistory[0].messages[0].content,'Try a tomato soup.');
+    assert.notEqual(v.chatMessages[0].id,v.chatHistory[0].messages[0].id,
+      'real engine binary must not alias messages across conversations');
+    return {messages:v.chatMessages.length,chronological:true,realBinary:true,scopedMessageIdentities:true};
   });
   scenario(engine,'v1-to-real-binary-snapshot-restart-and-projection',()=>{
     const src=docs().document;
