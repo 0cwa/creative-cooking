@@ -4,6 +4,13 @@ name: Subduction and Keyhive feasibility (experimental)
 # credentials, secret variables, app migrations, or branch deployments.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - spike/local-first-subduction-keyhive
+    paths:
+      - '.github/workflows/subduction-keyhive-spike.yml'
+      - 'scripts/spikes/local-first-subduction-keyhive/**'
+      - 'docs/spikes/local-first-subduction-keyhive.md'
   pull_request:
     paths:
       - '.github/workflows/subduction-keyhive-spike.yml'
