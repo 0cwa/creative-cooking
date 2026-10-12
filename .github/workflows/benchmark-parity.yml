@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# Do not spend experimental runners on superseded drafts when evidence changes.
+concurrency:
+  group: benchmark-parity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   node-bakeoff:
     name: Dual-engine logical benchmark (Node 22.13)
@@ -24,7 +29,7 @@ jobs:
           package-manager-cache: false
       - name: Install pinned isolated packages
         working-directory: scripts/spikes/benchmark-parity
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Measure identical scenarios with per-trial validation
         working-directory: scripts/spikes/benchmark-parity
         run: npm run bench

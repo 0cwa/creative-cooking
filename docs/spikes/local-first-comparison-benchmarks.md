@@ -57,13 +57,13 @@ Correctness assertions run *outside* the timed function boundaries wherever feas
 
 `process.memoryUsage()` exposes **V8 heap**, external and ArrayBuffer memory separately; RSS includes native/WASM allocations. `process.resourceUsage().maxRSS` is the process high-water RSS on Linux, not engine-specific peak retained bytes. The benchmark reports gross before/after deltas with other live references potentially present, plus per-20-edit process-memory snapshots after GC during the sustained history test, without claiming causally attributable engine allocations. It does **not** call V8 heap delta a WASM allocation measurement. Five fresh-process dynamic-import timings measure combined JS module loading and WASM setup, **not pure WASM instantiation**; document load is separately timed. A production mobile implementation would require representative, independently instrumented tests.
 
-Dependencies are pinned to `@automerge/automerge@3.5.0` and `loro-crdt@1.16.4` in the isolated package.json. Every run uploads its generated npm lockfile with registry integrity strings, exact package versions, an installed package-file tree SHA-256, OS/CPU/memory/Node/V8 and GitHub Actions commit/run ID. The deterministic fixture and operation trace have separate SHA-256 checksums.
+Dependencies are pinned to `@automerge/automerge@3.5.0` and `loro-crdt@1.16.4` in the isolated package.json. The isolated package-lock.json is committed and installed via npm ci; every run uploads the same lockfile with registry integrity strings, exact package versions, an installed package-file tree SHA-256, OS/CPU/memory/Node/V8 and GitHub Actions commit/run ID. The deterministic fixture and operation trace have separate SHA-256 checksums.
 
 ## Reproduce
 
 ```sh
 cd scripts/spikes/benchmark-parity
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 node --expose-gc run.mjs
 node check.mjs
 # Outputs: artifacts/benchmark-parity/results.json and results.csv
@@ -127,7 +127,7 @@ These static export sizes include the **unchanged app shell plus each temporary 
 
 ## Native worklane evidence (no manufactured parity)
 
-The native engine worklanes are independent. As of the source reports inspected October 12, 2026, Automerge #37 demonstrates an iOS Simulator 18-scenario contract and JS↔Swift binary/sync interoperability; Java 0.0.9 direct SyncState↔JS 3.5.0 failed, and Android native runtime remains partial. Loro #38 demonstrates native build integration (including an ARM64 Android APK of 87,482,205 bytes with a 5,944,816-byte native library), but representative Android/iOS runtime and web/native interchange still require qualification.
+The native engine worklanes are independent. As of the source reports inspected October 12, 2026, Automerge #37 demonstrates an iOS Simulator 18-scenario contract and JS↔Swift binary/sync interoperability; Java 0.0.9 direct SyncState↔JS 3.5.0 failed, and Android native runtime remains partial. Loro #38 demonstrates real published 1.10.3 TurboModule execution in an iOS Simulator, reaching web-created snapshot import and native edit/update export, but a subsequent duplicate-reimport assertion and malformed diagnostic collector left full interop/restart qualification **PARTIAL** ([native experimental run 38154451810](https://github.com/0cwa/creative-cooking/actions/runs/38154451810)). Its Android ARM64 build is compile-proven only (87,482,205-byte APK, 5,944,816-byte native library); the published binding lacks Android x86_64 native archives. A representative passing iOS restart and Android ARM64 runtime/interchange remain unproven.
 
 **APK/IPA `engine minus identical no-engine app` deltas: unavailable on a common comparable build matrix. Native startup latency, retained memory and full ABI/runtime coverage: not comparable from the current artifacts.** Dependency archive, AAR or single APK sizes must not be substituted for these missing paired measurements. Refresh this section only by consuming the actual native PR CI artifacts with their exact device/ABI/OS/run metadata. No native branch is modified here.
 
