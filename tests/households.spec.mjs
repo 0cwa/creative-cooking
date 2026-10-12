@@ -86,7 +86,7 @@ test('an unavailable selected household falls back to the personal list without 
   await page.goto('./shopping');
   await ready(page);
   await expect(page.getByRole('button', { name: 'Choose household shopping list' })).toContainText('Personal list');
-  await expect(page.getByText('personal tea', { exact: true })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'personal tea purchased' })).toBeVisible();
   await expect.poll(async () => (await saved(page)).activeHouseholdId).toBe(null);
   expect((await saved(page)).households).toHaveLength(1);
 });
@@ -104,5 +104,5 @@ test('creating a household needs no account and starts with a separate empty lis
   await page.getByRole('button', { name: 'Choose household shopping list' }).click();
   await page.getByRole('button', { name: 'Use personal shopping list' }).click();
   await page.getByRole('button', { name: 'Back to Shopping' }).click();
-  await expect(page.getByText('personal tea', { exact: true })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'personal tea purchased' })).toBeVisible();
 });
