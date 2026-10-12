@@ -20,6 +20,8 @@ type HarnessResult = {
   lifecycle?: unknown;
   outOfOrder?: unknown;
   historyRetention?: unknown;
+  falsyValueProbe?: unknown;
+  falsySnapshotBytes?: number[];
   platform: string;
   platformApi: string;
   webPackage: string;
@@ -619,6 +621,43 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     mergeableMap = { supported: true, value: structureJson.root };
   }
 
+  // Independent domain-correctness probe: the published 1.10.3 JS adapter
+  // currently begins jsValueToLoroValue() with if (!value). This can turn
+  // valid false / 0 / '' writes into Loro null. Assert the native Rust FFI's
+  // real serialized output, never a JS-only imitation or a mocked module.
+  nativeStage('native-falsy-value-probe');
+  const falsyDoc = new LoroDoc();
+  falsyDoc.setPeerId(606n);
+  const falsyMap = falsyDoc.getMap('falsy-values');
+  falsyMap.set('zero', 0);
+  falsyMap.set('false', false);
+  falsyMap.set('empty', '');
+  falsyMap.set('null', null);
+  falsyMap.set('truthy', true);
+  falsyMap.set('nested', { zero: 0, false: false, empty: '', truthy: true });
+  const falsyList = falsyDoc.getMovableList('falsy-list');
+  falsyList.insert(falsyList.len(), false);
+  falsyList.insert(falsyList.len(), 0);
+  falsyList.insert(falsyList.len(), '');
+  falsyList.insert(falsyList.len(), { zero: 0, false: false, empty: '' });
+  falsyDoc.commit();
+  const expectedFalsyState = {
+    'falsy-values': {
+      zero: 0, false: false, empty: '', null: null, truthy: true,
+      nested: { zero: 0, false: false, empty: '', truthy: true }
+    },
+    'falsy-list': [false, 0, '', { zero: 0, false: false, empty: '' }]
+  };
+  const observedFalsyState = falsyDoc.toJSON();
+  const falsyValuesPreserved = semanticEqual(observedFalsyState, expectedFalsyState);
+  const falsySnapshot = falsyDoc.export({ mode: 'snapshot' });
+  const falsyValueProbe = {
+    status: falsyValuesPreserved ? 'PASS' : 'FAIL',
+    expected: expectedFalsyState, actual: observedFalsyState,
+    preserved: falsyValuesPreserved,
+    sourcePackage: nativePackageLabel,
+    snapshot: byteIdentity(falsySnapshot)
+  };
   nativeStage('native-result-complete');
   const checks: NonNullable<HarnessResult['checks']> = {
     importWebBinary: 'PASS',
@@ -628,6 +667,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     duplicateImport: 'PASS',
     outOfOrderImport: 'PASS',
     fullHistoryRetention: 'PASS',
+    falsyValues: falsyValueProbe.status,
     shallowHistoryProbe: shallowHistory.status === 'PASS' ? 'PASS' : 'PARTIAL',
     durableReviewCheckpoint: reviewCheckpointRestored ? 'PASS' : 'PARTIAL',
     causalResolution: 'PASS',
@@ -639,10 +679,11 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
       && !nativeDisagreementEvidence.error
       && nativeDisagreementEvidence.concurrent ? 'PASS' : 'PARTIAL'
   };
-  const status = Object.values(checks).every((value) => value === 'PASS')
-    ? 'PASS' : 'PARTIAL';
+  const statuses = Object.values(checks);
+  const status = statuses.includes('FAIL') ? 'FAIL'
+    : statuses.every((value) => value === 'PASS') ? 'PASS' : 'PARTIAL';
   return {
-    ok: true,
+    ok: status !== 'FAIL',
     status,
     checks,
     runId,
@@ -653,6 +694,8 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     duplicateDiagnostics,
     outOfOrder,
     historyRetention,
+    falsyValueProbe,
+    falsySnapshotBytes: Array.from(new Uint8Array(falsySnapshot)),
     lifecycle,
     platform: Platform.OS,
     platformApi: nativePackageLabel,
