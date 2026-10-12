@@ -1,3 +1,4 @@
+import { normalizeHouseholdState } from '../domain/households.ts';
 import type { AppSettings, ChatConversation, ChatMessage, MealContext, PantryItem, PersistedState, Recipe, ShoppingItem } from '../domain/types';
 
 type BackupEnvelope = {
@@ -82,11 +83,13 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
       : [...defaults.settings.allergies]
   } as AppSettings;
 
-  return { pantry, shoppingList, recipes, chatMessages, chatHistory, activeConversationId, mealContext, settings };
+  return { ...normalizeHouseholdState(state), pantry, shoppingList, recipes, chatMessages, chatHistory, activeConversationId, mealContext, settings };
 }
 
 export function freshStateFromDefaults(defaults: PersistedState): PersistedState {
   return {
+    households: [],
+    activeHouseholdId: null,
     pantry: [],
     shoppingList: [],
     recipes: [],

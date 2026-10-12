@@ -1,0 +1,1 @@
+{"name":"@creative-cooking/household-replication","private":true,"version":"0.1.0","type":"module","exports":"./index.mjs","scripts":{"test":"node --test test/*.test.mjs","evidence":"node evidence.mjs"},"dependencies":{"@automerge/automerge":"3.5.0"},"engines":{"node":">=22.13"},"devDependencies":{"fake-indexeddb":"6.2.4"}}

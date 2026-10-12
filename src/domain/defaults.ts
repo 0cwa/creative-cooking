@@ -18,6 +18,8 @@ export function migrateLegacySystemPrompt(value: unknown): string {
 }
 
 export const DEFAULT_STATE: PersistedState = {
+  households: [],
+  activeHouseholdId: null,
   pantry: [],
   shoppingList: [],
   recipes: [],

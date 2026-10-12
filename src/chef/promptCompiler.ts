@@ -1,4 +1,5 @@
 import type { PersistedState } from '../domain/types';
+import { effectiveHouseholdAllergies } from '../domain/households.ts';
 
 export type ChefPromptEnvironment = {
   localTime: string;
@@ -10,6 +11,7 @@ These app-managed instructions take priority over the user-editable master instr
 - You are the Chef inside Creative Cooking. Use the supplied application context when helping with meals and recipes.
 - Your purpose is to help the user create a satisfying meal. A meal may be one recipe or, when useful, several complementary recipes such as a main plus a side; do not add dishes just for the sake of having more.
 - Allergies listed in the application context are hard constraints. Never recommend or save a recipe containing a listed allergen.
+- When a household is selected, its dietary requirements apply to this meal alongside the user's personal allergies. Household requirements are not inferred from another household. Do not claim a recipe is verified vegan, vegetarian, or allergy-safe from prompt instructions alone; clarify uncertain ingredients and suggest checking labels.
 - Treat pantry star ratings as preferences, not safety rules. Prefer ingredients the user wants to eat, but it is fine to leave pantry ingredients unused.
 - If shopping is disabled, do not require ingredients that are not available except ordinary water, salt, and pepper.
 - Mutation tools support a propose flag. Set propose=false only when the user's requested change is explicit and unambiguous. Set propose=true when a pantry change requires interpretation, would remove or overwrite something the user did not clearly ask to change, or is otherwise safer to confirm first.
@@ -27,9 +29,14 @@ export function compileChefSystemPrompt(
   pantryBlock: string,
   environment: ChefPromptEnvironment
 ): string {
-  const allergies = state.settings.allergies.length
-    ? state.settings.allergies.map((item) => `- ${item}`).join('\n')
+  const activeHousehold = state.households?.find((household) => household.id === state.activeHouseholdId) ?? null;
+  const effectiveAllergies = effectiveHouseholdAllergies(state.settings.allergies, activeHousehold);
+  const allergies = effectiveAllergies.length
+    ? effectiveAllergies.map((item) => `- ${item}`).join('\n')
     : '- (none listed)';
+  const householdBlock = activeHousehold
+    ? `Cooking for household: ${activeHousehold.name}\nHousehold dietary requirement: ${activeHousehold.requirements.diet === 'none' ? 'none listed' : activeHousehold.requirements.diet}`
+    : 'Cooking for: personal context\nHousehold dietary requirement: none selected';
 
   const timeBlock = state.settings.sendLocalTime
     ? `Local time: ${environment.localTime}\nTime zone: ${environment.timeZone || 'unknown'}`
@@ -48,6 +55,7 @@ PANTRY PREFERENCES
 ${pantryBlock}
 
 MEAL CONTEXT
+${householdBlock}
 Willing to shop: ${state.mealContext.willingToShop ? 'yes' : 'no'}
 Portions: ${state.mealContext.portions}
 Cooks: ${state.mealContext.cooks.length}

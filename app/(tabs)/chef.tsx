@@ -141,14 +141,16 @@ export default function ChefScreen() {
 
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
-    shoppingList: app.shoppingList,
+    shoppingList: app.personalShoppingList,
+    households: app.households,
+    activeHouseholdId: app.activeHouseholdId,
     recipes: app.recipes,
     chatMessages: app.chatMessages,
     chatHistory: app.chatHistory,
     activeConversationId: app.activeConversationId,
     mealContext: app.mealContext,
     settings: app.settings
-  }), [app.pantry, app.shoppingList, app.recipes, app.chatMessages, app.chatHistory, app.activeConversationId, app.mealContext, app.settings]);
+  }), [app.pantry, app.personalShoppingList, app.households, app.activeHouseholdId, app.recipes, app.chatMessages, app.chatHistory, app.activeConversationId, app.mealContext, app.settings]);
 
   const showDictationRecovery = (reason?: string) => {
     const detail = reason?.trim() ?? '';
@@ -251,7 +253,7 @@ export default function ChefScreen() {
       const provider = providerForId(app.settings.providerId);
       const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
 
-      if (capabilities.location === 'local' && app.settings.allergies.length > 0) {
+      if (capabilities.location === 'local' && app.effectiveAllergies.length > 0) {
         app.appendChatMessage(makeChatMessage(
           'assistant',
           'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'

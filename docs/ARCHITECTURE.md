@@ -53,6 +53,12 @@ OpenRouter remains the default because its OAuth PKCE flow works from a static b
 
 On native, credentials use Expo SecureStore. On web there is no browser equivalent to a native keychain, so the credential vault uses browser-local storage; the UI and documentation must be explicit about that limitation.
 
+## Local household scopes
+
+The local household foundation adds separate shopping lists, explicit selected recipe copies and household dietary requirements. Personal Pantry, chats, credentials and the original recipes remain personal. Selecting a household projects its shopping list while the underlying personal list remains intact for backup and later selection. Chef unions personal and selected-household allergies locally; the union is never stored as a household profile.
+
+`src/domain/households.ts` validates and allowlists household imports and recipe snapshots. The standalone `packages/household-replication` exercises Automerge behind a replaceable document/persistence/authority boundary and is not imported into Expo yet. Membership and cryptographic permissions are external to replicated cooking documents. The remaining adoption, key/transport, native and release gates are in [HOUSEHOLDS.md](HOUSEHOLDS.md).
+
 ## App-state persistence
 
 On web/PWA, ordinary application state is stored in IndexedDB. On first load after the migration, the adapter imports the existing `creative-cooking-state-v1` value from the previous localStorage-backed AsyncStorage path, commits it to IndexedDB, and only then removes the legacy value. The migration is idempotent because IndexedDB is authoritative once a record exists. Native builds continue to use AsyncStorage.

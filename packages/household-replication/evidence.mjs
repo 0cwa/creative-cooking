@@ -1,0 +1,10 @@
+import {spawnSync} from 'node:child_process';
+import {readdirSync,writeFileSync,mkdirSync} from 'node:fs';
+const files=readdirSync(new URL('./test/',import.meta.url)).filter(name=>name.endsWith('.test.mjs')).map(name=>`test/${name}`);
+const result=spawnSync(process.execPath,['--test','--test-reporter=spec',...files],{cwd:new URL('.',import.meta.url),encoding:'utf8'});
+const checks=result.stdout.split('\n').filter(line=>line.startsWith('✔ ')).map(line=>line.slice(2).replace(/ \([\d.]+ms\)$/,''));
+const report={schemaVersion:1,engine:'@automerge/automerge',engineVersion:'3.5.0',result:result.status===0?'PASS':'FAIL',checks,nativeQualification:'NOT_QUALIFIED',transport:'NOT_SELECTED',identityAndKeys:'EXTERNAL_AUTHORITY_TEST_DOUBLE_ONLY',durability:'IndexedDB implementation verified with fake-indexeddb; actual browser lifecycle remains an integration gate',limitations:['No production runtime integration','No end-to-end cryptography, key distribution or revocation','No durable publication outbox or wire protocol','No proof of browser process crash recovery or mobile execution']};
+mkdirSync(new URL('./artifacts/',import.meta.url),{recursive:true});
+writeFileSync(new URL('./artifacts/household-replication.json',import.meta.url),JSON.stringify(report,null,2)+'\n');
+process.stdout.write(result.stdout);process.stderr.write(result.stderr);process.stdout.write(JSON.stringify(report,null,2)+'\n');
+process.exitCode=result.status??1;
