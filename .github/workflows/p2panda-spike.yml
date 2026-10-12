@@ -1,0 +1,246 @@
+name: p2panda substrate spike (experimental)
+
+on:
+  pull_request:
+    paths:
+      - "experiments/p2panda/**"
+      - "docs/spikes/local-first-p2panda.md"
+      - ".github/workflows/p2panda-spike.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-contract:
+    name: Opaque contract and encrypted browser mailbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.13"
+          package-manager-cache: false
+      - run: node --test experiments/p2panda/*.test.mjs
+
+  chromium-static-browser:
+    name: Chromium static-browser encrypted catch-up
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.13"
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: node --test experiments/p2panda/chromium.smoke.mjs
+
+  rust-native:
+    name: Native p2panda/Spaces and genuine CRDT bytes (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.13"
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/p2panda/rust -> target
+      - name: Enforce checked-in exact experimental Cargo resolution
+        run: cargo metadata --locked --manifest-path experiments/p2panda/rust/Cargo.toml --format-version 1 --no-deps > /dev/null
+      - run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets --locked
+      - name: Surface Spaces read-only signed-write negative findings
+        run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --test spaces --locked -- --nocapture
+      - name: Download pinned real-engine test dependencies
+        run: npm ci --prefix experiments/p2panda/engine-fixtures --omit=dev --no-audit --no-fund
+      - name: Generate exact real CRDT incremental encrypted fixture hashes
+        run: node experiments/p2panda/engine-fixtures/fixtures.mjs generate experiments/p2panda/engine-fixtures/artifacts/fixtures.json
+      - name: Build a real native p2panda process
+        timeout-minutes: 12
+        run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --bin peer --locked
+      - name: Build real p2panda Spaces signed CBOR fixture producer and independent Bob verifier
+        run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --example spaces_wire --locked
+      - name: Persist/restart keyless C, late-B/E real signed encrypted Spaces headers and authorize Bob
+        timeout-minutes: 10
+        continue-on-error: true
+        run: node experiments/p2panda/spaces-native-smoke.mjs experiments/p2panda/rust/target/debug/peer experiments/p2panda/rust/target/debug/examples/spaces_wire
+      - name: Persisted real p2panda Automerge/Loro late-peer integration
+        continue-on-error: true
+        timeout-minutes: 12
+        run: node experiments/p2panda/real-engine-smoke.mjs experiments/p2panda/rust/target/debug/peer
+      - name: Real headless Chromium to signed p2panda native peers, restart and convergence
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          CC_BROWSER=1 CC_P2PANDA_OUTPUT=experiments/p2panda/artifacts/chromium-native-engine-scenarios.json node experiments/p2panda/real-engine-smoke.mjs experiments/p2panda/rust/target/debug/peer
+      - name: Real p2panda third-process random binary catch-up
+        continue-on-error: true
+        timeout-minutes: 7
+        run: node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug/peer
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p2panda-real-native-engine-evidence
+          path: experiments/p2panda/artifacts/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+
+  android-emulator-runtime:
+    name: Android emulator calls real p2panda JNI (x86_64, not Expo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: x86_64-linux-android
+      - name: Configure Android emulator target NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_HOME:-}"
+          if [ -z "$ndk" ]; then
+            sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+            ndk="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          llvm="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$llvm/x86_64-linux-android24-clang"
+          echo "CC_x86_64_linux_android=$llvm/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_x86_64_linux_android=$llvm/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$llvm/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+      - name: Link x86_64 Android Rust JNI p2panda Node library
+        run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --release --lib --target x86_64-linux-android --locked
+      - name: Package native .so into isolated Android app (no Expo)
+        run: |
+          mkdir -p experiments/p2panda/android-runtime/src/main/jniLibs/x86_64
+          cp experiments/p2panda/rust/target/x86_64-linux-android/release/libcreative_cooking_p2panda_spike.so experiments/p2panda/android-runtime/src/main/jniLibs/x86_64/
+          test -s experiments/p2panda/android-runtime/src/main/jniLibs/x86_64/libcreative_cooking_p2panda_spike.so
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Build isolated native Java APK
+        run: gradle -p experiments/p2panda/android-runtime assembleDebug --no-daemon
+      - uses: reactivecircus/android-emulator-runner@v2
+        name: Boot Android emulator and actually execute signed-operation JNI probe
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          script: bash experiments/p2panda/android-runtime/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p2panda-real-android-emulator-jni-evidence
+          path: experiments/p2panda/artifacts/android-emulator-*
+          if-no-files-found: warn
+          retention-days: 14
+
+  mobile-cross-check:
+    name: Native linkable artifact (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+          - os: macos-15
+            target: aarch64-apple-ios
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: ${{ matrix.target }}
+      - name: Configure Android NDK clang for native library link
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="$(printenv ANDROID_NDK_HOME || true)"
+          if [ -z "$ndk" ]; then
+            sdk="$(printenv ANDROID_HOME || echo /usr/local/lib/android/sdk)"
+            ndk="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          echo "CC_ANDROID_NDK=$ndk" >> "$GITHUB_ENV"
+          clang="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          ar="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          test -x "$clang"; test -x "$ar"
+          echo "CC_aarch64_linux_android=$clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
+          "$clang" --version
+      - name: Resolve target dependencies
+        run: cargo fetch --locked --manifest-path experiments/p2panda/rust/Cargo.toml --target ${{ matrix.target }}
+      - name: Reproduce known iOS upstream blocker before temporary patch
+        if: matrix.target == 'aarch64-apple-ios'
+        shell: bash
+        run: |
+          set +e
+          cargo check --locked --manifest-path experiments/p2panda/rust/Cargo.toml --lib --target aarch64-apple-ios > /tmp/p2panda-ios-unpatched.log 2>&1
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && grep -q 'in6_ifreq' /tmp/p2panda-ios-unpatched.log; then
+            echo 'Reproduced netdev 0.46.3 libc::in6_ifreq compile blocker.'
+          elif [ "$code" -eq 0 ]; then
+            echo 'Previously recorded iOS blocker no longer reproducible.'
+          else
+            tail -80 /tmp/p2panda-ios-unpatched.log
+            echo 'Prepatch check failed for an unexpected reason' >&2
+            exit 1
+          fi
+      - name: iOS-only minimal netdev upstream compatibility patch
+        if: matrix.target == 'aarch64-apple-ios'
+        run: python3 experiments/p2panda/ios-netdev-workaround.py
+      - name: iOS-only netwatch BSD routing-socket compatibility workaround
+        if: matrix.target == 'aarch64-apple-ios'
+        run: python3 experiments/p2panda/ios-netwatch-workaround.py
+      - name: Build linkable native C ABI probe containing real p2panda Node
+        run: cargo build --locked --manifest-path experiments/p2panda/rust/Cargo.toml --release --lib --target ${{ matrix.target }}
+      - name: Write exact ABI/toolchain/byte evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="experiments/p2panda/rust/target/${{ matrix.target }}/release"
+          mkdir -p experiments/p2panda/artifacts
+          rustc -vV
+          ls -lah "$p"/libcreative_cooking_p2panda_spike.*
+          shasum -a 256 "$p"/libcreative_cooking_p2panda_spike.* || sha256sum "$p"/libcreative_cooking_p2panda_spike.*
+          if [ "${{ matrix.target }}" = aarch64-linux-android ]; then
+            "$CC_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$p/libcreative_cooking_p2panda_spike.so"
+            "$CC_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D "$p/libcreative_cooking_p2panda_spike.so" > /tmp/cc-p2panda-android-symbols.txt
+            grep -m 1 'Java_org_creativecooking_spike_P2pandaProbe_nativeProbe' /tmp/cc-p2panda-android-symbols.txt
+            test -s "$p/libcreative_cooking_p2panda_spike.so"
+          else
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun lipo -info "$p/libcreative_cooking_p2panda_spike.a"
+            test -s "$p/libcreative_cooking_p2panda_spike.a"
+            file "$p/libcreative_cooking_p2panda_spike.a"
+            echo "NOTE: Xcode 16.4 nm cannot read LLVM 22 Rust 1.96 object attributes; staticlib built, lipo confirms arm64; iOS C symbol export/runtime not verified here."
+          fi
+          cp "$p/libcreative_cooking_p2panda_spike.a" experiments/p2panda/artifacts/
+          if [ -f "$p/libcreative_cooking_p2panda_spike.so" ]; then cp "$p/libcreative_cooking_p2panda_spike.so" experiments/p2panda/artifacts/; fi
+          python3 -c 'import json,os,platform,subprocess,glob,hashlib; p=glob.glob("experiments/p2panda/artifacts/libcreative_cooking_p2panda_spike.*"); print(json.dumps({"target":"${{ matrix.target }}","host":platform.platform(),"rustc":subprocess.check_output(["rustc","-vV"],text=True),"abi": "android arm64 JNI" if "${{ matrix.target }}".endswith("android") else "ios arm64 C staticlib","files":[{"name":os.path.basename(f),"bytes":os.path.getsize(f),"sha256":hashlib.sha256(open(f,"rb").read()).hexdigest()} for f in p],"executedOnMobile":False},indent=2))' > experiments/p2panda/artifacts/native-build.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p2panda-native-${{ matrix.target }}
+          path: experiments/p2panda/artifacts/
+          if-no-files-found: warn
+          retention-days: 14

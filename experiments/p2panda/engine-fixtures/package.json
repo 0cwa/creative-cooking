@@ -1,0 +1,21 @@
+{
+  "name": "creative-cooking-evaluation-readiness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "node --test boundary.test.mjs",
+    "fixtures": "node fixtures.mjs generate artifacts/fixtures.json",
+    "audit": "node audit-evidence.mjs"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.5.0",
+    "loro-crdt": "1.16.4"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
