@@ -54,8 +54,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: experiments/p2panda/rust -> target
-      - name: Generate exact experimental transitive dependency resolution
-        run: cargo generate-lockfile --manifest-path experiments/p2panda/rust/Cargo.toml
+      - name: Enforce checked-in exact experimental Cargo resolution
+        run: cargo metadata --locked --manifest-path experiments/p2panda/rust/Cargo.toml --format-version 1 --no-deps > /dev/null
       - run: cargo test --manifest-path experiments/p2panda/rust/Cargo.toml --all-targets --locked
       - name: Download pinned real-engine test dependencies
         run: npm ci --prefix experiments/p2panda/engine-fixtures --omit=dev --no-audit --no-fund
@@ -72,11 +72,6 @@ jobs:
         continue-on-error: true
         timeout-minutes: 7
         run: node experiments/p2panda/process-smoke.mjs experiments/p2panda/rust/target/debug/peer
-      - name: Lockfile retrieval (temporary bootstrap; remove once committed)
-        run: |
-          echo CC_CARGO_LOCK_BEGIN
-          cat experiments/p2panda/rust/Cargo.lock
-          echo CC_CARGO_LOCK_END
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -123,13 +118,13 @@ jobs:
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
           "$clang" --version
       - name: Resolve target dependencies
-        run: cargo fetch --manifest-path experiments/p2panda/rust/Cargo.toml --target ${{ matrix.target }}
+        run: cargo fetch --locked --manifest-path experiments/p2panda/rust/Cargo.toml --target ${{ matrix.target }}
       - name: Reproduce known iOS upstream blocker before temporary patch
         if: matrix.target == 'aarch64-apple-ios'
         shell: bash
         run: |
           set +e
-          cargo check --manifest-path experiments/p2panda/rust/Cargo.toml --lib --target aarch64-apple-ios > /tmp/p2panda-ios-unpatched.log 2>&1
+          cargo check --locked --manifest-path experiments/p2panda/rust/Cargo.toml --lib --target aarch64-apple-ios > /tmp/p2panda-ios-unpatched.log 2>&1
           code=$?
           set -e
           if [ "$code" -ne 0 ] && grep -q 'in6_ifreq' /tmp/p2panda-ios-unpatched.log; then
@@ -145,7 +140,7 @@ jobs:
         if: matrix.target == 'aarch64-apple-ios'
         run: python3 experiments/p2panda/ios-netdev-workaround.py
       - name: Build linkable native C ABI probe containing real p2panda Node
-        run: cargo build --manifest-path experiments/p2panda/rust/Cargo.toml --release --lib --target ${{ matrix.target }}
+        run: cargo build --locked --manifest-path experiments/p2panda/rust/Cargo.toml --release --lib --target ${{ matrix.target }}
       - name: Write exact ABI/toolchain/byte evidence
         shell: bash
         run: |

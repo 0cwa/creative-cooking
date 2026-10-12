@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 // Both real engine formats -> independent sealed binary changes -> opaque transport.
 // Fixture AES-GCM is test-only; it does not implement ARK, Keyhive, ACLs or pairing.
 import assert from 'node:assert/strict';
@@ -165,6 +166,7 @@ export function verifyRecovered(fixture, blobs, phase) {
     phase,exactCiphertextBytes:true,actualEngineChangeSha256:fixture.commits.slice(0,expected).map(x=>x.plainSha256),
     wireLengths:fixture.commits.slice(0,expected).map(x=>x.byteLength),...proof};
 }
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 const [, , command, ...args]=process.argv;
 if(command==='generate'){
   const [filename]=args;
@@ -183,3 +185,5 @@ if(command==='generate'){
   const observed=JSON.parse(readFileSync(receivedFile,'utf8'));
   console.log(JSON.stringify(verifyRecovered(fixture,observed,phase)));
 }else if(command!==undefined) throw new Error('Usage: node fixtures.mjs generate ... | verify ...');
+
+}
