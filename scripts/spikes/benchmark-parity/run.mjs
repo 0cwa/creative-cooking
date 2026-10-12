@@ -119,6 +119,11 @@ function one(engine, trial, warmup = false) {
   a = b.edit(a, TRACE.warmA, 'phone');
   c = b.edit(c, TRACE.warmB, 'laptop');
   const warm = report('warmIncrementalSync', timing(() => b.syncPair(a, c, existing)));
+  if (engine === 'automerge') console.log('AUTOMERGE_SYNC_DIAGNOSTIC', JSON.stringify({
+    bootWire: boot.wire, warmWire: warm.wire,
+    preWarmSyncStateA: existing?.a, preWarmSyncStateB: existing?.b,
+    resultSyncStateA: warm.session?.a, resultSyncStateB: warm.session?.b
+  }));
   assert.ok(warm.wire.aToB < boot.wire.aToB / 2,
     engine + ' warm send retransmitted most of snapshot; check retained session heads');
   const warmExpected = expectedAfter(expected, [...TRACE.warmA, ...TRACE.warmB]);
