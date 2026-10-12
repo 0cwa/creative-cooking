@@ -10,7 +10,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { Repo } from "@automerge/automerge-repo/slim";
+// Node bootstrap comes from the package's regular entrypoint, like ARK's
+// documented Node integration. Do not instantiate uninitialized Repo/slim.
+import { Repo } from "@automerge/automerge-repo";
 // The pinned package's Node entrypoint initializes the same wasm used by
 // Repo's slim import. The later 0.19.x initFromBase64Wasm helper does NOT
 // exist in our coherent ARK lockfile's @automerge/automerge-subduction 0.16.1.
