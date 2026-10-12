@@ -1,0 +1,319 @@
+name: Subduction native interoperability (isolated research)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/subduction-native-spike.yml'
+      - 'spikes/subduction-native/**'
+      - 'docs/spikes/local-first-subduction-native.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: subduction-native-research
+  cancel-in-progress: true
+
+jobs:
+  linux-host:
+    name: Rust host + Chromium genuine Subduction (NOT mobile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+      - uses: actions/checkout@v4
+        with:
+          repository: 0cwa/creative-cooking
+          ref: spike/local-first-evaluation-readiness
+          path: read-only-fixture
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: wasm32-unknown-unknown
+          cache: true
+          cache-workspaces: subduction-upstream
+      - name: Pin versions and fetch dependencies
+        run: |
+          mkdir -p artifacts/subduction-native
+          git -C subduction-upstream rev-parse HEAD > artifacts/subduction-native/sources.txt
+          git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
+          test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
+          rustc --version >> artifacts/subduction-native/sources.txt
+          cargo install wasm-pack --locked --version 0.14.0
+          (cd subduction-upstream/subduction_wasm && pnpm install --frozen-lockfile)
+          npm ci --prefix read-only-fixture/spikes/evaluation-readiness --no-audit --no-fund
+      - name: Build exact upstream relay, native Rust host and browser WASM
+        run: |
+          cargo build --manifest-path subduction-upstream/Cargo.toml -p subduction_cli
+          cargo build --manifest-path spikes/subduction-native/rust/Cargo.toml --release
+          (cd subduction-upstream && wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
+          cp spikes/subduction-native/rust/Cargo.lock artifacts/subduction-native/native-Cargo.lock
+          sha256sum spikes/subduction-native/rust/target/release/cc-subduction-host-probe \
+            spikes/subduction-native/rust/target/release/libcc_subduction_native.so \
+            subduction-upstream/target/debug/subduction_cli >> artifacts/subduction-native/sources.txt
+      - name: Generate actual engine fixtures and static subpath client
+        run: |
+          node read-only-fixture/spikes/evaluation-readiness/fixtures.mjs generate "$RUNNER_TEMP/native-fixture.json"
+          cp spikes/subduction-native/browser/native-interop.spec.ts.template subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
+          mkdir -p subduction-upstream/subduction_wasm/e2e/server/creative-cooking
+          cp subduction-upstream/subduction_wasm/e2e/server/index.html \
+            subduction-upstream/subduction_wasm/e2e/server/creative-cooking/index.html
+          ln -s ../pkg subduction-upstream/subduction_wasm/e2e/server/creative-cooking/pkg
+          echo "CC_NATIVE_CLI=$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_HOST_BIN=$GITHUB_WORKSPACE/spikes/subduction-native/rust/target/release/cc-subduction-host-probe" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_FIXTURE=$RUNNER_TEMP/native-fixture.json" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_VERIFIER=$GITHUB_WORKSPACE/read-only-fixture/spikes/evaluation-readiness/fixtures.mjs" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_OUTPUT=$GITHUB_WORKSPACE/artifacts/subduction-native" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_MODE=host" >> "$GITHUB_ENV"
+      - name: Real Chromium to host Rust relay/restart proof (host ONLY)
+        run: |
+          npm install --global http-server@14.1.1
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test native-interop.spec.ts --project=chromium --reporter=line
+      - name: Upload exact host proof or failing logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subduction-native-linux-host
+          path: |
+            artifacts/subduction-native/
+            spikes/subduction-native/rust/target/release/cc-subduction-host-probe
+            spikes/subduction-native/rust/target/release/libcc_subduction_native.so
+            subduction-upstream/subduction_wasm/test-results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  ios-simulator:
+    name: Expo iOS Simulator Rust runtime + simulator/device libraries
+    runs-on: macos-26
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+      - uses: actions/checkout@v4
+        with:
+          repository: 0cwa/creative-cooking
+          ref: spike/local-first-evaluation-readiness
+          path: read-only-fixture
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: wasm32-unknown-unknown,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          cache: true
+          cache-workspaces: subduction-upstream
+      - name: Source hashes and simulator architecture
+        run: |
+          mkdir -p artifacts/subduction-native
+          git -C subduction-upstream rev-parse HEAD > artifacts/subduction-native/sources.txt
+          git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
+          test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
+          xcodebuild -version >> artifacts/subduction-native/sources.txt
+          swift --version >> artifacts/subduction-native/sources.txt
+          rustc --version >> artifacts/subduction-native/sources.txt
+          uname -m >> artifacts/subduction-native/sources.txt
+          if [ "$(uname -m)" = "arm64" ]; then echo "RUST_SIM_TARGET=aarch64-apple-ios-sim" >> "$GITHUB_ENV";
+          else echo "RUST_SIM_TARGET=x86_64-apple-ios" >> "$GITHUB_ENV"; fi
+      - name: Compile real Rust staticlib for iOS simulator and device
+        run: |
+          cargo build --manifest-path spikes/subduction-native/rust/Cargo.toml --lib --target "$RUST_SIM_TARGET" --release
+          cp "spikes/subduction-native/rust/target/$RUST_SIM_TARGET/release/libcc_subduction_native.a" \
+            spikes/subduction-native/expo-probe/modules/cc-subduction-module/ios/libcc_subduction_native.a
+          shasum -a 256 spikes/subduction-native/expo-probe/modules/cc-subduction-module/ios/libcc_subduction_native.a >> artifacts/subduction-native/sources.txt
+          cargo build --manifest-path spikes/subduction-native/rust/Cargo.toml --lib --target aarch64-apple-ios --release
+          shasum -a 256 spikes/subduction-native/rust/target/aarch64-apple-ios/release/libcc_subduction_native.a >> artifacts/subduction-native/sources.txt
+          if [ "$RUST_SIM_TARGET" != "aarch64-apple-ios-sim" ]; then
+            cargo build --manifest-path spikes/subduction-native/rust/Cargo.toml --lib --target aarch64-apple-ios-sim --release
+            shasum -a 256 spikes/subduction-native/rust/target/aarch64-apple-ios-sim/release/libcc_subduction_native.a >> artifacts/subduction-native/sources.txt
+          fi
+          cp spikes/subduction-native/rust/Cargo.lock artifacts/subduction-native/native-Cargo.lock
+      - name: Generate and compile isolated Expo application
+        run: |
+          npm install --prefix spikes/subduction-native/expo-probe --no-audit --no-fund
+          cd spikes/subduction-native/expo-probe
+          npx expo prebuild --platform ios --no-install
+          cd ios
+          pod install --repo-update
+          WORKSPACE="$(find . -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          test -d "$WORKSPACE"
+          xcodebuild -list -json -workspace "$WORKSPACE" > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild-projects.json"
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/cc-ios-derived" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build \
+            > "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild.log" 2>&1 || {
+              tail -200 "$GITHUB_WORKSPACE/artifacts/subduction-native/xcodebuild.log"; exit 1;
+            }
+          find "$RUNNER_TEMP/cc-ios-derived/Build/Products" -maxdepth 3 -name '*.app' \
+            -print > "$GITHUB_WORKSPACE/artifacts/subduction-native/ios-app-path.txt"
+      - name: Run actual iOS app Rust Subduction against static Chromium and persistent CLI
+        run: |
+          cargo install wasm-pack --locked --version 0.14.0
+          (cd subduction-upstream/subduction_wasm && pnpm install --frozen-lockfile)
+          npm ci --prefix read-only-fixture/spikes/evaluation-readiness --no-audit --no-fund
+          cargo build --manifest-path subduction-upstream/Cargo.toml -p subduction_cli
+          (cd subduction-upstream && wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
+          node read-only-fixture/spikes/evaluation-readiness/fixtures.mjs generate "$RUNNER_TEMP/native-fixture.json"
+          cp spikes/subduction-native/browser/native-interop.spec.ts.template subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
+          mkdir -p subduction-upstream/subduction_wasm/e2e/server/creative-cooking
+          cp subduction-upstream/subduction_wasm/e2e/server/index.html \
+            subduction-upstream/subduction_wasm/e2e/server/creative-cooking/index.html
+          ln -s ../pkg subduction-upstream/subduction_wasm/e2e/server/creative-cooking/pkg
+          SIM_ID="$(xcrun simctl list devices available -j | node -e "let s='';process.stdin.on('data',x=>s+=x).on('end',()=>{const a=Object.values(JSON.parse(s).devices).flat().filter(x=>x.isAvailable&&x.name.includes('iPhone'));if(!a.length)process.exit(2);console.log(a[0].udid)})")"
+          xcrun simctl boot "$SIM_ID" || true
+          xcrun simctl bootstatus "$SIM_ID" -b
+          APP_PATH="$(head -n 1 artifacts/subduction-native/ios-app-path.txt)"
+          test -d "$APP_PATH"
+          xcrun simctl install booted "$APP_PATH"
+          echo "simulator=$SIM_ID" >> artifacts/subduction-native/sources.txt
+          export CC_NATIVE_CLI="$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli"
+          export CC_NATIVE_FIXTURE="$RUNNER_TEMP/native-fixture.json"
+          export CC_NATIVE_VERIFIER="$GITHUB_WORKSPACE/read-only-fixture/spikes/evaluation-readiness/fixtures.mjs"
+          export CC_NATIVE_OUTPUT="$GITHUB_WORKSPACE/artifacts/subduction-native"
+          export CC_NATIVE_MODE=ios
+          export CC_NATIVE_IOS_BUNDLE=dev.creativecooking.subductionnative
+          npm install --global http-server@14.1.1
+          (cd subduction-upstream/subduction_wasm && pnpm exec playwright install chromium && pnpm exec playwright test native-interop.spec.ts --project=chromium --reporter=line)
+      - name: Upload actual iOS results, source hashes and compile logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subduction-native-ios-simulator
+          path: |
+            artifacts/subduction-native/
+            spikes/subduction-native/rust/target/*-apple-ios*/release/libcc_subduction_native.a
+            spikes/subduction-native/expo-probe/modules/cc-subduction-module/ios/libcc_subduction_native.a
+            subduction-upstream/subduction_wasm/test-results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  android-arm64:
+    name: Android ARM64 JNI plus actual Android emulator runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 125
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+      - uses: actions/checkout@v4
+        with:
+          repository: 0cwa/creative-cooking
+          ref: spike/local-first-evaluation-readiness
+          path: read-only-fixture
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: aarch64-linux-android,x86_64-linux-android,wasm32-unknown-unknown
+          cache: true
+          cache-workspaces: subduction-upstream
+      - name: Cross-compile pinned Rust JNI shared library
+        run: |
+          mkdir -p artifacts/subduction-native
+          git -C subduction-upstream rev-parse HEAD > artifacts/subduction-native/sources.txt
+          git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
+          test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
+          rustc --version >> artifacts/subduction-native/sources.txt
+          echo "NDK=$ANDROID_NDK_HOME" >> artifacts/subduction-native/sources.txt
+          cargo install cargo-ndk --locked --version 3.5.4
+          cd spikes/subduction-native/rust
+          cargo ndk -t arm64-v8a -t x86_64 -p 26 \
+            -o "$GITHUB_WORKSPACE/spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs" \
+            build --release --lib
+          cd "$GITHUB_WORKSPACE"
+          sha256sum spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs/*/libcc_subduction_native.so \
+            >> artifacts/subduction-native/sources.txt
+          cp spikes/subduction-native/rust/Cargo.lock artifacts/subduction-native/native-Cargo.lock
+      - name: Compile isolated Expo Android app with ARM64 and x86_64 JNI
+        run: |
+          npm install --prefix spikes/subduction-native/expo-probe --no-audit --no-fund
+          cd spikes/subduction-native/expo-probe
+          npx expo prebuild --platform android --no-install
+          cd android
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --stacktrace > "$GITHUB_WORKSPACE/artifacts/subduction-native/android-gradle.log" 2>&1 || {
+            tail -250 "$GITHUB_WORKSPACE/artifacts/subduction-native/android-gradle.log"; exit 1;
+          }
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep 'libcc_subduction_native.so' > "$GITHUB_WORKSPACE/artifacts/subduction-native/android-packaging.txt"
+          find app/build/outputs/apk -name '*.apk' -exec sha256sum {} \; \
+            >> "$GITHUB_WORKSPACE/artifacts/subduction-native/sources.txt"
+      - name: Compile genuine Subduction CLI, browser WASM and two engine fixtures
+        run: |
+          cargo install wasm-pack --locked --version 0.14.0
+          (cd subduction-upstream/subduction_wasm && pnpm install --frozen-lockfile)
+          npm ci --prefix read-only-fixture/spikes/evaluation-readiness --no-audit --no-fund
+          cargo build --manifest-path subduction-upstream/Cargo.toml -p subduction_cli
+          (cd subduction-upstream && wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
+          node read-only-fixture/spikes/evaluation-readiness/fixtures.mjs generate "$RUNNER_TEMP/native-fixture.json"
+          cp spikes/subduction-native/browser/native-interop.spec.ts.template subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
+          mkdir -p subduction-upstream/subduction_wasm/e2e/server/creative-cooking
+          cp subduction-upstream/subduction_wasm/e2e/server/index.html \
+            subduction-upstream/subduction_wasm/e2e/server/creative-cooking/index.html
+          ln -s ../pkg subduction-upstream/subduction_wasm/e2e/server/creative-cooking/pkg
+          npm install --global http-server@14.1.1
+          (cd subduction-upstream/subduction_wasm && pnpm exec playwright install --with-deps chromium)
+          echo "CC_NATIVE_CLI=$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_FIXTURE=$RUNNER_TEMP/native-fixture.json" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_VERIFIER=$GITHUB_WORKSPACE/read-only-fixture/spikes/evaluation-readiness/fixtures.mjs" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_OUTPUT=$GITHUB_WORKSPACE/artifacts/subduction-native" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_MODE=android" >> "$GITHUB_ENV"
+          echo "CC_NATIVE_ANDROID_PACKAGE=dev.creativecooking.subductionnative" >> "$GITHUB_ENV"
+      - name: Install real Expo Android app and test native PID ↔ Chromium
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 3072M
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            adb install -r "$GITHUB_WORKSPACE/spikes/subduction-native/expo-probe/android/app/build/outputs/apk/release/app-release.apk"
+            echo "android-os=$(adb shell getprop ro.build.version.release)" >> "$GITHUB_WORKSPACE/artifacts/subduction-native/sources.txt"
+            cd subduction-upstream/subduction_wasm
+            pnpm exec playwright test native-interop.spec.ts --project=chromium --reporter=line
+      - name: Upload ARM64, Android x86 emulator output and runtime failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subduction-native-android-runtime
+          path: |
+            artifacts/subduction-native/
+            spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs/*/libcc_subduction_native.so
+            spikes/subduction-native/expo-probe/android/app/build/outputs/apk/
+            subduction-upstream/subduction_wasm/test-results/
+          if-no-files-found: warn
+          retention-days: 30

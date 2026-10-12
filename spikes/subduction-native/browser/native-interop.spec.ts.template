@@ -1,0 +1,365 @@
+/* Cross-runtime PROBE: genuine Subduction WASM, Rust/redb relay, and upstream
+ * native Rust code invoked by iOS Expo process (or HOST PREFLIGHT ONLY).
+ * The fixture is AES-GCM test ciphertext. --auth open is NOT secure.
+ * Source changes limited to isolated research paths; production is untouched.
+ */
+import { test, expect } from '@playwright/test';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync,
+  rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import net from 'node:net';
+
+type Commit = { id:string; dependencies:string[]; ciphertextBase64:string;
+  payloadSha256:string; kind:string; byteLength:number };
+type Scenario = { engine:'automerge'|'loro';spaceId:string;documentId:string;commits:Commit[] };
+type Fixtures = { scenarios:Scenario[];plaintextSentinels:string[] };
+type Peer = { context:any;page:any;link:string };
+const cli=process.env.CC_NATIVE_CLI, fixturesPath=process.env.CC_NATIVE_FIXTURE;
+const fixtureVerifier=process.env.CC_NATIVE_VERIFIER, outputDir=process.env.CC_NATIVE_OUTPUT;
+const mode=process.env.CC_NATIVE_MODE??'host', hostBin=process.env.CC_NATIVE_HOST_BIN;
+const iosBundleId=process.env.CC_NATIVE_IOS_BUNDLE??'dev.creativecooking.subductionnative';
+const androidPackage=process.env.CC_NATIVE_ANDROID_PACKAGE??'dev.creativecooking.subductionnative';
+if(!cli||!fixturesPath||!fixtureVerifier||!outputDir)
+  throw new Error('Missing CC_NATIVE_{CLI,FIXTURE,VERIFIER,OUTPUT} environment');
+if(!['host','ios','android'].includes(mode))throw new Error('CC_NATIVE_MODE must be host, ios or android');
+if(mode==='host'&&!hostBin)throw new Error('Missing CC_NATIVE_HOST_BIN');
+const fixtures=JSON.parse(readFileSync(fixturesPath,'utf8')) as Fixtures;
+expect(fixtures.scenarios.map(s=>s.engine)).toEqual(['automerge','loro']);
+const root=mkdtempSync(join(tmpdir(),'cc-subduction-native-'));
+const storage=join(root,'relay');
+const serverKey=join(root,'server-key');
+writeFileSync(serverKey,'ab'.repeat(32)+'\n',{mode:0o600});
+const service='creative-cooking-subduction-native-experiment';
+let server:ChildProcess|null=null,log='',port=0,ws='',http='';
+const delay=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
+const sha=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
+const treeId=(s:Scenario)=>sha(Buffer.from('creative-cooking:subduction-native:v1\0'+
+  s.engine+'\0'+s.spaceId+'\0'+s.documentId));
+function sidBytes(s:Scenario){return Array.from(Buffer.from(treeId(s),'hex'));}
+async function unusedPort():Promise<number>{
+  return new Promise((resolve,reject)=>{
+    const listener=net.createServer();
+    listener.once('error',reject);
+    listener.listen(0,'127.0.0.1',()=>{
+      const addr=listener.address();
+      if(!addr||typeof addr==='string')return reject(new Error('no port'));
+      listener.close(()=>resolve(addr.port));
+    });
+  });
+}
+async function waitServer(){
+  for(let i=0;i<250;i++){
+    try {
+      await new Promise<void>((resolve,reject)=>{
+        const socket=net.connect(port,'127.0.0.1');
+        socket.once('connect',()=>{socket.destroy();resolve();});
+        socket.once('error',reject);
+        socket.setTimeout(250,()=>{socket.destroy();reject(new Error('socket timeout'));});
+      });
+      return;
+    }catch{
+      if(server?.exitCode!=null)throw new Error('Subduction CLI exited: '+log.slice(-8000));
+      await delay(120);
+    }
+  }
+  throw new Error('CLI readiness timeout: '+log.slice(-8000));
+}
+async function startRelay(){
+  server=spawn(cli!,['server','--socket','127.0.0.1:'+port,
+    '--service-name',service,'--auth','open','--key-file',serverKey,
+    '--data-dir',storage],{stdio:['ignore','pipe','pipe']});
+  server.on('error',e=>{log+=String(e)});
+  for(const stream of [server.stdout,server.stderr]){
+    stream?.on('data',data=>{log=(log+data.toString()).slice(-120000);});
+  }
+  await waitServer();
+}
+async function stopRelay(){
+  const s=server;server=null;
+  if(!s||s.exitCode!==null)return;
+  await Promise.race([
+    new Promise<void>(resolve=>{s.once('exit',()=>resolve());s.kill('SIGTERM');}),
+    delay(4500).then(()=>{if(s.exitCode===null)s.kill('SIGKILL');}),
+  ]);
+}
+async function makeBrowser(browser:any,s:Scenario,transport:'ws'|'lp'='ws'):Promise<Peer>{
+  const context=await browser.newContext(),page=await context.newPage();
+  await page.goto('http://127.0.0.1:9891/creative-cooking/');
+  await page.waitForFunction(()=>(window as any).subductionReady===true,{timeout:45000});
+  const link=await page.evaluate(async({sid,ws,http,service,transport}:any)=>{
+    const api=(window as any).subduction;
+    const signer=await api.WebCryptoSigner.setup();
+    const syncer=new api.Subduction({signer,storage:new api.MemoryStorage()});
+    const peer=transport==='ws'?
+      await syncer.connectDiscover(new URL(ws),service):
+      await syncer.connectDiscoverLongPoll(http,service);
+    (window as any).cc={syncer,peer,sid:api.SedimentreeId.fromBytes(new Uint8Array(sid))};
+    return transport;
+  },{sid:sidBytes(s),ws,http,service,transport});
+  return {context,page,link};
+}
+async function push(page:any,commit:Commit){
+  return await page.evaluate(async({id,dependencies,bytes}:any)=>{
+    const api=(window as any).subduction,t=(window as any).cc;
+    await t.syncer.addCommit(t.sid,new api.CommitId(new Uint8Array(id)),
+      dependencies.map((b:number[])=>new api.CommitId(new Uint8Array(b))),new Uint8Array(bytes));
+    const result=await t.syncer.syncWithPeer(t.peer,t.sid,true,15000);
+    return {success:result.success,sent:result.stats.commitsSent,received:result.stats.commitsReceived};
+  },{id:Array.from(Buffer.from(commit.id,'hex')),
+    dependencies:commit.dependencies.map(x=>Array.from(Buffer.from(x,'hex'))),
+    bytes:Array.from(Buffer.from(commit.ciphertextBase64,'base64'))});
+}
+async function pull(page:any){
+  return await page.evaluate(async()=>{
+    const t=(window as any).cc,r=await t.syncer.syncWithPeer(t.peer,t.sid,true,15000);
+    const commits=await t.syncer.getCommits(t.sid);
+    return {success:r.success,count:commits?.length??0,
+      sent:r.stats.commitsSent,received:r.stats.commitsReceived};
+  });
+}
+async function eventually(page:any,target:number){
+  let last:any;const deadline=Date.now()+25000;
+  while(Date.now()<deadline){
+    last=await pull(page);
+    if(last.success&&last.count===target)return last;
+    if(last.count>target)throw new Error('unexpected extra updates '+JSON.stringify(last));
+    await delay(180);
+  }
+  throw new Error('web sync never reached '+target+': '+JSON.stringify(last)+'\n'+log.slice(-2500));
+}
+async function bytes(page:any):Promise<number[][]>{
+  return await page.evaluate(async()=>{
+    const t=(window as any).cc;
+    return (await t.syncer.getBlobs(t.sid)).map((b:Uint8Array)=>Array.from(b));
+  });
+}
+function verify(s:Scenario,all:number[][],phase:'conflict'|'resolved'){
+  const expected=phase==='conflict'?3:4;
+  expect(all.length).toBe(expected);
+  expect(new Set(all.map(b=>sha(Uint8Array.from(b))).values()).size).toBe(expected);
+  const actual=all.map(b=>Buffer.from(b));
+  for(const change of s.commits.slice(0,expected)){
+    const wire=Buffer.from(change.ciphertextBase64,'base64');
+    expect(actual.some(b=>b.equals(wire)),'exact opaque ciphertext '+change.id).toBe(true);
+    expect(sha(wire)).toBe(change.payloadSha256);
+  }
+  const receivedFile=join(root,s.engine+'-'+phase+'.json');
+  writeFileSync(receivedFile,JSON.stringify(all));
+  const v=execFileSync(process.execPath,
+    [fixtureVerifier!,'verify',fixturesPath!,s.engine,receivedFile,phase],
+    {encoding:'utf8',timeout:90000}).trim().split('\n').at(-1);
+  const parsed=JSON.parse(v!);
+  expect(parsed.exactCiphertextBytes).toBe(true);
+  expect(phase==='conflict'?parsed.portionsAlternatives:parsed.historicalAlternatives).toEqual([4,6]);
+  if(phase==='resolved')expect(parsed.portions).toBe(5);
+  return parsed;
+}
+function request(phase:'first'|'relaunch',count:number,publishIndex:number|null){
+  return {relayWs:ws,serviceName:service,phase,
+    scenarios:fixtures.scenarios.map(s=>({
+      engine:s.engine,spaceId:s.spaceId,documentId:s.documentId,
+      sedimentreeIdHex:treeId(s),expectedCount:count,
+      publish:publishIndex===null?[]:[{
+        id:s.commits[publishIndex].id,
+        dependencies:s.commits[publishIndex].dependencies,
+        ciphertextBase64:s.commits[publishIndex].ciphertextBase64,
+      }],
+    }))};
+}
+function runOnNative(phase:'first'|'relaunch',expectedCount:number,publishIndex:number|null){
+  const input=JSON.stringify({...request(phase,expectedCount,publishIndex),
+    relayWs:mode==='android'?'ws://10.0.2.2:'+port:ws});
+  let response:string;
+  if(mode==='host'){
+    const req=join(root,phase+'-host-request.json'),res=join(root,phase+'-host-result.json');
+    writeFileSync(req,input);
+    execFileSync(hostBin!,[req,res],{encoding:'utf8',timeout:130000});
+    response=readFileSync(res,'utf8');
+  }else if(mode==='android'){
+    // A signed release APK carries the JS trigger; no Metro or Node on device.
+    // The Android Intent injects disposable test data into the Expo module,
+    // whose JNI Rust implementation performs the real Subduction handshake.
+    const fixtureB64=Buffer.from(input,'utf8').toString('base64');
+    execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
+    execFileSync('adb',['logcat','-c'],{timeout:12000});
+    execFileSync('adb',['shell','am','start','-n',
+      androidPackage+'/'+androidPackage+'.MainActivity',
+      '--es','ccSubductionRequestB64',fixtureB64],{timeout:20000});
+    const deadline=Date.now()+150000;
+    let observed:string|undefined, logcat='';
+    while(Date.now()<deadline){
+      logcat=execFileSync('adb',['logcat','-d','-s','CCSubductionNative:I','*:S'],
+        {encoding:'utf8',timeout:12000});
+      const parts=new Map<number,string>();
+      let total=0;
+      for(const line of logcat.split('\n')){
+        const match=line.match(/CC_NATIVE_RESULT_V1:(\d+)\/(\d+):([A-Za-z0-9+/=]+)/);
+        if(!match)continue;
+        const index=Number(match[1]), count=Number(match[2]);
+        if(total!==0&&total!==count)throw new Error('Inconsistent JNI JSON chunk count');
+        total=count;
+        if(index<1||index>count)throw new Error('Invalid JNI JSON chunk index');
+        if(parts.has(index)&&parts.get(index)!==match[3])
+          throw new Error('Contradictory native JSON log chunk');
+        parts.set(index,match[3]);
+      }
+      if(total>0&&parts.size===total){
+        observed=Buffer.from(Array.from({length:total},(_,i)=>parts.get(i+1)??'').join(''),'base64').toString('utf8');
+        break;
+      }
+      execFileSync('sleep',['0.35']);
+    }
+    mkdirSync(outputDir!,{recursive:true});
+    writeFileSync(join(outputDir!,'android-'+phase+'-native-logcat.txt'),logcat);
+    if(!observed){
+      try{
+        const errors=execFileSync('adb',['logcat','-d','-t','700'],
+          {encoding:'utf8',timeout:12000});
+        writeFileSync(join(outputDir!,'android-'+phase+'-error-logcat.txt'),errors);
+      }catch{/* best effort diagnostics */}
+      throw new Error('Android app never emitted complete Rust Subduction JSON');
+    }
+    const observedPid=String(JSON.parse(observed).pid??'');
+    const devicePid=execFileSync('adb',['shell','pidof',androidPackage],
+      {encoding:'utf8',timeout:10000}).trim();
+    if(!devicePid.split(/\s+/).includes(observedPid))
+      throw new Error('Rust JNI PID does not match real Android application: '+observedPid+' vs '+devicePid);
+    execFileSync('adb',['shell','am','force-stop',androidPackage],{timeout:12000});
+    response=observed;
+  }else{
+    // Real iOS Simulator application process. No Node or WebView runs the native protocol.
+    const directory=execFileSync('xcrun',['simctl','get_app_container','booted',iosBundleId,'data'],
+      {encoding:'utf8',timeout:12000}).trim();
+    const files=join(directory,'Documents');
+    mkdirSync(files,{recursive:true});
+    const req=join(files,'subduction-request.json'),result=join(files,'subduction-result.json');
+    rmSync(result,{force:true});
+    writeFileSync(req,input);
+    execFileSync('xcrun',['simctl','launch','booted',iosBundleId],{encoding:'utf8',timeout:20000});
+    const deadline=Date.now()+140000;
+    while(!existsSync(result)&&Date.now()<deadline){
+      // Avoid a persistent native test process after each phase; each relaunch is new.
+      execFileSync('sleep',['0.25']);
+    }
+    try {
+      if(!existsSync(result))throw new Error('iOS Expo/Rust process wrote no native JSON result');
+      response=readFileSync(result,'utf8');
+    } finally {
+      try{execFileSync('xcrun',['simctl','terminate','booted',iosBundleId],{timeout:16000});}
+      catch{/* Process may already have exited; next launch still has fresh PID. */}
+    }
+  }
+  const decoded=JSON.parse(response);
+  expect(decoded.status,'native Subduction error: '+response).toBe('PASS');
+  expect(decoded.runtime).toBe('real-rust-subduction');
+  expect(decoded.phase).toBe(phase);
+  expect(decoded.scenarios.length).toBe(2);
+  for(let i=0;i<2;i++){
+    const s=fixtures.scenarios[i],row=decoded.scenarios[i];
+    expect(row.engine).toBe(s.engine);
+    expect(row.spaceId).toBe(s.spaceId);
+    expect(row.documentId).toBe(s.documentId);
+    expect(row.sedimentreeIdHex).toBe(treeId(s));
+    expect(row.receivedCount).toBe(expectedCount);
+    expect(row.postedCommits).toBe(publishIndex===null?0:1);
+    const all=(row.blobsBase64 as string[]).map((x:string)=>Array.from(Buffer.from(x,'base64')));
+    verify(s,all,expectedCount===3?'conflict':'resolved');
+    expect(row.ciphertextSha256.sort()).toEqual(all.map(b=>sha(Buffer.from(b))).sort());
+  }
+  return decoded;
+}
+function recursiveFiles(dir:string):string[]{
+  if(!existsSync(dir))return [];
+  return readdirSync(dir).flatMap(name=>{
+    const path=join(dir,name);
+    return statSync(path).isDirectory()?recursiveFiles(path):[path];
+  });
+}
+test.describe.configure({mode:'serial'});
+test.beforeAll(async()=>{
+  port=await unusedPort();ws='ws://127.0.0.1:'+port;http='http://127.0.0.1:'+port;
+  await startRelay();
+});
+test.afterAll(async()=>{await stopRelay();rmSync(root,{recursive:true,force:true});});
+test('PWA <-> real native Subduction transport, restart/recovery, original engine re-import',async({browser},info)=>{
+  test.setTimeout(590000);
+  const evidence:any={schemaVersion:1,status:'FAIL',nativeMode:mode,checkedAt:new Date().toISOString(),
+    gitUpstream:'f0af1aab5f2fd44e5b224c22fc8b62660d50bc01',
+    rustClientType:'TokioWebSocketClient / SubductionBuilder',
+    webClientType:'Chromium upstream wasm-bindgen',staticPath:'/creative-cooking/',
+    authentication:'UNSAFE --auth open',encryption:'test-only AES-GCM; NO Keyhive or ARK',
+    transport:{web:'WebSocket and HTTP long poll',native:'upstream Rust WebSocket'},
+    scenarios:[]};
+  mkdirSync(outputDir!,{recursive:true});
+  try{
+    for(const s of fixtures.scenarios){
+      const author=await makeBrowser(browser,s);
+      try{
+        for(const change of s.commits.slice(0,2)){
+          expect((await push(author.page,change)).success).toBe(true);
+        }
+        const prev=await eventually(author.page,2);
+        evidence.scenarios.push({engine:s.engine,spaceId:s.spaceId,documentId:s.documentId,
+          sedimentreeIdHex:treeId(s),webPublished:2,initial:prev});
+        await author.page.evaluate(async()=> (window as any).cc.syncer.disconnectAll());
+      }finally{await author.context.close();}
+    }
+    await stopRelay();
+    expect(existsSync(join(storage,'sedimentree.redb'))).toBe(true);
+    await startRelay();
+    evidence.relayRestartedAfterWebDisconnect=true;
+
+    const first=runOnNative('first',3,2);
+    evidence.nativeFirst=first;
+    for(const s of fixtures.scenarios){
+      const browserPeer=await makeBrowser(browser,s);
+      try {
+        const received=await eventually(browserPeer.page,3);
+        const conflict=verify(s,await bytes(browserPeer.page),'conflict');
+        expect((await push(browserPeer.page,s.commits[3])).success).toBe(true);
+        const resolved=await eventually(browserPeer.page,4);
+        expect((await push(browserPeer.page,s.commits[3])).success).toBe(true);
+        const duplicate=await eventually(browserPeer.page,4),idle=await pull(browserPeer.page);
+        expect(idle.received).toBe(0);
+        evidence.scenarios.find((r:any)=>r.engine===s.engine).webReceivedNative={
+          received,conflict,resolved,duplicate,idle};
+        await browserPeer.page.evaluate(async()=> (window as any).cc.syncer.disconnectAll());
+      }finally{await browserPeer.context.close();}
+    }
+    await stopRelay();
+    await startRelay();
+    evidence.relayRestartedWithFourUpdates=true;
+    const second=runOnNative('relaunch',4,null);
+    evidence.nativeRelaunch=second;
+    expect(second.pid).not.toBe(first.pid);
+    evidence.nativeProcessRestart=true;
+
+    for(const s of fixtures.scenarios){
+      const late=await makeBrowser(browser,s,'lp');
+      try{
+        const sync=await eventually(late.page,4);
+        const recovered=verify(s,await bytes(late.page),'resolved');
+        evidence.scenarios.find((r:any)=>r.engine===s.engine).lateHttpLongPoll={
+          sync,recovered};
+      }finally{await late.context.close();}
+    }
+    const diskFiles=recursiveFiles(storage);
+    expect(diskFiles.some(path=>path.endsWith('sedimentree.redb'))).toBe(true);
+    for(const file of diskFiles)for(const sentinel of fixtures.plaintextSentinels)
+      expect(readFileSync(file).includes(Buffer.from(sentinel)),'plaintext sentinel '+file).toBe(false);
+    evidence.diskFiles=diskFiles.map(f=>f.replace(root,'<temporary>'));
+    evidence.fixtureSentinelsAbsentFromRelayDisk=true;
+    evidence.status='PASS';
+    writeFileSync(join(outputDir!,'native-interop-'+mode+'.json'),JSON.stringify(evidence,null,2));
+    await info.attach('native-interop-'+mode+'.json',{body:JSON.stringify(evidence,null,2),
+      contentType:'application/json'});
+  }catch(error){
+    evidence.error=String(error);
+    evidence.relayLogTail=log.slice(-14000);
+    writeFileSync(join(outputDir!,'native-interop-'+mode+'-failure.json'),JSON.stringify(evidence,null,2));
+    throw error;
+  }
+});
