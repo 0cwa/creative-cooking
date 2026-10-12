@@ -1,0 +1,13 @@
+{
+  "name": "creative-cooking-benchmark-parity",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node --expose-gc run.mjs",
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.5.0",
+    "loro-crdt": "1.16.4"
+  }
+}
