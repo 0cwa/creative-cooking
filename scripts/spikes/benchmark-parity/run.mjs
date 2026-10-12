@@ -183,6 +183,8 @@ function one(engine, trial, warmup = false) {
   const dup = report('duplicateUpdateDelivery', timing(() => b.exchange(warm.a, trA, trB, true)));
   const dupExpected = expectedAfter(warmExpected, TRACE.single);
   prove(b.project(dup.a), dupExpected, 'duplicate A'); prove(b.project(dup.b), dupExpected, 'duplicate B');
+  if (!warmup) (wireSamples[engine].duplicateUpdateDelivery ??= []).push({
+    ...dup.wire, logicalOperations: TRACE.single.length, duplicateDelivery: true });
 
   const persisted = b.save(batch);
   b.dispose(batch); // Prove a cold object can be reopened from bytes, not simply reused.
@@ -192,8 +194,12 @@ function one(engine, trial, warmup = false) {
   prove(b.project(restarted), expectedAfter(expected, [...TRACE.batch, ...TRACE.reload]), 'further post-reload edit');
   const reloadSync = report('syncAfterReload', timing(() => b.exchange(seed, restarted, b.clone(seed, 'laptop'))));
   prove(b.project(reloadSync.b), expectedAfter(expected, [...TRACE.batch, ...TRACE.reload]), 'post-reload sync');
+  if (!warmup) (wireSamples[engine].syncAfterReload ??= []).push({
+    ...reloadSync.wire, logicalOperations: TRACE.batch.length + TRACE.reload.length });
 
-  const sizes = [];
+  const sizes = [], historyMemoryByBlock = [];
+  global.gc?.();
+  const historyMemoryBefore = memory();
   let growing = b.clone(seed, 'phone');
   for (let block = 0; block < 3; block++) {
     const segment = historyOps(20).map((op, i) => ({ ...op, value: op.value.slice(0, 65) +
@@ -204,12 +210,16 @@ function one(engine, trial, warmup = false) {
     }));
     const hSave = report('historySnapshotSave', timing(() => b.save(h)));
     sizes.push(hSave.byteLength);
+    global.gc?.();
+    historyMemoryByBlock.push(memory());
   }
   const catchup = report('history60EditCatchUp', timing(() => b.exchange(seed, growing, b.clone(seed, 'laptop'))));
   prove(b.project(catchup.a), b.project(catchup.b), 'history catch up');
   assert.ok(sizes.every(n => n > 0), 'history serialized');
   if (!warmup) (wireSamples[engine].history60EditCatchUp ??= []).push({
-    ...catchup.wire, snapshotBytesAtEdits20_40_60: sizes, logicalOperations: 60
+    ...catchup.wire, snapshotBytesAtEdits20_40_60: sizes, logicalOperations: 60,
+    historyMemoryBefore, historyMemoryByBlock,
+    memoryInterpretation: 'process-level samples after GC; other live references retained; not engine-specific allocations'
   });
   global.gc?.();
   const after = memory();
