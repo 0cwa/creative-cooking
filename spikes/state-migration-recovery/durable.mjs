@@ -236,7 +236,7 @@ export class DiskStore {
   }
   static restoreResearchBundle(dir,bundle,{engine,space,hasExternalGroupKey=false,crashBeforeActivation=false}={}){
     strictObject(bundle,['format','formatVersion','schemaVersion','engine','namespace','documentId',
-      'fullSnapshotBase64','snapshotSha256','updateWalBase64','appView','reviewCheckpoint','keyMetadata','security']);
+      'fullSnapshotBase64','snapshotSha256','updateWalBase64','appView','reviewCheckpoint','reviewCheckpointSha256','keyMetadata','security']);
     assert.equal(bundle.format,'creative-cooking-research-history');
     assert.equal(bundle.formatVersion,1);
     assert.equal(bundle.schemaVersion,2,'incompatible schema on restore');
