@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+# Several full native builds are expensive. Keep only the latest experimental
+# attempt for a draft PR; canceled predecessors remain visible in Actions.
+concurrency:
+  group: loro-spike-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   LORO_RN_COMMIT: 8fad8d61c11c23e7c57999533d637d316465ffc1
 
@@ -107,7 +113,7 @@ jobs:
           find node_modules/loro-react-native -type f \( -name '*.so' -o -name '*.a' -o -name '*.xcframework' \) -print -exec du -h {} \; || true
 
   android-runtime:
-    name: Android compile + runtime + web interop
+    name: Android ARM64 compile + x86_64 native-ABI gate
     needs: web-scenarios
     if: always()
     runs-on: ubuntu-latest
@@ -152,7 +158,6 @@ jobs:
           unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/arm64-native-library-list.txt || true
       - name: Build Android x86_64 emulator APK
         id: android_x86_build
-        continue-on-error: true
         run: |
           cd android
           ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=x86_64 | tee ../artifacts/loro/android/x86_64-build.log
@@ -160,8 +165,22 @@ jobs:
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
           stat -c '%s' "$APK" | tee artifacts/loro/android/x86_64-apk-bytes.txt
           unzip -l "$APK" | grep -Ei 'loro|uniffi|lib/.*\.so' > artifacts/loro/android/x86_64-native-library-list.txt || true
-      - name: Run on Android x86_64 emulator
+      - name: Require actual x86_64 Loro native library before emulator
+        id: x86_64_native_guard
         if: steps.android_x86_build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Published loro-react-native 1.10.3 omits x86_64 libloro_rs.a.
+          # An x86_64 APK may still compile/install; without this module
+          # there is no possible real Loro native-runtime qualification.
+          if ! grep -q 'lib/x86_64/libloro-react-native.so' artifacts/loro/android/x86_64-native-library-list.txt; then
+            printf '%s\n' '{"status":"PARTIAL","test":"Android x86_64 native runtime","executed":false,"reason":"published loro-react-native@1.10.3 lacks x86_64 Rust archive / native .so"}' > artifacts/loro/android/x86_64-native-capability.json
+            echo "::error::Android x86_64 Loro native module not packaged; stopping before futile emulator launch. Android ARM64 compile evidence is preserved; real ARM64 device runtime remains unproven."
+            exit 1
+          fi
+      - name: Run on Android x86_64 emulator
+        if: steps.android_x86_build.outcome == 'success' && steps.x86_64_native_guard.outcome == 'success'
         shell: bash
         run: |
           set -euxo pipefail
@@ -209,7 +228,7 @@ jobs:
           adb exec-out screencap -p > artifacts/loro/android/runtime.png
           node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/android/runtime.log artifacts/loro/android/result.json
       - name: Verify native-produced update in web Loro
-        if: steps.android_x86_build.outcome == 'success'
+        if: steps.android_x86_build.outcome == 'success' && steps.x86_64_native_guard.outcome == 'success'
         run: |
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
           node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android/result.json | tee artifacts/loro/android/web-verification.json
