@@ -325,8 +325,9 @@ jobs:
           node scripts/spikes/loro/parse-native-log.mjs "$OUTPUT/runtime.log" "$OUTPUT/result.json"
       - name: Verify Android-produced real Loro updates on Loro 1.16.4 web
         run: |
+          set -euo pipefail
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
-          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android-arm64/result.json | tee artifacts/loro/android-arm64/web-verification.json
+          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/android-arm64/result.json artifacts/loro/android-arm64/first-result.json | tee artifacts/loro/android-arm64/web-verification.json
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -411,8 +412,9 @@ jobs:
           node scripts/spikes/loro/parse-native-log.mjs artifacts/loro/ios/runtime.log artifacts/loro/ios/result.json
       - name: Verify native-produced update in web Loro
         run: |
+          set -euo pipefail
           npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
-          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/ios/result.json | tee artifacts/loro/ios/web-verification.json
+          node scripts/spikes/loro/verify-native-update.mjs artifacts/loro/web-native-input.json artifacts/loro/ios/result.json artifacts/loro/ios/first-result.json | tee artifacts/loro/ios/web-verification.json
       - uses: actions/upload-artifact@v6
         if: always()
         with:

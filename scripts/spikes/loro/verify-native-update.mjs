@@ -4,6 +4,7 @@ import { LoroDoc } from 'loro-crdt';
 
 const fixturePath = process.argv[2];
 const nativePath = process.argv[3];
+const firstLaunchPath = process.argv[4];
 if (!fixturePath || !nativePath) throw new Error('usage: verify-native-update.mjs <web-fixture> <native-result>');
 
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
@@ -11,6 +12,14 @@ const native = JSON.parse(fs.readFileSync(nativePath, 'utf8'));
 assert.equal(native.ok, true);
 assert.equal(native.status, 'PASS');
 assert.equal(native.checks?.processRestart, 'PASS');
+assert.equal(native.duplicateImportIdempotent, true);
+if (firstLaunchPath) {
+  const firstLaunch = JSON.parse(fs.readFileSync(firstLaunchPath, 'utf8'));
+  assert.equal(firstLaunch.status, 'PARTIAL');
+  assert.equal(firstLaunch.checks?.processRestart, 'PARTIAL');
+  assert.notEqual(firstLaunch.runId, native.runId);
+  assert.equal(native.processRestart?.previousRunId, firstLaunch.runId);
+}
 
 const fromBase64 = (value) => new Uint8Array(Buffer.from(value, 'base64'));
 const document = new LoroDoc();
@@ -65,6 +74,26 @@ assert.ok(Array.isArray(native.nativeResolutionUpdateBytes) && native.nativeReso
 document.import(Uint8Array.from(native.nativeResolutionUpdateBytes));
 const finalState = document.toJSON();
 assert.equal(finalState['recipe:recipe-1']?.portions, 8);
+const resolvedHistory = document.exportJsonUpdates(undefined, undefined, false);
+const resolutionWrites = [];
+for (const change of resolvedHistory.changes ?? []) {
+  const peer = String(change.id).slice(String(change.id).lastIndexOf('@') + 1);
+  for (const op of change.ops ?? []) {
+    if (op.container === 'cid:root-recipe:recipe-1:Map'
+        && op.content?.type === 'insert'
+        && op.content?.key === 'portions'
+        && op.content.value === 8) {
+      resolutionWrites.push({ peer, counter: op.counter, changeId: String(change.id) });
+    }
+  }
+}
+assert.equal(resolutionWrites.length, 1, 'native resolution must produce exactly one retained 8 write');
+for (const conflictingWrite of [four, six]) {
+  assert.equal(document.cmpFrontiers(
+    [{ peer: conflictingWrite.peer, counter: conflictingWrite.counter }],
+    [{ peer: resolutionWrites[0].peer, counter: resolutionWrites[0].counter }]
+  ), -1, 'resolved write must causally supersede both concurrent alternatives');
+}
 assert.deepEqual(canonical(finalState), canonical(native.nativeResolvedState));
 const firstFinal = document.oplogVersion();
 document.import(Uint8Array.from(native.nativeResolutionUpdateBytes));
@@ -77,6 +106,8 @@ const result = {
   processRestart: native.processRestart, 
   resolvedPortions: finalState['recipe:recipe-1']?.portions,
   resolvedConvergence: true,
+  causalResolutionSupersedesBoth: true,
+  resolutionChangeId: resolutionWrites[0].changeId,
   platform: native.platform ?? 'native',
   webVersion: fixture.webPackage,
   nativeApi: native.platformApi,

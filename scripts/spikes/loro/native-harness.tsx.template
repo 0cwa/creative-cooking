@@ -69,6 +69,18 @@ function versionIdentity(version: any): Record<string, number> {
   return Object.fromEntries(pairs);
 }
 
+function frontierIdentity(document: any): Array<{ peer: string; counter: number }> {
+  if (typeof document.oplogFrontiers !== 'function') {
+    throw new Error('Published native binding cannot expose OpLog frontiers');
+  }
+  return document.oplogFrontiers().toVec()
+    .map((id: { peer: bigint; counter: number }) => ({
+      peer: String(id.peer), counter: id.counter
+    }))
+    .sort((a: { peer: string; counter: number }, b: { peer: string; counter: number }) =>
+      a.peer < b.peer ? -1 : a.peer > b.peer ? 1 : a.counter - b.counter);
+}
+
 function byteIdentity(bytes: ArrayBuffer): { bytes: number; fnv1a32: string } {
   let hash = 0x811c9dc5;
   const value = new Uint8Array(bytes);
@@ -212,11 +224,14 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     reloaded.import_(Uint8Array.from(previous.snapshotBytes).buffer);
     const firstReload = reloaded.toJSON();
     if (!semanticEqual(firstReload, previous.state)
-        || !semanticEqual(versionIdentity(reloaded.oplogVersion()), previous.version)) {
+        || !semanticEqual(versionIdentity(reloaded.oplogVersion()), previous.version)
+        || !semanticEqual(frontierIdentity(reloaded), previous.frontiers)) {
       throw new Error('Persisted prior-process snapshot did not reproduce state/version: '
         + JSON.stringify({ priorRunId: previous.runId, expected: previous.state,
           observed: firstReload, expectedVersion: previous.version,
-          observedVersion: versionIdentity(reloaded.oplogVersion()) }));
+          observedVersion: versionIdentity(reloaded.oplogVersion()),
+          expectedFrontiers: previous.frontiers,
+          observedFrontiers: frontierIdentity(reloaded) }));
     }
     const beforeReplay = reloaded.oplogVersion();
     reloaded.import_(webUpdate);
@@ -267,15 +282,21 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   const beforeDuplicate = restarted.toJSON();
   const beforeDuplicateSecondRead = restarted.toJSON();
   const beforeVersion = restarted.oplogVersion();
+  const frontiersBefore = frontierIdentity(restarted);
   const historyBefore = historyIdentity(restarted, loro);
   const rawKeyOrderStableWithoutMutation =
     JSON.stringify(beforeDuplicate) === JSON.stringify(beforeDuplicateSecondRead);
   restarted.import_(webUpdate);
   const afterDuplicate = restarted.toJSON();
   const afterVersion = restarted.oplogVersion();
+  const frontiersAfter = frontierIdentity(restarted);
   const historyAfter = historyIdentity(restarted, loro);
   assertSemanticAndVersion(beforeDuplicate, afterDuplicate, beforeVersion, afterVersion,
     'duplicate web update import after native snapshot restart', historyBefore, historyAfter);
+  if (!semanticEqual(frontiersBefore, frontiersAfter)) {
+    throw new Error('duplicate import changed native frontiers: '
+      + JSON.stringify({ frontiersBefore, frontiersAfter, historyBefore, historyAfter }));
+  }
   const duplicateImportIdempotent = true;
   const duplicateDiagnostics = {
     semanticEqual: true,
@@ -284,6 +305,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     versionEqual: true,
     beforeVersion: versionIdentity(beforeVersion),
     afterVersion: versionIdentity(afterVersion),
+    frontiersBefore, frontiersAfter,
     beforeHistory: historyBefore,
     afterHistory: historyAfter,
     updateIdentity: byteIdentity(webUpdate)
@@ -344,7 +366,8 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     runId,
     snapshotBytes: Array.from(new Uint8Array(persistedSnapshot)),
     state: nativeResolvedState,
-    version: versionIdentity(restarted.oplogVersion())
+    version: versionIdentity(restarted.oplogVersion()),
+    frontiers: frontierIdentity(restarted)
   }));
 
   const structures = new LoroDoc();
