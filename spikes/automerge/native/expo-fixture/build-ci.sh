@@ -59,8 +59,15 @@ GRADLE
   > "$OUTPUT/expo-gradle-build.log" 2>&1 || {
     tail -n 220 "$OUTPUT/expo-gradle-build.log"; exit 1;
   }
-grep -R --include='*.java' --include='*.kt' 'AutomergeSpikeModule' \
-  android/app/build/generated android/build/generated > "$OUTPUT/expo-module-registered.log" 2>/dev/null || {
+# Expo 57 applies expo-autolinking to the :expo library project, so its
+# generated provider lives under that package's build directory, not :app.
+EXPO_PACKAGE_DIR=$(node -p "require('path').dirname(require.resolve('expo/package.json'))")
+MODULE_PROVIDER="$EXPO_PACKAGE_DIR/android/build/generated/expo/src/main/java/expo/modules/ExpoModulesPackageList.kt"
+test -s "$MODULE_PROVIDER" || {
+  echo "Missing generated Expo modules provider: $MODULE_PROVIDER" >&2; exit 1;
+}
+grep -F 'creative.cooking.automerge.spike.expo.AutomergeSpikeModule::class.java' \
+  "$MODULE_PROVIDER" > "$OUTPUT/expo-module-registered.log" || {
   echo 'Expo autolinking did not generate AutomergeSpikeModule registration' >&2; exit 1;
 }
 APK="android/app/build/outputs/apk/release/app-release.apk"
