@@ -54,10 +54,9 @@ try {
     const second = await page.evaluate(() => (window).__parityResult);
     assert.ok(second.prior >= offline.revision, 'local snapshot survived a refresh');
     assert.deepStrictEqual(pageErrors, []);
-    if (engine === 'loro') {
-      assert.ok(assets.some(x => x.url.endsWith('/loro_wasm_bg.wasm') && x.status === 200),
-        'Loro WASM must load at the correct Pages subpath');
-    }
+    const expectedWasm = engine === 'loro' ? '/loro_wasm_bg.wasm' : '/automerge.wasm';
+    assert.ok(assets.some(x => x.url.endsWith(expectedWasm) && x.status === 200),
+      engine + ' WASM must load from the actual Pages subpath');
   }
   await page.screenshot({ path: dir + '/chromium-' + engine + '.png', fullPage: true });
   const perf = await page.evaluate(() => performance.getEntriesByType('resource').map(item => ({
