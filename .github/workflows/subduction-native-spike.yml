@@ -239,6 +239,8 @@ jobs:
         run: |
           mkdir -p artifacts/subduction-native
           git -C subduction-upstream rev-parse HEAD > artifacts/subduction-native/sources.txt
+          git -C read-only-fixture rev-parse HEAD >> artifacts/subduction-native/sources.txt
+          test "$(git -C read-only-fixture rev-parse HEAD)" = "9c74e74247b926d9e0e6e3339739ad6882ea3e3e"
           rustc --version >> artifacts/subduction-native/sources.txt
           echo "NDK=$ANDROID_NDK_HOME" >> artifacts/subduction-native/sources.txt
           cargo install cargo-ndk --locked --version 3.5.4
