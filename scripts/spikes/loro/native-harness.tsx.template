@@ -28,6 +28,7 @@ type HarnessResult = {
   afterRestart?: unknown;
   duplicateImportIdempotent?: boolean;
   movableList?: unknown;
+  movableListBindingGap?: unknown;
   text?: unknown;
   mergeableMap?: unknown;
   nativeUpdateBytes?: number[];
@@ -399,13 +400,35 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   const structures = new LoroDoc();
   structures.setPeerId(404n);
   const movable = structures.getMovableList('steps');
-  movable.push('step-a');
-  movable.push('step-b');
-  movable.move(1, 0);
+  // Proven RN @1.10.3 JS wrapper defect: extension.ts's push() calls
+  // this.length(), while the generated FFI only exports len().
+  // Unlike the WASM library, this native FFI names reordering mov(), not
+  // move(). Exercise real native FFI through insert/len/mov, and preserve
+  // the convenience API mismatch explicitly in the test artifact.
+  const movableListBindingGap = {
+    nativeLengthMethod: typeof movable.len,
+    webStyleLengthMethod: typeof movable.length,
+    nativeReorderMethod: typeof movable.mov,
+    webStyleMoveMethod: typeof movable.move,
+    publishedPushCallsMissingLength:
+      typeof movable.push === 'function' && typeof movable.length !== 'function'
+  };
+  if (typeof movable.len !== 'function' || typeof movable.mov !== 'function'
+      || typeof movable.insert !== 'function') {
+    throw new Error('Published native movable-list FFI len/insert/mov unavailable: '
+      + JSON.stringify(movableListBindingGap));
+  }
+  movable.insert(movable.len(), 'step-a');
+  movable.insert(movable.len(), 'step-b');
+  movable.mov(1, 0);
   const text = structures.getText('method');
   text.insert(0, 'Heat oil.');
-  const textLength = typeof text.length === 'function' ? text.length() : text.length;
-  text.insert(textLength, ' Add tomatoes.');
+  // The published generated native LoroText exports lenUnicode(), not
+  // the browser's length property/function.
+  if (typeof text.lenUnicode !== 'function') {
+    throw new Error('Published native LoroText.lenUnicode() is unavailable');
+  }
+  text.insert(text.lenUnicode(), ' Add tomatoes.');
 
   let mergeableMap: unknown = { supported: false };
   const root = structures.getMap('root');
@@ -466,6 +489,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     afterRestart: afterRestart['recipe:recipe-1'],
     duplicateImportIdempotent,
     movableList: structureJson.steps,
+    movableListBindingGap,
     text: structureJson.method,
     mergeableMap,
     nativeUpdateBytes: Array.from(new Uint8Array(nativeUpdate)),
@@ -473,7 +497,11 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     capabilities: {
       historyJson: typeof replica.exportJsonUpdatesWithoutPeerCompression === 'function',
       frontierToVersion: typeof replica.frontiersToVv === 'function',
-      mergeableMap: typeof root.ensureMergeableMap === 'function'
+      mergeableMap: typeof root.ensureMergeableMap === 'function',
+      nativeMovableListInsert: typeof movable.insert === 'function',
+      nativeMovableListReorder: typeof movable.mov === 'function',
+      nativeTextUnicodeLength: typeof text.lenUnicode === 'function',
+      highLevelMovableListPushWrapper: !movableListBindingGap.publishedPushCallsMissingLength
     },
     snapshotBytes: snapshot.byteLength,
     updateBytes: nativeUpdate.byteLength
