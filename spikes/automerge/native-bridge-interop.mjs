@@ -224,31 +224,34 @@ try {
     assert.equal(rawText(web.pantryById['item-1'].name),'red tomatoes');
   });
 
-    await scenario(9, 'three replicas converge by independent real sync sessions without stale peer history', async () => {
+    await scenario(9, 'three replicas converge without cross-handle contamination', async () => {
     const first=await open(seed,102,'android-a');
     const second=await open(seed,103,'android-b');
+    // Scenario 8 wrote red tomatoes to a different handle. New handles must
+    // start from the seed, independent of previously disposed native state.
+    assert.equal(await nativeGet(first,pantry('name')),'tomatoes');
+    assert.equal(await nativeGet(second,pantry('name')),'tomatoes');
+    assert.deepEqual(JSON.parse(await call('heads',first)),seedHeads);
+    assert.deepEqual(JSON.parse(await call('heads',second)),seedHeads);
     await call('putInt',first,recipe('portions'),7);
     await call('putString',second,recipe('title'),txt('Shared toast'));
     const web=edit(seed,'web-third',d=>{d.pantryById['item-1'].name='cherry tomatoes';});
-    // Distinct native peer sessions are mandatory, even when a single web
-    // document acts as the relay between two independently offline replicas.
-    const s1=await newSession();
-    const a=await sync(web,first,s1);
-    const s2=await newSession();
-    const b=await sync(a.web,second,s2);
-    // The first peer has not received the second peer's title yet. A fresh
-    // session must genuinely transfer the change, not infer convergence from
-    // a stale prior acknowledgement. Check all three documents and heads.
-    const s3=await newSession();
-    const c=await sync(b.web,first,s3);
+    // Real SyncState is scoped per web/native peer pair. All new sessions
+    // start with an independent native State::new.
+    const a=await sync(web,first,await newSession());
+    assert.equal(rawText(a.web.pantryById['item-1'].name),'cherry tomatoes');
+    const b=await sync(a.web,second,await newSession());
+    assert.equal(rawText(b.web.pantryById['item-1'].name),'cherry tomatoes');
+    const c=await sync(b.web,first,await newSession());
+    const d=await sync(c.web,second,await newSession());
     const firstFinal=A.load(await nativeSave(first));
-    const secondSession=await newSession();
-    const d=await sync(c.web,second,secondSession);
     const secondFinal=A.load(await nativeSave(second));
-    for (const doc of [c.web,d.web,firstFinal,secondFinal]) {
+    for (const doc of [web,a.web,b.web,c.web,d.web,firstFinal,secondFinal]) {
+      assert.equal(rawText(doc.pantryById['item-1'].name),'cherry tomatoes');
+    }
+    for (const doc of [d.web,firstFinal,secondFinal]) {
       assert.equal(doc.recipesById['recipe-1'].portions,7);
       assert.equal(rawText(doc.recipesById['recipe-1'].title),'Shared toast');
-      assert.equal(rawText(doc.pantryById['item-1'].name),'cherry tomatoes');
     }
     assert.deepEqual(logical(firstFinal),logical(secondFinal));
     assert.deepEqual(A.getHeads(firstFinal).sort(),A.getHeads(secondFinal).sort());
