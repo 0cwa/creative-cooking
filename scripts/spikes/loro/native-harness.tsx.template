@@ -40,6 +40,11 @@ type HarnessResult = {
 
 
 const PERSISTED_RESTART_KEY = 'creative-cooking-loro-spike-restart-v2';
+let activeNativeStage = 'before-module-import';
+function nativeStage(stage: string) {
+  activeNativeStage = stage;
+  console.log('LORO_NATIVE_STAGE:' + Platform.OS + ':' + stage);
+}
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -207,13 +212,19 @@ function reconstructNativeDisagreement(document: any, loro: LoroModule) {
 }
 
 async function runHarness(loro: LoroModule): Promise<HarnessResult> {
+  nativeStage('harness-enter');
   const { LoroDoc } = loro;
   if (!LoroDoc) throw new Error('LoroDoc export is missing');
   const runId = Platform.OS + '-' + String(Date.now());
   let processRestart: { status: 'PASS' | 'PARTIAL'; previousRunId?: string; reason?: string } = {
     status: 'PARTIAL', reason: 'First process launch; persisted native data awaits an OS process relaunch'
   };
+  nativeStage('persisted-read-start');
+  if (typeof AsyncStorage?.getItem !== 'function') {
+    throw new Error('AsyncStorage.getItem is unavailable; observed typeof=' + typeof AsyncStorage?.getItem);
+  }
   const previousRaw = await AsyncStorage.getItem(PERSISTED_RESTART_KEY);
+  nativeStage(previousRaw === null ? 'persisted-empty' : 'persisted-present');
   if (previousRaw !== null) {
     const previous = JSON.parse(previousRaw);
     if (typeof previous.runId !== 'string' || previous.runId === runId
@@ -240,6 +251,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     processRestart = { status: 'PASS', previousRunId: previous.runId };
   }
 
+  nativeStage('web-snapshot-import');
   const replica = new LoroDoc();
   replica.import_(baseSnapshot);
 
@@ -248,6 +260,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     throw new Error(`web snapshot import mismatch: ${JSON.stringify(imported['recipe:recipe-1'])}`);
   }
 
+  nativeStage('native-branch-edit');
   const commonVersion = replica.oplogVersion();
   replica.setPeerId(303n);
   replica.getMap('recipe:recipe-1').set('portions', 6);
@@ -259,13 +272,16 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   const nativeBeforeWeb = replica.toJSON() as Record<string, any>;
   const nativeUpdate = replica.export({ mode: 'updates', from: commonVersion });
 
+  nativeStage('web-update-merge');
   replica.import_(webUpdate);
   const afterMerge = replica.toJSON() as Record<string, any>;
   if (![4, 6].includes(afterMerge['recipe:recipe-1']?.portions)) {
     throw new Error('native merge did not produce a valid converged portions value');
   }
+  nativeStage('native-provenance');
   const nativeDisagreementEvidence = reconstructNativeDisagreement(replica, loro);
 
+  nativeStage('native-snapshot-reload');
   const snapshot = replica.export({ mode: 'snapshot' });
   const restarted = new LoroDoc();
   restarted.import_(snapshot);
@@ -279,15 +295,20 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
 
   // Reproduce the exact earlier failure, recording real vector identities and
   // operation history. A reordered JSON object is not a CRDT mutation.
+  nativeStage('duplicate-prestate');
   const beforeDuplicate = restarted.toJSON();
   const beforeDuplicateSecondRead = restarted.toJSON();
+  nativeStage('duplicate-native-frontier');
   const beforeVersion = restarted.oplogVersion();
   const frontiersBefore = frontierIdentity(restarted);
+  nativeStage('duplicate-oplog-history');
   const historyBefore = historyIdentity(restarted, loro);
   const rawKeyOrderStableWithoutMutation =
     JSON.stringify(beforeDuplicate) === JSON.stringify(beforeDuplicateSecondRead);
+  nativeStage('duplicate-apply-update');
   restarted.import_(webUpdate);
   const afterDuplicate = restarted.toJSON();
+  nativeStage('duplicate-post-versions');
   const afterVersion = restarted.oplogVersion();
   const frontiersAfter = frontierIdentity(restarted);
   const historyAfter = historyIdentity(restarted, loro);
@@ -298,6 +319,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
       + JSON.stringify({ frontiersBefore, frontiersAfter, historyBefore, historyAfter }));
   }
   const duplicateImportIdempotent = true;
+  nativeStage('duplicate-diagnostics');
   const duplicateDiagnostics = {
     semanticEqual: true,
     rawKeyOrderStableWithoutMutation,
@@ -313,6 +335,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
 
   // A third native operation is causally AFTER both conflicting writes. Web
   // verification must observe one resolved value while retaining raw history.
+  nativeStage('native-causal-resolution');
   const preResolution = restarted.oplogVersion();
   restarted.setPeerId(505n);
   restarted.getMap('recipe:recipe-1').set('portions', 8);
@@ -334,6 +357,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   // Exercise real UniFFI object construction, load, import, snapshot export,
   // and handler acquisition repeatedly. No public synchronous dispose() exists
   // in this generated 1.10.3 binding; this is NOT a native heap-leak proof.
+  nativeStage('lifecycle-48-documents');
   const lifecycleStart = Date.now();
   const lifecycleCycles = 24;
   for (let i = 0; i < lifecycleCycles; i++) {
@@ -361,6 +385,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
   // Save only the actual binary CRDT snapshot and its expected logical/vector
   // identity in this isolated spike app. The next simctl launch reads this
   // record from AsyncStorage after the previous app process has terminated.
+  nativeStage('persisted-save');
   const persistedSnapshot = restarted.export({ mode: 'snapshot' });
   await AsyncStorage.setItem(PERSISTED_RESTART_KEY, JSON.stringify({
     runId,
@@ -370,6 +395,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     frontiers: frontierIdentity(restarted)
   }));
 
+  nativeStage('native-movable-list-text');
   const structures = new LoroDoc();
   structures.setPeerId(404n);
   const movable = structures.getMovableList('steps');
@@ -401,6 +427,7 @@ async function runHarness(loro: LoroModule): Promise<HarnessResult> {
     mergeableMap = { supported: true, value: structureJson.root };
   }
 
+  nativeStage('native-result-complete');
   const checks: NonNullable<HarnessResult['checks']> = {
     importWebBinary: 'PASS',
     nativeBinaryExport: 'PASS',
@@ -462,7 +489,7 @@ function failedResult(error: unknown, prefix = ''): HarnessResult {
     platformApi: nativePackageLabel,
     webPackage,
     scenario,
-    error: prefix + detail
+    error: prefix + '[stage=' + activeNativeStage + '] ' + detail
   };
 }
 
@@ -491,10 +518,10 @@ export default function LoroNativeHarness() {
       emitNativeResult(value);
     };
 
-    console.log(`LORO_NATIVE_STAGE:${Platform.OS}:before-module-import:${nativePackageLabel}`);
+    nativeStage('before-module-import:' + nativePackageLabel);
     import('loro-react-native')
       .then(async (loro) => {
-        console.log(`LORO_NATIVE_STAGE:${Platform.OS}:module-imported:${nativePackageLabel}`);
+        nativeStage('module-imported:' + nativePackageLabel);
         try {
           finish(await runHarness(loro));
         } catch (error) {
