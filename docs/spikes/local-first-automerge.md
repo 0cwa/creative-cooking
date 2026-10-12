@@ -8,6 +8,16 @@ Umbrella: #36 — **Evaluate local-first device sync architecture**
 
 Draft PR: #37 — **[spike] Automerge local-first engine and native feasibility**
 
+## Latest verified Android qualification on 12 October 2026
+
+**PASS scoped Android API35 x86_64 native-module execution**, on [run 38293542117](https://github.com/0cwa/creative-cooking/actions/runs/38293542117), tested source `6ff33027e8be612d1cb44e46f5ae36ec4e676665`. Device job `114963147120`, [artifact 11768780597](https://github.com/0cwa/creative-cooking/actions/runs/38293542117/artifacts/11768780597), ZIP SHA-256 `70ad1a88f1ac2b91d3397b37c5fbfe789715db953a2ef114606c1239a4ae56e8`: actual ReactNativeJS `AUTOMERGE_EXPO_SPIKE_PASS`, **eight live JS3.5↔Android Rust binary scenarios**, 64 test ADB broadcasts/26 SyncState frames, original 4/6 alternatives and causal 5, three replicas, malformed-frame rejection, and **four JNI instrumentation tests**. The JS peer is Node running the web binding, not a browser process. Native calls run through the custom Expo/JNI module; this is not direct WASM/Hermes execution.
+
+Parent build job `114959081802`, artifact `11768840091`, pins upstream `4d2a8f6bfecfb7f1e4fca126e6d2122ac526f903`, Rust Automerge 0.12.0, Rust 1.90.0 and RN0.86.3; Expo declares SDK57 `~57.0.17` but exact resolved patch was not recorded. Default Hermes configuration is used; no separate `HermesInternal` flag assertion exists. ARM64 and x86_64 libraries are packaged, but **ARM64 runtime is not qualified**. Current Android bridge text/reorder/list coverage remains incomplete.
+
+**OS process-death recovery is not proved.** Both App.js and the receiver's restart operation retain snapshot bytes in memory, close handles and reopen in the same process. The initial force-stop precedes document creation. Passing instrumentation does not restore prior edits after process loss. Durable app storage + real kill/relaunch, native ordered/text operations needed by the household schema, and Expo iOS integration remain the next native gates. The new runtime proof supersedes older broad “Android runtime unavailable” statements, without upgrading those distinct gates.
+
+The corrected harness builds the debug app required by instrumentation and captures raw logcat across current RN tags, process/launch/activity/package information and a diagnostic UI dump on exit. PASS still requires the live semantic marker; neither screenshots nor a green continue-on-error workflow manufacture qualification. No production application code changed.
+
 ## Scope
 
 This spike evaluates Automerge as a replicated local-first state engine behind a future backend boundary:
