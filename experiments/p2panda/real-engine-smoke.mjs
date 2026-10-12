@@ -93,9 +93,9 @@ async function killed(peer,scenario){
   peer.proc.kill('SIGKILL');await done;running.delete(peer.proc);
   trace(scenario,'SIGKILL',{peer:peer.label,pid:peer.proc.pid});
 }
-async function bridgeFor(peer,topic){
+async function bridgeFor(peer,topic,spaceId){
   const token=randomBytes(24).toString('hex');
-  const handle=await startNativeBridge(peer,topic,token);
+  const handle=await startNativeBridge(peer,topic,token,spaceId);
   const connected={...handle,token};
   bridges.add(connected);
   return connected;
@@ -152,7 +152,7 @@ async function scenarioCase(scenario){
   await ready(a);
   const c=startPeer('C-'+prefix,topic,12,prefix+'-C',output);
   await ready(c);
-  const bridgeA=await bridgeFor(a,topic),producer=await client(bridgeA);
+  const bridgeA=await bridgeFor(a,topic,scenario.spaceId),producer=await client(bridgeA);
   for(const item of scenario.commits.slice(0,3)){await push(producer,scenario,item);await has(c,item);}
   trace(output,'C-persisted-conflicting-4-and-6',{count:3});
   await stopClient(producer);await stopBridge(bridgeA);
@@ -162,7 +162,7 @@ async function scenarioCase(scenario){
   const b=startPeer('B-late-'+prefix,topic,13,prefix+'-B',output);
   await ready(b);
   for(const item of scenario.commits.slice(0,3))await has(b,item);
-  const bridgeB=await bridgeFor(b,topic),lateReader=await client(bridgeB);
+  const bridgeB=await bridgeFor(b,topic,scenario.spaceId),lateReader=await client(bridgeB);
   output.conflict=await recovered(lateReader,scenario,3,'conflict');
   assert.deepEqual(output.conflict.portionsAlternatives,[4,6]);
   // The late device creates a later *causal* resolution update, not the dead A.
@@ -177,7 +177,7 @@ async function scenarioCase(scenario){
   const e=startPeer('E-fresh-'+prefix,topic,14,prefix+'-E',output);
   await ready(e);
   for(const item of scenario.commits)await has(e,item);
-  const bridgeE=await bridgeFor(e,topic),fresh=await client(bridgeE);
+  const bridgeE=await bridgeFor(e,topic,scenario.spaceId),fresh=await client(bridgeE);
   output.lateRecovery=await recovered(fresh,scenario,4,'resolved');
   await stopClient(fresh);await stopBridge(bridgeE);
   // Rust p2panda SQLite C contains only encrypted *fixture* application bytes.

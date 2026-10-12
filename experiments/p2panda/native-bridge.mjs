@@ -17,11 +17,12 @@ const json = (res, code, object) => {
 };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
-export async function startNativeBridge(peer, topic, token) {
-  if (!/^[0-9a-f]{64}$/.test(topic) || typeof token !== 'string' || token.length < 32)
+export async function startNativeBridge(peer, topic, token, spaceId) {
+  if (!/^[0-9a-f]{64}$/.test(topic) || typeof token !== 'string' || token.length < 32 || !/^space:personal:[a-z]+$/.test(spaceId))
     throw new Error('Invalid isolated bridge topic/token');
   const endpoint = '/v1/native/' + topic + '/frames';
   const permitted = Buffer.from(token);
+  const forwarded = new Set();
   const server = createServer(async (req,res) => {
     const origin = req.headers.origin;
     // A static localhost page is served by this same loopback bridge.
@@ -41,6 +42,7 @@ export async function startNativeBridge(peer, topic, token) {
       for (const raw of peer.received) {
         try {
           const frame = decodeFrame(new Uint8Array(raw));
+          if (!frame.documentId.startsWith(spaceId + '/')) continue;
           const payload = Buffer.from(frame.bytes);
           const id = hash(payload);
           if (!seen.has(id)) seen.set(id,{documentId:frame.documentId,sha256:id,
@@ -59,10 +61,13 @@ export async function startNativeBridge(peer, topic, token) {
       }
       const frameBytes=Buffer.concat(parts);
       const parsed=decodeFrame(new Uint8Array(frameBytes));
-      if (!parsed.documentId.startsWith('space:personal:'))
-        return json(res,422,{error:'document_identity'});
+      if (!parsed.documentId.startsWith(spaceId + '/'))
+        return json(res,403,{error:'wrong_space'});
+      const id=hash(parsed.bytes);
+      if (forwarded.has(id)) return json(res,200,{accepted:false,replayNoop:true,sha256:id});
       peer.publish(frameBytes);
-      return json(res,202,{accepted:true,sha256:hash(parsed.bytes),storedBy:'p2panda_peer_not_http'});
+      forwarded.add(id);
+      return json(res,202,{accepted:true,sha256:id,storedBy:'p2panda_peer_not_http'});
     } catch (err) {
       return json(res,422,{error:'invalid_or_peer_exited',message:String(err)});
     }

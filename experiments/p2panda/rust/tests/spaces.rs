@@ -89,6 +89,6 @@ async fn outsider_has_no_welcome_key_and_cannot_publish_or_read() {
     outsider.persist_operation(&sealed).await.unwrap();
     let result = outsider.manager.process_persisted(&sealed).await;
     assert!(!matches!(result, Ok(ref events) if events.iter().any(|e| matches!(
-        e, Event::Application { data, .. } if data == b"opaque outsider must not read"
+        e, Event::Application { data, .. } if data.as_slice() == b"opaque outsider must not read"
     ))));
 }
