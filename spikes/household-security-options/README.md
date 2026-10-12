@@ -17,3 +17,11 @@ The relay stores opaque ciphertext, but it sees household IDs, device IDs, epoch
 The asymmetric signature authenticates the frame against an explicitly trusted public key. Encryption binds the complete fixed header as additional authenticated data. This illustrates why a relay's account permission and a client's verified author/key epoch must be separate boundaries. These primitives are standard; combining them into this fixture does **not** create a reviewed secure group protocol.
 
 Before any deployment choose a maintained security protocol/library, validate its browser and Expo bindings, implement authenticated invitation and policy distribution, and meet the gates in `../../docs/household-key-transport-options.md`. Keep Automerge payloads and application documents behind this independent byte boundary.
+
+To verify actual Automerge update composability after checking out the household foundation and running `npm ci` in its `packages/household-replication`, run:
+
+```sh
+node spikes/household-security-options/automerge-interop.mjs /path/to/household-foundation/packages/household-replication/index.mjs
+```
+
+Record the exact household-foundation commit used. This script is separate from the five primitive mailbox tests and does not select a group-key protocol.
