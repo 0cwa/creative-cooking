@@ -1,0 +1,95 @@
+name: Local-first evaluator readiness (experimental)
+
+# Separate from normal CI and Pages. Never deploy or touch real user state.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/local-first-evaluation-readiness.yml'
+      - 'spikes/evaluation-readiness/**'
+      - 'docs/spikes/local-first-evaluation-readiness.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-first-readiness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Opaque boundary, fixture correctness and evidence lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - run: npm ci --prefix spikes/evaluation-readiness --no-audit --no-fund
+      - run: npm run test --prefix spikes/evaluation-readiness
+      - run: node spikes/evaluation-readiness/fixtures.mjs generate "${{ runner.temp }}/cc-readiness-fixture.json"
+      - run: node spikes/evaluation-readiness/audit-evidence.mjs
+
+  subduction:
+    name: Real Subduction browser/durable relay composability (test-only crypto)
+    runs-on: ubuntu-latest
+    needs: contract
+    timeout-minutes: 75
+    steps:
+      - name: Checkout isolated research PR
+        uses: actions/checkout@v4
+      - name: Checkout pinned Subduction (not any Creative Cooking spike branch)
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: wasm32-unknown-unknown
+          cache: true
+          cache-workspaces: subduction-upstream
+      - name: Install upstream browser and real-engine fixture dependencies
+        run: |
+          cargo install wasm-pack --locked --version 0.14.0
+          (cd subduction-upstream/subduction_wasm && pnpm install --frozen-lockfile)
+          npm ci --prefix spikes/evaluation-readiness --no-audit --no-fund
+      - name: Compile exact Rust server and Subduction browser WASM
+        run: |
+          cd subduction-upstream
+          cargo build -p subduction_cli
+          wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release
+      - name: Generate genuine engine binary changes
+        run: |
+          mkdir -p artifacts/evaluation-readiness
+          node spikes/evaluation-readiness/fixtures.mjs generate "${{ runner.temp }}/cc-readiness-fixture.json"
+          cp spikes/evaluation-readiness/subduction-composability.spec.ts.template subduction-upstream/subduction_wasm/e2e/evaluation-readiness.spec.ts
+          echo "CC_EVAL_FIXTURE=${{ runner.temp }}/cc-readiness-fixture.json" >> "$GITHUB_ENV"
+          echo "CC_EVAL_CLI=$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli" >> "$GITHUB_ENV"
+          echo "CC_EVAL_SCRIPT=$GITHUB_WORKSPACE/spikes/evaluation-readiness/fixtures.mjs" >> "$GITHUB_ENV"
+          echo "CC_EVAL_OUTPUT=$GITHUB_WORKSPACE/artifacts/evaluation-readiness" >> "$GITHUB_ENV"
+      - name: Execute Chromium against live server, restart and late peers
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test evaluation-readiness.spec.ts --project=chromium --reporter=line
+      - name: Upload bounded machine-readable result and failure traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-first-evaluation-composability
+          path: |
+            artifacts/evaluation-readiness/subduction-composability.json
+            subduction-upstream/subduction_wasm/test-results/
+          if-no-files-found: warn
+          retention-days: 30

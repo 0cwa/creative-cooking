@@ -1,0 +1,198 @@
+/* Evaluator-readiness only: actual Subduction WASM + Rust CLI, no app changes.
+ * --auth open and disposable fixture AES-GCM are explicitly NOT ARK/Keyhive E2EE/ACL.
+ */
+import { test, expect } from '@playwright/test';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import net from 'node:net';
+
+type Commit = {id:string;dependencies:string[];ciphertextBase64:string;byteLength:number;plainByteLength:number;payloadSha256:string;kind:string};
+type Scenario = {engine:'automerge'|'loro';spaceId:string;documentId:string;commits:Commit[]};
+type Fixture = {scenarios:Scenario[];plaintextSentinels:string[]};
+const fixturePath=process.env.CC_EVAL_FIXTURE, cli=process.env.CC_EVAL_CLI;
+const verifier=process.env.CC_EVAL_SCRIPT, output=process.env.CC_EVAL_OUTPUT;
+if(!fixturePath||!cli||!verifier||!output) throw new Error('Missing CC_EVAL_* local-only workflow environment');
+const fixture=JSON.parse(readFileSync(fixturePath,'utf8')) as Fixture;
+const root=mkdtempSync(join(tmpdir(),'cc-evaluator-subduction-'));
+const storage=join(root,'relay');
+const keyfile=join(root,'relay-signing-key');
+writeFileSync(keyfile,'ab'.repeat(32)+'\n',{mode:0o600});
+const service='creative-cooking-evaluation-readiness-local';
+let server:ChildProcess|null=null,serverLog='',port=0,ws='',http='';
+
+const delay=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+async function unusedPort():Promise<number>{
+ return await new Promise((resolve,reject)=>{
+   const s=net.createServer();s.once('error',reject);
+   s.listen(0,'127.0.0.1',()=>{const addr=s.address();
+     if(!addr||typeof addr==='string')return reject(new Error('no port'));s.close(()=>resolve(addr.port));});
+ });
+}
+async function awaitPort(){
+ for(let attempt=0;attempt<250;attempt++){
+   try{
+     await new Promise<void>((resolve,reject)=>{
+       const s=net.connect(port,'127.0.0.1');s.once('connect',()=>{s.destroy();resolve();});s.once('error',reject);
+       s.setTimeout(250,()=>{s.destroy();reject(new Error('port timeout'));});
+     });return;
+   }catch{
+     if(server&&server.exitCode!==null)throw new Error('CLI exited before binding: '+serverLog.slice(-3500));
+     await delay(100);
+   }
+ }
+ throw new Error('Subduction startup timeout: '+serverLog.slice(-3500));
+}
+async function startServer(){
+ server=spawn(cli!,['server','--socket','127.0.0.1:'+port,
+   '--service-name',service,'--auth','open','--key-file',keyfile,'--data-dir',storage],{stdio:['ignore','pipe','pipe']});
+ server.on('error',e=>{serverLog+=String(e);});
+ server.stdout?.on('data',x=>{serverLog=(serverLog+x.toString()).slice(-150000);});
+ server.stderr?.on('data',x=>{serverLog=(serverLog+x.toString()).slice(-150000);});
+ await awaitPort();
+}
+async function stopServer(){
+ const current=server;server=null;if(!current||current.exitCode!==null)return;
+ await Promise.race([
+   new Promise<void>(resolve=>{current.once('exit',()=>resolve());current.kill('SIGTERM');}),
+   delay(4500).then(()=>{if(current.exitCode===null)current.kill('SIGKILL');})
+ ]);
+}
+async function peer(browser:any,sid:number,transport:'ws'|'lp'='ws'){
+ const context=await browser.newContext(),page=await context.newPage();
+ await page.goto('http://127.0.0.1:9891/');
+ await page.waitForFunction(()=>(window as any).subductionReady===true,{timeout:45000});
+ await page.evaluate(async ({ws,http,service,transport,sid}:any)=>{
+   const api=(window as any).subduction,signer=await api.WebCryptoSigner.setup();
+   const syncer=new api.Subduction({signer,storage:new api.MemoryStorage()});
+   const link=transport==='lp'
+     ?await syncer.connectDiscoverLongPoll(http,service)
+     :await syncer.connectDiscover(new URL(ws),service);
+   (window as any).testPeer={syncer,link,sid:api.SedimentreeId.fromBytes(new Uint8Array(32).fill(sid))};
+ },{ws,http,service,transport,sid});
+ return {context,page};
+}
+async function disconnect(page:any){
+ await page.evaluate(async()=> (window as any).testPeer.syncer.disconnectAll());
+}
+async function reconnect(page:any,transport:'ws'|'lp'='ws'){
+ await page.evaluate(async ({ws,http,service,transport}:any)=>{
+   const t=(window as any).testPeer;
+   t.link=transport==='lp'
+     ?await t.syncer.connectDiscoverLongPoll(http,service)
+     :await t.syncer.connectDiscover(new URL(ws),service);
+ },{ws,http,service,transport});
+}
+async function push(page:any,item:Commit){
+ const commit={id:[...Buffer.from(item.id,'hex')],dependencies:item.dependencies.map(h=>[...Buffer.from(h,'hex')]),
+  data:[...Buffer.from(item.ciphertextBase64,'base64')]};
+ return page.evaluate(async ({id,dependencies,data}:any)=>{
+   const api=(window as any).subduction,t=(window as any).testPeer;
+   await t.syncer.addCommit(t.sid,new api.CommitId(new Uint8Array(id)),
+     dependencies.map((dep:number[])=>new api.CommitId(new Uint8Array(dep))),new Uint8Array(data));
+   const result=await t.syncer.syncWithPeer(t.link,t.sid,true,15000);
+   return {success:result.success,commitsSent:result.stats.commitsSent,commitsReceived:result.stats.commitsReceived};
+ },commit);
+}
+async function pull(page:any){
+ return page.evaluate(async()=>{
+   const t=(window as any).testPeer,result=await t.syncer.syncWithPeer(t.link,t.sid,true,15000);
+   const commits=await t.syncer.getCommits(t.sid);
+   return {success:result.success,commitsSent:result.stats.commitsSent,commitsReceived:result.stats.commitsReceived,
+     count:commits?.length??0};
+ });
+}
+async function eventually(page:any,count:number){
+ let last:any;const deadline=Date.now()+20000;
+ while(Date.now()<deadline){
+   last=await pull(page);
+   if(last.success&&last.count===count)return last;
+   if(last.count>count)throw new Error('Unexpected commits: '+JSON.stringify({count,last}));
+   await delay(170);
+ }
+ throw new Error('Subduction catch-up timeout: '+JSON.stringify({count,last,log:serverLog.slice(-2500)}));
+}
+async function ciphertext(page:any):Promise<number[][]>{
+ return page.evaluate(async()=>{
+   const t=(window as any).testPeer;
+   return (await t.syncer.getBlobs(t.sid)).map((bytes:Uint8Array)=>Array.from(bytes));
+ });
+}
+function verify(scenario:Scenario,received:number[][],phase:'conflict'|'resolved'){
+ const temp=join(root,'received-'+scenario.engine+'-'+phase+'.json');
+ writeFileSync(temp,JSON.stringify(received));
+ const stdout=execFileSync(process.execPath,[verifier!,'verify',fixturePath!,scenario.engine,temp,phase],
+  {encoding:'utf8',timeout:90000});
+ return JSON.parse(stdout.trim().split('\n').at(-1)!);
+}
+function filesRecursively(directory:string):string[]{
+ if(!existsSync(directory))return[];
+ return readdirSync(directory).flatMap(f=>{
+   const full=join(directory,f);return statSync(full).isDirectory()?filesRecursively(full):[full];
+ });
+}
+test.describe.configure({mode:'serial'});
+test.beforeAll(async()=>{port=await unusedPort();ws='ws://127.0.0.1:'+port;http='http://127.0.0.1:'+port;await startServer();});
+test.afterAll(async()=>{await stopServer();rmSync(root,{recursive:true,force:true});});
+test('both real engine formats pass through unmodified Subduction blobs with durable late catch-up and conflict evidence',async({browser},testInfo)=>{
+ test.setTimeout(280000);
+ const evidence:any={schemaVersion:1,date:new Date().toISOString(),upstreamSubductionCommit:'f0af1aab5f2fd44e5b224c22fc8b62660d50bc01',
+   transport:['actual Subduction WASM WebSocket','actual Subduction WASM HTTP long poll'],
+   storage:'actual pinned Rust Subduction CLI redb',authentication:'UNSAFE TEST ONLY: --auth open',
+   encryption:'TEST FIXTURE AES-256-GCM, NOT Keyhive/ARK E2EE',clients:'isolated headless Chromium contexts',
+   source:'genuine incremental Automerge 3.5.0 and Loro 1.16.4 binary changes',scenarios:[]};
+ for(const [index,scenario] of fixture.scenarios.entries()){
+   const sid=index===0?37:38;
+   const a=await peer(browser,sid),b=await peer(browser,sid);
+   let c:Awaited<ReturnType<typeof peer>>|undefined;
+   const caseEvidence:any={engine:scenario.engine,spaceId:scenario.spaceId,
+     plaintextChangeBytes:scenario.commits.map(u=>u.plainByteLength),
+     ciphertextStoredBytes:scenario.commits.map(u=>u.byteLength),
+     changeHashes:scenario.commits.map(u=>u.payloadSha256)};
+   try{
+     expect((await push(a.page,scenario.commits[0])).success).toBe(true);
+     caseEvidence.initial=await eventually(b.page,1);
+     await disconnect(b.page);
+     expect((await push(a.page,scenario.commits[1])).success).toBe(true);
+     expect((await push(a.page,scenario.commits[2])).success).toBe(true);
+     await disconnect(a.page);
+     await stopServer();
+     expect(existsSync(join(storage,'sedimentree.redb'))).toBe(true);
+     await startServer();
+     await reconnect(b.page);
+     caseEvidence.lateCatchup=await eventually(b.page,3);
+     caseEvidence.conflict=verify(scenario,await ciphertext(b.page),'conflict');
+     expect(caseEvidence.conflict.portionsAlternatives).toEqual([4,6]);
+     await reconnect(a.page);
+     expect((await push(a.page,scenario.commits[3])).success).toBe(true);
+     caseEvidence.resolution=await eventually(b.page,4);
+     caseEvidence.resolved=verify(scenario,await ciphertext(b.page),'resolved');
+     expect(caseEvidence.resolved.resolutionCausal).toBe(true);
+     expect((await push(a.page,scenario.commits[3])).success).toBe(true);
+     const duplicate=await eventually(b.page,4),idle=await pull(b.page);
+     expect(idle.count).toBe(4);expect(idle.commitsReceived).toBe(0);
+     caseEvidence.duplicateAndIdle={duplicate,idle};
+     c=await peer(browser,sid,'lp');
+     caseEvidence.lateHttpPeer=await eventually(c.page,4);
+     caseEvidence.longPollVerified=verify(scenario,await ciphertext(c.page),'resolved');
+     evidence.scenarios.push(caseEvidence);
+   }finally{
+     if(c)await c.context.close();
+     await a.context.close();await b.context.close();
+   }
+ }
+ const files=filesRecursively(storage);
+ expect(files.some(x=>x.endsWith('sedimentree.redb'))).toBe(true);
+ for(const filename of files){
+   const bytes=readFileSync(filename);
+   for(const sentinel of fixture.plaintextSentinels)
+     expect(bytes.includes(Buffer.from(sentinel)),'test sentinel in relay store: '+filename).toBe(false);
+ }
+ evidence.relayDiskFixturePlaintextSentinelsAbsent=true;
+ evidence.actualRelayFiles=files.map(f=>f.replace(root,'<test-dir>'));
+ mkdirSync(output!,{recursive:true});
+ writeFileSync(join(output!,'subduction-composability.json'),JSON.stringify(evidence,null,2));
+ await testInfo.attach('subduction-composability.json',{body:JSON.stringify(evidence,null,2),contentType:'application/json'});
+ console.log('CC_EVALUATOR_READINESS='+JSON.stringify(evidence));
+});
