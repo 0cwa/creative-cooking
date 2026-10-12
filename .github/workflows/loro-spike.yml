@@ -7,6 +7,12 @@ on:
       - 'scripts/spikes/loro/**'
       - 'docs/spikes/local-first-loro.md'
   workflow_dispatch:
+    inputs:
+      arm64_physical:
+        description: 'Use a connected real Android ARM64 device on a self-hosted Linux x64 runner labelled android-arm64-device'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -199,7 +205,8 @@ jobs:
   android-arm64-runtime:
     name: Android ARM64 simulator runtime + web interop (macOS ARM host)
     needs: web-scenarios
-    if: always()
+    # A physical-device dispatch does not also burn a hosted Mac on TCG.
+    if: always() && !(github.event_name == 'workflow_dispatch' && inputs.arm64_physical == true)
     runs-on: macos-26
     timeout-minutes: 85
     steps:
@@ -334,6 +341,90 @@ jobs:
         with:
           name: loro-android-arm64-runtime
           path: artifacts/loro/android-arm64/
+
+  android-arm64-physical:
+    name: Physical Android ARM64 runtime + OS restart + web interop (opt-in hardware)
+    # Only runs if explicitly dispatched AND the repo has a self-hosted
+    # Linux x64 runner with an authorized physical ARM64 Android device.
+    # The job is SKIPPED on all PRs and ordinary manual workflow runs.
+    if: github.event_name == 'workflow_dispatch' && inputs.arm64_physical == true
+    needs: web-scenarios
+    runs-on: [self-hosted, linux, x64, android-arm64-device]
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check physical device runner prerequisites
+        run: |
+          set -euo pipefail
+          test -d "${ANDROID_HOME:?Install Android SDK/NDK and set ANDROID_HOME on the self-hosted runner}"
+          command -v adb
+          command -v unzip
+          command -v sha256sum
+          adb devices -l
+      - run: npm install --no-audit --no-fund
+      - name: Install exact official RN 1.10.3 native package
+        run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - uses: actions/download-artifact@v6
+        with:
+          name: loro-web-results
+          path: artifacts/loro
+      - name: Materialize isolated test app, without touching production files
+        run: |
+          set -euo pipefail
+          test -d app
+          test ! -e app-production
+          node scripts/spikes/loro/materialize-native-fixture.mjs
+          mv app app-production
+          mkdir app
+          cp scripts/spikes/loro/native-harness.tsx.template app/index.tsx
+          cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
+          cp scripts/spikes/loro/app.config.native.ts app.config.ts
+      - name: Compile and package genuine ARM64 Loro JNI/Rust APK
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/loro/android-arm64-physical
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
+          (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > artifacts/loro/android-arm64-physical/build.log 2>&1 || {
+            tail -200 artifacts/loro/android-arm64-physical/build.log
+            exit 1
+          }
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          test -n "$APK"
+          echo "$APK" > artifacts/loro/android-arm64-physical/apk-path.txt
+      - name: Qualify real connected ARM64 device and two OS processes
+        run: |
+          set -euo pipefail
+          export LORO_ANDROID_OUTPUT=artifacts/loro/android-arm64-physical
+          export LORO_ANDROID_APK
+          LORO_ANDROID_APK=$(cat "$LORO_ANDROID_OUTPUT/apk-path.txt")
+          bash scripts/spikes/loro/run-android-arm64-physical.sh
+      - name: Verify physical Android native updates on web Loro 1.16.4
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+          node scripts/spikes/loro/verify-native-update.mjs \
+            artifacts/loro/web-native-input.json \
+            artifacts/loro/android-arm64-physical/result.json \
+            artifacts/loro/android-arm64-physical/first-result.json \
+            | tee artifacts/loro/android-arm64-physical/web-verification.json
+      - name: Hash physical Android native evidence, including failed attempts
+        if: always()
+        run: |
+          mkdir -p artifacts/loro/android-arm64-physical
+          node scripts/spikes/loro/hash-evidence.mjs artifacts/loro/android-arm64-physical
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: loro-android-arm64-physical-runtime
+          path: artifacts/loro/android-arm64-physical/
 
   ios-runtime:
     name: iOS compile + runtime + web interop
