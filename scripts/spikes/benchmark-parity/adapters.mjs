@@ -167,13 +167,17 @@ export function backend(engine) {
     for (let round = 0; round < 100; round++) {
       rounds++;
       let ma, mb;
+      // Generate *both* peers' outbound messages against the same pre-round
+      // state, then deliver them. This is the symmetric exchange used by the
+      // official Automerge sync test helper; don't let B observe A's message
+      // before creating its corresponding round message (unfair serialization).
       [sa, ma] = A.generateSyncMessage(a, sa);
+      [sb, mb] = A.generateSyncMessage(b, sb);
       if (ma) {
         aToB += inspect(ma); messages++;
         [b, sb] = A.receiveSyncMessage(b, sb, ma);
         lastA = ma;
       }
-      [sb, mb] = A.generateSyncMessage(b, sb);
       if (mb) {
         bToA += inspect(mb); messages++;
         [a, sa] = A.receiveSyncMessage(a, sa, mb);
