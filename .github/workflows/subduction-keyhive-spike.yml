@@ -212,3 +212,53 @@ jobs:
           cd keyhive-upstream
           cargo test -p keyhive_core --test creative_cooking_security -- --nocapture
       # A deny/grant failure must fail this job, never continue-on-error.
+
+  revocation-proof-regression:
+    name: Genuine forged revocation — pinned original vs upstream fixed
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout exact original Keyhive pin (unmodified)
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/keyhive
+          ref: b7968be799705492428c94226ca28042c733a9e0
+          path: keyhive-old
+      - name: Checkout upstream security fix pin (unmodified)
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/keyhive
+          ref: a864f5c8159215a03fbdc5f0d042dff47f3ac0c0
+          path: keyhive-fixed
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          cache: true
+          cache-workspaces: keyhive-old
+      - name: Install identical owned integration test in both checkouts
+        run: |
+          test "$(git -C keyhive-old rev-parse HEAD)" = b7968be799705492428c94226ca28042c733a9e0
+          test "$(git -C keyhive-fixed rev-parse HEAD)" = a864f5c8159215a03fbdc5f0d042dff47f3ac0c0
+          cp scripts/spikes/local-first-subduction-keyhive/revocation-proof-regression.rs keyhive-old/keyhive_core/tests/creative_cooking_revocation_proof.rs
+          cp scripts/spikes/local-first-subduction-keyhive/revocation-proof-regression.rs keyhive-fixed/keyhive_core/tests/creative_cooking_revocation_proof.rs
+      - name: ORIGINAL — assert forged revocation is denied (intentional red if vulnerable)
+        run: |
+          set -o pipefail
+          cd keyhive-old
+          cargo test --locked -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-old-forged-revocation.log"
+      - name: FIXED — run identical test after baseline assertion
+        # If original is unsafe, this runs too while the overall job stays red.
+        if: always()
+        run: |
+          set -o pipefail
+          cd keyhive-fixed
+          cargo test --locked -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-fixed-forged-revocation.log"
+      - name: Preserve before/after evidence, including intentional failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-keyhive-revocation-before-after
+          path: ${{ runner.temp }}/keyhive-*-forged-revocation.log
+          retention-days: 30
+          if-no-files-found: warn
