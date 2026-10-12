@@ -272,7 +272,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo +1.90.0 ndk -t arm64-v8a -P 26 build --manifest-path spikes/automerge/native/rust-jni/Cargo.toml --release
+          (cd spikes/automerge/native/rust-jni && cargo +1.90.0 ndk -t arm64-v8a -P 26 build --release)
           LIB="spikes/automerge/native/rust-jni/target/aarch64-linux-android/release/libcreative_cooking_automerge_jni.so"
           test -s "$LIB"
           file "$LIB" | tee spikes/automerge/artifacts/jni-android-file.txt
@@ -284,7 +284,7 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add --toolchain 1.90.0 x86_64-linux-android
-          cargo +1.90.0 ndk -t x86_64 -P 26 build --manifest-path spikes/automerge/native/rust-jni/Cargo.toml --release
+          (cd spikes/automerge/native/rust-jni && cargo +1.90.0 ndk -t x86_64 -P 26 build --release)
           file spikes/automerge/native/rust-jni/target/x86_64-linux-android/release/libcreative_cooking_automerge_jni.so
       - name: Compile isolated Expo 57 / RN 0.86.3 native module release and test APK
         shell: bash

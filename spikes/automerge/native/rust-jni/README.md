@@ -43,8 +43,8 @@ Run the reproducible build and on-device harnesses:
     rustup toolchain install 1.90.0
     rustup target add --toolchain 1.90.0 aarch64-linux-android x86_64-linux-android
     cargo +1.90.0 install cargo-ndk --locked
-    cargo +1.90.0 ndk -t arm64-v8a -P 26 build --manifest-path native/rust-jni/Cargo.toml --release
-    cargo +1.90.0 ndk -t x86_64 -P 26 build --manifest-path native/rust-jni/Cargo.toml --release
+    (cd native/rust-jni && cargo +1.90.0 ndk -t arm64-v8a -P 26 build --release)
+    (cd native/rust-jni && cargo +1.90.0 ndk -t x86_64 -P 26 build --release)
     bash native/expo-fixture/build-ci.sh
     bash native/expo-fixture/run-device.sh
 
