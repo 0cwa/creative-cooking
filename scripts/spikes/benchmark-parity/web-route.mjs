@@ -45,10 +45,12 @@ async function engineRun() {
     incrementalBytes: ab.reduce((n,x)=>n+x.byteLength,0)+ba.reduce((n,x)=>n+x.byteLength,0),
     snapshotLoaded: true, duplicateSafe: true };
 }`;
-const loro = `import { LoroDoc } from 'loro-crdt';
-const KEY = 'parity-loro-v1';
-function make(peer: string) { const d = new LoroDoc(); d.setPeerId(peer); return d; }
-function engineRun() {
+const loro = `const KEY = 'parity-loro-v1';
+async function engineRun() {
+  // Client-only import: Loro's WASM/ESM module must not be evaluated by Expo
+  // static prerendering, where it prevents a Suspense boundary finishing (#419).
+  const { LoroDoc } = await import('loro-crdt');
+  function make(peer: string) { const d = new LoroDoc(); d.setPeerId(peer); return d; }
   const seed = make('900');
   seed.getMap('recipe').set('id', 'recipe-0000');
   seed.getMap('recipe').set('title', 'Kitchen supper');
