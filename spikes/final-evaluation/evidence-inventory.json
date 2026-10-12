@@ -1,0 +1,877 @@
+{
+  "schemaVersion": 1,
+  "frozenAtUtc": "2026-10-12T18:09:43.853211+00:00",
+  "decision": "Conditional architecture direction; WITHHOLD complete secure production stack",
+  "productionMain": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+  "sources": [
+    {
+      "pr": 37,
+      "url": "https://github.com/0cwa/creative-cooking/pull/37",
+      "branch": "spike/local-first-automerge",
+      "headSha": "505b91efbcbf129ff12cf359b975b3a112682285",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38288143418,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38288143418",
+          "name": "Automerge feasibility spike",
+          "status": "in_progress",
+          "conclusion": null,
+          "updatedAt": "2026-10-12T18:01:49Z"
+        },
+        {
+          "id": 38288143278,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38288143278",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T18:04:14Z"
+        }
+      ]
+    },
+    {
+      "pr": 38,
+      "url": "https://github.com/0cwa/creative-cooking/pull/38",
+      "branch": "spike/local-first-loro",
+      "headSha": "0aa857c1eb8248ee1d20c16286cc5c4c665d2948",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38288144791,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38288144791",
+          "name": "Loro feasibility spike",
+          "status": "in_progress",
+          "conclusion": null,
+          "updatedAt": "2026-10-12T18:03:27Z"
+        },
+        {
+          "id": 38288144823,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38288144823",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T18:04:09Z"
+        }
+      ]
+    },
+    {
+      "pr": 39,
+      "url": "https://github.com/0cwa/creative-cooking/pull/39",
+      "branch": "spike/local-first-p2panda",
+      "headSha": "26e091a71249765356d2f4cd39bc4c33f25a6b7a",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38268510738,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268510738",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T15:14:51Z"
+        },
+        {
+          "id": 38268510763,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268510763",
+          "name": "p2panda substrate spike (experimental)",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T15:27:08Z"
+        }
+      ]
+    },
+    {
+      "pr": 40,
+      "url": "https://github.com/0cwa/creative-cooking/pull/40",
+      "branch": "spike/local-first-subduction-keyhive",
+      "headSha": "c8e827e9c1fe5fa649fad7e767c64bd8104c0aae",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38268617971,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268617971",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T15:15:54Z"
+        },
+        {
+          "id": 38268617910,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268617910",
+          "name": "Subduction and Keyhive feasibility (experimental)",
+          "status": "completed",
+          "conclusion": "failure",
+          "updatedAt": "2026-10-12T15:18:01Z"
+        }
+      ]
+    },
+    {
+      "pr": 41,
+      "url": "https://github.com/0cwa/creative-cooking/pull/41",
+      "branch": "spike/local-first-merge-evidence",
+      "headSha": "b013b64e51a4f5bfe382ba2acd67e7f5f571ac54",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38186593589,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38186593589",
+          "name": "Merge evidence feasibility (experimental)",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T00:04:16Z"
+        },
+        {
+          "id": 38186593573,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38186593573",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T00:05:52Z"
+        }
+      ]
+    },
+    {
+      "pr": 42,
+      "url": "https://github.com/0cwa/creative-cooking/pull/42",
+      "branch": "spike/local-first-benchmark-parity",
+      "headSha": "4add471c51eda06ff6c03d20cd5104c292be05b4",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38187827555,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38187827555",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T00:26:01Z"
+        },
+        {
+          "id": 38187827563,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38187827563",
+          "name": "Benchmark parity (experimental)",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T00:28:15Z"
+        }
+      ]
+    },
+    {
+      "pr": 43,
+      "url": "https://github.com/0cwa/creative-cooking/pull/43",
+      "branch": "spike/local-first-evaluation-readiness",
+      "headSha": "9c74e74247b926d9e0e6e3339739ad6882ea3e3e",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38189878632,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38189878632",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T00:57:55Z"
+        },
+        {
+          "id": 38189878500,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38189878500",
+          "name": "Local-first evaluator readiness (experimental)",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T00:59:58Z"
+        }
+      ]
+    },
+    {
+      "pr": 44,
+      "url": "https://github.com/0cwa/creative-cooking/pull/44",
+      "branch": "spike/local-first-relay-operations",
+      "headSha": "2dc41f142f9818454d106b70e10c74b8dc226142",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38268322473,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268322473",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T15:13:45Z"
+        },
+        {
+          "id": 38268322672,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268322672",
+          "name": "Local-first persistent relay operations (research only)",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T15:17:56Z"
+        }
+      ]
+    },
+    {
+      "pr": 45,
+      "url": "https://github.com/0cwa/creative-cooking/pull/45",
+      "branch": "spike/local-first-subduction-native-interop",
+      "headSha": "de2fc70d5ff42e5aaa44b28f33b7f5e451abab09",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38266347228,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38266347228",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T14:56:46Z"
+        },
+        {
+          "id": 38266347503,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38266347503",
+          "name": "Subduction native interoperability (isolated research)",
+          "status": "completed",
+          "conclusion": "failure",
+          "updatedAt": "2026-10-12T15:24:29Z"
+        }
+      ]
+    },
+    {
+      "pr": 46,
+      "url": "https://github.com/0cwa/creative-cooking/pull/46",
+      "branch": "spike/local-first-state-migration-recovery",
+      "headSha": "b6436f72e6373248a2652ab9db82b30ac52580c9",
+      "baseSha": "a1c8993c4f45e9bb8de2b18d4f644088df99845a",
+      "draft": true,
+      "merged": false,
+      "currentHeadRuns": [
+        {
+          "id": 38288196578,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38288196578",
+          "name": "State migration and recovery feasibility (experimental)",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T18:02:27Z"
+        },
+        {
+          "id": 38288196581,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38288196581",
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "success",
+          "updatedAt": "2026-10-12T18:04:34Z"
+        }
+      ]
+    }
+  ],
+  "inspectedLaneEvidence": {
+    "engine": {
+      "auditDate": "2026-10-12",
+      "repository": "0cwa/creative-cooking",
+      "automerge": {
+        "pr": 37,
+        "headSha": "58e541809f781d1dfa7f25ce4c75086ee24c404b",
+        "testedMergeSha": "3393524eda71a6d02bec36e1e7fc0a1ed2d05b6d",
+        "runId": 38263528871,
+        "workflow": "FAIL",
+        "hostJni": "PASS",
+        "hostScenarioCount": 17,
+        "hostContract": {
+          "PASS": 11,
+          "PARTIAL": 5,
+          "NOT_IMPLEMENTED": 2
+        },
+        "androidRuntime": "PARTIAL",
+        "androidRuntimeJob": "skipped",
+        "artifactId": 11754107577,
+        "artifactZipSha256": "01608600186f7a9444aaa01744bca02235ac6e23b17a5eaa20777dc43ab1963f",
+        "blocker": "Gradle BUILD SUCCESSFUL; wrong generated-provider path in registration assertion",
+        "fixCommit": "505b91e",
+        "fixBranch": "spike/engine-closeout-automerge-guard",
+        "processDeathDurability": "NOT_PROVEN: receiver restart only serializes/reopens native document within same process",
+        "furtherFixPrepared": "ef5c51f: explicitly assembleDebug APK consumed by instrumentation"
+      },
+      "loro": {
+        "pr": 38,
+        "headSha": "67dcde9da83d3d8ac24d3e8c3508431cf031a3c5",
+        "testedMergeSha": "f13ceda86a9526187a141f8d45ce899f5b7a4342",
+        "runId": 38267465829,
+        "workflow": "FAIL",
+        "iosRuntime": "PASS",
+        "nativeChecks": {
+          "importWebBinary": "PASS",
+          "nativeBinaryExport": "PASS",
+          "concurrentMerge": "PASS",
+          "snapshotReload": "PASS",
+          "duplicateImport": "PASS",
+          "outOfOrderImport": "PASS",
+          "fullHistoryRetention": "PASS",
+          "falsyValues": "PASS",
+          "shallowHistoryProbe": "PASS",
+          "durableReviewCheckpoint": "PASS",
+          "causalResolution": "PASS",
+          "movableList": "PASS",
+          "text": "PASS",
+          "lifecycle": "PASS",
+          "processRestart": "PASS",
+          "nativeProvenance": "PASS"
+        },
+        "iosFalsyValues": "PASS",
+        "independentWebFalsyConvergence": true,
+        "nativePackage": "loro-react-native@1.10.3+falsy-compat",
+        "webVersion": "loro-crdt@1.16.4",
+        "artifactId": 11758015010,
+        "artifactZipSha256": "fa6c8a3d3a6a99ab094afd003e857dc64d85d9717e6c232862cb896755725e53",
+        "artifactManifestFilesVerified": 21,
+        "androidTcg": "FAIL",
+        "androidRuntime": "PARTIAL",
+        "blocker": "Host preflight emulator executable missing; install/build/guest steps never ran",
+        "physicalJob": "skipped",
+        "tcgFailureArtifactId": 11756465689,
+        "fixCommit": "0aa857c",
+        "fixBranch": "spike/engine-closeout-loro-preflight"
+      },
+      "localFixValidation": [
+        {
+          "check": "Automerge real registration",
+          "status": "PASS",
+          "expectedExit": 0
+        },
+        {
+          "check": "Automerge different module",
+          "status": "PASS",
+          "expectedExit": 1
+        },
+        {
+          "check": "Automerge missing provider",
+          "status": "PASS",
+          "expectedExit": 1
+        },
+        {
+          "check": "Loro installs missing emulator before inventory (mock SDK, no guest execution)",
+          "status": "PASS"
+        },
+        {
+          "check": "Loro SDK install failure remains fail closed",
+          "status": "PASS"
+        }
+      ],
+      "noRuntimeRerun": false,
+      "noProductionChanges": true,
+      "boundedFollowupRuns": {
+        "automerge": {
+          "sha": "505b91efbcbf129ff12cf359b975b3a112682285",
+          "runId": 38288143418,
+          "status": "in_progress",
+          "normalCiRun": 38288143278
+        },
+        "loro": {
+          "sha": "0aa857c1eb8248ee1d20c16286cc5c4c665d2948",
+          "runId": 38288144791,
+          "status": "in_progress",
+          "normalCiRun": 38288144823,
+          "tcg": "FAIL",
+          "tcgJob": 114941982191,
+          "tcgFailureArtifact": 11763658235,
+          "tcgFailureArtifactSha256": "afa94d4643730b385de4e817bdfc4dcb9ef8ae91e8ee1af3af2194bd129e007b",
+          "tcgBlocker": "Emulator SDK install succeeded; emulator -version exited127 loading libpulse.so.0; no guest/native run",
+          "androidRuntime": "PARTIAL"
+        }
+      },
+      "runtimeAttemptsExplanation": "Root published fast-forward harness corrections and started one bounded workflow per source branch; no agent reruns."
+    },
+    "securityTransport": {
+      "date": "2026-10-12",
+      "scope": "independent pinned source, CI job logs and artifact read-only inspection",
+      "prs": {
+        "39": {
+          "head_sha": "26e091a71249765356d2f4cd39bc4c33f25a6b7a",
+          "run_id": 38268510763,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268510763",
+          "jobs": [
+            {
+              "id": 114876686283,
+              "name": "Chromium static-browser encrypted catch-up",
+              "conclusion": "success"
+            },
+            {
+              "id": 114876686708,
+              "name": "Native p2panda/Spaces and genuine CRDT bytes (Linux)",
+              "conclusion": "success"
+            },
+            {
+              "id": 114876686710,
+              "name": "Native linkable artifact (aarch64-linux-android)",
+              "conclusion": "success"
+            },
+            {
+              "id": 114876686785,
+              "name": "Opaque contract and encrypted browser mailbox",
+              "conclusion": "success"
+            },
+            {
+              "id": 114876686895,
+              "name": "Native linkable artifact (aarch64-apple-ios)",
+              "conclusion": "success"
+            },
+            {
+              "id": 114876687002,
+              "name": "Android emulator calls real p2panda JNI (x86_64, not Expo)",
+              "conclusion": "success"
+            }
+          ]
+        },
+        "40": {
+          "head_sha": "c8e827e9c1fe5fa649fad7e767c64bd8104c0aae",
+          "run_id": 38268617910,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268617910",
+          "jobs": [
+            {
+              "id": 114877233434,
+              "name": "Pinned Subduction binary + real browser clients",
+              "conclusion": "failure"
+            },
+            {
+              "id": 114877233825,
+              "name": "Genuine forged revocation \u2014 pinned original vs upstream fixed",
+              "conclusion": "failure"
+            },
+            {
+              "id": 114877233838,
+              "name": "Pinned Keyhive Rust core real crypto, pairing and revocation",
+              "conclusion": "success"
+            },
+            {
+              "id": 114877234003,
+              "name": "Pinned ARK + authentic Keyhive security invariants",
+              "conclusion": "failure"
+            }
+          ]
+        },
+        "45": {
+          "head_sha": "de2fc70d5ff42e5aaa44b28f33b7f5e451abab09",
+          "run_id": 38266347503,
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38266347503",
+          "jobs": [
+            {
+              "id": 114869374437,
+              "name": "Android ARM64 JNI plus actual Android emulator runtime",
+              "conclusion": "failure"
+            },
+            {
+              "id": 114869374829,
+              "name": "Rust host + Chromium genuine Subduction (NOT mobile)",
+              "conclusion": "success"
+            },
+            {
+              "id": 114869374873,
+              "name": "Expo iOS Simulator Rust runtime + simulator/device libraries",
+              "conclusion": "success"
+            }
+          ]
+        }
+      },
+      "artifacts": [
+        {
+          "id": 11755613205,
+          "sha256": "75c814f8574e90b261a8a69f488800e4064751d67db08bef1c19e968eb33f25b",
+          "archive_inspected": true
+        },
+        {
+          "id": 11755493275,
+          "sha256": "e7a93475d27991a439dd0747661e6a10c75744ef25316704e80b2b37e8f6a3b2",
+          "archive_inspected": true
+        },
+        {
+          "id": 11755463540,
+          "sha256": "6c2e7e35c35780298999c6b88f12d6cd5a560e44f7d9cbc3c69763a217c15b3f",
+          "archive_inspected": true
+        },
+        {
+          "id": 11756024351,
+          "sha256": "b866bea0a1b0aee5d122dd4a7840d72a21dfcb9e8767cf6c0d8afe4f510531ca",
+          "archive_inspected": true
+        },
+        {
+          "id": 11756133676,
+          "sha256": "230dfc17df9ef18452676f59182ccca84afdf8802a9feac1c08951db0cf08983",
+          "archive_inspected": true
+        }
+      ],
+      "security_findings": [
+        "legacy unsigned entitlement wire byte retrieval after redb restart",
+        "ARK unauthorized requester/legacy policy grants",
+        "tampered card graph admission only",
+        "authorized ARK reader decryption positive fails",
+        "genuine signed forged revocation accepted at pinned core; official upstream fixed core rejects"
+      ],
+      "new_runtime_status": {
+        "p2pandaAndroidX86JNI": "PASS actual, not Expo or ARM64",
+        "subductionExpoIOSSimulator": "PASS real app, distinct PIDs 50591/51254; successful retry after retained timeout",
+        "subductionAndroid": "PACKAGING PASS; RUNTIME NOT QUALIFIED emulator boot timeout"
+      },
+      "source_pins": {
+        "subduction": "f0af1aab5f2fd44e5b224c22fc8b62660d50bc01",
+        "ark": "5d09e8c8cfdebd5656b1426b66aea6b1395f83da",
+        "coreBeforeSha": "b7968be799705492428c94226ca28042c733a9e0",
+        "coreFixedSha": "a864f5c8159215a03fbdc5f0d042dff47f3ac0c0"
+      }
+    },
+    "operationsPerformance": {
+      "checkedAtUtc": "2026-10-12T18:00:15Z",
+      "scope": "read-only existing CI/source audit; no benchmark rerun",
+      "pullRequests": {
+        "42": {
+          "headSha": "4add471c51eda06ff6c03d20cd5104c292be05b4",
+          "report": "https://github.com/0cwa/creative-cooking/blob/4add471c51eda06ff6c03d20cd5104c292be05b4/docs/spikes/local-first-comparison-benchmarks.md"
+        },
+        "44": {
+          "headSha": "2dc41f142f9818454d106b70e10c74b8dc226142",
+          "report": "https://github.com/0cwa/creative-cooking/blob/2dc41f142f9818454d106b70e10c74b8dc226142/docs/spikes/local-first-relay-operations.md"
+        }
+      },
+      "runs": {
+        "38187827563": {
+          "conclusion": "success",
+          "headSha": "4add471c51eda06ff6c03d20cd5104c292be05b4",
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38187827563"
+        },
+        "38187827555": {
+          "conclusion": "success",
+          "headSha": "4add471c51eda06ff6c03d20cd5104c292be05b4",
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38187827555"
+        },
+        "38187392524": {
+          "conclusion": "success",
+          "headSha": "4da61d280f68ca18a1d4d34d4fa00538aecc5b32",
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38187392524"
+        },
+        "38268322672": {
+          "conclusion": "success",
+          "headSha": "2dc41f142f9818454d106b70e10c74b8dc226142",
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268322672"
+        },
+        "38268322473": {
+          "conclusion": "success",
+          "headSha": "2dc41f142f9818454d106b70e10c74b8dc226142",
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38268322473"
+        },
+        "38265453804": {
+          "conclusion": "success",
+          "headSha": "797af9d40b18bd4996adc7544c535ccf6bc66b91",
+          "url": "https://github.com/0cwa/creative-cooking/actions/runs/38265453804"
+        }
+      },
+      "artifacts": {
+        "38187827563": [
+          {
+            "id": 11719939129,
+            "name": "benchmark-parity-chromium-evidence",
+            "size_in_bytes": 48234,
+            "url": "https://api.github.com/repos/0cwa/creative-cooking/actions/artifacts/11719939129",
+            "expired": false,
+            "digest": "sha256:2f32c7be25a3b794ad98deb9f1bb21d1e32aba57172ff2211b606483b149f13f"
+          },
+          {
+            "id": 11719724009,
+            "name": "benchmark-parity-node-evidence",
+            "size_in_bytes": 9734,
+            "url": "https://api.github.com/repos/0cwa/creative-cooking/actions/artifacts/11719724009",
+            "expired": false,
+            "digest": "sha256:7dcd5dc1de589e18fa63645a1ba96886aafa7ff4c8b1285e7f937b5ec7c945ca"
+          }
+        ],
+        "38187392524": [
+          {
+            "id": 11720396970,
+            "name": "benchmark-parity-node-evidence",
+            "size_in_bytes": 9723,
+            "url": "https://api.github.com/repos/0cwa/creative-cooking/actions/artifacts/11720396970",
+            "expired": false,
+            "digest": "sha256:1607dac64243e19b877bdff90b3c1839e753148992f0b64fe9eb957677a8a240"
+          },
+          {
+            "id": 11719893915,
+            "name": "benchmark-parity-chromium-evidence",
+            "size_in_bytes": 48194,
+            "url": "https://api.github.com/repos/0cwa/creative-cooking/actions/artifacts/11719893915",
+            "expired": false,
+            "digest": "sha256:bb9c55bfdd91dac701a329b9744d244e33b26a302463d35283cd42633673d725"
+          }
+        ],
+        "38268322672": [
+          {
+            "id": 11755478990,
+            "name": "creative-cooking-relay-operations-evidence",
+            "size_in_bytes": 4757,
+            "url": "https://api.github.com/repos/0cwa/creative-cooking/actions/artifacts/11755478990",
+            "expired": false,
+            "digest": "sha256:768307bd3485fc880cea8b6d4207aa88a3250ad147451abcfb249ff5cc5c3789"
+          }
+        ],
+        "38265453804": [
+          {
+            "id": 11755420061,
+            "name": "creative-cooking-relay-operations-evidence",
+            "size_in_bytes": 4175,
+            "url": "https://api.github.com/repos/0cwa/creative-cooking/actions/artifacts/11755420061",
+            "expired": false,
+            "digest": "sha256:dd2f9010148e246eae30784730ce3b908bec4b48ff89ee8b519a6045efe8512d"
+          }
+        ]
+      },
+      "rawArtifactRetrieval": {
+        "status": "RECOVERED_AND_INSPECTED",
+        "method": "GitHub MCP download_workflow_artifact -> sediment download_file",
+        "artifactIds": [
+          11755478990,
+          11719724009,
+          11720396970,
+          11719893915
+        ],
+        "note": "gh direct redirects returned 403; connector fallback succeeded; no rebuild."
+      },
+      "benchmarkNumericProvenance": {
+        "runId": 38187392524,
+        "headSha": "4da61d280f68ca18a1d4d34d4fa00538aecc5b32",
+        "source": "raw artifact results.json inspected and matched committed numeric table",
+        "versions": {
+          "automerge": "3.5.0",
+          "loro": "1.16.4"
+        },
+        "snapshotBytes": {
+          "automerge": 369612,
+          "loro": 678010
+        },
+        "browserBrotliDeltaBytes": {
+          "automerge": 807818,
+          "loro": 807010
+        },
+        "coldLoadMedianMs": {
+          "automerge": 597.634,
+          "loro": 2.305
+        },
+        "prepareViewMedianMs": {
+          "automerge": 8.869,
+          "loro": 290.511
+        },
+        "note": "Do not sum marginal medians as a measured combined latency or compare different sync mechanisms as engine-core performance.",
+        "githubSha": "836d466885706f84980f3d08bd8677822300682c"
+      },
+      "githubShaInterpretation": "Artifact GITHUB_SHA is pull-request merge ref; API run headSha is PR source branch head. Keep both pins.",
+      "relayExactHeadSummary": {
+        "recordedAt": "2026-10-12T15:17:37.178Z",
+        "upstreamNew": "f0af1aab5f2fd44e5b224c22fc8b62660d50bc01 v0.19.0",
+        "upstreamOld": "2566cbfc5d1d529ed8c109009a645ee73d7dc0dd v0.18.0",
+        "transport": "real pinned Subduction CLI redb + browser WASM; loopback TLS proxy",
+        "authentication": "INSECURE --auth open. Origin restriction and TLS do not supply ACL.",
+        "confidentiality": "disposable AES-GCM fixture ONLY; NOT ARK/Keyhive E2EE",
+        "fixture": {
+          "engine": "automerge",
+          "version": "3.5.0",
+          "commitCount": 28,
+          "plainBytes": 92954,
+          "ciphertextBytes": 93738
+        },
+        "unproven": [
+          "real Keyhive/ARK credentials, identity, grants and revocation",
+          "multi-host WAN, real multi-day offline time, production application clients",
+          "live consistent snapshot and replica quorum, untrusted network DDoS",
+          "real server transaction interrupted mid external blob fsync; disk-full transaction if no tmpfs injection"
+        ],
+        "checkStatuses": {
+          "proxyOrigin": "PASS",
+          "abruptKillAndQuiescentBackup": "PASS",
+          "durableLatePeer": "PASS",
+          "loadDedupLongPoll": "PASS",
+          "boundedConcurrentFanout": "PASS",
+          "externalBlob": "PASS",
+          "restoreFull": "PASS",
+          "restoredApplicationBytes": "PASS",
+          "corruptPartialRestore": "PASS",
+          "staleSignerIdentity": "PASS",
+          "interruptedBlobWrite": "SIMULATED_ONLY",
+          "unavailableAndRecover": "PASS",
+          "quotas": "PARTIAL",
+          "diskFull": "OBSERVED_UNDURABLE_SYNC_RESULT",
+          "versionedUpgradeRollback": "TESTED_PARTIAL_RESULT_SEE_CASES",
+          "signerContinuity": "PASS",
+          "staticPwaHosting": "ARCHITECTURAL"
+        },
+        "diskFullEvidence": {
+          "durableLatePeer": {
+            "status": "PASS",
+            "first": {
+              "success": true,
+              "received": 0,
+              "sent": 0,
+              "count": 1
+            },
+            "afterKill": {
+              "success": true,
+              "received": 3,
+              "sent": 0,
+              "count": 4
+            },
+            "count": 4
+          },
+          "diskFull": {
+            "status": "OBSERVED_UNDURABLE_SYNC_RESULT",
+            "value": {
+              "status": "OBSERVED_UNDURABLE_SYNC_RESULT",
+              "mount": "isolated 12MiB private tmpfs; no rootfs pressure",
+              "kernelErrno": "ENOSPC",
+              "filledBytes": 12546048,
+              "availableBeforeBytes": 12546048,
+              "initialPersisted": true,
+              "attemptedWhileFull": {
+                "returned": {
+                  "success": true,
+                  "sent": 1,
+                  "received": 0
+                }
+              },
+              "serverErrorOrRejectedSyncObserved": false,
+              "recoveredAfterKill": {
+                "success": true,
+                "received": 1,
+                "sent": 0,
+                "count": 1
+              },
+              "recoveredCount": 1,
+              "recoveredExact": true,
+              "transportSuccessWithoutDurableCommit": true,
+              "replayFromOriginalPeer": {
+                "status": "PASS",
+                "value": {
+                  "retry": {
+                    "success": true,
+                    "received": 0,
+                    "sent": 1,
+                    "count": 2
+                  },
+                  "late": {
+                    "success": true,
+                    "received": 0,
+                    "sent": 0,
+                    "count": 2
+                  },
+                  "exactCiphertext": true
+                }
+              },
+              "qualification": "The client sync API reported success but update 2 was absent after crash; this was not a verified durable acknowledgment. A surviving peer must retain and replay missing history."
+            }
+          }
+        }
+      }
+    },
+    "dataExit": {
+      "checkedAt": "2026-10-12T17:59:52.138Z",
+      "pullRequests": [
+        {
+          "number": 41,
+          "head": "b013b64e51a4f5bfe382ba2acd67e7f5f571ac54",
+          "state": "open",
+          "draft": true,
+          "workflowRuns": [
+            {
+              "id": 38186593589,
+              "name": "Merge evidence feasibility (experimental)",
+              "status": "completed",
+              "conclusion": "success",
+              "run_number": 12,
+              "jobs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38186593589/jobs",
+              "logs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38186593589/logs",
+              "workflow_id": 381645291
+            },
+            {
+              "id": 38186593573,
+              "name": "CI",
+              "status": "completed",
+              "conclusion": "success",
+              "run_number": 325,
+              "jobs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38186593573/jobs",
+              "logs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38186593573/logs",
+              "workflow_id": 362606475
+            }
+          ]
+        },
+        {
+          "number": 46,
+          "head": "e3382d8ed105223f8f7d7c101891f33ea226f7d5",
+          "state": "open",
+          "draft": true,
+          "workflowRuns": [
+            {
+              "id": 38254466022,
+              "name": "State migration and recovery feasibility (experimental)",
+              "status": "completed",
+              "conclusion": "success",
+              "run_number": 6,
+              "jobs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38254466022/jobs",
+              "logs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38254466022/logs",
+              "workflow_id": 382153419
+            },
+            {
+              "id": 38254466089,
+              "name": "CI",
+              "status": "completed",
+              "conclusion": "success",
+              "run_number": 410,
+              "jobs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38254466089/jobs",
+              "logs_url": "https://api.github.com/repos/0cwa/creative-cooking/actions/runs/38254466089/logs",
+              "workflow_id": 362606475
+            }
+          ]
+        }
+      ],
+      "localHarness": {
+        "head": "e3382d8ed105223f8f7d7c101891f33ea226f7d5",
+        "typecheck": "PASS",
+        "policy": 6,
+        "automerge": 17,
+        "loro": 17,
+        "fail": 0
+      },
+      "exitDrill": {
+        "branch": "research/feasibility-engine-exit-drill",
+        "directions": [
+          "automerge\u2192loro\u2192automerge",
+          "loro\u2192automerge\u2192loro"
+        ],
+        "pass": 2,
+        "fail": 0,
+        "verification": "local only, no GitHub Actions run for new drill",
+        "artifact": "/workspace/work/data-exit/spikes/state-migration-recovery/artifacts/engine-exit-results.json",
+        "commit": "b6436f7",
+        "base": "e3382d8ed105223f8f7d7c101891f33ea226f7d5",
+        "workflow": "Dedicated #46 workflow now runs npm run test:exit and uploads generated artifact; new-head CI remains pending until root publishes.",
+        "supersededBy": "newExitCi: exact new head isolated and normal CI PASS; artifact independently inspected"
+      }
+    }
+  },
+  "newExitCi": {
+    "headSha": "b6436f72e6373248a2652ab9db82b30ac52580c9",
+    "normalRunId": 38288196581,
+    "experimentRunId": 38288196578,
+    "artifactId": 11763334290,
+    "zipSha256": "80e55c252b4bbb948f392bdf9fd7dc29187a77348e02bd358369151b8f3452db",
+    "artifactInspected": true,
+    "directionsPass": 2
+  },
+  "userInfrastructure": {
+    "arm64DeviceRunnerAvailable": false
+  },
+  "interpretation": "Current-head run metadata is live at freeze; lane evidence names its own exact tested head. A newer pending fix does not overwrite older valid runtime proof. PR merge commit and branch head may differ. Local paths are audit-workspace locations, not portable evidence URLs."
+}
