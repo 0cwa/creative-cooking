@@ -130,8 +130,8 @@ function one(engine, trial, warmup = false) {
     retransmittedHistorySizedPayload: warmRetransmittedHistory });
   // A second genuine edit pair in the same established session makes first-round
   // retransmission vs steady-state delta behavior independently observable.
-  const nextA = b.edit(warm.a, TRACE.warmFollowupA, 'phone');
-  const nextB = b.edit(warm.b, TRACE.warmFollowupB, 'laptop');
+  const nextA = b.edit(b.clone(warm.a, 'phone'), TRACE.warmFollowupA, 'phone');
+  const nextB = b.edit(b.clone(warm.b, 'laptop'), TRACE.warmFollowupB, 'laptop');
   const nextWarm = report('warmFollowupSync', timing(() => b.syncPair(nextA, nextB, warm.session)));
   const nextExpected = expectedAfter(warmExpected, [...TRACE.warmFollowupA, ...TRACE.warmFollowupB]);
   prove(b.project(nextWarm.a), nextExpected, 'followup warm A');
