@@ -11,6 +11,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Repo } from "@automerge/automerge-repo/slim";
+import { initFromBase64Wasm } from "@automerge/automerge-subduction/slim";
+import { wasmBase64 } from "@automerge/automerge-subduction/wasm-base64";
 import {
   Access, CiphertextStore, ContactCard, DocumentId, Keyhive, Signer,
 } from "@keyhive/keyhive/slim";
@@ -69,6 +71,9 @@ async function assertPermission(
 describe.sequential("Creative Cooking: actual ARK/Keyhive policy invariants", () => {
   beforeAll(async () => {
     initKeyhiveWasm();
+    // Repo/slim's Subduction wasm is NOT automatically initialized in Node.
+    // Match ARK's exact installed 0.16.1 slim binding; no newer bridge.
+    initFromBase64Wasm(wasmBase64);
     [owner, relay, reader, editor, admin, outsider] = await Promise.all(
       Array.from({length: 6}, () => subject())
     );
