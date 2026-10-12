@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, readdirSync, existsSync,
   openSync, closeSync, fsyncSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import * as E from './engines.mjs';
-import { SHA, canonical, docId, validateDocument, projectView } from './schema.mjs';
+import { SHA, canonical, docId, validateDocument, projectView, SECRET_MARKERS } from './schema.mjs';
 
 const hash = (data) => SHA(data);
 const canonicalBytes = (x) => Buffer.from(JSON.stringify(canonical(x)));
@@ -13,6 +13,18 @@ const strictObject = (obj,keys)=>{
   assert.ok(obj && typeof obj==='object'&&!Array.isArray(obj));
   for(const key of Object.keys(obj))assert.ok(keys.includes(key),'unknown envelope field: '+key);
 };
+function validKeyMetadata(meta,space) {
+  strictObject(meta,['keyRequirement','publicEpochReference']);
+  assert.equal(meta.keyRequirement,space.kind==='household'?'external':'none',
+    'cannot downgrade household external key requirement');
+  assert.ok(meta.publicEpochReference===null||
+    (typeof meta.publicEpochReference==='string'&&meta.publicEpochReference.length<=128),
+    'only bounded nonsecret key epoch references allowed');
+  const bytes=JSON.stringify(meta);
+  for(const marker of SECRET_MARKERS)assert.ok(!bytes.includes(marker),'live key material in metadata');
+  assert.ok(!/-----BEGIN (?:[A-Z ]* )?PRIVATE KEY-----/.test(bytes),'private key in metadata');
+  return meta;
+}
 function ensureDir(d){mkdirSync(d,{recursive:true});}
 function durableWrite(file,data){
   ensureDir(path.dirname(file));
@@ -95,12 +107,13 @@ export class DiskStore {
     const digest=SHA(Buffer.from(binary));
     durableWrite(this.file('snapshots/'+digest+'.bin'),Buffer.from(binary));
     if(interrupt)throw Error('INJECTED:during-migration-before-activation');
+    const safeKeyMetadata=validKeyMetadata(keyMetadata ?? {
+      keyRequirement:this.space.kind==='household'?'external':'none',
+      publicEpochReference:this.space.kind==='household'?'epoch-ref-test-v1':null
+    },this.space);
     const manifest={format:'creative-cooking-crdt-reference',version:1,
       schemaVersion:2,engine:this.engine,space:this.space,documentId:doc.documentId,
-      seedSha256:digest,keyMetadata:keyMetadata ?? {
-        keyRequirement:this.space.kind==='household'?'external':'none',
-        publicEpochReference:this.space.kind==='household'?'epoch-ref-test-v1':null
-      }};
+      seedSha256:digest,keyMetadata:safeKeyMetadata};
     // Atomic activation occurs LAST, leaving previous state untouched on failure.
     storedJson(this.file('manifest.json'),manifest);
     return {manifest,snapshotBytes:binary.length};
@@ -115,6 +128,7 @@ export class DiskStore {
     assert.equal(manifest.engine,this.engine,'storage engine mismatch');
     assert.deepEqual(manifest.space,this.space,'storage space mismatch');
     assert.equal(manifest.documentId,docId(this.space));
+    validKeyMetadata(manifest.keyMetadata,this.space);
     const snapshotFile=this.file('snapshots/'+manifest.seedSha256+'.bin');
     const bytes=readFileSync(snapshotFile);
     assert.equal(SHA(bytes),manifest.seedSha256,'partial or corrupted snapshot');
@@ -211,11 +225,13 @@ export class DiskStore {
       engine:this.engine,namespace:this.space,documentId:docId(this.space),
       fullSnapshotBase64:binary.toString('base64'),snapshotSha256:SHA(binary),
       updateWalBase64:updates,appView:projectView(r.document),
-      reviewCheckpoint:r.checkpoint,keyMetadata:r.manifest.keyMetadata,
+      reviewCheckpoint:r.checkpoint,
+      reviewCheckpointSha256:r.checkpoint?hash(canonicalBytes(r.checkpoint)):null,
+      keyMetadata:r.manifest.keyMetadata,
       security:'UNAUTHENTICATED_TEST_ONLY_NOT_E2EE'
     };
     // Only a reference/epoch, not a secret key, is permitted in backup metadata.
-    strictObject(envelope.keyMetadata,['keyRequirement','publicEpochReference']);
+    validKeyMetadata(envelope.keyMetadata,this.space);
     return envelope;
   }
   static restoreResearchBundle(dir,bundle,{engine,space,hasExternalGroupKey=false,crashBeforeActivation=false}={}){
@@ -227,8 +243,10 @@ export class DiskStore {
     assert.equal(bundle.engine,engine,'restore engine mismatch');
     assert.deepEqual(bundle.namespace,space,'wrong restore space');
     assert.equal(bundle.documentId,docId(space));
-    strictObject(bundle.keyMetadata,['keyRequirement','publicEpochReference']);
-    if(bundle.keyMetadata.keyRequirement==='external'&&!hasExternalGroupKey)
+    validKeyMetadata(bundle.keyMetadata,space);
+    assert.equal(bundle.reviewCheckpointSha256,
+      bundle.reviewCheckpoint?hash(canonicalBytes(bundle.reviewCheckpoint)):null,'tampered review checkpoint');
+    if(space.kind==='household'&&!hasExternalGroupKey)
       throw Error('MISSING_GROUP_KEY: re-pair or obtain separately protected recovery material');
     const raw=Buffer.from(bundle.fullSnapshotBase64,'base64');
     assert.equal(SHA(raw),bundle.snapshotSha256,'corrupted/partial portable snapshot');

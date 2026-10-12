@@ -56,6 +56,7 @@ const storageResults=[];
 const scanRecords=[];
 const migrationResults=[];
 const rollback=[];
+const activityResults=[];
 function scenario(engine,name,run){
   const start=performance.now();
   try{
@@ -203,6 +204,7 @@ for(const engine of Object.keys(E.ENGINE_VERSIONS)) {
     assert.equal(view.recipes[0].ingredients[0].amount,'2');
     assert.equal(view.recipes[0].steps.length,2);
     assert.equal(view.pantry.length,3);
+    assert.equal(view.chatMessages.length,1);
     assert.equal(E.frontier(engine,after).length>0,true);
     scan(engine+'-initial-binary-and-view',[
       {name:'real-'+engine+'-snapshot.bin',bytes:Buffer.from(binary)},
@@ -386,6 +388,12 @@ for(const engine of Object.keys(E.ENGINE_VERSIONS)) {
       const locked={...bundle,namespace:household,documentId:docId(household),
         keyMetadata:{keyRequirement:'external',publicEpochReference:'epoch-ref-test-v1'}};
       assert.throws(()=>DiskStore.restoreResearchBundle(groupTarget,locked,{engine,space:household}),/MISSING_GROUP_KEY/);
+      assert.throws(()=>DiskStore.restoreResearchBundle(temporary(engine),
+        {...locked,keyMetadata:{keyRequirement:'none',publicEpochReference:null}},
+        {engine,space:household}),/cannot downgrade household/);
+      assert.throws(()=>DiskStore.restoreResearchBundle(temporary(engine),
+        {...bundle,reviewCheckpoint:{...bundle.reviewCheckpoint,events:[]}},
+        {engine,space:personal}),/tampered review checkpoint/);
       assert.equal(new DiskStore(groupTarget,engine,household).recover(),null);
       const restoreAbort=temporary(engine);
       assert.throws(()=>DiskStore.restoreResearchBundle(restoreAbort,bundle,
@@ -402,6 +410,27 @@ for(const engine of Object.keys(E.ENGINE_VERSIONS)) {
       return report;
     }finally{dispose(dir);dispose(target);dispose(groupTarget);}
   });
+  scenario(engine,'real-derived-sync-activity-and-restart-index-evidence',()=>{
+    const src=docs().document,seed=E.seed(engine,src),identity=ids(src);
+    const phone=E.edit(engine,E.fork(engine,seed,'phone'),'phone','portions',identity,4);
+    const tablet=E.edit(engine,E.fork(engine,seed,'tablet'),'tablet','title',identity,'Garlicky toast');
+    const joined=E.merge(engine,phone,tablet);
+    const activity=E.activity(engine,joined);
+    assert.ok(activity.length>=3,'seed and two authored changes must survive');
+    assert.ok(activity.every(x=>x.id&&x.actorId&&x.completeness),'activity requires opaque source identity');
+    const cold=E.load(engine,E.snapshot(engine,joined));
+    assert.deepEqual(E.activity(engine,cold),activity,'change activity stable over binary restart');
+    const update=E.incremental(engine,seed,phone)[0];
+    let duplicate=E.apply(engine,seed,update);
+    const before=E.activity(engine,duplicate);
+    duplicate=E.apply(engine,duplicate,update);
+    assert.deepEqual(E.activity(engine,duplicate),before,'duplicate update does not double count authored activity');
+    const report={engine,entryCount:activity.length,sample:activity.slice(0,3),
+      headerOnly:true,mutableReviewLedgerRequired:true,
+      dependencyProvenance:engine==='automerge'?'change deps available':'per-op dependencies not directly in activity header'};
+    activityResults.push(report);
+    return {activityHeaders:activity.length,stableAfterRestart:true,deduplicated:true};
+  });
   scenario(engine,'wire-space-replay-and-unknown-engine-field-fail-closed',()=>{
     const src=docs().document,seed=E.seed(engine,src),identity=ids(src);
     const changed=E.edit(engine,E.fork(engine,seed,'phone'),'phone','title',identity,'Herby toast');
@@ -415,6 +444,18 @@ for(const engine of Object.keys(E.ENGINE_VERSIONS)) {
       key:'providerApiKey',secret:secret[4]});
     const binary=E.snapshot(engine,rogue);
     assert.throws(()=>E.read(engine,E.load(engine,binary),personal),/unknown|rogue|credential|provider/i);
+    const rejectionDir=temporary(engine);
+    try {
+      const admissionStore=new DiskStore(rejectionDir,engine,personal);
+      admissionStore.startMigration(src);
+      const authoritative=admissionStore.recover().doc;
+      const untrusted=E.edit(engine,E.fork(engine,authoritative,'phone'),'phone',
+        'rogueField',identity,{key:'providerApiKey',secret:secret[4]});
+      const rogueUpdate=E.incremental(engine,authoritative,untrusted)[0];
+      assert.throws(()=>admissionStore.receive(makeEnvelope(engine,personal,rogueUpdate)),
+        /unknown|credential|provider/i);
+      assert.equal(admissionStore.recover().updates,0,'rejected untrusted edit must never become WAL');
+    } finally {dispose(rejectionDir);}
     // Receiver must check imported projection before committing an untrusted network write.
     const bytes=E.incremental(engine,seed,rogue)[0];
     const candidate=E.apply(engine,seed,bytes);
@@ -472,6 +513,7 @@ const files={
   'scenario-results.json':{schemaVersion:1,engineVersions:E.ENGINE_VERSIONS,counts,results},
   'migration-results.json':{schemaVersion:2,source:'unmodified production v1 parser read-only',results:migrationResults},
   'recovery-results.json':{schemaVersion:1,storage:storageResults,rollback},
+  'activity-evidence.json':{schemaVersion:1,source:'real engine retained change headers',results:activityResults},
   'leak-scan-results.json':{schemaVersion:1,knownSentinels:secret.length,
     markerValuesExcludedFromReport:true,
     negativeControl:'Existing raw v1 backup includes injected secrets when state is polluted; unchanged production exporter',

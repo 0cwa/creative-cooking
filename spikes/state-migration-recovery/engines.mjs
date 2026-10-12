@@ -237,3 +237,21 @@ export function actualAlternatives(engine,doc,recipeId,field) {
   return {values:maximal.map(x=>x.value),operationIds:maximal.map(x=>x.id),frontier:frontier(engine,doc),
     concurrent,evidence:'getAllChanges/getOpsInChange/cmpFrontiers real Loro history'};
 }
+
+/** Derived low-priority Sync Activity metadata; never authoritative application edits. */
+export function activity(engine,doc) {
+  const result=[];
+  if(engine==='automerge'){
+    for(const m of A.getChangesMetaSince(doc,[]))result.push({
+      id:m.hash,actorId:m.actor??null,message:m.message??null,
+      dependencies:[...(m.deps??[])],completeness:'change-header-and-deps'
+    });
+  }else if(engine==='loro'){
+    for(const [peer,changes] of doc.getAllChanges())for(const m of changes)result.push({
+      id:String(m.counter)+'@'+String(peer),actorId:String(peer),
+      message:m.message??m.msg??null,dependencies:null,
+      completeness:'change-header-no-direct-per-op-deps'
+    });
+  }else throw Error('unsupported activity engine');
+  return result.sort((a,b)=>a.id.localeCompare(b.id));
+}
