@@ -7,14 +7,18 @@ const dir = 'artifacts/benchmark-parity';
 fs.mkdirSync(dir, { recursive: true });
 const url = 'http://127.0.0.1:4173/creative-cooking/benchmark-parity';
 const browser = await chromium.launch({ headless: true });
-const pageErrors = [], failedRequests = [], assets = [], cdpTransfers = [];
+const pageErrors = [], failedRequests = [], assets = [], cdpTransfers = [], cdpExceptions = [], consoleEvents = [];
 try {
   const context = await browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
+  await cdp.send('Runtime.enable');
+  cdp.on('Runtime.exceptionThrown', ev => cdpExceptions.push(ev.exceptionDetails));
   cdp.on('Network.loadingFinished', event => cdpTransfers.push({ requestId: event.requestId, encodedDataLength: event.encodedDataLength }));
-  page.on('pageerror', err => pageErrors.push(String(err?.stack ?? err)));
+  page.on('pageerror', err => pageErrors.push({ text: String(err?.stack ?? err), name: err?.name, message: err?.message,
+    stack: err?.stack, stringified: String(err), propertyNames: Object.getOwnPropertyNames(err ?? {}) }));
+  page.on('console', msg => consoleEvents.push({ type: msg.type(), text: msg.text() }));
   page.on('requestfailed', req => failedRequests.push({ url: req.url(), error: req.failure()?.errorText }));
   page.on('response', response => {
     const reqUrl = response.url();
@@ -31,6 +35,7 @@ try {
   assert.ok(first, 'window engine readiness');
   assert.equal(response?.status(), 200);
   assert.ok(assets.every(x => x.status === 200), 'all same-origin assets must load');
+  if (pageErrors.length) console.log('BROWSER_DIAGNOSTIC', JSON.stringify({ engine, pageErrors, cdpExceptions, consoleEvents }));
   assert.deepStrictEqual(pageErrors, []);
   assert.deepStrictEqual(failedRequests, []);
   const firstCdpBytes = cdpTransfers.reduce((n,x) => n + x.encodedDataLength, 0);
@@ -65,7 +70,7 @@ try {
   })));
   const output = { engine, pass: true, pageUrl: url, initialResponse: response?.status(),
     first, pageErrors, failedRequests, assets, perfResources: perf,
-    initialCdpEncodedBytes: firstCdpBytes,
+    initialCdpEncodedBytes: firstCdpBytes, cdpExceptions, consoleEvents,
     totalWithRefreshCdpEncodedBytes: cdpTransfers.reduce((n,x) => n + x.encodedDataLength, 0),
     transportNote:'Initial CDP bytes include initial navigation/response headers (HTTP compression from server). TotalWithRefresh adds reload traffic. Browser service workers blocked for this isolated offline-document test',
     compression: 'local static server sends Brotli when the browser accepts it',
@@ -75,7 +80,7 @@ try {
     localReload: engine === 'control' ? 'not applicable' : 'PASS', cdpBytes: output.initialCdpEncodedBytes }));
 } catch(error) {
   fs.writeFileSync(dir + '/browser-' + engine + '.json', JSON.stringify({
-    engine, pass: false, error: String(error?.stack ?? error), pageErrors, failedRequests, assets
+    engine, pass: false, error: String(error?.stack ?? error), pageErrors, failedRequests, assets, cdpExceptions, consoleEvents
   }, null, 2) + '\n');
   throw error;
 } finally { await browser.close(); }
