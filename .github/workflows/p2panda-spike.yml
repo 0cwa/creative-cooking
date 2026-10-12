@@ -152,12 +152,14 @@ jobs:
           shasum -a 256 "$p"/libcreative_cooking_p2panda_spike.* || sha256sum "$p"/libcreative_cooking_p2panda_spike.*
           if [ "${{ matrix.target }}" = aarch64-linux-android ]; then
             "$CC_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$p/libcreative_cooking_p2panda_spike.so"
-            "$CC_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D "$p/libcreative_cooking_p2panda_spike.so" | grep -m 1 'Java_org_creativecooking_spike_P2pandaProbe_nativeProbe'
+            "$CC_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D "$p/libcreative_cooking_p2panda_spike.so" > /tmp/cc-p2panda-android-symbols.txt
+            grep -m 1 'Java_org_creativecooking_spike_P2pandaProbe_nativeProbe'
             test -s "$p/libcreative_cooking_p2panda_spike.so"
           else
             xcrun --sdk iphoneos --show-sdk-version
             xcrun lipo -info "$p/libcreative_cooking_p2panda_spike.a"
-            nm "$p/libcreative_cooking_p2panda_spike.a" | grep -m 1 'cc_p2panda_self_probe'
+            nm "$p/libcreative_cooking_p2panda_spike.a" > /tmp/cc-p2panda-ios-symbols.txt
+            grep -m 1 'cc_p2panda_self_probe'
           fi
           cp "$p/libcreative_cooking_p2panda_spike.a" experiments/p2panda/artifacts/
           if [ -f "$p/libcreative_cooking_p2panda_spike.so" ]; then cp "$p/libcreative_cooking_p2panda_spike.so" experiments/p2panda/artifacts/; fi
