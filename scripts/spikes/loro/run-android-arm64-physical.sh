@@ -78,7 +78,7 @@ cleanup() {
   if [[ -n "$METRO_PID" ]]; then kill "$METRO_PID" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
-CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 \
+CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat \
   npx expo start --localhost --port 8081 > "$OUT/metro.log" 2>&1 &
 METRO_PID="$!"
 sleep 8
