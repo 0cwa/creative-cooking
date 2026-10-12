@@ -68,6 +68,13 @@ jobs:
         continue-on-error: true
         timeout-minutes: 12
         run: node experiments/p2panda/real-engine-smoke.mjs experiments/p2panda/rust/target/debug/peer
+      - name: Real headless Chromium to signed p2panda native peers, restart and convergence
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          CC_BROWSER=1 CC_P2PANDA_OUTPUT=experiments/p2panda/artifacts/chromium-native-engine-scenarios.json node experiments/p2panda/real-engine-smoke.mjs experiments/p2panda/rust/target/debug/peer
       - name: Real p2panda third-process random binary catch-up
         continue-on-error: true
         timeout-minutes: 7
