@@ -41,7 +41,8 @@ Seed `20261012`, fixed-width padded representative scalar/text fields, fixed ISO
 | Single-field edit | One committed title mutation | Projection matches common operation trace |
 | Batch edit | Five pantry, three recipe and one method-step update | Projection matches trace |
 | Brand-new second device | **Automerge true SyncState handshake versus Loro full snapshot import** | Fresh device converges and bytes/rounds counted |
-| Warm incremental sync | Warmed Automerge SyncState / Loro version-vector binary delta exchange | A and B edit separate fields and converge |
+| Warm incremental sync after bootstrap | Reuse the actual acknowledged bootstrap peer documents and SyncState session; Loro uses the same imported snapshot before version-vector deltas | One edit each; peers converge, exact bytes and any history-sized retransmission recorded |
+| Follow-up incremental sync | Second edit pair in the same already-used session, with no new bootstrap | Two further independent edits; peers converge |
 | Raw change exchange | Automerge getChanges/applyChanges / Loro version-vector update import | Both peers converge; **not** Automerge SyncState |
 | Document merge | Automerge merge() / Loro import updates into fork | Same projection; separate named metric |
 | Long offline catch-up | 21 edits per side including concurrent portions disagreement | 4 and 6 retained, all 40 independent updates preserved, peers converge |
@@ -115,3 +116,5 @@ The native engine worklanes are independent. As of the source reports inspected 
 - The final architecture evaluator should consider the executable measurements **together with** #37/#38 native evidence and #39/#40 transport/security worklanes, not infer a winning engine from any single performance number.
 
 **Do not merge or use this PR to ship either engine.**
+
+**Warm-session note:** The initial experimental run unexpectedly observed a history-sized Automerge SyncState message *despite shared history and a retained session* (old measured run #38186299280). Treating its time as a small incremental exchange would repeat the original comparison error. The revised harness records `retransmittedHistorySizedPayload` and tests a second session update rather than silently dropping or recategorizing those bytes. In the symmetric exchange, each peer generates its message before either imports updates, matching the upstream Automerge sync-test exchange pattern.
