@@ -35,13 +35,17 @@ function conflictPair(E, field, first, second) {
 }
 function observedMeta(E, doc, operation, value, index) {
   if (E.ENGINE === 'automerge') {
-    const change = E.metadata(doc).find((m) => {
+    const matches = E.metadata(doc).filter((m) => {
       try { return JSON.parse(m.message)?.operation === operation; } catch { return false; }
     });
+    // Do not guess which hash created a value when the same operation appears repeatedly.
+    const change = matches.length === 1 ? matches[0] : null;
     return { value, changeId: change?.hash ?? null, operationId: null,
       authorId: change?.author ?? change?.actor ?? null, dependencies: change?.deps ?? null };
   }
   const fields = {
+    portions: ['recipe:recipe-1', 'portions'],
+    ingredientAmount: ['ingredient:ingredient-1', 'amount'],
     deleted: ['recipe:recipe-1', 'deleted'],
     title: ['recipe:recipe-1', 'title'],
     carrotsPhone: ['pantry:carrot-phone', 'preference'],
@@ -233,14 +237,21 @@ for (const E of [Automerge, Loro]) {
     assert.equal(E.read(doc, 'portions'), 8);
     assert.equal(E.read(doc, 'ingredientAmount'), '1');
     assert.equal(E.scalar(doc, 'portions', index()).concurrent, false);
+    const policyIndex = index();
+    const sources = [
+      observedMeta(E, doc, 'portions', 8, policyIndex),
+      observedMeta(E, doc, 'ingredientAmount', '1', policyIndex)
+    ];
+    assert.ok(sources.every((source) => source.changeId),
+      'policy event should identify the triggering edits without calling them conflicts');
     const event = semanticEvent(E, 'semantic-suspicion',
       { type: 'recipe', id: 'recipe-1' }, ['nutrition-and-yield-heuristic'],
-      [], ['recipe-1', 'rule:yield-versus-quantity-v1'],
+      sources, ['recipe-1', 'rule:yield-versus-quantity-v1'],
       ['inspect-recipe', 'dismiss-for-now'],
       'Example heuristic: 8 portions with just 1 tomato; not a CRDT conflict or cooking verdict');
     sampleEvents.push(event);
     return { eventId: event.id, possibleAnomaly: true, crdtConflict: false,
-      heuristicIsNotAuthoritative: true };
+      heuristicIsNotAuthoritative: true, sourceChanges: sources.map((source) => source.changeId) };
   });
 
   run(E, 11, 'Three replicas converge regardless of merge/delivery order', () => {
