@@ -66,7 +66,7 @@ jobs:
       - name: Generate actual engine fixtures and static subpath client
         run: |
           node read-only-fixture/spikes/evaluation-readiness/fixtures.mjs generate "$RUNNER_TEMP/native-fixture.json"
-          cp spikes/subduction-native/browser/native-interop.spec.ts subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
+          cp spikes/subduction-native/browser/native-interop.spec.ts.template subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
           mkdir -p subduction-upstream/subduction_wasm/e2e/server/creative-cooking
           cp subduction-upstream/subduction_wasm/e2e/server/index.html \
             subduction-upstream/subduction_wasm/e2e/server/creative-cooking/index.html
@@ -170,7 +170,7 @@ jobs:
           cargo build --manifest-path subduction-upstream/Cargo.toml -p subduction_cli
           (cd subduction-upstream && wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
           node read-only-fixture/spikes/evaluation-readiness/fixtures.mjs generate "$RUNNER_TEMP/native-fixture.json"
-          cp spikes/subduction-native/browser/native-interop.spec.ts subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
+          cp spikes/subduction-native/browser/native-interop.spec.ts.template subduction-upstream/subduction_wasm/e2e/native-interop.spec.ts
           mkdir -p subduction-upstream/subduction_wasm/e2e/server/creative-cooking
           cp subduction-upstream/subduction_wasm/e2e/server/index.html \
             subduction-upstream/subduction_wasm/e2e/server/creative-cooking/index.html
@@ -229,9 +229,11 @@ jobs:
           rustc --version >> artifacts/subduction-native/sources.txt
           echo "NDK=$ANDROID_NDK_HOME" >> artifacts/subduction-native/sources.txt
           cargo install cargo-ndk --locked --version 3.5.4
+          cd spikes/subduction-native/rust
           cargo ndk -t arm64-v8a -p 26 \
-            -o spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs \
-            build --manifest-path spikes/subduction-native/rust/Cargo.toml --release --lib
+            -o "$GITHUB_WORKSPACE/spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs" \
+            build --release --lib
+          cd "$GITHUB_WORKSPACE"
           sha256sum spikes/subduction-native/expo-probe/modules/cc-subduction-module/android/src/main/jniLibs/arm64-v8a/libcc_subduction_native.so \
             >> artifacts/subduction-native/sources.txt
           cp spikes/subduction-native/rust/Cargo.lock artifacts/subduction-native/native-Cargo.lock

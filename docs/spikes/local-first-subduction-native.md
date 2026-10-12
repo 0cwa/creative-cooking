@@ -22,7 +22,7 @@ The research-only module under [spikes/subduction-native/rust](../../spikes/subd
 
 The [standalone Expo 57 app](../../spikes/subduction-native/expo-probe) runs outside the production app. Its iOS simulator process calls the compiled Rust static library through an ExpoModule and writes result JSON to application Documents. Its Android ARM64 module packages the Rust shared object through JNI and performs the same handshake in the app process if and only if actually executed. An APK alone does not establish an Android runtime PASS.
 
-The [adversarial Chromium spec](../../spikes/subduction-native/browser/native-interop.spec.ts) runs against a persistent, real upstream Rust CLI server. The static browser entry is served from /creative-cooking/ with real WASM, and it tests the same namespace on web and native. Every scenario carries **genuine independently generated Automerge and Loro incremental binary changes** in AES-GCM test envelopes, with distinct engine/space/document IDs hashed into separate Sedimentree IDs, and exact SHA256 checking.
+The [adversarial Chromium spec](../../spikes/subduction-native/browser/native-interop.spec.ts.template) runs against a persistent, real upstream Rust CLI server. The static browser entry is served from /creative-cooking/ with real WASM, and it tests the same namespace on web and native. Every scenario carries **genuine independently generated Automerge and Loro incremental binary changes** in AES-GCM test envelopes, with distinct engine/space/document IDs hashed into separate Sedimentree IDs, and exact SHA256 checking.
 
 The executable contract is:
 
