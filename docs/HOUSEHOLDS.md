@@ -2,6 +2,8 @@
 
 Automerge is the working engine choice. The goal is opt-in collaboration on household shopping lists and selected recipes while preserving accountless offline cooking and private personal data. The local foundation builds on the existing Shopping work in [PR #33](https://github.com/0cwa/creative-cooking/pull/33); it does not merge that PR or the research branches.
 
+The concrete [multi-household Shopping UX plan](HOUSEHOLD_SHOPPING_UX.md) defines scope selection, combined errands, source-owned checkoffs, Pantry destinations and three mobile wireframes. Its first prerequisite is separating shopping-trip selection from Chef's cooking household; the current single-household local slice uses one active scope for both. The combined trip is planned, not implemented in this slice.
+
 ## Completed in this slice
 
 - Local household creation and switching, one shopping list per household, and a separate personal list. Pantry remains personal; purchasing from a household list can explicitly add those items to personal Pantry.
@@ -20,11 +22,13 @@ The app currently saves local household arrays through its ordinary local storag
 | --- | --- | --- |
 | Local engine adoption | Route household domain commands through the engine adapter; store binary history and review evidence; create a durable outbox alongside committed changes; preserve existing JSON recovery as a view export. | Web add/check/remove/copy edits survive restart and transport failure without lost outbox changes or history. No personal scope enters household payloads. |
 | Keys and transport decision | Select one maintained group-security implementation that fits browser and Expo; qualify an authenticated HTTPS ciphertext mailbox and durable receipts. Current Keyhive/ARK/Spaces/Subduction shipping paths remain parked. | Exact pinned implementation proves verified device invitation, two households, read/write/admin authority, future-key revocation, stale offline writer handling and one recovery path. See the separate key/transport recommendation. |
-| Native Automerge | Diagnose the Android release-launch timeout; qualify actual Expo/Hermes calls and real process death/relaunch; build the small Expo iOS Swift bridge. | Actual binary exchange and conflict/order/restart evidence comes from required runtimes, not compilation or in-memory handle reload. No ARM64 device runner is available currently. |
+| Native Automerge | Android API35 x86_64 Expo/JNI calls and eight live binary scenarios now pass. Finish durable OS process-death/relaunch, native ordering operations, ARM64 runtime and the small Expo iOS bridge. | Runtime binary/conflict/order/restart evidence comes from required targets, not compilation or in-memory handle reload. No ARM64 device runner is available currently. |
 | Household sharing integration | Connect authenticated ciphertext transport to the outbox/import boundary; explicit household joins, reader/editor/admin roles, reconnect, leave/remove and selected recipe copies. | Two devices edit offline and converge later through durable storage; outsiders and removed devices fail negative tests; local cooking stays available without service access. |
 | Recovery and release | Encrypted key recovery plus scoped full-history backups; schema/epoch migration and late old-peer policy; installed-PWA WASM cache upgrades; native key custody; real crash/storage-full recovery and operational owner. | Device-loss restore and removal work on supported platforms; the documentation accurately describes what a removed member can retain. |
 
 Remote keys and transport are a decision gate requested by the user. Continue local engine work independently, but do not enable household network sharing before the user chooses the recommended direction and that exact implementation passes its tests. Replicated membership fields must never become permission authority; Automerge actor IDs are not authenticated identities.
+
+The independently inspected Android result is [run 38293542117](https://github.com/0cwa/creative-cooking/actions/runs/38293542117), tested source `6ff3302`, device artifact `11768780597`: four instrumentation tests and eight host-JS-to-Android native binary scenarios pass. It uses Expo/RN's default Hermes configuration without a separate runtime-flag assertion. The test labeled restart keeps snapshot bytes in process memory, so OS process-loss recovery remains unproved; native Text/list operations and ARM64 execution also remain open.
 
 ## Product priorities
 
