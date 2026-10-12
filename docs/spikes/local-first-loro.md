@@ -361,6 +361,18 @@ Web requires explicit WASM asset handling in Expo static export. Native benefits
 - Device identity/authorship metadata belongs to Creative Cooking; peer IDs alone are not human device names.
 - Sync transport, pairing/authentication, and encryption remain outside this engine spike.
 
+## SHA-256 identities of verified native evidence archives
+
+The following downloaded Actions artifact ZIP digests were independently verified locally (SHA-256), and are consistent with GitHub artifact digests. A ZIP checksum does not itself make missing result JSON a PASS.
+
+| Run 38240053849 artifact | Result proven | Downloaded ZIP SHA-256 |
+|---|---|---|
+| [iOS 11744245324](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11744245324) | Genuine iOS runtime/OS restart and independent web verification PASS | 371d3135274ba86e6182a2a822a868a1edd80ba2bb4ffa6852235a7b4772533f |
+| [Android ARM64 11743346589](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11743346589) | Compile only; HV_UNSUPPORTED emulator | bf274cd26eabf7223c4435941478bb1938fd3ca565f898b5d637a40aaa7de150 |
+| [Android x86_64 11744095007](https://github.com/0cwa/creative-cooking/actions/runs/38240053849/artifacts/11744095007) | Missing x86_64 Rust archive; no native runtime | b783af0f6e690eb743a1a47987b9f1eba6520495117fd6179407f32c7452b37f |
+
+Subsequent experimental native CI jobs also write SHA256SUMS.txt for raw output files and independently capture the APK hash. The V2 parser remains fail-closed: a log/artifact without actual valid result.json plus web-verification.json is not successful native convergence.
+
 ## CI, artifacts, and isolation
 
 Normal Creative Cooking CI is unchanged and green on this branch: Gitleaks, unit tests, TypeScript, production PWA export/verification, and Playwright E2E pass. Experimental Loro jobs are separate and do not weaken those checks.
