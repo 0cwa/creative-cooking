@@ -80,7 +80,7 @@ function entriesWithStableIds(rows, kind, dropped) {
     }
     const index = missingCounters.get(key) ?? 0;
     missingCounters.set(key, index + 1);
-    matches.push({ row, key, digest, index });
+    matches.push({ row, key, digest, index, position:i });
     unique.set(key, matches);
   }
   const output = [];
@@ -93,7 +93,8 @@ function entriesWithStableIds(rows, kind, dropped) {
       output.push({ ...entry, id: stableId(kind, entry.key + suffix) });
     }
   }
-  return output.sort((a, b) => a.id.localeCompare(b.id));
+  // Identity assignment is digest-stable, but presentation order follows v1 arrays.
+  return output.sort((a, b) => a.position - b.position);
 }
 function ingredientRows(items, recipeId, dropped) {
   assert.ok(Array.isArray(items), 'recipe ingredient collection must be an array');
@@ -190,14 +191,14 @@ export function importV1(raw, space, selection = null) {
         id: liveId, title:'Active chat', messages:state.chatMessages, createdAt:'', updatedAt:''
       }] : [])
     ];
-    for (const {row, id} of entriesWithStableIds(conversations, 'conversation', droppedPaths)) {
+    for (const {row, id, position} of entriesWithStableIds(conversations, 'conversation', droppedPaths)) {
       const messages = chatMessageRows(row.messages, id, droppedPaths);
       for (const key of Object.keys(row)) if (!['id','title','messages','createdAt','updatedAt'].includes(key))
         droppedPaths.push('conversations.' + key + ':not-replicated');
       doc.conversations[id] = { id, title:text(row.title, 'conversation.title'),
         messagesById:messages.byId, messageOrder:messages.order,
         createdAt:timestamp(row.createdAt), updatedAt:timestamp(row.updatedAt), deleted:false };
-      if (row.id === liveId) doc.activeConversationId = id;
+      if (state.chatMessages.length && position === conversations.length - 1) doc.activeConversationId = id;
     }
     // An empty active chat remains empty; no artificial conversation inserted.
   } else {
