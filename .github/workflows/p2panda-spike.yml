@@ -146,6 +146,9 @@ jobs:
       - name: iOS-only minimal netdev upstream compatibility patch
         if: matrix.target == 'aarch64-apple-ios'
         run: python3 experiments/p2panda/ios-netdev-workaround.py
+      - name: iOS-only netwatch BSD routing-socket compatibility workaround
+        if: matrix.target == 'aarch64-apple-ios'
+        run: python3 experiments/p2panda/ios-netwatch-workaround.py
       - name: Build linkable native C ABI probe containing real p2panda Node
         run: cargo build --locked --manifest-path experiments/p2panda/rust/Cargo.toml --release --lib --target ${{ matrix.target }}
       - name: Write exact ABI/toolchain/byte evidence
