@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "updatedAt": "2026-10-12",
   "experimental": true,
   "productionReady": false,
@@ -8,11 +8,14 @@
   "pr": 39,
   "umbrellaIssue": 36,
   "measuredRun": {
-    "url": "https://github.com/0cwa/creative-cooking/actions/runs/38252204267",
-    "nativeScenarioArtifactId": 11749501837,
+    "url": "https://github.com/0cwa/creative-cooking/actions/runs/38266794739",
+    "nativeScenarioArtifactId": 11755436218,
     "nativeStatus": "PASS",
     "chromiumStatus": "PASS",
-    "productionCiUrl": "https://github.com/0cwa/creative-cooking/actions/runs/38252204158"
+    "genuineSpacesNativePersistentStatus": "PASS",
+    "iosPatchedStaticLibraryStatus": "PASS",
+    "androidArm64LinkStatus": "PASS",
+    "normalAppCiUrl": "https://github.com/0cwa/creative-cooking/actions/runs/38266794932"
   },
   "baseline": {
     "p2panda": "0.7.1",
@@ -30,10 +33,15 @@
   "facts": {
     "chromeToNativeUsingRealP2panda": true,
     "browserNativeP2panda": false,
-    "realSpacesEndToEndPersistentCatchup": false,
+    "realSpacesEndToEndPersistentCatchup": true,
     "realPhysicalMobileRuntime": false,
     "durableRelayServiceDeployed": false,
-    "normalCiChanges": false
+    "normalCiChanges": false,
+    "iosArm64PatchedCrossLink": true,
+    "androidArm64SharedLibraryBuilt": true,
+    "actualExpoIosOrAndroidExecution": false,
+    "iosAutomaticRouteMonitoringAfterTemporaryPatch": false,
+    "spacesAuthorizationAuditPassed": false
   },
   "scenarios": [
     {
@@ -54,8 +62,8 @@
       "id": "native-persistent-third-replica-no-author-overlap",
       "status": "PASS",
       "confidence": "high",
-      "evidence": "CI #38252204267; A/C SIGKILL, restart C from same SQLite and identity, late B obtains initial+concurrent frames; repeat second C restart and fresh E recovers resolution; trace JSON",
-      "limitations": "All processes on one Linux host with mDNS; C ciphertext is synthetic AES-GCM not Spaces"
+      "evidence": "CI #38266794739; both engines A→C SIGKILL and C restart→B, then B/C killed and C restored→E verified; separate genuine Spaces signed header/process catch-up PASSED using recipient persistent isolated prekeys; artifact #11755436218",
+      "limitations": "All same-host Linux CI processes; no public hosted router, NAT, physical devices or full Spaces ACL; C holds actual signed ciphertext header and can observe metadata."
     },
     {
       "id": "native-replay-and-causal-order",
@@ -67,9 +75,9 @@
     {
       "id": "real-spaces-authenticated-group-encryption",
       "status": "PARTIAL",
-      "confidence": "medium",
-      "evidence": "p2panda-spaces 0.7.1 rust/tests/spaces.rs component tests add third peer/read and revoke future ciphertext; tests/spaces_network.rs local-node signed transport added",
-      "limitations": "Not a process-restart same-identity Spaces encrypted control/message protocol; native transport test on latest head pending"
+      "confidence": "high",
+      "evidence": "CI #38266794739 real p2panda Spaces 0.7.1 encrypted application message + signed auth/control canonical CBOR headers replicated through keyless p2panda C SQLite, SIGKILL and late Bob/E; native verifier independently imports authoritative signed headers and uses isolated persisted recipient prekeys; artifact #11755436218. Component add/revoke/outsider tests pass.",
+      "limitations": "Cryptographic group encryption and integrity/delivery PASSED in artificial TestPeer fixture; full authorization, pairing, group ACL on transport ingress, stale/forged device, browser PWA/Expo and independent audit NOT passed."
     },
     {
       "id": "spaces-outsider-unwelcomed-read-and-edit",
@@ -101,10 +109,10 @@
     },
     {
       "id": "spaces-replay-authenticated-operations",
-      "status": "NOT TESTED",
-      "confidence": "low",
-      "evidence": "Bridge content-SHA duplicate POST test passed but is not a native Spaces malicious signed message replay test",
-      "limitations": "Need validated operation signature/dependency and key epochs in production ingress/replication"
+      "status": "PARTIAL",
+      "confidence": "high",
+      "evidence": "CI #38266794739 persisted Spaces verifier decodes signed CBOR, rejects one byte-tampered header and duplicate signed operation in Bob SqliteStore; bridge separately dedups same-session SHA-256 POST.",
+      "limitations": "Duplicate operation store semantics and signature tamper test are PASS, but native malicious requester replay/rollback, authorization and key epoch rollback attack across reboots NOT TESTED."
     },
     {
       "id": "spaces-stale-device-after-rotation",
@@ -122,10 +130,10 @@
     },
     {
       "id": "ios-netdev-scoped-source-patch",
-      "status": "PARTIAL",
-      "confidence": "medium",
-      "evidence": "ios-netdev-workaround.py gates original ioctl to macOS, iOS defaults unknown IPv6 flags, designed to run in macos-15 native CI job",
-      "limitations": "Latest iOS job queued when report drafted; not a confirmed link, upstream-compatible design must be upstreamed and verified"
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38266794739 iOS ARM64 Rust release static library links on macos-15 after isolated patches of netdev 0.46.3 and netwatch 0.19.3; lipo architecture inspection and artifact #11755865544",
+      "limitations": "Platform ABI proof only, not App Store/iPhone runtime; patches mutate registry source in CI, netwatch loses OS route-change monitoring/default-route query; must obtain upstream fix."
     },
     {
       "id": "ios-iphone-expo-runtime",
@@ -138,8 +146,8 @@
       "id": "android-arm64-linkable-native-lib",
       "status": "PASS",
       "confidence": "high",
-      "evidence": "CI #38252204267 mobile android job compiled release ELF64 AArch64 33 MB shared library / 121 MB static library, Rust 1.96.0, Android NDK 27.3.13750724 target API 24, JNI entrypoint exists in earlier job #114818115988",
-      "limitations": "ABI inspection reporting job failed due missing grep file argument, subsequently fixed in workflow; not Android JNI execution or AAR"
+      "evidence": "CI #38266794739 Android NDK 27.3.13750724 API24 Rust 1.96 release built ELF64 AArch64 p2panda .so (~33 MB) with exported real-Node JNI nativeProbe entrypoint, .a (~121 MB); artifact #11755346497",
+      "limitations": "No Android arm64 phone or Expo runtime execution, APK/AAR/ABI install and Java call not validated by this arm64 build."
     },
     {
       "id": "android-expo-runtime",
@@ -210,6 +218,48 @@
       "confidence": "low",
       "evidence": "p2panda Spaces upstream warns encryption not audited; component tests and prototype do not constitute audit",
       "limitations": "Withhold production security claims"
+    },
+    {
+      "id": "ios-upstream-netwatch-0.19.3-unpatched",
+      "status": "FAIL",
+      "confidence": "high",
+      "evidence": "CI #38253993901 genuine patched netdev follow-on compiled until netwatch 0.19.3 fails due missing libc::RTA_IFP, RTAX_*, RTM_* on aarch64-apple-ios",
+      "limitations": "netwatch routes macOS BSD routing constants into iOS; two independent upstream fixes/feature gates required."
+    },
+    {
+      "id": "ios-patched-crosslinked-staticlib",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38266794739 native aarch64-apple-ios static library successfully linked with experimental registry-source netdev+netwatch iOS fallbacks; artifact #11755865544",
+      "limitations": "Xcode16.4 nm LLVM17 cannot decode compiler_builtins LLVM22 object attributes; Rust staticlib and lipo architecture verified, no iOS simulator/phone invocation or Swift module."
+    },
+    {
+      "id": "ios-automatic-interface-route-observer-workaround",
+      "status": "FAIL",
+      "confidence": "high",
+      "evidence": "ios-netwatch-workaround.py deliberately maps iOS route monitoring to netwatch POSIX no-op; preserves netdev IP interface listing, loses OS route notifications/default-route lookup",
+      "limitations": "A successful iOS library link cannot be promoted to functional networking, background recovery or direct NAT routing test."
+    },
+    {
+      "id": "spaces-native-persisted-signed-group-ciphertext",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "CI #38266794739 independently generated authentic p2panda Spaces signed CBOR headers (356, 1075, 541 bytes), actual Node Rust A→C persistence, A/C SIGKILL, C restart→late B, repeat C restart→late E, Ed25519 Header::decode verification, recipient Bob decrypt and outsider denial; artifact #11755436218",
+      "limitations": "Disposable TestPeer41/42 seeded identities; Bob private prekeys recovered from separate SQLite copy; auth grants not wired to Node peer sync; no production security qualification."
+    },
+    {
+      "id": "spaces-recipient-prekey-recovery",
+      "status": "PASS",
+      "confidence": "high",
+      "evidence": "First native CI #38265398326 failed UnknownPreKeyUsed when recipient deterministic identity reconstructed without original key material; CI #38266794739 passed after persisting private pre-key state in a separate Bob SQLite and copying that store to resumed verifier",
+      "limitations": "Feasibility confirms private key custody and backup are essential. Fixture keychain is test SQLite, NOT SecureStore/keychain hardware or rotated-key recovery."
+    },
+    {
+      "id": "android-x86-emulator-actual-jni-runtime",
+      "status": "NOT TESTED",
+      "confidence": "low",
+      "evidence": "Isolated new android-runtime Java/JNI x86_64 emulator job configured on branch; no completed runtime result at ledger update",
+      "limitations": "Even PASS does not prove ARM64 phone or Expo dev-client binding. Evidence must be promoted only after emulator logcat states CC_P2PANDA_ANDROID_NATIVE_RUNTIME=PASS."
     }
   ]
 }
