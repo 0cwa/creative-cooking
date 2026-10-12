@@ -8,7 +8,7 @@ Compare **equivalent product behaviour** despite different history interfaces. `
 
 ```sh
 cd spikes/merge-evidence
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 npm run typecheck
 npm test
 npm run benchmark
@@ -93,15 +93,38 @@ Both engine adapters exercise identical human-visible outcomes. Each row produce
 
 Do not promote a web-derived index to native capability without an actual native binding API/runtime result. Do not equate `PARTIAL` with a negative verdict on future bindings.
 
-## Cost, integration and failure modes
+## Measured cost and integration implications
 
-The [benchmark](../../spikes/merge-evidence/benchmark.mjs) builds a roughly cooking-shaped fixture: **200 pantry entries, 500 additional recipes × 5 ingredients × 4 steps, 100 conversations × 20 messages**, and **800 real retained causal edits** plus two concurrent portions edits. It measures build and snapshot bytes, cold load+evidence extraction median, warm queries, Loro index first build/incremental change cost/index bytes, ledger bytes, Automerge first-class conflict reads separately, and adapter lines of code. Results are stored in `benchmark-results.json` rather than hardcoded here until a successful Actions run exists. Node/V8 runner measurements are directional, **not iPhone/Android timings**. Structural schema differences mean these are evidence-access measurements, **not a CRDT-wide speed verdict**.
+**Verified pinned Linux runner:** [experimental Actions run #38186275958](https://github.com/0cwa/creative-cooking/actions/runs/38186275958) — [machine-readable JSON artifact #11719139761](https://github.com/0cwa/creative-cooking/actions/runs/38186275958/artifacts/11719139761), 26/26 scenario+retention assertions passed. Subsequent commits add stronger review-isolation regression tests; use the latest PR checks for the final verdict. The artifact carries the exact CPU, Node version, five timing samples, event examples, ledger state and checkpoints.
 
-Maintenance-cost distinctions:
-- Automerge: less code for *live scalar conflicts*, but still an activity/change index, semantic rules, persistence, provenance join tests, and native bridge parity; op-to-change association can become ambiguous on repeated actor writes.
-- Loro: extra low-level op decoding, update-triggered index management, causal maximal-write selection, version compatibility tests and destructive compaction guard; its RN bridge release lag may require native API work.
-- Shared: stable-ID/tombstone schema migration, explicit review decisions, local checkpoint consistency, cleanup retention UX, privacy redaction, transport delivery dedupe, metadata upgrades, and a separate semantic policy engine.
-- Risks: dropped operations after shallow trimming, stale index after app crash, index version mismatch, missing native metadata, rendering an unapproved LWW winner, and replay re-opening dismissed events. No app account/credential/device-only data belongs in replicated evidence.
+The [benchmark](../../spikes/merge-evidence/benchmark.mjs) builds **200 pantry entries, 500 additional recipes × 5 ingredients × 4 steps, 100 conversations × 20 messages**, and **800 retained causal edits** plus a concurrent 4/6 dispute. Two different schemas implement the same logical workload; these are **evidence-layer measurements, not fair general-purpose CRDT engine benchmarks**.
+
+| Node 22.13.0 / Linux sample metric | Automerge JS 3.5.0 | Loro JS 1.16.4 |
+|---|---:|---:|
+| Full engine snapshot | 246,439 B | 275,581 B |
+| Cold load **plus conflict evidence extraction**, median of 5 | 385.0 ms | 80.5 ms |
+| Warm evidence query median of 20 | 8.315 ms | 0.169 ms (activity index) |
+| Direct first-class conflict read **without metadata scan** | 0.0154 ms | Not available |
+| Full-activity index initial build | Not built | 44.2 ms / 15,015 decoded ops |
+| Full-activity index JSON | Not built | 2,103,716 B |
+| Filtered review-only index JSON / indexed writes | Not built | 194,387 B / 1,007 |
+| Filtered review-only initial build / warm query | Not built | 39.2 ms / 0.063 ms |
+| Full activity index update after one new operation | Not built | 17.6 ms / 1 newly decoded op |
+| Serialized one-disagreement local ledger | 1,259 B | 793 B |
+| Adapter source lines (including fixture/replay helpers) | 140 | 238 |
+
+**Interpretation matters more than a speed ranking.** Automerge's live `getConflicts` primitive alone takes ~0.015 ms here. Its warm `scalar()` prototype also reads **all** change metadata for author/change attribution, which explains the much larger ~8.3 ms full-evidence number. A production Sync Activity feed or repeated same-author op-to-change mapping would need an indexed provenance strategy even with Automerge. This spike deliberately did **not** build an Automerge full-activity index; treating its missing index bytes as zero overhead would be misleading.
+
+Loro can deliver ~0.06–0.17 ms warm queries from a frontier-cached derived index, but the **full-activity index is ~7.6× its snapshot size** because it retains a verbose JavaScript representation of map operations. Filtering for review-relevant recipe/pantry/ingredient fields reduces it to ~194 KB (~0.7× the snapshot), at the cost of **not** providing a complete historical activity feed. Both index variants decode operations once during build, then use the frontier check to skip full history enumeration on ordinary UI renders. After new changes, `getAllChanges` still enumerates retained change headers (1,653 **cumulative** header visits in this update benchmark), though only one newly seen op was decoded. Index update cost is consequently **not** constant in total history size, and a durable incremental change notification API or chunking would be useful in a production port.
+
+The 5-sample medians and construction timings vary significantly between hosted runners. These are **not physical device, JS-to-native crossing, browser UI frame, or APK/IPA measurements**. Differences in nested Automerge structure versus Loro root containers, the snapshot format, and the scope of their evidence adapters prevent a winner claim. The serialized ledgers are not directly comparable per byte because the two engines carry different change identifiers/dependency detail.
+
+### Maintenance cost and failure modes
+
+- **Automerge:** ~140 lines for the experimental adapter. It substantially reduces **live multi-value detection** code, but full Sync Activity/history queries, repeated-actor op→change joins, durable local review state, semantic rules and native metadata bridges remain. Java 0.0.9's existing attribution gap and live web↔Java sync incompatibility are separate blockers from this evidence implementation.
+- **Loro:** ~238 adapter lines. Owns low-level serde operation parsing, maximal-write causal tests, mode-specific index persistence, frontier invalidation and compaction guards. The JavaScript index can be optimized to just review-relevant fields, but the RN publication and API/version gap matters.
+- **Shared:** stable-ID/tombstone migrations, reviewed-vs-dismissed semantics, physical-delete retention, credential-safe redaction, schema/version migration of local index/checkpoints, transport duplicates, and cooking-specific semantic inspection.
+- **Failure modes:** Loro shallow compaction losing old losing-writes, stale/corrupted local ledger after restart, an unapproved LWW display promoted to a human decision, index invalidation missing imported remote changes, future operation-shape changes, or native bindings missing API parity. The test rejects tampered checkpoints and proves local review states diverge safely; there is **no** production multi-store transaction yet.
 
 ## Research limitations
 
