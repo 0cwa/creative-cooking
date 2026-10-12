@@ -83,23 +83,47 @@ Automerge 3.5.0's default `browser` package export imports raw `.wasm` as an ES 
 
 The build must be inspected for which scripts actually load on initial route navigation; these data do not claim a lazy-loading strategy will succeed until a candidate production integration demonstrates it.
 
-## Results and run artifacts
+## Results and exact executable run artifacts
 
-**This document must only be filled with numbers from passing, exact workflow run artifacts.** An unexecuted local script, pre-existing #37/#38 results or a failed CI job must never be labelled a completed parity measurement.
+**Passing dual-engine CI evidence:** [GitHub Actions run #38187058455](https://github.com/0cwa/creative-cooking/actions/runs/38187058455), from benchmark PR head `bfb61fce67fc82bb2a7050bd32c4ee788a185994` (five measured Node trials, Node 22.13.0 on hosted Linux/x64; all three real static Chromium exports passed). The latest harness additionally includes per-history-block memory observations and equivalent client-only lazy module import in both browser probes. Those subsequent changes must use their own new artifacts, not the historical timings below.
 
-| Comparable observation | Automerge 3.5.0 | Loro 1.16.4 | Important caveat |
-| --- | --- | --- | --- |
-| Initial new-device bootstrap | Read `coldSecondDeviceBootstrap` and its `scenarioEvidence` from passing run | Same | SyncState vs full snapshot: different wire semantics |
-| Warm bilateral incremental update | Read `warmIncrementalSync` | Same | Session protocol vs update exchange |
-| Raw binary delta exchange | Read `rawUpdateExchange` | Same | Automerge getChanges differs from SyncState |
-| Full snapshot | `saveSnapshot` + `scenarioEvidence.singleFieldEdit` / payload | Same | Full snapshot bytes in scenario evidence |
-| Cold decode + projection | `loadSnapshot` and `prepareLogicalView` | Same | Does not include module/WASM import |
-| History growth | `historySnapshotSave` and `history60EditCatchUp` | Same | 60 edits on same field |
-| PWA static cost | `static-cost.json`, `browser-automerge.json` | `static-cost.json`, `browser-loro.json` | Includes isolated test route |
+Exact passing artifacts:
+- **[Node JSON/CSV + dependency lockfile](https://github.com/0cwa/creative-cooking/actions/runs/38187058455/artifacts/11719947744)** — exact raw times, 5-trial median/p95, transfer bytes, sync rounds, snapshots, process-memory categories, package-tree hashes, npm integrity strings, deterministic fixture and trace SHA-256.
+- **[Chromium browser results, static asset inventories and three screenshots](https://github.com/0cwa/creative-cooking/actions/runs/38187058455/artifacts/11720580442)** — control/Automerge/Loro browser JSON, console/errors, WASM requests, offline/reload checks, network bytes and raw/gzip/Brotli static asset totals.
 
-**Artifact run URL:** to be linked after CI executes successfully.
-**Node:** `benchmark-parity-node-evidence` (`results.json`, `results.csv`, npm lockfile).
-**Browser:** `benchmark-parity-chromium-evidence` (`static-cost.json`, `browser-*.json`, screenshots and server logs).
+### Node latency and actual wire counts — passing evidence from #38187058455
+
+All times in **milliseconds**. Latency values are the **median (p95)** of five samples; tail statistics with five samples are exploratory. Transfer bytes are **A → B / B → A** from `scenarioEvidence` (the common trace yields the same payload bytes across this run). The engines use different APIs/wire formats; this table is a boundary-aware record **not a speed ranking**.
+
+| Operation | Automerge latency (median / p95) | Loro latency (median / p95) | Automerge wire bytes A→B / B→A | Loro wire bytes A→B / B→A |
+| --- | ---: | ---: | ---: | ---: |
+| **Bootstrap from a truly empty second device** | 1,380.438 / 1,449.906 | 317.529 / 447.269 | 739,371 / 126 (SyncState) | 678,010 / 0 (full snapshot) |
+| **First warm exchange after acknowledged bootstrap** | 1,118.890 / 1,120.487 | 121.463 / 269.356 | 369,995 / 369,909 (history-sized resend) | 194 / 152 (deltas) |
+| **Follow-up exchange in the established session** | 2.569 / 3.085 | 146.259 / 271.699 | 498 / 423 (incremental) | 193 / 150 (incremental) |
+| **Plain change/update exchange (not SyncState)** | 8.081 / 9.138 | 146.944 / 252.371 | 242 / 167 (getChanges) | 194 / 152 (version vectors) |
+| Snapshot serialize | 37.176 / 37.334 | 77.818 / 83.271 | — | — |
+| Cold snapshot load | 811.741 / 816.708 | 2.567 / 2.585 | — | — |
+| Prepare usable full logical projection | 9.475 / 10.035 | 310.095 / 450.309 | — | — |
+| Single-field edit | 2.938 / 2.959 | 41.138 / 105.465 | — | — |
+| Long offline divergent catch-up | 14.996 / 15.452 | 1,352.177 / 2,405.262 | Raw changes (see JSON) | Version-vector deltas (see JSON) |
+
+**Complete logical snapshot bytes:** Automerge 369,612; Loro 678,010. Cold readiness should consider **both** load and full-view preparation, not one API's low-level decode time in isolation. The canonical logical dataset hashes to `50c6c264865aab9a134de07cc7ba784fb6bafe0b8d6da4a1eaa337e0572e04d2`.
+
+The first SyncState exchange after initial bootstrap transmitted unexpectedly large traffic despite both peers sharing the base. This was **retained as evidence**, not normalized away. The second already-established exchange was small, showing why it is unsafe to equate a first SyncState session or its immediate follow-up with a warm version-vector delta. The raw getChanges/applyChanges path is separately measured. This observed behavior is specific to the synthetic giant initial transaction, the implementation, and the exact protocol sequence; it is **not** a general verdict about production sync throughput.
+
+### Real Expo static export and initial Chromium transfer
+
+**Passing Chromium run:** same [run #38187058455](https://github.com/0cwa/creative-cooking/actions/runs/38187058455). All engines initialized and loaded their WASM from `/creative-cooking/`, persisted and reloaded snapshots, applied new edits while `context.setOffline(true)`, and produced **zero JavaScript page errors and failed requests**. Browser service workers were blocked intentionally; this verifies browser-local CRDT function, *not* installed-PWA offline shell behavior.
+
+| Static export / HTTP traffic | Control | Automerge probe | Loro probe |
+| --- | ---: | ---: | ---: |
+| Entire Expo export, raw bytes | 13,869,250 | 17,585,008 | 17,403,752 |
+| Entire export, gzip bytes (offline recompression) | 4,785,180 | 5,948,277 | 5,931,775 |
+| Entire export, Brotli bytes (offline recompression) | 3,272,480 | 4,078,659 | 4,079,002 |
+| Brotli delta from control | — | +806,179 | +806,522 |
+| Initial route load, CDP encoded network bytes (including HTTP headers) | 302,082 | 1,108,186 | 1,108,111 |
+
+These static export sizes include the **unchanged app shell plus each temporary experimental benchmark route**, not a production-integrated migration or installed npm archive size. Initial network transfer is a separate Chromium measurement and is not the sum of all exported files. The browser JSON contains the actual Brotli asset transfer sizes, WASM URLs and code-splitting/chunk requests; the more recent branch also probes explicit lazy imports for both engines. A production lazy-loaded route and service-worker cache strategy still require an integration-specific qualification.
 
 ## Native worklane evidence (no manufactured parity)
 
