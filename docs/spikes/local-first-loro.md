@@ -146,19 +146,105 @@ There are two materially different official artifacts.
 
 ### iOS result
 
-**PARTIAL.** With the published 1.10.3 package, Expo 57 prebuild and CocoaPods integration succeed. A clean simulator build/runtime probe was attempted in GitHub-hosted macOS. The final report does not count iOS runtime or web↔iOS interchange as proven unless a successful native runtime artifact exists; compile/prebuild evidence is intentionally not promoted to runtime success.
+**PARTIAL; executable 1.10.3 binding confirmed, but end-to-end acceptance not yet established.** A real Expo 57 / RN 0.86.3 Release app built, installed and launched on the iOS Simulator. In [experimental run 38154451810, job 114514779408](https://github.com/0cwa/creative-cooking/actions/runs/38154451810/job/114514779408), JavaScript imported the actual published TurboModule, loaded the Loro 1.16.4 web snapshot, made the native portions=6 edit, exported the native update, imported the concurrent web portions=4 update, and reached the restart/duplicate-import assertion. The assertion compared raw `JSON.stringify` output, so its failure alone does **not** establish either a changed logical value or genuine Loro operation duplication.
+
+That original diagnostic ended with `duplicate update import was not idempotent after restart`; its collector then threw `SyntaxError: Bad escaped character in JSON`, because Apple unified logs represented escaped stack newlines as `\\134n`. Neither failure is hidden or counted as a complete interoperability PASS. Subsequent builds exercise canonical semantic equality **and** `VersionVector.eq()`/peer-counter maps while retaining the before/after history, and perform a true `simctl terminate` / launch using an AsyncStorage-persisted binary snapshot. The first launch is explicitly `PARTIAL` until a separate process reads that persisted snapshot.
 
 ### Android result
 
-**PARTIAL.** The published package autolinks and an ARM64 APK was built under Expo 57 / RN 0.86.3. Measured prior build: 87,482,205 B with `lib/arm64-v8a/libloro-react-native.so` at 5,944,816 B.
+**PARTIAL — ARM64 native-library/APK compilation proved, real ARM64 Loro execution pending.** The published package autolinks into Expo 57 / RN 0.86.3. A measured Android arm64-v8a debug APK is 87,482,205 B and contains `lib/arm64-v8a/libloro-react-native.so` (5,944,816 B).
 
-An x86_64 emulator APK also compiles (80,374,176 B), but it contains no Loro native library, matching the npm package's lack of x86_64 Rust archive. Thus an ordinary GitHub x86_64 Android emulator cannot prove Loro runtime even though Gradle compilation succeeds.
+An x86_64 emulator APK also compiles (80,374,176 B) but contains **no** Loro x86_64 native library. In [run 38185197429](https://github.com/0cwa/creative-cooking/actions/runs/38185197429), the Google x86_64 emulator booted, accepted installation, and launched the APK, but no Loro result marker was emitted. That is not valid Loro native-runtime evidence regardless of Gradle success. Do not run/declare x86_64 Loro tests with this npm release without rebuilding its Rust archive for that ABI.
 
-A serious ARM-hosted attempt was also made on GitHub's Linux ARM runner. The Android SDK repository there does not provide the Android Emulator package for that host, so an actual ARM64 device runtime could not be created. Android ARM64 build support is demonstrated; actual Android Loro runtime/interchange remains unproven in hosted CI.
+On `ubuntu-24.04-arm`, the Android SDK has no host ARM64 `emulator` package (`Failed to find package 'emulator'`), so that attempted runner cannot satisfy the runtime requirement. A replacement isolated experiment runs on **Apple Silicon macOS**, installs Google's **arm64-v8a** system image, checks `adb shell getprop ro.product.cpu.abi` and `ro.build.version.sdk`, and only counts result frames from a real ARM64 process; it terminates/relaunches the app and verifies native-produced bytes on web. The experimental workflow remains red if those conditions cannot be met.
 
 ### Web/native binary interoperability
 
 The harness uses a real web-created 1.16.4 binary snapshot, intends to import it natively, fork portions=6 against web portions=4, export a native update, and re-import that native update on web while checking disagreement history. Because a successful published-RN runtime result has not been demonstrated on both native platforms, this spike does **not** call web/native interchange a full PASS. Loro's stable 1.x binary format makes the version-skew scenario intended to be interoperable, but compile-only evidence is not accepted as proof.
+
+## Phase-two native qualification (2026-10-12)
+
+This continuation does not restart or weaken the 18 web scenarios. It adds fail-closed, machine-readable **native** results and uses the actual npm `loro-react-native@1.10.3` TurboModule in an isolated Expo Router harness. All data are disposable test fixtures; no provider credentials, production AppState/storage or user backups are accessed. Normal app CI stays separate.
+
+### Reproducer and status rules
+
+- `node --test scripts/spikes/loro/parse-native-log.test.mjs`: **8/8 PASS** in [experiment 38186124459](https://github.com/0cwa/creative-cooking/actions/runs/38186124459) and later web jobs. Regression includes the exact Apple octal backslash format, Unicode, out-of-order/duplicate frames, missing/malformed/incomplete result, and contradictory status.
+- Simulator logs now emit `LORO_NATIVE_RESULT_V2:<run-id>:<1-based-index>/<frame-count>:<URI-encoded-JSON-fragment>`. Each result contains `status: PASS | PARTIAL | FAIL`, per-feature checks and version/operation diagnostics; large byte arrays/history are split into individually single-line-safe frames. The parser emits `result.json` with `FAIL` and exits nonzero for any missing/corrupt result. A previous PASS cannot mask the newest truncated attempt. Raw `live.log`, `system.log` / `runtime.log` and native device/build logs remain separate uploaded artifacts.
+- The harness compares recursively sorted semantic JSON **and** Rust `VersionVector.eq()`; maps are captured using `VersionVector.toHashmap()` (which exists in published RN 1.10.3; `toJSON()` does not). It records web binary update hash+size, before/after peer counters, top-level state and low-level public history. Distinct JSON object iteration order is diagnostic only, never an assertion by itself. Any changed content or vector is **FAIL**.
+- A native `AsyncStorage` fixture stores the binary snapshot and expected semantic/vector identity. Only a second real simulator/Android process that loads it and reimports the same web update with no semantic/vector change can mark **process restart PASS**. A single in-memory `new LoroDoc(); import(snapshot)` is a separate test, not proof of app restart.
+- The native harness creates 48 additional actual UniFFI-backed documents in 24 create/import/export/reimport/load cycles, edits native LoroText and movable lists, and creates a causal resolution `portions=8` after the concurrent native 6 and web 4 writes. The web verifier imports both native binary updates into Loro 1.16.4 and checks normalized convergence, retained old alternatives and duplicate update handling. Binding-generated native ownership relies on finalization; without a native heap profiler, this is **not** proof of zero leaks.
+- Native conflict provenance uses the public native FFI route `exportJsonUpdatesWithoutPeerCompression` + `frontiersToVv` + `Frontiers.fromId` + `VersionVector.partialCmp`, which is different from the three JavaScript WASM history helpers. If native provenance is absent or cannot attribute real writes, report `PARTIAL` rather than inventing authors or assuming the LWW value contains them.
+
+### Evidence matrix: distinguish compilation, live execution, and cross-platform convergence
+
+| Evidence | Status on 2026-10-12 | Grounding / required upgrade to PASS |
+|---|---|---|
+| Web + common merge semantics | **PASS** | 18/18 `loro-crdt@1.16.4`; pre-existing independent contract |
+| Parser and no-false-PASS regression | **PASS** | 8/8 in [run 38186124459](https://github.com/0cwa/creative-cooking/actions/runs/38186124459) |
+| iOS actual RN module launches and performs snapshot/fork/merge operations | **PASS through duplicate assertion** | [Earlier native iOS logs and screenshot, run 38154451810](https://github.com/0cwa/creative-cooking/actions/runs/38154451810), then assertion FAIL; does **not** claim complete roundtrip |
+| iOS canonical duplicate import, version and operation identity, separate OS restart | **PARTIAL until successful new artifacts** | [new full qualification workflow](https://github.com/0cwa/creative-cooking/actions/workflows/loro-spike.yml); requires `ios/first-result.json` and `ios/result.json` |
+| Web 1.16.4 → native 1.10.3 → web 1.16.4, convergence and causal review resolution | **PARTIAL until successful new artifacts** | Native `nativeUpdateBytes`, `nativeResolutionUpdateBytes` and `ios/web-verification.json` must agree; no mocked native module |
+| Native provenance of 4-versus-6 alternatives with real peer IDs | **PARTIAL until evidence** | Native public FFI history result checked separately from web reconstruction |
+| Native movable list, LoroText, 24-cycle lifecycle / ownership | **PARTIAL until native result** | Recorded test cycles and feature checks; memory leak not measured |
+| Android ARM64 binary compiled and packaged | **PASS (compile only)** | 87,482,205 B APK, 5,944,816 B Loro arm64-v8a .so |
+| Android x86_64 runtime with published Loro Rust native library | **FAIL / unsupported ABI** | No x86_64 `libloro-react-native.so`; even a booted x86_64 emulator cannot qualify it |
+| Android true ARM64 device execution/restart/interop | **PARTIAL pending native runtime** | [Apple Silicon ARM64 emulator experiment](https://github.com/0cwa/creative-cooking/actions/workflows/loro-spike.yml); absent compatible device, preserve compile evidence only |
+
+Native CI artifacts are attached to individual workflow runs under `loro-ios-runtime` and `loro-android-arm64-runtime`. For a successful native result, both `result.json` and `web-verification.json` must exist; compile logs and screenshots alone do not satisfy the acceptance criteria. Experiment failures remain visible (they are not production branch protection checks).
+
+### Native API/version delta and operational maintenance
+
+| API/build axis | Published RN 1.10.3 | Official RN source `8fad8d6` / metadata 1.13.2 | Web core 1.16.4 |
+|---|---|---|---|
+| `getAllChanges`, `getOpsInChange`, `cmpFrontiers` | **0/3 exact web APIs** | **0/3 exact web APIs** | **3/3** |
+| `exportJsonUpdatesWithoutPeerCompression`, `frontiersToVv`, `Frontiers.fromId`, `VersionVector.partialCmp` | **4/4 alternate native history APIs** | **4/4** | Different public history interface |
+| `ensureMergeableMap` and other mergeable-container methods | **Absent** | **Present** | Present |
+| Rust FFI core | 1.10.3 | 1.13.7 | JS WASM CRDT 1.16.4 |
+| Prebuilt official iOS/Android bindings | **Yes**, iOS arm64 + x86_64 simulator and Android arm64/armv7; Android x86_64 **missing** | **No** for Git-install source checkout; must regenerate/link | N/A |
+| React Native upstream tested against | npm artifact published from older RN series | 0.79.2 / React 19.0.0 | Browser JavaScript; Creative Cooking uses RN 0.86.3 |
+
+**Smallest maintainable route under investigation:** use the published 1.10.3 binding without modifying Rust if the binary interoperability + history checks actually PASS; the missing web-style `getAllChanges` methods alone do not force a native fork because the RN FFI exposes an alternate public history route. If version/ABI/native behavior blocks acceptance, reproduce the official **1.13.2** source native build **without changing its Rust CRDT**: pin SHA `8fad8d61c11c23e7c57999533d637d316465ffc1`, Node/Yarn 3.6.1, `uniffi-bindgen-react-native@0.31.0-2`, Rust `loro-ffi=1.13.7`, and run upstream `yarn ubrn:ios:release` / `yarn ubrn:android:release`. The source `ubrn.config.yaml` requires three iOS Rust targets and two Android targets, with x86_64 Android commented out; Android builds need Rust NDK targets and `cargo-ndk`. Publish/cache regenerated native archives and retest actual Expo autolinking. Merely `npm install github:loro-dev/loro-react-native#8fad8d6` is insufficient (no prebuilt archives).
+
+**Engineering estimate, NOT measured duration:** if published binaries qualify, expect roughly **1–3 engineer-days** for isolated-to-product boundary/integration and platform CI, plus **2–4 days** for retained-history review indexing and compaction policy work (the latter is not part of this spike). Keeping npm pinned avoids owning a Rust fork. If rebuilding current RN source is necessary, budget an additional **3–7 engineer-days** one-time for reproducible multi-target native builds, CocoaPods/Gradle autolinking, ABI packaging/caching and device CI, plus **0.5–2 days per upstream binding/FFI upgrade** for rebuilding and binary/history compatibility qualification. These are estimates under a working upstream build; observed native Android/iOS build sizes and failure logs are evidence, not proof of sustainable release engineering. A target-specific Android emulator or physical ARM64 device is still required for release qualification.
+
+**Measured footprint (debug/release configurations are *not* like-for-like app-size delta comparisons):** Android arm64 debug APK 87,482,205 B; x86_64 debug APK 80,374,176 B but missing Loro .so; ARM64 Loro library 5,944,816 B; earlier iOS Release Simulator .app directory 103,896 KiB. Upstream npm RN package installed size approximately 62 MB with prebuilt native archives; Git-install source checkout approximately 2.7 MB without them. These are native development artifact observations, not incremental production bundle size.
+
+### Repeatability / local qualification commands
+
+Web/parser probes and an independent binary verifier:
+
+```sh
+npm install --no-audit --no-fund
+npm install --no-save --no-audit --no-fund loro-crdt@1.16.4
+node --test scripts/spikes/loro/parse-native-log.test.mjs
+node scripts/spikes/loro/run.mjs
+node scripts/spikes/loro/materialize-native-fixture.mjs
+# Once a real platform's result.json is downloaded, NOT a synthetic result:
+node scripts/spikes/loro/verify-native-update.mjs \
+  artifacts/loro/web-native-input.json artifacts/loro/ios/result.json
+```
+
+Native iOS/Android workflow steps generate a disposable Expo Router app from `scripts/spikes/loro/native-harness.tsx.template`, and `ios/result.json` / `android-arm64/result.json` only count as platform proofs when the real app returned complete V2 frames. To qualify on an external physical Android ARM64 device if hosted emulators fail: build the `arm64-v8a` debug APK with `./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a` after isolated Expo prebuild, then:
+
+```sh
+adb devices -l
+adb shell getprop ro.product.cpu.abi   # must be arm64-v8a
+adb shell getprop ro.build.version.sdk
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb logcat -c
+adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1
+adb logcat -d > artifacts/loro/android-arm64/first-runtime.log
+node scripts/spikes/loro/parse-native-log.mjs \
+  artifacts/loro/android-arm64/first-runtime.log artifacts/loro/android-arm64/first-result.json --allow-partial
+adb shell am force-stop com.creativecooking.lorospike
+adb logcat -c
+adb shell monkey -p com.creativecooking.lorospike -c android.intent.category.LAUNCHER 1
+adb logcat -d > artifacts/loro/android-arm64/runtime.log
+node scripts/spikes/loro/parse-native-log.mjs \
+  artifacts/loro/android-arm64/runtime.log artifacts/loro/android-arm64/result.json
+```
+
+The physical-device path additionally needs Metro available/forwarded on port 8081 and the native web fixture materialized into the isolated app. Otherwise the APK may launch without running the JS harness; the parser correctly returns FAIL.
 
 ## Performance fixture
 
