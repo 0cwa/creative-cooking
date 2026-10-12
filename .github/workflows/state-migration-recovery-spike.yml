@@ -1,0 +1,43 @@
+name: State migration and recovery feasibility (experimental)
+
+on:
+  pull_request:
+    paths:
+      - 'spikes/state-migration-recovery/**'
+      - 'docs/spikes/local-first-state-migration-recovery.md'
+      - '.github/workflows/state-migration-recovery-spike.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dual-engine-reference:
+    name: Pinned real Automerge/Loro migration, crashes and recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - name: Install exact engine versions - isolated experiment
+        working-directory: spikes/state-migration-recovery
+        run: npm ci --no-audit --no-fund
+      - name: Proposed UI/backend contract is type-valid
+        working-directory: spikes/state-migration-recovery
+        run: npm run typecheck
+      - name: Actual CRDT binaries, migration, failure injection, leak scans
+        working-directory: spikes/state-migration-recovery
+        run: npm test
+      - name: Upload machine-readable proof and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: state-migration-recovery-node22
+          path: |
+            spikes/state-migration-recovery/artifacts/*.json
+            spikes/state-migration-recovery/package-lock.json
+          if-no-files-found: warn
+          retention-days: 30
