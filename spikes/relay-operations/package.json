@@ -1,0 +1,14 @@
+{
+  "name": "creative-cooking-relay-operations-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "test": "node --test *.test.mjs",
+    "fixtures": "node fixtures.mjs"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.5.0"
+  }
+}

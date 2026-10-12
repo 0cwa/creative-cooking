@@ -1,0 +1,682 @@
+/* Experimental persistent Subduction operations; copy this file into pinned
+ * upstream subduction_wasm/e2e/ as operations.spec.ts. No app or prod sync.
+ * --auth open and disposable fixture AES ARE NOT Keyhive/ARK security.
+ */
+import { test, expect } from '@playwright/test';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, cpSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { tmpdir, cpus, totalmem, platform, release, arch } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import net from 'node:net';
+import https from 'node:https';
+import tls from 'node:tls';
+
+type Item = { index:number;label:string;id:string;dependencies:string[];ciphertextBase64:string;bytes:number;plainBytes:number };
+const cli=process.env.CC_OPS_CLI!, previousCli=process.env.CC_OPS_PREVIOUS_CLI || '';
+const fixturePath=process.env.CC_OPS_FIXTURE!, fixtureScript=process.env.CC_OPS_FIXTURE_SCRIPT!;
+const proxyScript=process.env.CC_OPS_PROXY_SCRIPT!, storePath=process.env.CC_OPS_STORE!;
+const output=process.env.CC_OPS_RESULTS!, fixture=JSON.parse(readFileSync(fixturePath,'utf8'));
+const sha=(v:Buffer)=>createHash('sha256').update(v).digest('hex');
+const delay=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
+
+async function freePort():Promise<number>{
+ return new Promise((resolve,reject)=>{
+  const s=net.createServer();s.once('error',reject);
+  s.listen(0,'127.0.0.1',()=>{
+   const addr=s.address();if(!addr||typeof addr==='string')return reject(Error('no port'));
+   s.close(()=>resolve(addr.port));
+  });
+ });
+}
+async function waitPort(port:number,child:ChildProcess,log:()=>string){
+ for(let n=0;n<250;n++){
+  if(child.exitCode!==null||child.signalCode!==null)throw Error('Exited before listener: '+log().slice(-3000));
+  try {await new Promise<void>((resolve,reject)=>{
+   const s=net.connect(port,'127.0.0.1');
+   s.once('connect',()=>{s.destroy();resolve();});
+   s.once('error',reject);s.setTimeout(250,()=>{s.destroy();reject(Error('tcp timeout'));});
+  });return;}catch{await delay(100);}
+ }
+ throw Error('Listener did not start: '+log().slice(-3000));
+}
+async function terminate(child:ChildProcess|null,signal:NodeJS.Signals='SIGTERM'){
+ if(!child || child.exitCode!==null||child.signalCode!==null)return;
+ await new Promise<void>(resolve=>{
+  const watchdog=setTimeout(()=>{if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL');},4500);
+  child.once('exit',()=>{clearTimeout(watchdog);resolve();});
+  child.kill(signal);
+ });
+}
+function sample(pid:number|undefined){
+ if(!pid)return null;
+ try{
+  const status=readFileSync('/proc/'+pid+'/status','utf8');
+  const rss=Number(/VmRSS:\s+(\d+)/.exec(status)?.[1] || 0);
+  const hwm=Number(/VmHWM:\s+(\d+)/.exec(status)?.[1] || 0);
+  const threads=Number(/Threads:\s+(\d+)/.exec(status)?.[1] || 0);
+  const fields=execFileSync('ps',['-p',String(pid),'-o','%cpu=,rss='],{encoding:'utf8'}).trim().split(/\s+/);
+  return {rssKiB:rss,peakRssKiB:hwm,threads,cpuPercentSnapshot:Number(fields[0]||0),psRssKiB:Number(fields[1]||0)};
+ }catch(error){return {samplingError:String(error)};}
+}
+async function httpsProbe(port:number,path:string,method='GET',origin?:string,body?:Buffer){
+ return new Promise<any>((resolve,reject)=>{
+  const headers:Record<string,string>={};if(origin)headers.Origin=origin;
+  if(body)headers['Content-Length']=String(body.length);
+  const req=https.request({hostname:'127.0.0.1',port,path,method,rejectUnauthorized:false,headers,timeout:7000},res=>{
+   const bytes:Buffer[]=[];res.on('data',b=>bytes.push(b));
+   res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(bytes).toString().slice(0,600)}));
+  });
+  req.once('error',reject);req.once('timeout',()=>req.destroy(Error('HTTPS probe timeout')));
+  if(body)req.end(body);else req.end();
+ });
+}
+// A real TLS handshake with a browser-like WebSocket upgrade, but a foreign
+// Origin. No authentication is implied by a 403 Origin response.
+async function forbiddenWsOrigin(port:number):Promise<string>{
+ return new Promise((resolve,reject)=>{
+  const client=tls.connect({host:'127.0.0.1',port,rejectUnauthorized:false},()=>{
+   client.write([
+    'GET / HTTP/1.1','Host: 127.0.0.1:'+port,'Upgrade: websocket',
+    'Connection: Upgrade','Sec-WebSocket-Version: 13',
+    'Sec-WebSocket-Key: '+Buffer.alloc(16,0x53).toString('base64'),
+    'Origin: https://attacker.invalid','',''
+   ].join('\r\n'));
+  });
+  client.setTimeout(5000,()=>client.destroy(new Error('Origin-test handshake timed out')));
+  client.once('data',value=>{resolve(value.toString().split('\r\n')[0]);client.end();});
+  client.once('error',reject);
+ });
+}
+async function stats(port:number){
+ const r=await httpsProbe(port,'/__ops_stats');expect(r.status).toBe(200);return JSON.parse(r.body);
+}
+async function pagePeer(browser:any,port:number,proxyPort:number,opts:{lp?:boolean;old?:boolean;direct?:boolean}={}){
+ const context=await browser.newContext({ignoreHTTPSErrors:true});
+ const page=await context.newPage();
+ await page.goto(opts.old ? 'http://127.0.0.1:9892/' : 'http://127.0.0.1:9891/');
+ await page.waitForFunction(()=>(window as any).subductionReady===true,{timeout:45000});
+ const service='creative-cooking-local-ops-v1';
+ await page.evaluate(async ({ws,http,service,lp}:any)=>{
+  const api=(window as any).subduction,signer=await api.WebCryptoSigner.setup();
+  const syncer=new api.Subduction({signer,storage:new api.MemoryStorage()});
+  const link=lp?await syncer.connectDiscoverLongPoll(http,service):
+   await syncer.connectDiscover(new URL(ws),service);
+  (window as any).ops={syncer,link,sid:api.SedimentreeId.fromBytes(new Uint8Array(32).fill(73))};
+ },{ws:opts.direct?'ws://127.0.0.1:'+port:'wss://127.0.0.1:'+proxyPort,
+     http:'https://127.0.0.1:'+proxyPort,service,lp:!!opts.lp});
+ return {context,page};
+}
+async function disconnect(page:any){
+ await page.evaluate(async()=>(window as any).ops.syncer.disconnectAll());
+}
+async function reconnect(page:any,port:number,proxyPort:number,lp=false){
+ await page.evaluate(async({ws,http,service,lp}:any)=>{
+  const t=(window as any).ops;t.link=lp?
+   await t.syncer.connectDiscoverLongPoll(http,service):
+   await t.syncer.connectDiscover(new URL(ws),service);
+ },{ws:'wss://127.0.0.1:'+proxyPort,http:'https://127.0.0.1:'+proxyPort,
+    service:'creative-cooking-local-ops-v1',lp});
+}
+async function push(page:any,commit:Item){
+ return page.evaluate(async({id,deps,data}:any)=>{
+  const api=(window as any).subduction,t=(window as any).ops;
+  await t.syncer.addCommit(t.sid,new api.CommitId(new Uint8Array(id)),
+   deps.map((x:number[])=>new api.CommitId(new Uint8Array(x))),new Uint8Array(data));
+  const result=await t.syncer.syncWithPeer(t.link,t.sid,true,15000);
+  return {success:result.success,sent:result.stats.commitsSent,received:result.stats.commitsReceived};
+ },{id:[...Buffer.from(commit.id,'hex')],
+    deps:commit.dependencies.map(h=>[...Buffer.from(h,'hex')]),
+    data:[...Buffer.from(commit.ciphertextBase64,'base64')]});
+}
+async function pull(page:any){
+ return page.evaluate(async()=>{
+  const t=(window as any).ops, r=await t.syncer.syncWithPeer(t.link,t.sid,true,15000);
+  const all=await t.syncer.getCommits(t.sid);
+  return {success:r.success,received:r.stats.commitsReceived,sent:r.stats.commitsSent,count:all?.length||0};
+ });
+}
+async function eventually(page:any,n:number){
+ const stop=Date.now()+25000;let last:any;
+ while(Date.now()<stop){
+  last=await pull(page);
+  if(last.success && last.count===n)return last;
+  if(last.count>n)throw Error('unexpected surplus changes: '+JSON.stringify(last));
+  await delay(150);
+ }
+ throw Error('late peer failed to catch up: '+JSON.stringify({expected:n,last}));
+}
+async function blobBase64(page:any){
+ const bytes:number[][]=await page.evaluate(async()=>{
+  const t=(window as any).ops;
+  return (await t.syncer.getBlobs(t.sid)).map((b:Uint8Array)=>Array.from(b));
+ });
+ return bytes.map(x=>Buffer.from(x).toString('base64'));
+}
+function verifyExact(base64:string[],len=fixture.commits.length){
+ expect(base64.length).toBe(len);
+ const actual=new Set(base64.map(v=>sha(Buffer.from(v,'base64'))));
+ for(const item of fixture.commits.slice(0,len)) expect(actual.has(item.ciphertextSha256),item.label).toBe(true);
+}
+function verifyEngine(full:string[],root:string){
+ const path=join(root,'received.json');writeFileSync(path,JSON.stringify(full));
+ const result=execFileSync(process.execPath,[fixtureScript,'verify',fixturePath,path],{encoding:'utf8',timeout:120000});
+ return JSON.parse(result.trim().split('\n').at(-1)!);
+}
+function byteCount(root:string,store:any){
+ return store.files(root).reduce((sum:number,f:string)=>sum+statSync(join(root,f)).size,0);
+}
+async function safeTry(label:string,fn:()=>Promise<unknown>|unknown){
+ try{
+  const value=await fn();
+  // A skipped test is never represented as a PASS merely because the
+  // capability/availability probe returned successfully.
+  if(value && typeof value==='object' && 'status' in value &&
+     ['NOT_TESTED','SIMULATED_ONLY','PROBED_HOST_ONLY','PARTIAL','OBSERVED_UNDURABLE_SYNC_RESULT'].includes(String((value as any).status)))
+   return {status:(value as any).status,value};
+  return {status:'PASS',value};
+ }
+ catch(error){return {status:'FAIL',label,error:String(error)};}
+}
+
+test('actual persistent Rust relay: quiescent backup, kill, late catch-up, TLS, load, fault tests and versioned upgrade',async({browser},testInfo)=>{
+ test.setTimeout(600000);
+ const store=await import(pathToFileURL(storePath).href);
+ const root=mkdtempSync(join(tmpdir(),'creative-cooking-ops-'));
+ mkdirSync(output,{recursive:true});
+ const data=join(root,'persistent'),backup=join(root,'backup'),restored=join(root,'restored');
+ const keyPath=join(data,'identity.key');mkdirSync(data,{recursive:true,mode:0o700});
+ writeFileSync(keyPath,randomBytes(32).toString('hex')+'\n',{mode:0o600});
+ const relayPort=await freePort(),proxyPort=await freePort();
+ const cert=join(root,'proxy.crt'),priv=join(root,'proxy.key');
+ execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1',
+  '-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1',
+  '-keyout',priv,'-out',cert],{stdio:'ignore'});
+ let current:ChildProcess|null=null,proxy:ChildProcess|null=null;
+ let activeData=data,relayLog='',proxyLog='',launches=0;
+ const peerIdBySeed=new Map<string,string>();
+ const children=new Set<any>();
+ const evidence:any={
+  schemaVersion:1,recordedAt:new Date().toISOString(),scope:'test-only isolated GitHub runner; no production claims',
+  upstreamNew:'f0af1aab5f2fd44e5b224c22fc8b62660d50bc01 v0.19.0',
+  upstreamOld:previousCli?'2566cbfc5d1d529ed8c109009a645ee73d7dc0dd v0.18.0':'NOT BUILT',
+  transport:'real pinned Subduction CLI redb + browser WASM; loopback TLS proxy',
+  authentication:'INSECURE --auth open. Origin restriction and TLS do not supply ACL.',
+  confidentiality:'disposable AES-GCM fixture ONLY; NOT ARK/Keyhive E2EE',
+  host:{platform:platform(),kernel:release(),arch:arch(),cpus:cpus().length,
+    cpuModel:cpus()[0]?.model,memoryBytes:totalmem(),node:process.version},
+  fixture:{engine:fixture.engine,version:fixture.engineVersion,commitCount:fixture.commits.length,
+    plainBytes:fixture.commits.reduce((n:number,c:any)=>n+c.plainBytes,0),
+    ciphertextBytes:fixture.commits.reduce((n:number,c:any)=>n+c.bytes,0)},
+  actualChecks:{},observations:{},unproven:[
+   'real Keyhive/ARK credentials, identity, grants and revocation',
+   'multi-host WAN, real multi-day offline time, production application clients',
+   'live consistent snapshot and replica quorum, untrusted network DDoS',
+   'real server transaction interrupted mid external blob fsync; disk-full transaction if no tmpfs injection'
+  ]
+ };
+ async function start(binary=cli,target=activeData){
+  activeData=target;launches++;
+  const args=['server','--socket','127.0.0.1:'+relayPort,
+   '--service-name','creative-cooking-local-ops-v1','--auth','open',
+   '--key-file',join(target,'identity.key'),'--data-dir',target,
+   '--max-message-size','131072','--ready-file',join(root,'ready-'+launches+'.json')];
+  current=spawn(binary,args,{stdio:['ignore','pipe','pipe']});
+  current.on('error',e=>relayLog+=String(e));
+  current.stdout?.on('data',b=>relayLog=(relayLog+b.toString()).slice(-100000));
+  current.stderr?.on('data',b=>relayLog=(relayLog+b.toString()).slice(-100000));
+  await waitPort(relayPort,current,()=>relayLog);
+  const tcpReadyMs=Date.now()-launchStarted;
+  // Upstream --ready-file writes key=value lines, despite the illustrative
+  // .json suffix and a README description of JSON.
+  const readyPath=join(root,'ready-'+launches+'.json');
+  for(let n=0;n<40 && !existsSync(readyPath);n++)await delay(25);
+  expect(existsSync(readyPath),'Upstream did not publish readiness identity').toBe(true);
+  const peerId=/^peer_id=(.+)$/m.exec(readFileSync(readyPath,'utf8'))?.[1]?.trim();
+  expect(peerId,'Server must report an Ed25519-derived peer ID').toBeTruthy();
+  const seedFingerprint=sha(readFileSync(join(target,'identity.key'))).slice(0,16);
+  const previouslySeen=peerIdBySeed.get(seedFingerprint);
+  if(previouslySeen)expect(peerId,'same seed must reproduce exact server peer ID').toBe(previouslySeen);
+  else peerIdBySeed.set(seedFingerprint,peerId!);
+  await delay(150);
+  evidence.observations['launch'+launches]={binary:binary===cli?'0.19.0':'0.18.0',
+    tcpReadyMs,launchRoutineMs:Date.now()-launchStarted,explicitSettlingDelayMs:150,
+    peerId,seedFingerprint,stableForSeenSeed:!previouslySeen||peerId===previouslySeen,pid:current.pid};
+ }
+ let launchStarted=Date.now();
+ async function boot(binary=cli,target=activeData){launchStarted=Date.now();await start(binary,target);}
+ async function stop(signal:NodeJS.Signals='SIGTERM'){const c=current;current=null;await terminate(c,signal);}
+ async function tracked(opts:{lp?:boolean;old?:boolean;direct?:boolean}={}){
+  const c=await pagePeer(browser,relayPort,proxyPort,opts);children.add(c);return c;
+ }
+ try {
+  await boot();
+  proxy=spawn(process.execPath,[proxyScript],{
+   env:{...process.env,CC_OPS_PROXY_PORT:String(proxyPort),CC_OPS_TARGET_PORT:String(relayPort),
+    CC_OPS_PROXY_KEY:priv,CC_OPS_PROXY_CERT:cert,
+    CC_OPS_ALLOWED_ORIGIN:'http://127.0.0.1:9891'},stdio:['ignore','pipe','pipe']});
+  proxy.stdout?.on('data',b=>proxyLog+=b.toString());
+  proxy.stderr?.on('data',b=>proxyLog+=b.toString());
+  await waitPort(proxyPort,proxy,()=>proxyLog);
+  evidence.observations.startup={first: evidence.observations.launch1,baseRss:sample(current?.pid)};
+  evidence.actualChecks.proxyOrigin=await safeTry('reverse proxy controls',async()=>{
+   const yes=await httpsProbe(proxyPort,'/ops-preflight','OPTIONS','http://127.0.0.1:9891');
+   const no=await httpsProbe(proxyPort,'/ops-preflight','OPTIONS','https://attacker.invalid');
+   const big=await httpsProbe(proxyPort,'/ops-post','POST','http://127.0.0.1:9891',Buffer.alloc(300000));
+   const forbiddenWebSocket=await forbiddenWsOrigin(proxyPort);
+   const missingBrowserOrigin=await httpsProbe(proxyPort,'/ops-preflight','OPTIONS');
+   expect(yes.status).toBe(204);
+   expect(yes.headers['access-control-allow-origin']).toBe('http://127.0.0.1:9891');
+   expect(yes.headers['access-control-allow-headers']).toContain('X-Session-Id');
+   expect(yes.headers['access-control-expose-headers']).toContain('X-Session-Id');
+   expect(no.status).toBe(403);expect(big.status).toBe(413);
+   expect(forbiddenWebSocket).toMatch(/^HTTP\/1\.1 403/);
+   expect(missingBrowserOrigin.status).toBe(204);
+   return {allow:yes.status,deny:no.status,maxHttpBodyStatus:big.status,limit:262144,
+    forbiddenWebSocket,missingOriginPreflightStatus:missingBrowserOrigin.status,
+    caveat:'No-origin traffic can pass the toy proxy; origin filtering is not user authentication.'};
+  });
+  const a=await tracked(),b=await tracked();
+  const initial=await push(a.page,fixture.commits[0]);
+  expect(initial.success).toBe(true);
+  const first=await eventually(b.page,1);
+  await disconnect(b.page);
+  for(const item of fixture.commits.slice(1,4)) expect((await push(a.page,item)).success).toBe(true);
+  await disconnect(a.page);
+  evidence.observations.preKill={afterFourDiskBytes:byteCount(data,store),sample:sample(current?.pid),proxy:await stats(proxyPort)};
+  await stop('SIGKILL');
+  expect(existsSync(join(data,'sedimentree.redb'))).toBe(true);
+  const firstBackup=store.snapshot(data,backup,{serverStopped:true});
+  evidence.actualChecks.abruptKillAndQuiescentBackup={status:'PASS',files:firstBackup.files.map((x:any)=>({path:x.path,bytes:x.bytes})),
+    totalBytes:firstBackup.totalBytes,sourceHash:sha(readFileSync(join(data,'identity.key')))};
+  await boot();
+  await reconnect(b.page,relayPort,proxyPort);
+  const afterKill=await eventually(b.page,4);
+  evidence.actualChecks.durableLatePeer={status:'PASS',first,afterKill,count:afterKill.count};
+  await reconnect(a.page,relayPort,proxyPort);
+  const pushStarted=Date.now();
+  const history:any[]=[];
+  for(const item of fixture.commits.slice(4)){
+   const result=await push(a.page,item);
+   expect(result.success,'push '+item.label).toBe(true);
+   if(item.index===11||item.index===19||item.index===27)
+    history.push({commits:item.index+1,diskBytes:byteCount(data,store),sample:sample(current?.pid)});
+  }
+  const loadMs=Date.now()-pushStarted;
+  const all=await eventually(b.page,fixture.commits.length);
+  const duplicate=await push(a.page,fixture.commits[27]);expect(duplicate.success).toBe(true);
+  const idle=await eventually(b.page,fixture.commits.length);
+  const idleAgain=await pull(b.page);expect(idleAgain.received).toBe(0);
+  const beforeIdle=await stats(proxyPort);await delay(1000);const afterIdle=await stats(proxyPort);
+  const c=await tracked({lp:true});
+  const http=await eventually(c.page,fixture.commits.length);
+  const actual=await blobBase64(c.page);verifyExact(actual);
+  const engine=verifyEngine(actual,root);
+  evidence.actualChecks.loadDedupLongPoll={
+   status:'PASS',loadMs,commits:fixture.commits.length,syntheticClients:3,
+   duplicate,catchup:all,idle:idleAgain,longPoll:http,verifiedEngine:engine,
+   history,proxyBeforeIdle:beforeIdle,proxyAfterIdle:afterIdle,
+   observedIdleByteDelta:(afterIdle.wsBytesUp+afterIdle.wsBytesDown)-(beforeIdle.wsBytesUp+beforeIdle.wsBytesDown),
+   resourceAfterLoad:sample(current?.pid)};
+  // Bounded synthetic fan-out: six additional independent Chromium browser
+  // peers read exact opaque updates concurrently, on top of the two retained
+  // WebSocket peers. This is NOT a multi-tenant capacity/soak benchmark.
+  const syntheticPeers:any[]=[];
+  const fanoutStarted=Date.now();
+  try {
+   for(let i=0;i<6;i++){
+    const extra=await tracked();syntheticPeers.push(extra);
+    const result=await eventually(extra.page,fixture.commits.length);
+    expect(result.success).toBe(true);
+    verifyExact(await blobBase64(extra.page));
+   }
+   const counters=await stats(proxyPort);
+   expect(counters.peakWebSockets).toBeGreaterThanOrEqual(6);
+   evidence.actualChecks.boundedConcurrentFanout={
+    status:'PASS',additionalIndependentChromiumPeers:syntheticPeers.length,
+    totalKnownWebSocketPeers:2+syntheticPeers.length,
+    elapsedMs:Date.now()-fanoutStarted,
+    verifiedCountPerExtraPeer:fixture.commits.length,
+    peakProxyWebSocketConnections:counters.peakWebSockets,
+    resourceDuringFanout:sample(current?.pid),
+    qualification:'One host, one household tree and 28 updates; no 1vCPU/512MiB cap or public hostile load.'
+   };
+  }finally{
+   for(const peer of syntheticPeers)await disconnect(peer.page).catch(()=>{});
+  }
+  const onDisk=store.files(data);
+  expect(onDisk.some((f:string)=>f==='sedimentree.redb')).toBe(true);
+  const external=onDisk.filter((f:string)=>f.startsWith('blobs/'));
+  expect(external.length>0,'actual large external blob required').toBe(true);
+  for(const filename of onDisk){
+   const raw=readFileSync(join(data,filename));
+   for(const marker of fixture.knownPlaintext)expect(raw.includes(Buffer.from(marker))).toBe(false);
+  }
+  evidence.actualChecks.externalBlob={status:'PASS',files:external.map((f:string)=>({path:f,bytes:statSync(join(data,f)).size})),
+    diskBytes:byteCount(data,store),knownPlaintextMarkersAbsent:true,
+    warning:'Known-marker scan does not demonstrate encrypted metadata or audited E2EE'};
+  await stop('SIGTERM');
+  const full=join(root,'full-backup');
+  const listing=store.snapshot(data,full,{serverStopped:true});
+  store.restore(full,restored,{serverStopped:true});
+  evidence.actualChecks.restoreFull={status:'PASS',manifestFiles:listing.files.length,
+   manifestTotalBytes:listing.totalBytes,restoredBytes:byteCount(restored,store),
+   sameSigningSeed:sha(readFileSync(join(restored,'identity.key')))===sha(readFileSync(keyPath))};
+  expect(evidence.actualChecks.restoreFull.sameSigningSeed).toBe(true);
+  await boot(cli,restored);
+  const d=await tracked();
+  const restoredPull=await eventually(d.page,fixture.commits.length);
+  const restoredBytes=await blobBase64(d.page);verifyExact(restoredBytes);
+  evidence.actualChecks.restoredApplicationBytes={
+   status:'PASS',count:restoredPull.count,allCiphertextExact:true,
+   engine:verifyEngine(restoredBytes,root)};
+  await stop();
+  const malformed:any={};
+  for(const name of ['truncate-redb','missing-external-blob','missing-identity','partial-restore']){
+   const target=join(root,'damaged-'+name);cpSync(full,target,{recursive:true});
+   if(name==='truncate-redb')truncateSync(join(target,'sedimentree.redb'),512);
+   if(name==='missing-external-blob')rmSync(join(target,external[0]));
+   if(name==='missing-identity')rmSync(join(target,'identity.key'));
+   if(name==='partial-restore')rmSync(join(target,'sedimentree.redb'));
+   let rejected=false;
+   try{store.verify(target);}catch{rejected=true;}
+   expect(rejected,'must reject '+name).toBe(true);
+   malformed[name]='rejected before process launch by full-store SHA-256 manifest';
+  }
+  evidence.actualChecks.corruptPartialRestore={status:'PASS',cases:malformed,
+   qualification:'Manifest verifies offline backup only; SHA-256 manifest is not signed authenticity'};
+  const changed=join(root,'changed-identity');cpSync(full,changed,{recursive:true});
+  const identityBefore=sha(readFileSync(join(changed,'identity.key')));
+  writeFileSync(join(changed,'identity.key'),randomBytes(32).toString('hex')+'\n',{mode:0o600});
+  expect(sha(readFileSync(join(changed,'identity.key')))).not.toBe(identityBefore);
+  expect(()=>store.verify(changed)).toThrow();
+  evidence.actualChecks.staleSignerIdentity={status:'PASS',observed:'local backup manifest rejects changed key',
+    unproven:'actual production client pinning/recovery from lost Ed25519 identity'};
+  // Simulates crash-left orphan: does not claim actual interruption of redb blob writer.
+  const orphanDir=join(root,'orphan-copy');store.restore(full,orphanDir,{serverStopped:true});
+  mkdirSync(join(orphanDir,'blobs','ff'),{recursive:true});
+  writeFileSync(join(orphanDir,'blobs','ff','interrupted.tmp'),Buffer.alloc(157,5));
+  // Actually launch the upstream Rust reader against the simulated orphan.
+  // This is still not a deterministic interruption of the write syscall.
+  await boot(cli,orphanDir);
+  const orphanPeer=await tracked();
+  const orphanRead=await eventually(orphanPeer.page,fixture.commits.length);
+  verifyExact(await blobBase64(orphanPeer.page));
+  await stop();
+  evidence.actualChecks.interruptedBlobWrite={status:'SIMULATED_ONLY',
+    observed:'extra unreferenced .tmp file did not prevent real Rust redb+blob restart',
+    freshPeerRecovered:orphanRead.count,allCiphertextExact:true,
+    unproven:'actual kill point between fsync of external blob and redb commit'};
+  await boot(cli,restored);
+  const unavailable=await safeTry('unavailable service',async()=>{
+   await stop('SIGKILL');
+   const probe=await httpsProbe(proxyPort,'/unavailable','GET','http://127.0.0.1:9891');
+   expect(probe.status).toBe(502);
+   const backoffProbe:any[]=[];
+   for(const milliseconds of [100,200,400]){
+    const started=Date.now();
+    const again=await httpsProbe(proxyPort,'/unavailable','GET','http://127.0.0.1:9891');
+    expect(again.status).toBe(502);
+    backoffProbe.push({status:again.status,scheduledBackoffMs:milliseconds,
+      elapsedProbeMs:Date.now()-started});
+    await delay(milliseconds);
+   }
+   await boot(cli,restored);
+   const available=await httpsProbe(proxyPort,'/unavailable','GET','http://127.0.0.1:9891');
+   expect(available.status).not.toBe(502);
+   const returned=await tracked();const result=await eventually(returned.page,fixture.commits.length);
+   return {downstreamStatus:probe.status,returningPeerCount:result.count,
+     proxyHttpRetryProbe:backoffProbe,recoveredHttpStatus:available.status,
+     qualification:'Actual bounded HTTP client probe backoff; no production browser/native sync SDK retry implementation.',
+     recommendedClientBackoffMs:[250,500,1000,2000,4000,8000]};
+  });
+  evidence.actualChecks.unavailableAndRecover=unavailable;
+  evidence.actualChecks.quotas={status:'PARTIAL',proxyOnlyHttpBytes:262144,upstreamWsMaxMessageSize:131072,
+    proxySimultaneousWsLimit:16,testedHttp413:true,
+    unproven:'authentication, per-household byte quota, rate limiting of WS frames, public adversarial DoS'};
+  evidence.actualChecks.diskFull=await safeTry('real Subduction writer under private bounded tmpfs ENOSPC',async()=>{
+   // An isolated, 12 MiB mounted tmpfs, NOT the runner's potentially huge
+   // /dev/shm. Requires noninteractive sudo mount on the disposable CI host.
+   // A rejected mount returns NOT_TESTED and does not touch runner root storage.
+   const mountPoint=join(root,'ops-limited-volume');
+   mkdirSync(mountPoint,{recursive:true,mode:0o700});
+   try{
+    execFileSync('sudo',['-n','mount','-t','tmpfs','-o','size=12m,nodev,nosuid,mode=1777','tmpfs',mountPoint],
+     {encoding:'utf8',timeout:12000,stdio:'pipe'});
+   }catch(e:any){
+    return {status:'NOT_TESTED',reason:'Private bounded tmpfs mount unavailable, avoiding unsafe whole-host pressure',
+      mountError:String(e?.stderr||e).slice(0,250)};
+   }
+   const fs=await import('node:fs');
+   const diskDir=join(mountPoint,'real-rust-data'),filler=join(mountPoint,'bounded-filler');
+   let kernelErrno='',attempted:any={notAttempted:true},initial:any=null;
+   let restarted:any=null,recoveredCount=0,recoveredExact=false,filledBytes=0;
+   let serverFailureObserved=false,availableBeforeBytes=0;
+   try{
+    // Quiesce the other test store before moving the only Rust listener.
+    await stop();
+    mkdirSync(diskDir,{recursive:true,mode:0o700});
+    writeFileSync(join(diskDir,'identity.key'),randomBytes(32).toString('hex')+'\n',{mode:0o600});
+    await boot(cli,diskDir);
+    const writer=await tracked({direct:true});
+    const independent=await tracked({direct:true});
+    const first=await push(writer.page,fixture.commits[0]);expect(first.success).toBe(true);
+    initial=await eventually(independent.page,1);
+    verifyExact(await blobBase64(independent.page),1);
+    const statfs=fs.statfsSync(mountPoint);
+    availableBeforeBytes=Number(statfs.bavail)*Number(statfs.bsize);
+    // Fill only this private 12 MiB volume, not /dev/shm or runner disk.
+    const fd=fs.openSync(filler,'w');
+    try{
+     const chunk=Buffer.alloc(128*1024,0x5c);
+     for(let i=0;i<256;i++){
+      try{
+       const n=fs.writeSync(fd,chunk);filledBytes+=n;
+       if(n===0)throw Error('zero-byte tmpfs write');
+      }catch(e:any){kernelErrno=String(e?.code||e);break;}
+     }
+    }finally{fs.closeSync(fd);}
+    expect(kernelErrno,'must reach real tmpfs ENOSPC before testing relay').toBe('ENOSPC');
+    const logBefore=relayLog.length;
+    try{attempted={returned:await push(writer.page,fixture.commits[1])};}
+    catch(e){attempted={error:String(e).slice(0,350)};}
+    const redbWriteLog=relayLog.slice(logBefore);
+    serverFailureObserved=/ENOSPC|No space left|database full|storage failed|io error/i.test(redbWriteLog)
+      || attempted.returned?.success===false || !!attempted.error;
+    await stop('SIGKILL');
+    fs.rmSync(filler,{force:true});
+    await boot(cli,diskDir);
+    const fresh=await tracked({direct:true});
+    const deadline=Date.now()+20000;let last:any;
+    while(Date.now()<deadline){
+     last=await pull(fresh.page);
+     if(last.success && last.count>=1)break;
+     await delay(160);
+    }
+    expect(last?.success).toBe(true);
+    expect([1,2]).toContain(last?.count);
+    const exact=await blobBase64(fresh.page);
+    verifyExact(exact,last.count);
+    recoveredCount=last.count;recoveredExact=true;restarted=last;
+    const apparentSyncButMissingCommit=attempted.returned?.success===true && recoveredCount===1;
+    // The original client still retains the second local update even if the
+    // server did not. Test independent late-peer catch-up after original replay,
+    // rather than silently calling transport-level 'success' a durable ack.
+    let retransmission:any={status:'NOT_NEEDED',reason:'server already contains both updates'};
+    if(recoveredCount===1){
+     retransmission=await safeTry('replay missing change from the originating client',async()=>{
+      await reconnect(writer.page,relayPort,proxyPort);
+      const retry=await pull(writer.page);
+      const late=await eventually(fresh.page,2);
+      verifyExact(await blobBase64(fresh.page),2);
+      return {retry,late,exactCiphertext:true};
+     });
+    }
+    return {
+     status:apparentSyncButMissingCommit?'OBSERVED_UNDURABLE_SYNC_RESULT':
+      serverFailureObserved?'PASS':'PROBED_HOST_ONLY',
+     mount:'isolated 12MiB private tmpfs; no rootfs pressure',kernelErrno,
+     filledBytes,availableBeforeBytes,initialPersisted:first.success && initial.count===1,
+     attemptedWhileFull:attempted,serverErrorOrRejectedSyncObserved:serverFailureObserved,
+     recoveredAfterKill:restarted,recoveredCount,recoveredExact,
+     transportSuccessWithoutDurableCommit:apparentSyncButMissingCommit,
+     replayFromOriginalPeer:retransmission,
+     qualification:apparentSyncButMissingCommit
+      ? 'The client sync API reported success but update 2 was absent after crash; this was not a verified durable acknowledgment. A surviving peer must retain and replay missing history.'
+      : serverFailureObserved
+       ? 'Rust write error/rejected sync observed during ENOSPC; baseline update survived restart.'
+       : 'ENOSPC observed on server filesystem, but durable result of stressed update did not show a rejection.'};
+   }finally{
+    await stop().catch(()=>{});
+    fs.rmSync(filler,{force:true});
+    // No mounted filesystem survives the disposable test process.
+    try{execFileSync('sudo',['-n','umount',mountPoint],{timeout:12000,stdio:'pipe'});}
+    finally{rmSync(mountPoint,{recursive:true,force:true});}
+   }
+  });
+  // This tests a REAL older/newer binary pair, while keeping incompatible
+  // cases as evidence rather than declaring unsupported wire semantics PASS.
+  // Check both ends of each upgrade pair with an independent receiver, not
+  // the local document that the writer already added to its own MemoryStorage.
+  // A successful local addCommit() is NOT evidence the old Rust server persisted.
+  const upgrade:any={
+   status:previousCli?'TESTED_PARTIAL_RESULT_SEE_CASES':'NOT_TESTED',
+   pair:'v0.18.0 -> v0.19.0',newWasmClientOldServer:{status:'NOT_TESTED'},
+   sameBinaryDurability:{status:'NOT_TESTED'},oldToNew:{status:'NOT_TESTED'},
+   newWritesAfterUpgrade:{status:'NOT_TESTED'},downgradeSameData:{status:'NOT_TESTED'},
+   rollbackFromQuiescentOldSnapshot:{status:'NOT_TESTED'},oldWasmClientNewServer:{status:'NOT_TESTED'},
+   qualification:'Every successful recovery uses an independent fresh browser, exact ciphertext and a pinned server binary.'
+  };
+  if(previousCli){
+   await stop();
+   const upgrDir=join(root,'upgrade'),upBackup=join(root,'upgrade-backup');
+   mkdirSync(upgrDir,{recursive:true});
+   writeFileSync(join(upgrDir,'identity.key'),randomBytes(32).toString('hex')+'\n',{mode:0o600});
+   upgrade.newWasmClientOldServer=await safeTry('new WASM -> old Rust; second client must see bytes',async()=>{
+    await boot(previousCli,upgrDir);
+    const writer=await tracked({direct:true});
+    const pushed=await push(writer.page,fixture.commits[0]);expect(pushed.success).toBe(true);
+    const independent=await tracked({direct:true});
+    const recovered=await eventually(independent.page,1);
+    verifyExact(await blobBase64(independent.page),1);
+    await disconnect(writer.page);
+    return {pushed,recovered,exactCiphertext:true};
+   });
+   await stop();
+   if(upgrade.newWasmClientOldServer.status==='PASS' && existsSync(join(upgrDir,'sedimentree.redb'))){
+    upgrade.sameBinaryDurability=await safeTry('old Rust own restart durability',async()=>{
+     await boot(previousCli,upgrDir);
+     const fresh=await tracked({direct:true});
+     const result=await eventually(fresh.page,1);
+     verifyExact(await blobBase64(fresh.page),1);
+     return {result,verifiedAfterOldServerRestart:true};
+    });
+    await stop();
+   } else upgrade.sameBinaryDurability={
+    status:'BLOCKED_BY_PRECONDITION',
+    reason:'No independently verified old-client/new-WASM -> old-server persisted change; do not call subsequent update loss an upgrade regression.'
+   };
+   if(upgrade.sameBinaryDurability.status==='PASS'){
+    store.snapshot(upgrDir,upBackup,{serverStopped:true});
+    upgrade.oldToNew=await safeTry('0.18 persisted store -> 0.19 binary',async()=>{
+     await boot(cli,upgrDir);
+     const fresh=await tracked({direct:true});
+     const result=await eventually(fresh.page,1);
+     verifyExact(await blobBase64(fresh.page),1);
+     return {result,exactCiphertext:true};
+    });
+    await stop();
+    if(upgrade.oldToNew.status==='PASS'){
+     upgrade.newWritesAfterUpgrade=await safeTry('new version writes after recovering old store',async()=>{
+      await boot(cli,upgrDir);
+      const writer=await tracked({direct:true});
+      await eventually(writer.page,1);
+      const pushed=await push(writer.page,fixture.commits[1]);expect(pushed.success).toBe(true);
+      const fresh=await tracked({direct:true});
+      const result=await eventually(fresh.page,2);
+      verifyExact(await blobBase64(fresh.page),2);
+      await disconnect(writer.page);
+      return {pushed,result,exactCiphertext:true};
+     });
+     await stop();
+    }else upgrade.newWritesAfterUpgrade={
+     status:'BLOCKED_BY_PRECONDITION',reason:'0.19 failed recovery of independently proven 0.18 store'
+    };
+    if(upgrade.newWritesAfterUpgrade.status==='PASS'){
+     upgrade.downgradeSameData=await safeTry('0.19-written live store -> old 0.18 binary',async()=>{
+      await boot(previousCli,upgrDir);
+      const fresh=await tracked({direct:true});
+      const result=await eventually(fresh.page,2);
+      verifyExact(await blobBase64(fresh.page),2);
+      return {result,exactCiphertext:true,
+       caution:'In-place downgrade may be lossy despite protocol success; compare underlying store bytes separately.'};
+     });
+     await stop();
+    }else upgrade.downgradeSameData={
+     status:'BLOCKED_BY_PRECONDITION',reason:'No verified post-upgrade write, so in-place downgrade not interpretable'
+    };
+    const rollback=join(root,'rollback-restored');
+    store.restore(upBackup,rollback,{serverStopped:true});
+    upgrade.rollbackFromQuiescentOldSnapshot=await safeTry('old 0.18 from pre-upgrade snapshot',async()=>{
+     await boot(previousCli,rollback);
+     const fresh=await tracked({direct:true});
+     const result=await eventually(fresh.page,1);
+     verifyExact(await blobBase64(fresh.page),1);
+     return {result,exactCiphertext:true,
+      qualification:'Rollback restores only pre-upgrade state; any later writes are lost unless explicitly replayed.'};
+    });
+    await stop();
+   }else{
+    upgrade.oldToNew={status:'BLOCKED_BY_PRECONDITION',reason:'0.18.0 baseline byte durability not proven'};
+    upgrade.newWritesAfterUpgrade={status:'BLOCKED_BY_PRECONDITION'};
+    upgrade.downgradeSameData={status:'BLOCKED_BY_PRECONDITION'};
+    upgrade.rollbackFromQuiescentOldSnapshot={status:'BLOCKED_BY_PRECONDITION'};
+   }
+   // Independent old-client/new-server test: create and confirm history on an
+   // 0.19 server first. Do not silently rely on the possibly empty 0.18 store.
+   if(process.env.CC_OPS_OLD_STATIC_URL){
+    const crossDir=join(root,'old-wasm-new-server');
+    mkdirSync(crossDir,{recursive:true});
+    writeFileSync(join(crossDir,'identity.key'),randomBytes(32).toString('hex')+'\n',{mode:0o600});
+    upgrade.oldWasmClientNewServer=await safeTry('real 0.18 WASM -> proven 0.19 server history',async()=>{
+     await boot(cli,crossDir);
+     const writer=await tracked({direct:true});
+     const pushed=await push(writer.page,fixture.commits[0]);expect(pushed.success).toBe(true);
+     const modern=await tracked({direct:true});
+     const baseline=await eventually(modern.page,1);
+     verifyExact(await blobBase64(modern.page),1);
+     await disconnect(writer.page);
+     const oldBrowser=await tracked({old:true,direct:true});
+     const result=await eventually(oldBrowser.page,1);
+     verifyExact(await blobBase64(oldBrowser.page),1);
+     return {pushed,modernBaseline:baseline,oldWasmRecovery:result,exactCiphertext:true};
+    });
+    await stop();
+   }else upgrade.oldWasmClientNewServer={status:'NOT_TESTED',reason:'older pinned WASM test page did not build'};
+  }
+  evidence.actualChecks.versionedUpgradeRollback=upgrade;
+  evidence.observations.finalProxyStats=await stats(proxyPort);
+  evidence.actualChecks.signerContinuity={status:'PASS',uniqueSeedCount:peerIdBySeed.size,
+   checkedLaunches:launches,allExistingSeedRestartsMatched:true,
+   qualification:'Public Ed25519 peer IDs remain stable for the same seed; this does not prove real client pinning or trust rotation.'};
+  evidence.actualChecks.staticPwaHosting={status:'ARCHITECTURAL',finding:'GitHub Pages stays static; persistent server, storage, DNS/TLS, keys, backups external'};
+  expect(evidence.actualChecks.proxyOrigin.status).toBe('PASS');
+  expect(evidence.actualChecks.unavailableAndRecover.status).toBe('PASS');
+ } catch(error){
+  evidence.fatal={error:String(error),relayLogTail:relayLog.slice(-4000),proxyLogTail:proxyLog.slice(-2000)};
+  throw error;
+ } finally{
+  await stop().catch(()=>{});
+  await terminate(proxy).catch(()=>{});
+  for(const c of children)await c.context.close().catch(()=>{});
+  const resultFile=join(output,'relay-operations-result.json');
+  writeFileSync(resultFile,JSON.stringify(evidence,null,2));
+  await testInfo.attach('relay-operations-result.json',{body:JSON.stringify(evidence,null,2),contentType:'application/json'});
+  console.log('CC_RELAY_OPERATIONS_RESULT='+JSON.stringify({
+   fatal:!!evidence.fatal,checks:Object.fromEntries(Object.entries(evidence.actualChecks).map(([k,v]:any)=>[k,v.status])),
+   outputs:resultFile
+  }));
+  rmSync(root,{recursive:true,force:true});
+ }
+});

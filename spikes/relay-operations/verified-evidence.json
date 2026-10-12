@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "classification": "pinned single-host research evidence only, not production durability",
+  "provenance": {
+    "runId": 38265453804,
+    "sourceCommit": "797af9d40b18bd4996adc7544c535ccf6bc66b91",
+    "artifactId": 11755420061,
+    "runUrl": "https://github.com/0cwa/creative-cooking/actions/runs/38265453804",
+    "testedAtUtc": "2026-10-12T14:54:36.815Z"
+  },
+  "pinned": {
+    "subductionCurrent": "f0af1aab5f2fd44e5b224c22fc8b62660d50bc01 (CLI 0.19.0)",
+    "subductionPrevious": "2566cbfc5d1d529ed8c109009a645ee73d7dc0dd (CLI 0.18.0)",
+    "engine": "Automerge 3.5.0 real incremental binary updates",
+    "rust": "1.91.0",
+    "node": "22.13.0"
+  },
+  "host": {
+    "os": "Linux",
+    "kernel": "6.17.0-1022-azure",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "reportedVcpus": 4,
+    "hostRamBytes": 16770748416,
+    "notes": "unrestricted GitHub Actions hosted runner, not constrained deployment"
+  },
+  "workload": {
+    "changes": 28,
+    "plaintextEngineBytes": 92954,
+    "fixtureCiphertextBytes": 93738,
+    "externalBlobBytes": 60254,
+    "storeBytesAfterFullRestore": 379807,
+    "relativeStoreVsCiphertext": 4.05
+  },
+  "metrics": {
+    "tcpReadyMs": 106,
+    "launchRoutineMs": 257,
+    "artificialSettlingMs": 150,
+    "baselineRssKiB": 38884,
+    "afterLoadRssKiB": 45488,
+    "eightPeerRssKiB": 48176,
+    "afterFinalWritePsCpuPercentSample": 51,
+    "activeWsPeak": 8,
+    "additionalPeersVerified": 6,
+    "additionalPeerFetchSetupMs": 3548,
+    "oneSecondIdleWsDeltaBytes": 0,
+    "totalWsClientToRelayBytes": 184573,
+    "totalWsRelayToClientBytes": 1021144,
+    "totalHttpClientToRelayBytes": 260,
+    "totalHttpRelayToClientBytes": 100551,
+    "caveat": "proxy TCP stream counters exclude TLS record and IP overhead; CPU snapshots are not interval-normalized"
+  },
+  "exactOutcomes": {
+    "abruptKillLateCatchup": "PASS (4 ciphertext updates)",
+    "fullBackupRestore": "PASS (28 exact verified updates)",
+    "corruptionManifestRejection": "PASS (redb/blob/identity/partial)",
+    "orphanWrite": "SIMULATED_ONLY",
+    "diskFull": "OBSERVED_UNDURABLE_SYNC_RESULT; original peer replay recovered update 2",
+    "oldNewClientServer": "PASS tested 0.18.0↔0.19.0 single-change pairs",
+    "upgradeDowngrade": "PASS on two-change limited case; pre-upgrade backup rollback returns one",
+    "proxyTlsAndCors": "PASS localhost self-signed; HTTP+WSS foreign origin denied",
+    "browserConcurrency": "PASS eight simultaneous local WS sessions",
+    "quotas": "PARTIAL (256 KiB HTTP body, WS max message 131072 configured, 16-session cap not exhausted)",
+    "constrainedHost": "NOT TESTED"
+  },
+  "caveats": [
+    "--auth open; disposable AES-GCM is not Keyhive/ARK E2EE/authorization",
+    "No iOS/Android native runtime or actual WAN/NAT",
+    "No authenticated quota, multi-tenant load or long offline real-time soak",
+    "No real interrupted external blob fsync failpoint or Keyhive permission history",
+    "No warranted monthly cost range or production SLA"
+  ]
+}

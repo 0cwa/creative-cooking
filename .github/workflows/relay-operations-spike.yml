@@ -1,0 +1,129 @@
+name: Local-first persistent relay operations (research only)
+
+# Path-scoped experiment, independent of application CI / GitHub Pages.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/relay-operations-spike.yml'
+      - 'spikes/relay-operations/**'
+      - 'docs/spikes/local-first-relay-operations.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-ops-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backup-contract:
+    name: Full-store backup contract (isolated Node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - name: Unit-test quiescent snapshots and corrupt/partial rejection
+        run: |
+          node --check spikes/relay-operations/store.mjs
+          node --check spikes/relay-operations/tls-proxy.mjs
+          node --check spikes/relay-operations/fixtures.mjs
+          npm run test --prefix spikes/relay-operations
+
+  durable-relay:
+    name: Actual pinned Rust relay, Chromium, TLS and recovery
+    needs: backup-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/cc-relay-target
+    steps:
+      - name: Checkout this research PR only
+        uses: actions/checkout@v4
+      - name: Checkout exact Subduction v0.19.0 source
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+      - name: Checkout exact preceding v0.18.0 nightly source
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: 2566cbfc5d1d529ed8c109009a645ee73d7dc0dd
+          path: subduction-previous
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: wasm32-unknown-unknown
+          cache: false
+      - name: Pin and install fixture + upstream browser dependencies
+        run: |
+          npm install --prefix spikes/relay-operations --no-package-lock --no-audit --no-fund
+          (cd subduction-upstream/subduction_wasm && pnpm install --frozen-lockfile)
+          cargo install wasm-pack --locked --version 0.14.0
+      - name: Build native Rust 0.19.0 and 0.18.0 for actual upgrade pair
+        run: |
+          (cd subduction-upstream && cargo build --locked -p subduction_cli)
+          cp cc-relay-target/debug/subduction_cli "${{ runner.temp }}/cc-relay-0.19.0"
+          (cd subduction-previous && cargo build --locked -p subduction_cli)
+          cp cc-relay-target/debug/subduction_cli "${{ runner.temp }}/cc-relay-0.18.0"
+          "${{ runner.temp }}/cc-relay-0.19.0" --version
+          "${{ runner.temp }}/cc-relay-0.18.0" --version
+      - name: Build pinned current browser WASM and release fixture
+        run: |
+          (cd subduction-upstream && wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
+          node spikes/relay-operations/fixtures.mjs generate "${{ runner.temp }}/creative-cooking-ops-fixture.json"
+          cp spikes/relay-operations/operations.spec.ts.template subduction-upstream/subduction_wasm/e2e/operations.spec.ts
+          echo "CC_OPS_CLI=${{ runner.temp }}/cc-relay-0.19.0" >> "$GITHUB_ENV"
+          echo "CC_OPS_PREVIOUS_CLI=${{ runner.temp }}/cc-relay-0.18.0" >> "$GITHUB_ENV"
+          echo "CC_OPS_FIXTURE=${{ runner.temp }}/creative-cooking-ops-fixture.json" >> "$GITHUB_ENV"
+          echo "CC_OPS_FIXTURE_SCRIPT=$GITHUB_WORKSPACE/spikes/relay-operations/fixtures.mjs" >> "$GITHUB_ENV"
+          echo "CC_OPS_PROXY_SCRIPT=$GITHUB_WORKSPACE/spikes/relay-operations/tls-proxy.mjs" >> "$GITHUB_ENV"
+          echo "CC_OPS_STORE=$GITHUB_WORKSPACE/spikes/relay-operations/store.mjs" >> "$GITHUB_ENV"
+          echo "CC_OPS_RESULTS=$GITHUB_WORKSPACE/spikes/relay-operations/ci-results" >> "$GITHUB_ENV"
+      - name: Optional old-client WASM for genuine 0.18.0 client ↔ 0.19.0 server test
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -eu
+          (cd subduction-previous/subduction_wasm && pnpm install --frozen-lockfile)
+          (cd subduction-previous && wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release)
+          npm install --global http-server@14.1.1
+          (cd subduction-previous/subduction_wasm/e2e/server && nohup http-server -a 127.0.0.1 -p 9892 > "${{ runner.temp }}/cc-ops-old-wasm-http.log" 2>&1 < /dev/null &)
+          for _ in $(seq 1 50); do
+            if curl --silent --fail http://127.0.0.1:9892/ >/dev/null; then
+              echo "CC_OPS_OLD_STATIC_URL=http://127.0.0.1:9892/" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 0.1
+          done
+          exit 1
+      - name: Run real browser transport, kill/restart, full restore, upgrade and faults
+        run: |
+          npm install --global http-server@14.1.1
+          (cd subduction-upstream/subduction_wasm && pnpm exec playwright install --with-deps chromium)
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright test operations.spec.ts --project=chromium --reporter=line --retries=0
+      - name: Upload machine-readable results and failure traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: creative-cooking-relay-operations-evidence
+          path: |
+            spikes/relay-operations/ci-results/relay-operations-result.json
+            subduction-upstream/subduction_wasm/test-results/
+            subduction-upstream/subduction_wasm/playwright-report/
+          if-no-files-found: warn
+          retention-days: 30
