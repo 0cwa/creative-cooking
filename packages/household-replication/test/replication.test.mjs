@@ -102,3 +102,19 @@ test('invalid scalar alternatives and structural ID collisions quarantine',async
  const second=A.change(A.clone(a.document),d=>{d.shoppingLists.week.items.collision=item('collision','Second');});
  assert.equal((await a.receive({...a.allChanges(),changes:[...A.getChanges(a.document,first),...A.getChanges(a.document,second)]},credentials)).accepted,false);
 });
+test('local actor and sequences remain stable through mutations, receive and restart',async()=>{
+ const actor='0123456789abcdef0123456789abcdef';
+ const a=repo({actor});
+ const first=await a.change(d=>{d.requirements.diet=scalar('vegan');},credentials);
+ const b=fork(a);
+ const remote=await b.change(d=>{d.requirements.allergies.nuts=scalar('Nuts');},credentials);
+ assert.equal((await a.receive(remote,credentials)).accepted,true);
+ const second=await a.change(d=>{d.requirements.diet=scalar('vegetarian');},credentials);
+ const restarted=repo({actor,snapshot:a.snapshot()});
+ const third=await restarted.change(d=>{d.requirements.diet=scalar('none');},credentials);
+ assert.equal(A.getActorId(a.document),actor);assert.equal(A.getActorId(restarted.document),actor);
+ const decoded=[first,second,third].map(e=>A.decodeChange(e.changes[0]));
+ assert.deepEqual(decoded.map(c=>c.actor),[actor,actor,actor]);
+ assert.deepEqual(decoded.map(c=>c.seq),[2,3,4]);
+ assert.equal(restarted.projection().requirements.allergies.nuts,'Nuts');
+});

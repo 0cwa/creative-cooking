@@ -137,7 +137,7 @@ export function repository({scope,actor,persistence,authority,publish=async()=>{
     change:(mutate,credentials)=>serial(async()=>{
       if(!await authority.verify({...credentials,...scope,action:'write'}))throw new Error('Write denied');
       const previous=doc;
-      const candidate=validate(A.change(A.clone(doc),mutate),scope);
+      const candidate=validate(A.change(A.clone(doc,{actor:A.getActorId(doc)}),mutate),scope);
       preserveTombstones(previous,candidate);
       const outgoing=envelope(A.getChanges(previous,candidate));
       await persist(candidate); // failure leaves current document and publication untouched
@@ -158,7 +158,7 @@ export function repository({scope,actor,persistence,authority,publish=async()=>{
           }
         }
         // Clone isolates rejected candidates and Automerge's deferred causally pending changes.
-        const [candidate]=A.applyChanges(A.clone(doc),incoming.changes);
+        const [candidate]=A.applyChanges(A.clone(doc,{actor:A.getActorId(doc)}),incoming.changes);
         validate(candidate,scope);
         preserveTombstones(doc,candidate);
         await persist(candidate);
