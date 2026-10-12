@@ -231,6 +231,10 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Install actual published RN binding (with ARM64 Rust binary)
         run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - name: Apply one-line value-converter compatibility patch (pinned JS only)
+        run: |
+          mkdir -p artifacts/loro/android-arm64
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/android-arm64/value-adapter-patch.json
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
@@ -246,7 +250,7 @@ jobs:
       - name: Expo prebuild and actual ARM64 APK
         run: |
           set -euxo pipefail
-          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo prebuild --clean --platform android --no-install
           (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > artifacts/loro/android-arm64/build.log 2>&1 || {
             tail -180 artifacts/loro/android-arm64/build.log
             exit 1
@@ -300,7 +304,7 @@ jobs:
           adb shell getprop ro.product.cpu.abi | tee "$OUTPUT/device-abi.txt"
           adb shell getprop ro.build.version.sdk | tee "$OUTPUT/device-api.txt"
           grep -q '^arm64-v8a' "$OUTPUT/device-abi.txt"
-          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo start --localhost --port 8081 > "$OUTPUT/metro.log" 2>&1 &
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo start --localhost --port 8081 > "$OUTPUT/metro.log" 2>&1 &
           METRO_PID=$!
           sleep 8
           adb reverse tcp:8081 tcp:8081
@@ -372,6 +376,10 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Install exact official RN 1.10.3 native package
         run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - name: Apply one-line value-converter compatibility patch (pinned JS only)
+        run: |
+          mkdir -p artifacts/loro/android-arm64-physical
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/android-arm64-physical/value-adapter-patch.json
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
@@ -391,7 +399,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/loro/android-arm64-physical
-          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform android --no-install
+          CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo prebuild --clean --platform android --no-install
           (cd android && ./gradlew --no-daemon assembleDebug -PreactNativeArchitectures=arm64-v8a) > artifacts/loro/android-arm64-physical/build.log 2>&1 || {
             tail -200 artifacts/loro/android-arm64-physical/build.log
             exit 1
@@ -441,8 +449,12 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Install latest published official RN package for autolinking
         run: npm install --save-exact --no-audit --no-fund loro-react-native@1.10.3
+      - name: Apply one-line value-converter compatibility patch (pinned JS only)
+        run: |
+          mkdir -p artifacts/loro/ios
+          node scripts/spikes/loro/patch-published-falsy-adapter.mjs --apply artifacts/loro/ios/value-adapter-patch.json
         env:
-          EXPO_PUBLIC_LORO_NATIVE_LABEL: loro-react-native@1.10.3
+          EXPO_PUBLIC_LORO_NATIVE_LABEL: loro-react-native@1.10.3+falsy-compat
       - uses: actions/download-artifact@v6
         with:
           name: loro-web-results
@@ -456,7 +468,7 @@ jobs:
           cp scripts/spikes/loro/native-layout.tsx app/_layout.tsx
           cp scripts/spikes/loro/app.config.native.ts app.config.ts
       - name: Expo prebuild iOS
-        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 npx expo prebuild --clean --platform ios --no-install
+        run: CI=1 EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat npx expo prebuild --clean --platform ios --no-install
       - name: Install CocoaPods
         run: cd ios && pod install
       - name: Build iOS simulator app
@@ -472,7 +484,7 @@ jobs:
           xcodebuild -version > artifacts/loro/ios/xcode-version.txt
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
-          EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build | tee artifacts/loro/ios-build.log
+          EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3+falsy-compat xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build | tee artifacts/loro/ios-build.log
           APP=$(find ios-build/Build/Products/Release-iphonesimulator -name '*.app' -print -quit)
           mkdir -p artifacts/loro/ios
           du -sk "$APP" | tee artifacts/loro/ios/app-kib.txt
