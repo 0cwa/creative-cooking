@@ -1,0 +1,269 @@
+name: Subduction and Keyhive feasibility (experimental)
+
+# Isolated from the app build and from production state. No public relay,
+# credentials, secret variables, app migrations, or branch deployments.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/subduction-keyhive-spike.yml'
+      - 'scripts/spikes/local-first-subduction-keyhive/**'
+      - 'docs/spikes/local-first-subduction-keyhive.md'
+
+permissions:
+  contents: read
+
+# A new pushed spike revision supersedes an older expensive Rust/WASM build.
+concurrency:
+  group: subduction-feasibility-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-durable-relay:
+    name: Pinned Subduction binary + real browser clients
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Creative Cooking
+        uses: actions/checkout@v4
+
+      - name: Checkout exactly pinned upstream Subduction
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/subduction
+          ref: f0af1aab5f2fd44e5b224c22fc8b62660d50bc01
+          path: subduction-upstream
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up pinned upstream Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          target: wasm32-unknown-unknown
+          cache: true
+          cache-workspaces: subduction-upstream
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked --version 0.14.0
+
+      - name: Install pinned upstream and fixture dependencies
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm install --frozen-lockfile
+          cd ../..
+          npm install --prefix scripts/spikes/local-first-subduction-keyhive --no-audit --no-fund
+
+      - name: Build Subduction native relay, core and browser WASM
+        run: |
+          cd subduction-upstream
+          cargo build -p subduction_cli
+          wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release
+
+      - name: Run selected upstream transport and durability regressions
+        run: |
+          cd subduction-upstream
+          cargo test -p subduction_core --test relay_topology_sync
+          cargo test -p subduction_core --test addbatch_storage_durability
+          cargo test -p subduction_core --test responder_cache_fast_path
+
+      - name: Compile current native Rust Subduction and Keyhive components
+        run: |
+          cd subduction-upstream
+          cargo check -p subduction_core -p subduction_iroh -p subduction_keyhive
+
+      # This is the upstream's own local/direct-only QUIC test, with no public
+      # relay. It is exploratory (can fail in UDP-restricted hosted runners).
+      - name: Exercise local Iroh QUIC transport (exploratory)
+        continue-on-error: true
+        run: |
+          cd subduction-upstream
+          cargo test -p subduction_cli --test iroh_e2e -- --nocapture
+
+      - name: Create encrypted real-Automerge test changes
+        run: |
+          node scripts/spikes/local-first-subduction-keyhive/make-fixtures.mjs "$RUNNER_TEMP/cc-subduction-fixtures.json"
+          cp scripts/spikes/local-first-subduction-keyhive/creative-cooking.spec.ts subduction-upstream/subduction_wasm/e2e/creative-cooking.spec.ts
+          cp scripts/spikes/local-first-subduction-keyhive/adversarial-relay.spec.ts subduction-upstream/subduction_wasm/e2e/adversarial-relay.spec.ts
+          # Playwright executes inside the pinned upstream checkout; resolve the fixture's
+          # exact test-only Automerge dependency without modifying upstream manifests.
+          mkdir -p subduction-upstream/subduction_wasm/node_modules/@automerge
+          ln -s "$GITHUB_WORKSPACE/scripts/spikes/local-first-subduction-keyhive/node_modules/@automerge/automerge" subduction-upstream/subduction_wasm/node_modules/@automerge/automerge
+          echo "CC_SUBDUCTION_FIXTURES=$RUNNER_TEMP/cc-subduction-fixtures.json" >> "$GITHUB_ENV"
+          echo "CC_SUBDUCTION_CLI=$GITHUB_WORKSPACE/subduction-upstream/target/debug/subduction_cli" >> "$GITHUB_ENV"
+
+      - name: Install local static test server and Chromium
+        run: |
+          npm install --global http-server@14.1.1
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Exercise two browser peers, WebSocket, redb restart and HTTP long poll
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright test creative-cooking.spec.ts --project=chromium --reporter=line
+
+      - name: Attack real Keyhive-authenticated relay with valid protected and legacy IDs
+        # Intentionally a hard failure on unauthorized fetch/put. This is NOT
+        # open auth, not a fixture-AES proof, and not continue-on-error.
+        run: |
+          cd subduction-upstream/subduction_wasm
+          pnpm exec playwright test adversarial-relay.spec.ts --project=chromium --reporter=line
+
+      - name: Upload experimental browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subduction-keyhive-spike-diagnostics
+          path: |
+            subduction-upstream/subduction_wasm/test-results/
+            subduction-upstream/subduction_wasm/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ark-cryptography-and-acl:
+    name: Pinned ARK + authentic Keyhive security invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout isolated Creative Cooking harness
+        uses: actions/checkout@v4
+
+      # Do not substitute newer bridge and newer Subduction WASM for the
+      # exact alpha package graph that ARK v0.6.0-alpha.1 actually declares.
+      - name: Checkout exact ARK upstream source and locked dependency graph
+        uses: actions/checkout@v4
+        with:
+          repository: automerge/automerge-repo-keyhive
+          ref: 5d09e8c8cfdebd5656b1426b66aea6b1395f83da
+          path: ark-upstream
+
+      - name: Node 22 / pinned pnpm 10.15
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.15.0'
+
+      - name: Install ARK exact alpha lockfile, build and check actual APIs
+        run: |
+          cd ark-upstream
+          pnpm install --frozen-lockfile
+          pnpm build
+          node -p "'ARK loaded: ' + require('./package.json').version"
+
+      - name: Copy owned adversarial probe into exact upstream test environment
+        run: |
+          cp scripts/spikes/local-first-subduction-keyhive/ark-adversarial.test.ts ark-upstream/test/creative-cooking-adversarial.test.ts
+
+      - name: Execute genuine protected-document/ACL/Keyhive E2EE probes
+        # Known unsafe negative cases must FAIL this job loudly and retain
+        # evidence. Never waive with continue-on-error.
+        run: |
+          cd ark-upstream
+          CC_ARK_SECURITY_EVIDENCE="$GITHUB_WORKSPACE/cc-ark-security-matrix.json" pnpm exec vitest run test/creative-cooking-adversarial.test.ts --reporter=verbose
+
+      - name: Publish exact executed security matrix, even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyhive-ark-adversarial-matrix
+          path: |
+            cc-ark-security-matrix.json
+            ark-upstream/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  keyhive-core-adversarial:
+    name: Pinned Keyhive Rust core real crypto, pairing and revocation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Creative Cooking research only
+        uses: actions/checkout@v4
+      - name: Checkout exactly pinned unaudited Keyhive source
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/keyhive
+          ref: b7968be799705492428c94226ca28042c733a9e0
+          path: keyhive-upstream
+      - name: Install pinned Rust compiler and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          cache: true
+          cache-workspaces: keyhive-upstream
+      - name: Insert independent Creative Cooking adversarial Keyhive test
+        run: |
+          cp scripts/spikes/local-first-subduction-keyhive/keyhive-core-security.rs keyhive-upstream/keyhive_core/tests/creative_cooking_security.rs
+          cd keyhive-upstream
+          git diff -- keyhive_core/tests/
+      - name: Execute actual native Keyhive identity, permissions, rekey and archive controls
+        run: |
+          cd keyhive-upstream
+          cargo test -p keyhive_core --test creative_cooking_security -- --nocapture
+      # A deny/grant failure must fail this job, never continue-on-error.
+
+  revocation-proof-regression:
+    name: Genuine forged revocation — pinned original vs upstream fixed
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout exact original Keyhive pin (unmodified)
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/keyhive
+          ref: b7968be799705492428c94226ca28042c733a9e0
+          path: keyhive-old
+      - name: Checkout upstream security fix pin (unmodified)
+        uses: actions/checkout@v4
+        with:
+          repository: inkandswitch/keyhive
+          ref: a864f5c8159215a03fbdc5f0d042dff47f3ac0c0
+          path: keyhive-fixed
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.91.0'
+          cache: true
+          cache-workspaces: keyhive-old
+      - name: Install identical owned integration test in both checkouts
+        run: |
+          test "$(git -C keyhive-old rev-parse HEAD)" = b7968be799705492428c94226ca28042c733a9e0
+          test "$(git -C keyhive-fixed rev-parse HEAD)" = a864f5c8159215a03fbdc5f0d042dff47f3ac0c0
+          cp scripts/spikes/local-first-subduction-keyhive/revocation-proof-regression.rs keyhive-old/keyhive_core/tests/creative_cooking_revocation_proof.rs
+          cp scripts/spikes/local-first-subduction-keyhive/revocation-proof-regression.rs keyhive-fixed/keyhive_core/tests/creative_cooking_revocation_proof.rs
+      - name: ORIGINAL — assert forged revocation is denied (intentional red if vulnerable)
+        run: |
+          set -o pipefail
+          cd keyhive-old
+          # Pinned upstream source Cargo.lock is out of sync; cargo resolves and logs it.
+          # Artifact includes the exact resolved lockfile for reproducibility.
+          cargo test -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-old-forged-revocation.log"
+      - name: FIXED — run identical test after baseline assertion
+        # If original is unsafe, this runs too while the overall job stays red.
+        if: always()
+        run: |
+          set -o pipefail
+          cd keyhive-fixed
+          cargo test -p keyhive_core --test creative_cooking_revocation_proof -- --nocapture 2>&1 | tee "$RUNNER_TEMP/keyhive-fixed-forged-revocation.log"
+      - name: Preserve before/after evidence, including intentional failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-keyhive-revocation-before-after
+          path: |
+            ${{ runner.temp }}/keyhive-*-forged-revocation.log
+            keyhive-old/Cargo.lock
+            keyhive-fixed/Cargo.lock
+          retention-days: 30
+          if-no-files-found: warn
