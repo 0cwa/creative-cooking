@@ -14,7 +14,7 @@ assert.ok(native.status === 'PASS' || native.status === 'PARTIAL',
   'Native app did not produce a valid functional result');
 for (const feature of [
   'importWebBinary', 'nativeBinaryExport', 'concurrentMerge',
-  'snapshotReload', 'duplicateImport', 'outOfOrderImport',
+  'snapshotReload', 'duplicateImport', 'outOfOrderImport', 'falsyValues',
   'fullHistoryRetention', 'shallowHistoryProbe', 'durableReviewCheckpoint',
   'causalResolution', 'movableList', 'text', 'lifecycle', 'processRestart'
 ]) {
@@ -36,6 +36,25 @@ assert.equal(native.historyRetention?.checkpointWrittenAndReadBack, true);
 assert.equal(native.historyRetention?.checkpointRestoredAfterOsRestart, true);
 assert.deepEqual(new Set(native.historyRetention?.fullSnapshotAlternatives?.map((a) => a.value)), new Set([4, 6]));
 assert.equal(native.nativeDisagreementEvidence?.concurrent, true);
+assert.equal(native.falsyValueProbe?.status, 'PASS',
+  'Published native JS adapter must faithfully preserve falsy domain values');
+assert.equal(native.falsyValueProbe?.preserved, true);
+assert.ok(Array.isArray(native.falsySnapshotBytes) && native.falsySnapshotBytes.length > 0);
+const falsyDocument = new LoroDoc();
+const falsyBytes = Uint8Array.from(native.falsySnapshotBytes);
+falsyDocument.import(falsyBytes);
+const sortedDomainValue = (value) => Array.isArray(value) ? value.map(sortedDomainValue)
+  : value && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => [k, sortedDomainValue(v)])) : value;
+assert.deepEqual(sortedDomainValue(falsyDocument.toJSON()),
+  sortedDomainValue(native.falsyValueProbe.expected),
+  'Actual native binary falsy values did not round-trip into web Loro 1.16.4');
+const falsyVersion = falsyDocument.oplogVersion().toJSON();
+falsyDocument.import(falsyBytes);
+assert.deepEqual(sortedDomainValue(falsyDocument.toJSON()),
+  sortedDomainValue(native.falsyValueProbe.expected));
+assert.deepEqual(falsyDocument.oplogVersion().toJSON(), falsyVersion);
 if (firstLaunchPath) {
   const firstLaunch = JSON.parse(fs.readFileSync(firstLaunchPath, 'utf8'));
   assert.equal(firstLaunch.status, 'PARTIAL');
@@ -141,6 +160,8 @@ const result = {
   nativeRestart: native.afterRestart,
   duplicateImportIdempotent: native.duplicateImportIdempotent,
   outOfOrder: native.outOfOrder,
-  historyRetention: native.historyRetention
+  historyRetention: native.historyRetention,
+  nativeFalsyValues: native.falsyValueProbe,
+  falsyNativeToWebConvergence: true
 };
 console.log(JSON.stringify(result, null, 2));
