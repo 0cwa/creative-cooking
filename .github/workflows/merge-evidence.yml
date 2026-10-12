@@ -1,0 +1,46 @@
+name: Merge evidence feasibility (experimental)
+
+on:
+  pull_request:
+    paths:
+      - 'spikes/merge-evidence/**'
+      - 'docs/spikes/local-first-merge-evidence.md'
+      - '.github/workflows/merge-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  merge-evidence:
+    name: Both engines - deterministic scenarios, retention and cost
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+      - name: Install exact engine versions in isolated experiment
+        working-directory: spikes/merge-evidence
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck proposed TypeScript MergeEvent contract
+        working-directory: spikes/merge-evidence
+        run: npm run typecheck
+      - name: Deterministic dual-engine scenarios and compaction
+        working-directory: spikes/merge-evidence
+        run: npm test
+      - name: Retained history cost study
+        working-directory: spikes/merge-evidence
+        run: npm run benchmark
+      - name: Machine-readable artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-evidence-results-node-22
+          path: |
+            spikes/merge-evidence/artifacts/*.json
+            spikes/merge-evidence/package-lock.json
+          if-no-files-found: warn
+          retention-days: 30
