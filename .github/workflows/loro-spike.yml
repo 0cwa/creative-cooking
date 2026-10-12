@@ -374,9 +374,13 @@ jobs:
           SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list -json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.workspace.schemes[0])})")
           UDID=$(xcrun simctl list devices available -j | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);const ds=Object.values(j.devices).flat().filter(d=>d.isAvailable&&/^iPhone/.test(d.name));if(!ds[0])process.exit(2);console.log(ds[0].udid)})")
           echo "workspace=$WORKSPACE scheme=$SCHEME simulator=$UDID"
+          mkdir -p artifacts/loro/ios
+          xcrun simctl list devices available -j > artifacts/loro/ios/simulator-devices.json
+          uname -a > artifacts/loro/ios/host.txt
+          xcodebuild -version > artifacts/loro/ios/xcode-version.txt
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
-          EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO build | tee artifacts/loro/ios-build.log
+          EXPO_PUBLIC_LORO_NATIVE_LABEL=loro-react-native@1.10.3 xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath ios-build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build | tee artifacts/loro/ios-build.log
           APP=$(find ios-build/Build/Products/Release-iphonesimulator -name '*.app' -print -quit)
           mkdir -p artifacts/loro/ios
           du -sk "$APP" | tee artifacts/loro/ios/app-kib.txt
