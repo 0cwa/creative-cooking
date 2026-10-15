@@ -1,5 +1,7 @@
 # Existing stacks for household keys and transport
 
+> Superseded recommendation, 15 October 2026: see [the broader database and access-control review](distributed-database-access-control-decision.md). Matrix-first and Jazz Classic-first priorities below are historical; current source, active alpha candidates and a fresh ARK probe change the shortlist.
+
 Research date: 12 October 2026. Related to #36, #48 and #49. **Prefer an existing encrypted collaboration stack before building our own group-key protocol or relay.** The previous ciphertext-mailbox proof remains useful boundary evidence; it is not the recommended production implementation.
 
 Three independent research lanes screened [OpenHaven's 227-entry catalog](https://openhaven.net/api/protocols.json), then checked relevant projects against current primary documentation, source, package publications and releases. [OpenHaven's public JSON API](https://openhaven.net/developers/) enabled complete catalog screening. Directory metadata is discovery evidence, not a security audit or current SDK qualification. Adjacent relevant projects absent from the named catalog rows, including Jazz, were investigated explicitly.

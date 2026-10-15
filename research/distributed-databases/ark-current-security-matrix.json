@@ -1,0 +1,232 @@
+{
+  "upstream": {
+    "ark": "390a1488826d26bd0f183d66ed260d69ca8b36af",
+    "keyhiveWasM": "0.4.0-alpha.1",
+    "automergeRepo": "2.6.0-subduction.49",
+    "automergeSubduction": "0.20.1"
+  },
+  "scope": "pinned ARK JS policy + genuine Keyhive WASM membership; policy invoked directly, not network E2E",
+  "protectedFactory": "repo.create2 with ARK keyhiveIdFactory",
+  "docIdBytes": 32,
+  "observations": [
+    {
+      "testId": "protected-factory",
+      "expected": "protected-32-byte-id",
+      "observed": "protected",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "docIdBytes": 32,
+      "idTailZero": false
+    },
+    {
+      "testId": "fetch-Relay",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Relay",
+      "protected": true
+    },
+    {
+      "testId": "fetch-Read",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Read",
+      "protected": true
+    },
+    {
+      "testId": "fetch-Edit",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Edit",
+      "protected": true
+    },
+    {
+      "testId": "fetch-Admin",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Admin",
+      "protected": true
+    },
+    {
+      "testId": "fetch-cross-household",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "protected": true,
+      "error": "Error: insufficient access to fetch: requires at least Relay"
+    },
+    {
+      "testId": "put-Relay",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Relay",
+      "protected": true,
+      "verifiedAuthor": "simulated policy input only; no signed-wire test",
+      "error": "Error: insufficient access to put: requires at least Edit"
+    },
+    {
+      "testId": "put-Read",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Read",
+      "protected": true,
+      "verifiedAuthor": "simulated policy input only; no signed-wire test",
+      "error": "Error: insufficient access to put: requires at least Edit"
+    },
+    {
+      "testId": "put-Edit",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Edit",
+      "protected": true,
+      "verifiedAuthor": "simulated policy input only; no signed-wire test"
+    },
+    {
+      "testId": "put-Admin",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "role": "Admin",
+      "protected": true,
+      "verifiedAuthor": "simulated policy input only; no signed-wire test"
+    },
+    {
+      "testId": "put-cross-household",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "protected": true,
+      "error": "Error: insufficient access to put: requires at least Edit"
+    },
+    {
+      "testId": "authentic-keyhive-ciphertext",
+      "expected": "owner-decrypts / ciphertext-not-plaintext",
+      "observed": "owner-decrypts / ciphertext-not-plaintext",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "plaintextBytes": 57,
+      "ciphertextBytes": 286,
+      "digest": "eab1970f543f8180c5f73d5007d12e157be0cf3ee92dfce165c7242e55dfa45d",
+      "caveat": "not a relay server or second-device decryption proof"
+    },
+    {
+      "testId": "forged-contact-card-admission",
+      "expected": "deny",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "returnedWithoutThrow": true,
+      "bytes": 513,
+      "signatureTamper": "first Ed25519 signature byte flipped",
+      "scope": "Keyhive accepted agent in live graph, not just contact-card parser"
+    },
+    {
+      "testId": "signed-membership-propagation",
+      "expected": "separate identities ingest archive",
+      "observed": "separate identities ingest archive",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "archiveBytes": 14294,
+      "format": "Keyhive WASM Archive; *not* a network sync session"
+    },
+    {
+      "testId": "cross-device-read",
+      "expected": "reader decrypts",
+      "observed": "reader cannot decrypt",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "plaintextBytes": 56,
+      "ciphertextBytes": 285,
+      "archiveSync": true,
+      "postEncryptionKeyEventsBytes": 14294,
+      "readerDocumentKnown": true
+    },
+    {
+      "testId": "no-key-relay",
+      "expected": "relay cannot decrypt",
+      "observed": "relay cannot decrypt",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "ciphertextBytes": 285
+    },
+    {
+      "testId": "cross-household-decrypt",
+      "expected": "outsider cannot decrypt",
+      "observed": "outsider cannot decrypt",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM"
+    },
+    {
+      "testId": "upgrade-start-read",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "error": "Error: insufficient access to put: requires at least Edit"
+    },
+    {
+      "testId": "upgrade-edit",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM"
+    },
+    {
+      "testId": "downgrade-revoked",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "error": "Error: insufficient access to put: requires at least Edit"
+    },
+    {
+      "testId": "downgrade-read",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "error": "Error: insufficient access to put: requires at least Edit"
+    },
+    {
+      "testId": "downgrade-fetch",
+      "expected": "grant",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM"
+    },
+    {
+      "testId": "read-revoked",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "error": "Error: insufficient access to fetch: requires at least Relay"
+    },
+    {
+      "testId": "revoked-reader-future-key",
+      "expected": "deny",
+      "observed": "deny",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "archiveBytes": 20452,
+      "ciphertextBytes": 271,
+      "note": "archived historical plaintext is not remotely erasable"
+    },
+    {
+      "testId": "put-unauthorized-forwarder",
+      "expected": "deny",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "protected": true,
+      "authorRole": "Edit",
+      "requesterRole": "none",
+      "boundary": "ARK JS buildServerSubductionPolicy; no signed-wire attestation"
+    },
+    {
+      "testId": "legacy-id-fetch",
+      "expected": "deny",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "idTailZero": true
+    },
+    {
+      "testId": "legacy-id-put",
+      "expected": "deny",
+      "observed": "grant",
+      "runtime": "Node 24.19.0 / current pinned ARK Keyhive WASM",
+      "idTailZero": true
+    }
+  ]
+}
