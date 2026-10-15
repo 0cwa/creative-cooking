@@ -1,0 +1,1725 @@
+{
+  "schemaVersion": 1,
+  "reviewDate": "2026-10-12",
+  "frozenAtUtc": "2026-10-12T19:50:12.827298+00:00",
+  "catalog": {
+    "url": "https://openhaven.net/api/protocols.json",
+    "count": 227,
+    "sha256": "a37bb2a1c472aadcd75155eba32c2e11f80712347bac6fb08cc53c1d0e7effd5",
+    "method": "Directory metadata screened for every row; current primary sources verified for selected candidates, not all implementations audited"
+  },
+  "recommendation": {
+    "firstTrial": "Automerge + Matrix existing SDKs/homeserver",
+    "challenger": "Jazz Classic 0.20.19 as engine-replacement integrated stack",
+    "runtimeQualification": "NOT_TESTED in this survey",
+    "customSecurityProtocol": "Do not adopt the disposable mailbox fixture"
+  },
+  "catalogScreening": [
+    {
+      "id": "nostr",
+      "name": "Nostr",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "tinyssb",
+      "name": "tinySSB",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "lit-protocol",
+      "name": "Lit Protocol",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "meshtastic",
+      "name": "Meshtastic",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "reticulum",
+      "name": "Reticulum",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "hyphanet",
+      "name": "Hyphanet",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "toda-ip",
+      "name": "TODA/IP",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "noise-protocol-framework",
+      "name": "Noise Protocol Framework",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "x402",
+      "name": "x402",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "a2a-agent2agent",
+      "name": "A2A (Agent2Agent)",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "topo",
+      "name": "Topo",
+      "classification": "conceptual-or-not-production",
+      "reason": "Directory flags conceptual/proof-of-concept/no technology product, not mature target implementation.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "polkadot",
+      "name": "Polkadot",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "windfall-protocol",
+      "name": "Windfall Protocol",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "cashu",
+      "name": "Cashu",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "marmot-protocol",
+      "name": "Marmot Protocol",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "model-context-protocol",
+      "name": "Model Context Protocol",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "gordian-clubs",
+      "name": "Gordian Clubs",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "hyperswarm",
+      "name": "Hyperswarm",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "kitsune",
+      "name": "Kitsune",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "tox",
+      "name": "Tox",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "dfos-protocol",
+      "name": "DFOS Protocol",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "mls-messaging-layer-security",
+      "name": "MLS (Messaging Layer Security)",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "town-os",
+      "name": "Town OS",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ditto",
+      "name": "Ditto",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Production commercial own engine; primary C# authentication docs grant server all document access. Blind-server E2EE not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "map",
+      "name": "MAP",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "fluree",
+      "name": "Fluree",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "semapps",
+      "name": "SemApps",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "bonfire-networks",
+      "name": "Bonfire Networks",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "verida",
+      "name": "Verida",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Primary code approved-user external DB requires caller encryptionKey; updateUsers edits ACL without rotating key. Lower-level group ACL API does not implement automatic cryptographic revocation; higher-level key sharing not audited.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "digi-me",
+      "name": "Digi.me",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "portable-communities-protocol",
+      "name": "Portable Communities Protocol",
+      "classification": "conceptual-or-not-production",
+      "reason": "Directory flags conceptual/proof-of-concept/no technology product, not mature target implementation.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "sideways",
+      "name": "Sideways",
+      "classification": "conceptual-or-not-production",
+      "reason": "Directory flags conceptual/proof-of-concept/no technology product, not mature target implementation.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "itsnoon",
+      "name": "Itsnoon",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "activitypods",
+      "name": "ActivityPods",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "unyt",
+      "name": "Unyt",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "eclipse-dataspace-components-edc",
+      "name": "Eclipse Dataspace Components (EDC)",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "veilid",
+      "name": "Veilid",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "neighbourhoods",
+      "name": "Neighbourhoods",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "dxos",
+      "name": "DXOS",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "holochain",
+      "name": "Holochain",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "nextgraph",
+      "name": "NextGraph",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ad4m",
+      "name": "AD4M",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "project-mycelium",
+      "name": "Project Mycelium",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "freenet",
+      "name": "Freenet",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "shelter-protocol",
+      "name": "Shelter Protocol",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Chelonia provides contract keys, invites and durable event chains; generic implementation page still almost ready, native Expo portability unqualified.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "tor-relay-nodes",
+      "name": "Tor Relay Nodes",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "snowflake",
+      "name": "Snowflake",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "i2p",
+      "name": "I2P",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "conduit-psiphon",
+      "name": "Conduit (Psiphon)",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "meshcore",
+      "name": "MeshCore",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "kwaainet",
+      "name": "KwaaiNet",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "hubert",
+      "name": "Hubert",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "bittorrent-mainline-dht",
+      "name": "BitTorrent Mainline DHT",
+      "classification": "network-transport-only",
+      "reason": "Secure links/peer discovery do not supply durable blind ciphertext catch-up, membership, key rotation and recovery.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "bluesky",
+      "name": "BlueSky",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "anytype",
+      "name": "Anytype",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "affine",
+      "name": "AFFiNE",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "logseq",
+      "name": "Logseq",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "serenity",
+      "name": "Serenity",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "twake-workplace",
+      "name": "Twake Workplace",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "nextcloud",
+      "name": "Nextcloud",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "internxt",
+      "name": "Internxt",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "appflowy",
+      "name": "Appflowy",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "flux",
+      "name": "Flux",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "evr",
+      "name": "EVR",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "bitchat",
+      "name": "Bitchat",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "aether",
+      "name": "Aether",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "mastodon",
+      "name": "Mastodon",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "hypha",
+      "name": "Hypha",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "social-fabric",
+      "name": "Social Fabric",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "flotilla",
+      "name": "Flotilla",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "agora",
+      "name": "Agora",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "divine",
+      "name": "Divine",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "white-noise",
+      "name": "White Noise",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "chorus",
+      "name": "Chorus",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "zapstore",
+      "name": "Zapstore",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "ngit",
+      "name": "ngit",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "mobilizon",
+      "name": "Mobilizon",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "peertube",
+      "name": "PeerTube",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "cryptpad",
+      "name": "CryptPad",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Mature end-user suite, capability links and document engines; no proved engine-neutral Expo SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "spasm-forum",
+      "name": "Spasm Forum",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "holons",
+      "name": "Holons",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ndn-workspace",
+      "name": "NDN Workspace",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Research Yjs+NDN web workspace; native household key SDK unqualified.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "moss",
+      "name": "Moss",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "group-income",
+      "name": "Group Income",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Plausible integrated or own-engine stack; cannot infer production group E2EE+Expo/PWA SDK from directory metadata; strongest primary evidence discussed in report.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "matrix",
+      "name": "Matrix",
+      "classification": "delegated-primary-review",
+      "reason": "Integrated stack/group protocol specialist lane owns qualification; not omitted.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "activitypub",
+      "name": "ActivityPub",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "atproto",
+      "name": "ATproto",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "solid",
+      "name": "Solid",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "koi-net-protocol",
+      "name": "KOI-net Protocol",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "beckn-protocol",
+      "name": "Beckn Protocol",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "dsnp-decentralized-social-networking-protocol",
+      "name": "DSNP (Decentralized Social Networking Protocol)",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "murmurations",
+      "name": "Murmurations",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "valueflows",
+      "name": "Valueflows",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "atomic-data",
+      "name": "Atomic Data",
+      "classification": "federated-or-server-trust-stack",
+      "reason": "Federated server ACL/storage model; server-blind group E2EE and offline app SDK not established.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "promise-protocol",
+      "name": "Promise Protocol",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "eclipse-dataspace-protocol",
+      "name": "Eclipse Dataspace Protocol",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "gordian-envelope",
+      "name": "Gordian Envelope",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "dcbor",
+      "name": "dCBOR",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "uniform-resources",
+      "name": "Uniform Resources",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "sskr",
+      "name": "SSKR",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "rdf",
+      "name": "RDF",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "owl",
+      "name": "OWL",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "shacl",
+      "name": "SHACL",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "sparql",
+      "name": "SPARQL",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "personhood-credentials-phcs",
+      "name": "Personhood Credentials (PHCs)",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "verifiable-relationship-credentials-vrcs",
+      "name": "Verifiable Relationship Credentials (VRCs)",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "json-ld",
+      "name": "JSON-LD",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "vcs",
+      "name": "VCs",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "decentralized-deliberation-stack-dds",
+      "name": "Decentralized Deliberation Stack (DDS)",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "linkedclaims",
+      "name": "LinkedClaims",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "schema-org",
+      "name": "Schema.org",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "spasm",
+      "name": "Spasm",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "fedid",
+      "name": "FedID",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "fan",
+      "name": "FAN",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "iden3-privado-id",
+      "name": "Iden3 / Privado ID",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-01-15"
+    },
+    {
+      "id": "didcomm",
+      "name": "DIDComm",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "trust-spanning-protocol",
+      "name": "Trust Spanning Protocol",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "trust-registry-query-protocol",
+      "name": "Trust Registry Query Protocol",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "zcaps",
+      "name": "ZCAPs",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "dids",
+      "name": "DIDs",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "keri",
+      "name": "KERI",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "rids-reference-identifiers",
+      "name": "RIDs (Reference Identifiers)",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "acdc-authentic-chained-data-containers",
+      "name": "ACDC (Authentic Chained Data Containers)",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "openid-for-verifiable-credentials-openid4vc",
+      "name": "OpenID for Verifiable Credentials (OpenID4VC)",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "did-scid",
+      "name": "did:scid",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "did-webvh",
+      "name": "did:webvh",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "oobi-out-of-band-introduction-protocol",
+      "name": "OOBI (Out-of-Band Introduction) Protocol",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "myterms",
+      "name": "MyTerms",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "did-key",
+      "name": "did:key",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "did-web",
+      "name": "did:web",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "did-peer",
+      "name": "did:peer",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "did-indy",
+      "name": "did:indy",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "did-cheqd",
+      "name": "did:cheqd",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "did-ethr",
+      "name": "did:ethr",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "spruceid",
+      "name": "SpruceID",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "dock-io-truvera",
+      "name": "Dock.io / Truvera",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "walt-id",
+      "name": "Walt.id",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "meeco",
+      "name": "Meeco",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "northern-block-4sure",
+      "name": "Northern Block / 4sure",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "spherity",
+      "name": "Spherity",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "animo",
+      "name": "Animo",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "keyhive",
+      "name": "Keyhive",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Prior spike owns qualification; directory itself carries production warning and no audit.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "affinidi",
+      "name": "Affinidi",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "human-passport",
+      "name": "Human Passport",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "flowsta",
+      "name": "Flowsta",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "openvtc",
+      "name": "OpenVTC",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "identikey",
+      "name": "IdentiKey",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "first-person-project-network",
+      "name": "First Person Project / Network",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "greencheck",
+      "name": "GreenCheck",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "brightid",
+      "name": "BrightID",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "xid",
+      "name": "XID",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "common-graph",
+      "name": "Common Graph",
+      "classification": "conceptual-or-not-production",
+      "reason": "Directory flags conceptual/proof-of-concept/no technology product, not mature target implementation.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "erc-4337",
+      "name": "ERC-4337",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "erc-725",
+      "name": "ERC-725",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "eip-4361-siwe",
+      "name": "EIP-4361 (SIWE)",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "erc-8004",
+      "name": "ERC-8004",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "cosmwasm",
+      "name": "CosmWasm",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ink",
+      "name": "ink!",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "near-contract-standards",
+      "name": "NEAR Contract Standards",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "erc-6551",
+      "name": "ERC-6551",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "erc-5114",
+      "name": "ERC-5114",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ics-20",
+      "name": "ICS-20",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "spl-token-program",
+      "name": "SPL Token Program",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "anchor-framework",
+      "name": "Anchor Framework",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "xcm",
+      "name": "XCM",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "fa2-tzip-12",
+      "name": "FA2 (TZIP-12)",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "erc-3643",
+      "name": "ERC-3643",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "erc-7984",
+      "name": "ERC-7984",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "filecoin",
+      "name": "FileCoin",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "arweave",
+      "name": "Arweave",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "storj",
+      "name": "Storj",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Durable client-encrypted object store, per-member household key lifecycle still application-owned.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "sia-skynet",
+      "name": "Sia / Skynet",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "swarm",
+      "name": "Swarm",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "tahoe-lafs",
+      "name": "Tahoe-LAFS",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Mature encrypted capability filesystem with Python gateway; no turnkey mobile/PWA membership rotation/recovery.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "z-s",
+      "name": "Z\u00fcs",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ipfs",
+      "name": "IPFS",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "hyper-hyper-space",
+      "name": "Hyper Hyper Space",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Primary official homepage says current v2 should not be used for new projects; v3 in development.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "seed-hypermedia",
+      "name": "Seed Hypermedia",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Own collaborative document app/protocol; blind durable group E2EE key lifecycle and Expo SDK not established.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "willow",
+      "name": "Willow",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Primary Rust site says only data model+Meadowcap implemented; E2EE-encryptable is not complete application key lifecycle.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "ceramic-network",
+      "name": "Ceramic Network",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-03-09"
+    },
+    {
+      "id": "iroh",
+      "name": "Iroh",
+      "classification": "network-transport-only",
+      "reason": "iroh-docs shares namespace write key among writers; payload encryption, per-member key lifecycle and durable deployment need separate layers.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "hypercore",
+      "name": "Hypercore",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "hyperbee",
+      "name": "Hyperbee",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "hyperdrive",
+      "name": "Hyperdrive",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Storage/log primitive does not alone establish per-member offline authorization plus group-key lifecycle and Expo/PWA SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "autobase",
+      "name": "Autobase",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Multiwriter log merge layer, not full group-encryption mobile/PWA stack.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "automerge",
+      "name": "Automerge",
+      "classification": "crdt-only",
+      "reason": "Merge/sync engine does not implement complete group encrypted key lifecycle and authorization.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "yjs",
+      "name": "Yjs",
+      "classification": "crdt-only",
+      "reason": "Merge/sync engine does not implement complete group encrypted key lifecycle and authorization.",
+      "directory_lastInvestigated": "2026-07-31"
+    },
+    {
+      "id": "agent-centric-currency-framework",
+      "name": "Agent-Centric Currency Framework",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "antirival-accounting",
+      "name": "Antirival Accounting",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "bonding-curve-continuous-token",
+      "name": "Bonding Curve / Continuous Token",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "carbon-sequestration-backed-token",
+      "name": "Carbon-Sequestration-Backed Token",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "commitment-pooling",
+      "name": "Commitment Pooling",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "distributed-ledger-protocol-grammar",
+      "name": "Distributed-Ledger Protocol Grammar",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "loan-granting-closed-circuit-credit",
+      "name": "Loan-Granting Closed-Circuit Credit",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "mutual-credit-clearing",
+      "name": "Mutual Credit Clearing",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "mutual-credit-on-blockchain",
+      "name": "Mutual-Credit-on-Blockchain",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "open-value-accounting",
+      "name": "Open Value Accounting",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "quadratic-funding",
+      "name": "Quadratic Funding",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "recursive-mutual-credit-protocol",
+      "name": "Recursive Mutual Credit Protocol",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "retroactive-public-goods-funding",
+      "name": "Retroactive Public Goods Funding",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-07-01"
+    },
+    {
+      "id": "civic-space",
+      "name": "Civic Space",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-03"
+    },
+    {
+      "id": "civic-process",
+      "name": "Civic Process",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-03"
+    },
+    {
+      "id": "civic-activity",
+      "name": "Civic Activity",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-03"
+    },
+    {
+      "id": "civic-identity",
+      "name": "Civic Identity",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-08-03"
+    },
+    {
+      "id": "pubky-core",
+      "name": "Pubky Core",
+      "classification": "encrypted-or-durable-storage-only",
+      "reason": "Official README describes authenticated writes and public reads; no private group-key lifecycle.",
+      "directory_lastInvestigated": "2026-08-22"
+    },
+    {
+      "id": "pkarr",
+      "name": "PKARR",
+      "classification": "authorization-or-crypto-primitive",
+      "reason": "Relevant cryptographic/authorization primitive; complete durable transport and target platform support remain separate.",
+      "directory_lastInvestigated": "2026-08-22"
+    },
+    {
+      "id": "buzz",
+      "name": "Buzz",
+      "classification": "other-related-application",
+      "reason": "Domain-specific app/protocol, not an evidenced reusable turnkey household group E2EE sync SDK.",
+      "directory_lastInvestigated": "2026-08-22"
+    },
+    {
+      "id": "deliberation-interoperability-project",
+      "name": "Deliberation Interoperability Project",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-22"
+    },
+    {
+      "id": "ixo",
+      "name": "IXO",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-08-24"
+    },
+    {
+      "id": "bitcoin",
+      "name": "Bitcoin",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "ethereum",
+      "name": "Ethereum",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "ibc-inter-blockchain-communication-protocol",
+      "name": "IBC (Inter-Blockchain Communication Protocol)",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "cosmos-sdk",
+      "name": "Cosmos SDK",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "solana",
+      "name": "Solana",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "near-protocol",
+      "name": "NEAR Protocol",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "cardano",
+      "name": "Cardano",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "algorand",
+      "name": "Algorand",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "avalanche",
+      "name": "Avalanche",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "celestia",
+      "name": "Celestia",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "monero",
+      "name": "Monero",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "zcash",
+      "name": "Zcash",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-23"
+    },
+    {
+      "id": "xrp-ledger",
+      "name": "XRP Ledger",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-24"
+    },
+    {
+      "id": "spiritdao-community-app",
+      "name": "SpiritDAO Community App",
+      "classification": "outside-app-sync-key-scope",
+      "reason": "Economic/blockchain/domain schema, governance/social application or infra entry; directory description does not establish reusable household key+sync SDK.",
+      "directory_lastInvestigated": "2026-08-30"
+    },
+    {
+      "id": "grc-20",
+      "name": "GRC-20",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "geo-genesis",
+      "name": "Geo Genesis",
+      "classification": "identity-or-credential-primitive",
+      "reason": "Identity/credential alone does not provide household encryption, replication and durable relay.",
+      "directory_lastInvestigated": "2026-09-14"
+    },
+    {
+      "id": "hypergraph",
+      "name": "Hypergraph",
+      "classification": "integrated-candidate-or-own-engine",
+      "reason": "Primary README explicitly Developer Preview; do not use production.",
+      "directory_lastInvestigated": "2026-09-14"
+    }
+  ],
+  "adjacentCandidates": [
+    {
+      "id": "comapeo",
+      "name": "CoMapeo / Awana Digital",
+      "reason": "Generic core not ready; mapping-specific Node embedded Expo56 module; PWA generic core unproved",
+      "sources": [
+        "https://github.com/digidem/comapeo-core",
+        "https://github.com/digidem/comapeo-core-react-native"
+      ]
+    },
+    {
+      "id": "earthstar",
+      "name": "Earthstar v11",
+      "reason": "Willow-backed beta in progress; lifecycle and native implementation unqualified",
+      "sources": [
+        "https://github.com/earthstar-project/earthstar/tree/willow"
+      ]
+    },
+    {
+      "id": "encrypted-spaces",
+      "name": "Encrypted Spaces",
+      "reason": "Research prototype forbids production; fake proofs by default, placeholder authentication, browser WASM not finalized",
+      "sources": [
+        "https://github.com/encrypted-spaces/prototype"
+      ]
+    },
+    {
+      "id": "localfirst-auth",
+      "name": "@localfirst/auth",
+      "reason": "Root independently primary-verified repository archived 2026-10-08 and no longer maintained",
+      "sources": [
+        "https://github.com/local-first-web/auth"
+      ]
+    },
+    {
+      "id": "cojson",
+      "name": "CoJSON",
+      "reason": "Jazz underlying engine; integrated-stack specialist lane owns assessment; absent separately named directory row",
+      "sources": [
+        "https://github.com/garden-co/jazz"
+      ]
+    }
+  ],
+  "integratedPrimarySources": {
+    "review_date": "2026-10-12",
+    "primary_sources": [
+      "https://classic.jazz.tools/docs/react/core-concepts/sync-and-storage.",
+      "https://classic.jazz.tools/docs/react/reference/encryption.",
+      "https://classic.jazz.tools/react-native/llms-full.txt.",
+      "https://github.com/Peergos/Peergos/blob/ad72858794cb302c03e03ee689a8dc80479f5539/README.md.",
+      "https://github.com/anyproto/any-sync/blob/5d71ccad5db77997df2d2426011ebae4e7600d98/README.md.",
+      "https://github.com/anyproto/any-sync/blob/5d71ccad5db77997df2d2426011ebae4e7600d98/commonspace/object/acl/list/models.go.",
+      "https://github.com/anyproto/any-sync/blob/5d71ccad5db77997df2d2426011ebae4e7600d98/commonspace/object/acl/list/revokerotate_test.go.",
+      "https://github.com/dxos/dxos/blob/7107ac7507756a4b6cecd1fa39982a14e8a4fee5/LICENSE.",
+      "https://github.com/dxos/dxos/blob/7107ac7507756a4b6cecd1fa39982a14e8a4fee5/SECURITY.md.",
+      "https://github.com/dxos/dxos/blob/7107ac7507756a4b6cecd1fa39982a14e8a4fee5/packages/core/halo/credentials/src/state-machine/member-state-machine.ts.",
+      "https://github.com/garden-co/jazz/blob/63adeca0c18ca204d86592dbcc11048ed0996eaf/README.md.",
+      "https://github.com/nextgraph-org/nextgraph-rs/blob/05cfe6c4102710b4769c267caa5bfc34df10395b/sdk/js/README.md.",
+      "https://github.com/nextgraph-org/nextgraph-rs/blob/05cfe6c4102710b4769c267caa5bfc34df10395b/sdk/js/examples/expense-tracker-discrete/README.md.",
+      "https://github.com/nextgraph-org/nextgraph-rs/blob/05cfe6c4102710b4769c267caa5bfc34df10395b/sdk/js/web/README.md.",
+      "https://github.com/serenity-kit/secsync/blob/03202ba91b847a19a5d94f09a1d5cc12207a5c42/README.md.",
+      "https://peergos.org/posts/security-audit-2024",
+      "https://raw.githubusercontent.com/Peergos/Peergos/refs/heads/master/audits/Peergos%20penetration%20test%20report%202024%201.0.pdf.",
+      "https://registry.npmjs.org/@ng-org%2fweb,",
+      "https://registry.npmjs.org/jazz-tools",
+      "https://registry.npmjs.org/jazz-tools/-/jazz-tools-0.20.19.tgz."
+    ],
+    "pins": {
+      "dxos": "7107ac7507756a4b6cecd1fa39982a14e8a4fee5",
+      "nextgraph": "05cfe6c4102710b4769c267caa5bfc34df10395b",
+      "any-sync": "5d71ccad5db77997df2d2426011ebae4e7600d98",
+      "secsync": "03202ba91b847a19a5d94f09a1d5cc12207a5c42",
+      "jazz-main": "63adeca0c18ca204d86592dbcc11048ed0996eaf",
+      "jazz-classic": "0.20.19",
+      "nextgraph-web": "0.1.2-alpha.15",
+      "peergos": "ad72858794cb302c03e03ee689a8dc80479f5539"
+    }
+  },
+  "groupPrimarySources": {
+    "observed_at": "2026-10-12",
+    "verification_method": "Direct urllib HTTP fetch of primary GitHub API/raw content and RFC/spec; GitHub canonical links map to fetched source. OpenHaven catalog copied from parent fetch. No native execution performed.",
+    "sources": {
+      "openhaven_catalog": "https://openhaven.net/",
+      "matrix_spec": "https://spec.matrix.org/v1.16/client-server-api/",
+      "matrix_js_release": "https://github.com/matrix-org/matrix-js-sdk/releases/tag/v43.0.0",
+      "matrix_js_readme_pin": "https://github.com/matrix-org/matrix-js-sdk/blob/v43.0.0/README.md",
+      "matrix_rust_release": "https://github.com/matrix-org/matrix-rust-sdk/releases/tag/matrix-sdk-0.19.1",
+      "matrix_rn_repo": "https://github.com/unomed-dev/react-native-matrix-sdk",
+      "matrix_rn_release": "https://github.com/unomed-dev/react-native-matrix-sdk/releases/tag/0.10.2",
+      "matrix_rn_source": "https://github.com/unomed-dev/react-native-matrix-sdk/blob/fb1204910ac43de120955ea56a84a170db5d0ba1/src/generated/matrix_sdk_ffi.ts",
+      "matrix_rn_pin": "https://github.com/unomed-dev/react-native-matrix-sdk/blob/0.10.2/ubrn.yaml",
+      "matrix_rn_package": "https://github.com/unomed-dev/react-native-matrix-sdk/blob/0.10.2/package.json",
+      "matrix_rust_ffi_cargo_pin": "https://github.com/matrix-org/matrix-rust-sdk/blob/1c44fb66214667c6d00acaf72ab592493653708b/bindings/matrix-sdk-ffi/Cargo.toml",
+      "matrix_rust_encryption_pin": "https://github.com/matrix-org/matrix-rust-sdk/blob/1c44fb66214667c6d00acaf72ab592493653708b/crates/matrix-sdk/src/room/futures.rs",
+      "matrix_vodozemac_audit": "https://github.com/matrix-org/matrix.org/blob/main/content/blog/2022/05/2022-05-16-independent-public-audit-of-vodozemac-a-native-rust-reference-implementation-of-matrix-end-to-end-encryption.md",
+      "matrix_olm_deprecation": "https://github.com/matrix-org/matrix.org/blob/main/content/blog/2024/08/2024-08-28-libolm-deprecation.md",
+      "matrix_public_advisories": "https://github.com/matrix-org/matrix-js-sdk/security/advisories",
+      "marmot_ts": "https://github.com/parres-hq/marmot-ts/blob/master/README.md",
+      "marmot_mdk_readme_pin": "https://github.com/parres-hq/mdk/blob/v0.13.0/README.md",
+      "openmls_release": "https://github.com/openmls/openmls/releases/tag/openmls-v0.9.0",
+      "mls_rfc": "https://www.rfc-editor.org/rfc/rfc9420.txt",
+      "simplex_release": "https://github.com/simplex-chat/simplex-chat/releases/tag/v7.0.3",
+      "simplex_node_client": "https://github.com/simplex-chat/simplex-chat/blob/v7.0.3/packages/simplex-chat-nodejs/README.md",
+      "simplex_design_review": "https://github.com/simplex-chat/simplex-chat/blob/v7.0.3/blog/20241014-simplex-network-v6-1-security-review-better-calls-user-experience.md",
+      "ssb_tribes2": "https://github.com/ssbc/ssb-tribes2/blob/master/README.md",
+      "comapeo_roles": "https://github.com/digidem/comapeo-core/blob/v7.6.1/src/roles.js",
+      "comapeo_mobile_package": "https://github.com/digidem/comapeo-mobile/blob/v13.0/package.json",
+      "comapeo_cloud": "https://github.com/digidem/comapeo-cloud/blob/main/README.md"
+    }
+  },
+  "additionalCurrentPrimaryFinding": {
+    "project": "@localfirst/auth",
+    "url": "https://github.com/local-first-web/auth",
+    "archived": true,
+    "observedPush": "2026-10-08T17:06:42Z",
+    "readmeStatus": "No longer maintained"
+  }
+}
