@@ -89,6 +89,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="settings" />
+          <Stack.Screen name="shopping" />
         </Stack>
         <InstallAppPrompt />
         <FirstOpenLoadingAnimation />

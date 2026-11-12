@@ -1,4 +1,5 @@
 import type { PersistedState } from './types';
+import { emptyShoppingState } from './shopping.ts';
 
 export const LEGACY_DEFAULT_SYSTEM_PROMPT = `You are the Chef in Creative Cooking. Your purpose is to create creative, appealing recipe options based on what the user wants to eat, the ingredients they have available, their allergies, whether they are willing to shop, the number of portions, how many people are cooking, and the cooks' energy levels.
 
@@ -20,6 +21,7 @@ export function migrateLegacySystemPrompt(value: unknown): string {
 export const DEFAULT_STATE: PersistedState = {
   pantry: [],
   recipes: [],
+  shopping: emptyShoppingState(),
   chatMessages: [],
   chatHistory: [],
   activeConversationId: null,

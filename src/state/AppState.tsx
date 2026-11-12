@@ -4,6 +4,20 @@ import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversa
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
 import { normalizeRecipes } from '@/domain/recipeIdentity';
+import {
+  appendShoppingItems,
+  applyShoppingPurchase,
+  createShoppingList as createShoppingListCommand,
+  migrateLegacyShopping,
+  removeShoppingItem as removeShoppingItemCommand,
+  removeShoppingList as removeShoppingListCommand,
+  setShoppingItemChecked as setShoppingItemCheckedCommand,
+  startNewPurchaseCycle as startNewPurchaseCycleCommand,
+  updateShoppingItem as updateShoppingItemCommand,
+  validateShoppingState,
+  type NewShoppingItem,
+  type NewShoppingList
+} from '@/domain/shopping';
 import { preserveRecipeStepIds } from '@/domain/recipeEditing';
 import { isDictationEngine, isProviderId } from '@/domain/types';
 import type {
@@ -21,6 +35,11 @@ import { loadState, saveState } from '@/storage/appStorage';
 
 function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   if (!saved) return DEFAULT_STATE;
+
+  const recipes = normalizeRecipes(Array.isArray(saved.recipes) ? saved.recipes : []);
+  const shopping = saved.shopping === undefined
+    ? migrateLegacyShopping(recipes)
+    : validateShoppingState(saved.shopping);
 
   const savedProviderId = saved.settings?.providerId;
   const providerId = isProviderId(savedProviderId)
@@ -47,7 +66,8 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   return {
     ...DEFAULT_STATE,
     ...saved,
-    recipes: normalizeRecipes(Array.isArray(saved.recipes) ? saved.recipes : []),
+    recipes,
+    shopping,
     chatMessages,
     chatHistory: sortChatHistory(chatHistory),
     activeConversationId,
@@ -88,6 +108,14 @@ type AppStateApi = PersistedState & {
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
+  createShoppingList(input: NewShoppingList): void;
+  addShoppingItems(listId: string, inputs: NewShoppingItem[]): void;
+  updateShoppingItem(id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }): void;
+  removeShoppingItem(id: string): void;
+  removeShoppingList(id: string): void;
+  setShoppingItemChecked(id: string, cycleId: string, checked: boolean): void;
+  startNewPurchaseCycle(listId: string, cycleId: string): void;
+  purchaseCheckedShoppingItems(listId: string, cycleId: string, purchaseId: string, purchasedAt: string): void;
   setChatMessages(messages: ChatMessage[]): void;
   appendChatMessage(message: ChatMessage): void;
   setChatProposalStatus(messageId: string, proposalId: string, status: ChefToolProposalStatus): void;
@@ -266,7 +294,12 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       ...current,
       recipes: current.recipes.map((recipe) => (
         recipe.id === id
-          ? { ...recipe, ...input, stepIds: preserveRecipeStepIds(input.steps, recipe.steps, recipe.stepIds, id), updatedAt: new Date().toISOString() }
+          ? normalizeRecipes([{
+              ...recipe,
+              ...input,
+              stepIds: preserveRecipeStepIds(input.steps, recipe.steps, recipe.stepIds, id),
+              updatedAt: new Date().toISOString()
+            }])[0]
           : recipe
       ))
     }));
@@ -274,6 +307,67 @@ export function AppStateProvider({ children }: PropsWithChildren) {
 
   const deleteRecipe = useCallback((id: string) => {
     setState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
+  }, []);
+
+  const createShoppingList = useCallback((input: NewShoppingList) => {
+    setState((current) => ({ ...current, shopping: createShoppingListCommand(current.shopping, input) }));
+  }, []);
+
+  const addShoppingItems = useCallback((listId: string, inputs: NewShoppingItem[]) => {
+    setState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
+  }, []);
+
+  const updateShoppingItem = useCallback((id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }) => {
+    setState((current) => ({
+      ...current,
+      shopping: updateShoppingItemCommand(current.shopping, id, patch, new Date().toISOString())
+    }));
+  }, []);
+
+  const removeShoppingItem = useCallback((id: string) => {
+    setState((current) => ({
+      ...current,
+      shopping: removeShoppingItemCommand(current.shopping, id, new Date().toISOString())
+    }));
+  }, []);
+
+  const removeShoppingList = useCallback((id: string) => {
+    setState((current) => ({
+      ...current,
+      shopping: removeShoppingListCommand(current.shopping, id, new Date().toISOString())
+    }));
+  }, []);
+
+  const setShoppingItemChecked = useCallback((id: string, cycleId: string, checked: boolean) => {
+    setState((current) => ({
+      ...current,
+      shopping: setShoppingItemCheckedCommand(current.shopping, id, cycleId, checked, new Date().toISOString())
+    }));
+  }, []);
+
+  const startNewPurchaseCycle = useCallback((listId: string, cycleId: string) => {
+    setState((current) => ({
+      ...current,
+      shopping: startNewPurchaseCycleCommand(current.shopping, listId, cycleId, new Date().toISOString())
+    }));
+  }, []);
+
+  const purchaseCheckedShoppingItems = useCallback((
+    listId: string,
+    cycleId: string,
+    purchaseId: string,
+    purchasedAt: string
+  ) => {
+    setState((current) => {
+      const purchase = applyShoppingPurchase(current.shopping, current.pantry, {
+        id: purchaseId,
+        listId,
+        purchaseCycleId: cycleId,
+        purchasedAt
+      });
+      if (!purchase.applied) return current;
+      return { ...current, shopping: purchase.shopping, pantry: purchase.pantry };
+    });
   }, []);
 
   const setChatMessages = useCallback((messages: ChatMessage[]) => {
@@ -360,7 +454,12 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, []);
 
   const restoreState = useCallback((next: PersistedState) => {
-    setState({ ...next, recipes: normalizeRecipes(next.recipes ?? []) });
+    const recipes = normalizeRecipes(next.recipes ?? []);
+    setState({
+      ...next,
+      recipes,
+      shopping: next.shopping === undefined ? migrateLegacyShopping(recipes) : validateShoppingState(next.shopping)
+    });
   }, []);
 
   const value = useMemo<AppStateApi>(
@@ -379,6 +478,14 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       saveRecipe,
       updateRecipe,
       deleteRecipe,
+      createShoppingList,
+      addShoppingItems,
+      updateShoppingItem,
+      removeShoppingItem,
+      removeShoppingList,
+      setShoppingItemChecked,
+      startNewPurchaseCycle,
+      purchaseCheckedShoppingItems,
       setChatMessages,
       appendChatMessage,
       setChatProposalStatus,
@@ -405,6 +512,14 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       saveRecipe,
       updateRecipe,
       deleteRecipe,
+      createShoppingList,
+      addShoppingItems,
+      updateShoppingItem,
+      removeShoppingItem,
+      removeShoppingList,
+      setShoppingItemChecked,
+      startNewPurchaseCycle,
+      purchaseCheckedShoppingItems,
       setChatMessages,
       appendChatMessage,
       setChatProposalStatus,

@@ -263,16 +263,13 @@ export function scaleRecipeIngredients(
   }));
 }
 
-export function shoppingIngredients(
+/** Recipe previews use pantry availability; legacy flags are consumed only during migration. */
+export function missingPantryIngredients(
   ingredients: RecipeIngredient[],
-  pantryNames?: string[]
+  pantryNames: string[]
 ): RecipeIngredient[] {
-  const pantry = pantryNames === undefined
-    ? null
-    : new Set(pantryNames.map((name) => normalizeIngredientName(name).toLocaleLowerCase()));
-
+  const pantry = new Set(pantryNames.map((name) => normalizeIngredientName(name).toLocaleLowerCase()));
   return ingredients.filter((ingredient) => (
-    Boolean(ingredient.needsShopping)
-    || Boolean(pantry && !pantry.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase()))
+    !pantry.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase())
   ));
 }

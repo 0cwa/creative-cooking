@@ -284,6 +284,7 @@ export default function SettingsScreen() {
   const snapshot = () => ({
     pantry: app.pantry,
     recipes: app.recipes,
+    shopping: app.shopping,
     chatMessages: app.chatMessages,
     chatHistory: app.chatHistory,
     activeConversationId: app.activeConversationId,
@@ -412,7 +413,7 @@ export default function SettingsScreen() {
         const raw = await pickNativeBackup();
         if (raw === null) return;
         app.restoreState(parseBackup(raw));
-        Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
+        Alert.alert('Backup restored', 'Pantry, shopping lists, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
         return;
       }
 
@@ -426,7 +427,7 @@ export default function SettingsScreen() {
             const file = input.files?.[0];
             if (!file) return;
             app.restoreState(parseBackup(await file.text()));
-            Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
+            Alert.alert('Backup restored', 'Pantry, shopping lists, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
           } catch (error) {
             Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
           }
