@@ -246,7 +246,7 @@ export default function ShoppingScreen() {
           </Pressable>
         </View>
 
-        <Text accessibilityLiveRegion="polite" style={styles.localNotice}>{storageNotice}</Text>
+        <Text testID="shopping-local-persistence-status" accessibilityLiveRegion="polite" style={styles.localNotice}>{storageNotice}</Text>
 
         {activeLists.length > 1 && (
           <View style={styles.listPicker}>
