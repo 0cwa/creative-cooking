@@ -10,7 +10,10 @@ import { useAppState } from '@/state/AppState';
 
 export default function PantryScreen() {
   const router = useRouter();
-  const { pantry, addPantryItems, removePantryItem, setPantryPreference } = useAppState();
+  const {
+    pantry, addPantryItems, removePantryItem, setPantryPreference,
+    contentWorkspaceName, contentWorkspaceRole, contentSyncStatus, localPersistenceStatus
+  } = useAppState();
   const [input, setInput] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -23,7 +26,7 @@ export default function PantryScreen() {
   };
 
   return (
-    <Screen>
+    <Screen testID="pantry-screen">
       <View style={styles.header}>
         <View>
           <Text style={styles.eyebrow}>YOUR KITCHEN</Text>
@@ -32,6 +35,15 @@ export default function PantryScreen() {
         <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settingsButton}>
           <SettingsGlyph />
         </Pressable>
+      </View>
+
+      <View style={styles.workspaceStatusWrap}>
+        <Text testID="pantry-workspace-status" style={styles.workspaceStatus}>
+          Cooking in {contentWorkspaceName} · {contentWorkspaceRole ?? 'local'} · {contentSyncStatus.replaceAll('-', ' ')}
+        </Text>
+        <Text testID="pantry-local-persistence-status" accessibilityLiveRegion="polite" style={styles.localPersistenceStatus}>
+          {localPersistenceStatus === 'saving' ? 'Saving locally' : localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
+        </Text>
       </View>
 
       <View style={styles.listWrap}>
@@ -86,6 +98,9 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   settingsButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  workspaceStatusWrap: { paddingHorizontal: 20, paddingBottom: 6, gap: 2 },
+  workspaceStatus: { color: '#64748b', fontSize: 12, fontWeight: '700' },
+  localPersistenceStatus: { color: '#64748b', fontSize: 11.5 },
   listWrap: { flex: 1 },
   composer: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12, gap: 8 },
   composerHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 17, textAlign: 'center' },

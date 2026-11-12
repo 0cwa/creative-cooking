@@ -4,12 +4,14 @@ import type {
   AccountUser,
   AccountWorkspace,
   AccountWorkspaceSnapshot,
+  ContentMutationRequest,
   MeResponse,
+  PowerSyncCredentialResponse,
   StoredAccountSession,
   WorkspaceInvitation,
   WorkspaceMember
 } from './contracts';
-import { getStoredApiUrl, getStoredSession, setStoredApiUrl, setStoredSession } from './sessionStorage';
+import { getStoredApiUrl, getStoredPowerSyncUrl, getStoredSession, setStoredApiUrl, setStoredPowerSyncUrl, setStoredSession } from './sessionStorage';
 
 const REFRESH_EARLY_MS = 72 * 60 * 60 * 1000;
 const MAX_TIMEOUT_MS = 2_147_000_000;
@@ -23,8 +25,10 @@ type RequestContext = {
 const listeners = new Set<() => void>();
 let snapshot: AccountWorkspaceSnapshot = {
   apiUrl: '',
+  powerSyncUrl: '',
   status: 'loading',
   user: null,
+  localProfileId: null,
   sessionEmail: null,
   spaces: [],
   busyAction: null,
@@ -40,6 +44,24 @@ let sessionPersistenceWarning: string | null = null;
 
 export function getAccountWorkspaceSnapshot(): AccountWorkspaceSnapshot {
   return snapshot;
+}
+
+export function normalizePowerSyncServiceUrl(value: string): string {
+  const configured = value.trim();
+  if (!configured) return '';
+  let endpoint: URL;
+  try {
+    endpoint = new URL(configured);
+  } catch {
+    throw new Error('Enter a valid PowerSync Service URL.');
+  }
+  const isLoopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(endpoint.hostname);
+  if ((endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:')
+    || (endpoint.protocol === 'http:' && !isLoopback)
+    || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+    throw new Error('The PowerSync Service URL must use HTTPS, or loopback HTTP for local development, without credentials or query parameters.');
+  }
+  return `${endpoint.origin}${endpoint.pathname.replace(/\/+$/, '')}`;
 }
 
 export function subscribeAccountWorkspace(listener: () => void): () => void {
@@ -143,6 +165,7 @@ async function markExpired(requestContext: RequestContext): Promise<void> {
   publish({
     status: 'expired',
     user: null,
+    localProfileId: requestContext.session?.userId ?? snapshot.localProfileId,
     sessionEmail: requestContext.session?.email ?? snapshot.sessionEmail,
     spaces: [],
     error: 'This account session has expired or was revoked. Sign in again to continue.',
@@ -187,7 +210,8 @@ async function rotateSession(requestContext: RequestContext): Promise<StoredAcco
     apiUrl: requestContext.apiUrl,
     token: result.session.token,
     expiresAt: result.session.expiresAt,
-    email: previous.email
+    email: previous.email,
+    ...(previous.userId ? { userId: previous.userId } : {})
   };
   currentSession = rotated;
   const nextContext = { ...requestContext, session: rotated };
@@ -223,7 +247,7 @@ async function readMe(requestContext: RequestContext, allowRefresh: boolean): Pr
 async function restore(apiUrl: string, requestGeneration: number, session: StoredAccountSession): Promise<void> {
   const requestContext: RequestContext = { generation: requestGeneration, apiUrl, session };
   currentSession = session;
-  publish({ status: 'restoring', user: null, sessionEmail: session.email, spaces: [], error: null, notice: null });
+  publish({ status: 'restoring', user: null, localProfileId: session.userId ?? null, sessionEmail: session.email, spaces: [], error: null, notice: null });
 
   try {
     let candidate = session;
@@ -234,7 +258,7 @@ async function restore(apiUrl: string, requestGeneration: number, session: Store
     const me = await readMe({ ...requestContext, session: candidate }, true);
     assertCurrent(requestContext);
     currentSession = candidate;
-    publish({ status: 'signed-in', user: me.user, sessionEmail: me.user.email, spaces: me.spaces, error: sessionPersistenceWarning, notice: null });
+    publish({ status: 'signed-in', user: me.user, localProfileId: me.user.id, sessionEmail: me.user.email, spaces: me.spaces, error: sessionPersistenceWarning, notice: null });
     scheduleRefresh(candidate, { ...requestContext, session: candidate });
   } catch (error) {
     if (!isCurrent(requestContext)) return;
@@ -243,6 +267,7 @@ async function restore(apiUrl: string, requestGeneration: number, session: Store
       publish({
         status: 'offline',
         user: null,
+        localProfileId: session.userId ?? null,
         sessionEmail: session.email,
         spaces: [],
         error: 'The saved session could not be checked while offline. Household membership stays hidden until the service confirms it.',
@@ -266,11 +291,12 @@ export async function initializeAccountWorkspace(): Promise<void> {
   if (initialization) return initialization;
   initialization = (async () => {
     try {
-      const rawUrl = await getStoredApiUrl();
+      const [rawUrl, storedPowerSyncUrl] = await Promise.all([getStoredApiUrl(), getStoredPowerSyncUrl()]);
       const apiUrl = normalizeApiUrl(rawUrl);
+      const powerSyncUrl = normalizePowerSyncServiceUrl(storedPowerSyncUrl);
       const requestGeneration = ++generation;
       clearRefreshTimer();
-      publish({ apiUrl, status: apiUrl ? 'signed-out' : 'local', user: null, sessionEmail: null, spaces: [], error: null, notice: null });
+      publish({ apiUrl, powerSyncUrl, status: apiUrl ? 'signed-out' : 'local', user: null, localProfileId: null, sessionEmail: null, spaces: [], error: null, notice: null });
       const session = await getStoredSession();
       if (requestGeneration !== generation) return;
       if (!apiUrl) return;
@@ -338,7 +364,7 @@ export async function setAccountApiUrl(value: string): Promise<void> {
     if (requestGeneration !== generation) return;
     currentSession = null;
     sessionPersistenceWarning = null;
-    publish({ apiUrl, status: apiUrl ? 'signed-out' : 'local', user: null, sessionEmail: null, spaces: [], busyAction: null, error: null, notice: null });
+    publish({ apiUrl, status: apiUrl ? 'signed-out' : 'local', user: null, localProfileId: null, sessionEmail: null, spaces: [], busyAction: null, error: null, notice: null });
     if (apiUrl) {
       const storedSession = await getStoredSession();
       if (requestGeneration !== generation) return;
@@ -350,6 +376,15 @@ export async function setAccountApiUrl(value: string): Promise<void> {
     }
     throw error;
   }
+}
+
+/** The Service address is device-only connection configuration, never content. */
+export async function setPowerSyncServiceUrl(value: string): Promise<void> {
+  await initializeAccountWorkspace();
+  const powerSyncUrl = normalizePowerSyncServiceUrl(value);
+  if (powerSyncUrl === snapshot.powerSyncUrl) return;
+  await setStoredPowerSyncUrl(powerSyncUrl);
+  publish({ powerSyncUrl, error: null, notice: powerSyncUrl ? 'PowerSync Service address saved on this device.' : 'PowerSync Service address cleared on this device.' });
 }
 
 async function authenticate(path: '/auth/register' | '/auth/login', email: string, password: string): Promise<void> {
@@ -370,7 +405,8 @@ async function authenticate(path: '/auth/register' | '/auth/login', email: strin
       apiUrl: requestContext.apiUrl,
       token: response.session.token,
       expiresAt: response.session.expiresAt,
-      email: response.user.email
+      email: response.user.email,
+      userId: response.user.id
     };
     currentSession = session;
     try {
@@ -380,7 +416,7 @@ async function authenticate(path: '/auth/register' | '/auth/login', email: strin
       sessionPersistenceWarning = 'Account access succeeded, but secure session storage failed. Keep this app open and sign out before closing it.';
     }
     assertCurrent(requestContext);
-    publish({ status: 'signed-in', user: response.user, sessionEmail: response.user.email, spaces: response.spaces, error: sessionPersistenceWarning, notice: null });
+    publish({ status: 'signed-in', user: response.user, localProfileId: response.user.id, sessionEmail: response.user.email, spaces: response.spaces, error: sessionPersistenceWarning, notice: null });
     scheduleRefresh(session, { ...requestContext, session });
   });
 }
@@ -419,6 +455,7 @@ export async function logoutAccount(): Promise<void> {
     publish({
       status: 'signed-out',
       user: null,
+      localProfileId: null,
       sessionEmail: null,
       spaces: [],
       busyAction: null,
@@ -436,11 +473,12 @@ export async function refreshAccountWorkspace(): Promise<void> {
     publish({
       status: 'signed-in',
       user: me.user,
+      localProfileId: me.user.id,
       sessionEmail: me.user.email,
       spaces: me.spaces,
       error: sessionPersistenceWarning,
       notice: removed.length
-        ? `Access to ${removed.map((space) => space.name).join(', ')} was removed. Cooking content has not been connected to household workspaces; local cooking data remains on this device.`
+        ? `Access to ${removed.map((space) => space.name).join(', ')} was removed. The saved workspace copy and pending edits remain on this device.`
         : 'Account and household membership were checked with the service.'
     });
   });
@@ -450,8 +488,85 @@ export async function refreshAccountSession(): Promise<void> {
   await withBusy('refresh-session', true, async (requestContext) => {
     const rotated = await rotateSession(requestContext);
     const me = await readMe({ ...requestContext, session: rotated }, false);
-    publish({ status: 'signed-in', user: me.user, sessionEmail: me.user.email, spaces: me.spaces, error: sessionPersistenceWarning, notice: 'Session refreshed. The previous session token was revoked.' });
+    publish({ status: 'signed-in', user: me.user, localProfileId: me.user.id, sessionEmail: me.user.email, spaces: me.spaces, error: sessionPersistenceWarning, notice: 'Session refreshed. The previous session token was revoked.' });
   });
+}
+
+/** Fetch a fresh service JWT without exposing the long-lived app bearer to sync code. */
+export async function fetchPowerSyncCredential(): Promise<{
+  endpoint: string;
+  token: string;
+  expiresAt?: Date;
+}> {
+  const endpoint = configuredPowerSyncEndpoint();
+  let requestContext = context(true);
+  try {
+    const credential = await request<PowerSyncCredentialResponse>(requestContext, '/sync/credentials', {
+      method: 'POST',
+      mutationLabel: 'sync credential request'
+    });
+    if (!credential || typeof credential.token !== 'string' || !credential.token
+      || !Number.isFinite(Date.parse(credential.expiresAt))) {
+      throw new Error('The sync service returned incomplete connection credentials.');
+    }
+    return {
+      endpoint,
+      token: credential.token,
+      expiresAt: new Date(credential.expiresAt)
+    };
+  } catch (error) {
+    if (error instanceof AccountApiError && error.status === 401 && requestContext.session) {
+      const rotated = await rotateSession(requestContext);
+      requestContext = { ...requestContext, session: rotated };
+      const credential = await request<PowerSyncCredentialResponse>(requestContext, '/sync/credentials', {
+        method: 'POST',
+        mutationLabel: 'sync credential request'
+      });
+      if (!credential || typeof credential.token !== 'string' || !credential.token
+        || !Number.isFinite(Date.parse(credential.expiresAt))) {
+        throw new Error('The sync service returned incomplete connection credentials.');
+      }
+      return {
+        endpoint,
+        token: credential.token,
+        expiresAt: new Date(credential.expiresAt)
+      };
+    }
+    if (error instanceof AccountApiError && error.status === 401) await markExpired(requestContext);
+    throw error;
+  }
+}
+
+function configuredPowerSyncEndpoint(): string {
+  const endpoint = normalizePowerSyncServiceUrl(snapshot.powerSyncUrl);
+  if (!endpoint) throw new Error('Set a PowerSync Service URL on this device before connecting workspace content.');
+  return endpoint;
+}
+
+/** Apply one idempotent PowerSync CRUD transaction through the membership-checked API. */
+export async function submitContentMutation(
+  spaceId: string,
+  body: ContentMutationRequest
+): Promise<unknown> {
+  const requestContext = context(true);
+  try {
+    return await request<unknown>(requestContext, `/spaces/${encodeURIComponent(spaceId)}/content/mutations`, {
+      method: 'POST',
+      body,
+      mutationLabel: 'content upload'
+    });
+  } catch (error) {
+    if (error instanceof AccountApiError && error.status === 401) await markExpired(requestContext);
+    if (error instanceof AccountApiError && error.status === 403) {
+      try {
+        const me = await readMe(requestContext, true);
+        if (isCurrent(requestContext)) publish({ user: me.user, spaces: me.spaces, status: 'signed-in' });
+      } catch {
+        // The original authorization denial remains the actionable upload result.
+      }
+    }
+    throw error;
+  }
 }
 
 export async function createHousehold(name: string): Promise<AccountWorkspace> {
@@ -462,7 +577,7 @@ export async function createHousehold(name: string): Promise<AccountWorkspace> {
       mutationLabel: 'household creation'
     });
     const spaces = [...snapshot.spaces.filter((space) => space.id !== result.space.id), result.space];
-    publish({ spaces, notice: `${result.space.name} was created. Cooking content is still stored on this device.` });
+    publish({ spaces, notice: `${result.space.name} was created. Choose it as the cooking workspace when you are ready.` });
     return result.space;
   });
 }
@@ -505,7 +620,7 @@ export async function acceptWorkspaceInvitation(token: string): Promise<AccountW
     });
     publish({
       spaces: [...snapshot.spaces.filter((space) => space.id !== result.space.id), result.space],
-      notice: `Joined ${result.space.name} as ${result.space.role}. Cooking content remains on this device.`
+      notice: `Joined ${result.space.name} as ${result.space.role}. Choose it as the cooking workspace when you are ready.`
     });
     return result.space;
   });

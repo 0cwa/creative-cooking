@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type PropsWithChildren } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversations';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
@@ -31,7 +31,9 @@ import type {
   PersistedState,
   Recipe
 } from '@/domain/types';
-import { loadState, saveState } from '@/storage/appStorage';
+import { loadState } from '@/storage/appStorage';
+import { useContentRuntime } from '@/content/useContentRuntime';
+import { planChefProposalEffect } from '@/chef/proposalEffect';
 
 function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   if (!saved) return DEFAULT_STATE;
@@ -97,7 +99,26 @@ function archiveActiveChat(current: PersistedState): PersistedState['chatHistory
 type AppStateApi = PersistedState & {
   hydrated: boolean;
   storageError: string | null;
+  contentWorkspaceId: string;
+  contentWorkspaceName: string;
+  contentWorkspaceRole: 'owner' | 'editor' | 'viewer' | null;
+  contentSyncStatus: import('@/content/useContentRuntime').ContentSyncStatus;
+  contentSyncError: string | null;
+  localPersistenceStatus: import('@/content/useContentRuntime').LocalPersistenceStatus;
+  canEditSharedContent: boolean;
+  guestContentAvailable: boolean;
+  guestContentDecision: 'merge' | 'keep' | 'in-progress' | null;
+  localRecipeConflicts: import('@/content/useContentRuntime').LocalRecipeConflict[];
+  personalContentConflicts: import('@/content/contentStore').PersonalContentConflict[];
+  recoveryArchives: import('@/content/contentStore').ArchivedWorkspace[];
   retryStorage(): Promise<boolean>;
+  selectContentWorkspace(spaceId: string): Promise<void>;
+  mergeGuestContent(): Promise<void>;
+  keepGuestContent(): Promise<void>;
+  prepareAccountExit(): Promise<void>;
+  flushCurrentWorkspace(): Promise<void>;
+  exportWorkspaceRecovery(): Promise<string>;
+  reportContentEditDenied(): void;
   addPantryItems(names: string[], preference?: IngredientPreference): void;
   updatePantryByName(name: string, newName: string): boolean;
   removePantryItem(id: string): void;
@@ -119,6 +140,7 @@ type AppStateApi = PersistedState & {
   setChatMessages(messages: ChatMessage[]): void;
   appendChatMessage(message: ChatMessage): void;
   setChatProposalStatus(messageId: string, proposalId: string, status: ChefToolProposalStatus): void;
+  applyChefProposalEffect(conversationId: string, proposal: ChefToolProposal): Promise<'applied' | 'queued'>;
   newChat(): void;
   openChatConversation(id: string): void;
   deleteChatConversation(id: string): void;
@@ -132,69 +154,41 @@ const AppStateContext = createContext<AppStateApi | null>(null);
 
 export function AppStateProvider({ children }: PropsWithChildren) {
   const [state, setState] = useState<PersistedState>(DEFAULT_STATE);
+  const appStateRef = useRef(state);
   const pantryRef = useRef(state.pantry);
+  appStateRef.current = state;
   pantryRef.current = state.pantry;
-  const [hydrated, setHydrated] = useState(false);
-  const [storageError, setStorageError] = useState<string | null>(null);
-  const [storageWritable, setStorageWritable] = useState(true);
+  const readLegacy = useCallback(async () => {
+    const saved = await loadState();
+    return { state: saved ? mergeState(saved) : null, hadData: saved !== null };
+  }, []);
+  const content = useContentRuntime(state, setState, readLegacy);
+  const updateAppState = useCallback((
+    update: PersistedState | ((current: PersistedState) => PersistedState)
+  ) => {
+    const current = appStateRef.current;
+    const next = typeof update === 'function' ? update(current) : update;
+    if (next === current) return;
+    content.markLocalStateChange();
+    appStateRef.current = next;
+    pantryRef.current = next.pantry;
+    setState(next);
+  }, [content.markLocalStateChange]);
+  const hydrated = content.hydrated;
+  const storageError = content.storageError;
+  const retryStorage = content.retryStorage;
 
-  const describeStorageError = useCallback((error: unknown) => (
-    error instanceof Error ? error.message : 'Creative Cooking could not save local data.'
-  ), []);
-
-  useEffect(() => {
-    let active = true;
-    loadState()
-      .then((saved) => {
-        if (active) setState(mergeState(saved));
-      })
-      .catch((error) => {
-        if (!active) return;
-        setStorageError(describeStorageError(error));
-        setStorageWritable(false);
-      })
-      .finally(() => {
-        if (active) setHydrated(true);
-      });
-    return () => {
-      active = false;
-    };
-  }, [describeStorageError]);
-
-  useEffect(() => {
-    if (!hydrated || !storageWritable) return;
-    let active = true;
-    void saveState(state)
-      .then(() => {
-        if (active) setStorageError(null);
-      })
-      .catch((error) => {
-        if (!active) return;
-        setStorageError(describeStorageError(error));
-        setStorageWritable(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [describeStorageError, hydrated, state, storageWritable]);
-
-  const retryStorage = useCallback(async () => {
-    try {
-      await saveState(state);
-      setStorageWritable(true);
-      setStorageError(null);
-      return true;
-    } catch (error) {
-      setStorageWritable(false);
-      setStorageError(describeStorageError(error));
-      return false;
-    }
-  }, [describeStorageError, state]);
+  const ensureSharedEditAllowed = useCallback(() => {
+    if (content.canEditShared) return true;
+    content.reportEditDenied();
+    return false;
+  }, [content.canEditShared, content.reportEditDenied]);
 
   const commitPantry = useCallback((pantry: PersistedState['pantry']) => {
+    if (!ensureSharedEditAllowed()) return;
     pantryRef.current = pantry;
-    setState((current) => ({ ...current, pantry }));
-  }, []);
+    updateAppState((current) => ({ ...current, pantry }));
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const addPantryItems = useCallback((names: string[], preference: IngredientPreference = 3) => {
     const current = pantryRef.current;
@@ -263,6 +257,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, [state.settings.allergies]);
 
   const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
     validateRecipe(input);
 
     const now = new Date().toISOString();
@@ -272,11 +267,12 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       createdAt: now,
       updatedAt: now
     }])[0];
-    setState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
+    updateAppState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, [validateRecipe]);
+  }, [ensureSharedEditAllowed, updateAppState, validateRecipe]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!ensureSharedEditAllowed()) return;
     const existing = state.recipes.find((recipe) => recipe.id === id);
     const ingredientNamesChanged = !existing
       || existing.ingredients.length !== input.ingredients.length
@@ -290,7 +286,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       if (!validation.ok) throw new RecipeAllergyError(validation.matches);
     }
 
-    setState((current) => ({
+    updateAppState((current) => ({
       ...current,
       recipes: current.recipes.map((recipe) => (
         recipe.id === id
@@ -303,54 +299,62 @@ export function AppStateProvider({ children }: PropsWithChildren) {
           : recipe
       ))
     }));
-  }, [state.recipes, state.settings.allergies]);
+  }, [ensureSharedEditAllowed, state.recipes, state.settings.allergies, updateAppState]);
 
   const deleteRecipe = useCallback((id: string) => {
-    setState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
-  }, []);
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const createShoppingList = useCallback((input: NewShoppingList) => {
-    setState((current) => ({ ...current, shopping: createShoppingListCommand(current.shopping, input) }));
-  }, []);
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({ ...current, shopping: createShoppingListCommand(current.shopping, input) }));
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const addShoppingItems = useCallback((listId: string, inputs: NewShoppingItem[]) => {
-    setState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
-  }, []);
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const updateShoppingItem = useCallback((id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }) => {
-    setState((current) => ({
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({
       ...current,
       shopping: updateShoppingItemCommand(current.shopping, id, patch, new Date().toISOString())
     }));
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const removeShoppingItem = useCallback((id: string) => {
-    setState((current) => ({
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({
       ...current,
       shopping: removeShoppingItemCommand(current.shopping, id, new Date().toISOString())
     }));
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const removeShoppingList = useCallback((id: string) => {
-    setState((current) => ({
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({
       ...current,
       shopping: removeShoppingListCommand(current.shopping, id, new Date().toISOString())
     }));
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const setShoppingItemChecked = useCallback((id: string, cycleId: string, checked: boolean) => {
-    setState((current) => ({
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({
       ...current,
       shopping: setShoppingItemCheckedCommand(current.shopping, id, cycleId, checked, new Date().toISOString())
     }));
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const startNewPurchaseCycle = useCallback((listId: string, cycleId: string) => {
-    setState((current) => ({
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => ({
       ...current,
       shopping: startNewPurchaseCycleCommand(current.shopping, listId, cycleId, new Date().toISOString())
     }));
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const purchaseCheckedShoppingItems = useCallback((
     listId: string,
@@ -358,7 +362,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     purchaseId: string,
     purchasedAt: string
   ) => {
-    setState((current) => {
+    if (!ensureSharedEditAllowed()) return;
+    updateAppState((current) => {
       const purchase = applyShoppingPurchase(current.shopping, current.pantry, {
         id: purchaseId,
         listId,
@@ -368,32 +373,32 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       if (!purchase.applied) return current;
       return { ...current, shopping: purchase.shopping, pantry: purchase.pantry };
     });
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const setChatMessages = useCallback((messages: ChatMessage[]) => {
-    setState((current) => ({
+    updateAppState((current) => ({
       ...current,
       chatMessages: messages,
       activeConversationId: messages.length
         ? current.activeConversationId ?? `chat-${messages[0]?.id ?? Date.now()}`
         : null
     }));
-  }, []);
+  }, [updateAppState]);
 
   const appendChatMessage = useCallback((message: ChatMessage) => {
-    setState((current) => ({
+    updateAppState((current) => ({
       ...current,
       chatMessages: [...current.chatMessages, message],
       activeConversationId: current.activeConversationId ?? `chat-${message.id}`
     }));
-  }, []);
+  }, [updateAppState]);
 
   const setChatProposalStatus = useCallback((
     messageId: string,
     proposalId: string,
     status: ChefToolProposalStatus
   ) => {
-    setState((current) => ({
+    updateAppState((current) => ({
       ...current,
       chatMessages: current.chatMessages.map((message) => (
         message.id === messageId
@@ -406,19 +411,25 @@ export function AppStateProvider({ children }: PropsWithChildren) {
           : message
       ))
     }));
-  }, []);
+  }, [updateAppState]);
+
+  const applyChefProposalEffect = useCallback(async (conversationId: string, proposal: ChefToolProposal) => {
+    if (!ensureSharedEditAllowed()) throw new Error(content.sharedEditDeniedMessage);
+    const planned = planChefProposalEffect(state, content.scope.spaceId, conversationId, proposal);
+    return content.applyProposalEffect(conversationId, proposal, state, planned.state);
+  }, [content.applyProposalEffect, content.scope.spaceId, content.sharedEditDeniedMessage, ensureSharedEditAllowed, state]);
 
   const newChat = useCallback(() => {
-    setState((current) => ({
+    updateAppState((current) => ({
       ...current,
       chatHistory: archiveActiveChat(current),
       chatMessages: [],
       activeConversationId: null
     }));
-  }, []);
+  }, [updateAppState]);
 
   const openChatConversation = useCallback((id: string) => {
-    setState((current) => {
+    updateAppState((current) => {
       const target = current.chatHistory.find((conversation) => conversation.id === id);
       if (!target) return current;
       return {
@@ -428,46 +439,66 @@ export function AppStateProvider({ children }: PropsWithChildren) {
         activeConversationId: target.id
       };
     });
-  }, []);
+  }, [updateAppState]);
 
   const deleteChatConversation = useCallback((id: string) => {
-    setState((current) => ({
+    updateAppState((current) => ({
       ...current,
       chatHistory: current.chatHistory.filter((conversation) => conversation.id !== id)
     }));
-  }, []);
+  }, [updateAppState]);
 
   const updateMealContext = useCallback((patch: Partial<MealContext>) => {
-    setState((current) => ({ ...current, mealContext: { ...current.mealContext, ...patch } }));
-  }, []);
+    updateAppState((current) => ({ ...current, mealContext: { ...current.mealContext, ...patch } }));
+  }, [updateAppState]);
 
   const updateCookEnergy = useCallback((index: number, energy: CookEnergy) => {
-    setState((current) => {
+    updateAppState((current) => {
       const cooks = [...current.mealContext.cooks];
       cooks[index] = energy;
       return { ...current, mealContext: { ...current.mealContext, cooks } };
     });
-  }, []);
+  }, [updateAppState]);
 
   const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    setState((current) => ({ ...current, settings: { ...current.settings, ...patch } }));
-  }, []);
+    updateAppState((current) => ({ ...current, settings: { ...current.settings, ...patch } }));
+  }, [updateAppState]);
 
   const restoreState = useCallback((next: PersistedState) => {
+    if (!ensureSharedEditAllowed()) return;
     const recipes = normalizeRecipes(next.recipes ?? []);
-    setState({
+    updateAppState({
       ...next,
       recipes,
       shopping: next.shopping === undefined ? migrateLegacyShopping(recipes) : validateShoppingState(next.shopping)
     });
-  }, []);
+  }, [ensureSharedEditAllowed, updateAppState]);
 
   const value = useMemo<AppStateApi>(
     () => ({
       ...state,
       hydrated,
       storageError,
+      contentWorkspaceId: content.scope.spaceId,
+      contentWorkspaceName: content.workspaceName,
+      contentWorkspaceRole: content.role,
+      contentSyncStatus: content.syncStatus,
+      contentSyncError: content.syncError,
+      localPersistenceStatus: content.localPersistenceStatus,
+      canEditSharedContent: content.canEditShared,
+      guestContentAvailable: content.guestAdoption.available,
+      guestContentDecision: content.guestAdoption.decision,
+      localRecipeConflicts: content.recipeConflicts,
+      personalContentConflicts: content.personalConflicts,
+      recoveryArchives: content.archives,
       retryStorage,
+      selectContentWorkspace: content.selectWorkspace,
+      mergeGuestContent: content.mergeGuestContent,
+      keepGuestContent: content.keepGuestContent,
+      prepareAccountExit: content.prepareAccountExit,
+      flushCurrentWorkspace: content.flushCurrentWorkspace,
+      exportWorkspaceRecovery: content.exportWorkspaceRecovery,
+      reportContentEditDenied: content.reportEditDenied,
       addPantryItems,
       updatePantryByName,
       removePantryItem,
@@ -489,6 +520,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       setChatMessages,
       appendChatMessage,
       setChatProposalStatus,
+      applyChefProposalEffect,
       newChat,
       openChatConversation,
       deleteChatConversation,
@@ -501,6 +533,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       state,
       hydrated,
       storageError,
+      content,
       retryStorage,
       addPantryItems,
       updatePantryByName,
@@ -523,6 +556,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       setChatMessages,
       appendChatMessage,
       setChatProposalStatus,
+      applyChefProposalEffect,
       newChat,
       openChatConversation,
       deleteChatConversation,

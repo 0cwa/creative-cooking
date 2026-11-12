@@ -137,3 +137,16 @@ test('removed lists retain tombstones and items while disappearing from active r
   assert.equal(removed.items.length, 1);
   assert.deepEqual(validateShoppingState(removed), removed);
 });
+
+test('purchase IDs remain valid historical snapshots after item and pantry rows are absent', () => {
+  const state = {
+    lists: [{ id: 'list-main', name: 'Weekly shop', currentCycleId: 'cycle-first', createdAt: at, updatedAt: at }],
+    cycles: [{ id: 'cycle-first', listId: 'list-main', startedAt: at }],
+    items: [],
+    purchases: [{
+      id: 'purchase-archived', listId: 'list-main', purchaseCycleId: 'cycle-first',
+      itemIds: ['removed-shopping-item'], pantryItemIds: ['deleted-pantry-item'], purchasedAt: at
+    }]
+  };
+  assert.deepEqual(validateShoppingState(state), state);
+});

@@ -29,7 +29,12 @@ export default function ShoppingScreen() {
     removeShoppingList,
     setShoppingItemChecked,
     startNewPurchaseCycle,
-    purchaseCheckedShoppingItems
+    purchaseCheckedShoppingItems,
+    contentWorkspaceName,
+    contentSyncStatus,
+    contentSyncError,
+    localPersistenceStatus,
+    storageError
   } = useAppState();
 
   const activeLists = shopping.lists.filter((list) => !list.removedAt);
@@ -83,6 +88,24 @@ export default function ShoppingScreen() {
     !sourceKey(sourceRecipe?.id ?? '', ingredient.id)
     || !existingSourceRefs.has(sourceKey(sourceRecipe?.id ?? '', ingredient.id) ?? '')
   ));
+
+  const storageNotice = storageError
+    ? `Local save needs attention: ${storageError}`
+    : localPersistenceStatus === 'saving'
+      ? 'Saving changes on this device…'
+    : localPersistenceStatus === 'error'
+      ? 'Local save needs attention.'
+    : contentSyncStatus === 'local-only'
+      ? 'Saved on this device only.'
+      : contentSyncStatus === 'offline-unverified'
+        ? 'Saved on this device. Membership and current sync status are unverified while offline.'
+        : contentSyncStatus === 'unconfigured'
+          ? `Saved locally in ${contentWorkspaceName}; this app build has no sync service configured.`
+          : contentSyncStatus === 'synced'
+            ? `Saved in ${contentWorkspaceName}; the server has confirmed the current upload and download queue.`
+            : contentSyncStatus === 'attention' || contentSyncStatus === 'error'
+              ? `Saved locally in ${contentWorkspaceName}; sync needs attention.${contentSyncError ? ` ${contentSyncError}` : ''}`
+              : `Saved locally in ${contentWorkspaceName}; waiting for the server to confirm sync.`;
 
   const createList = () => {
     const name = listName.trim();
@@ -223,7 +246,7 @@ export default function ShoppingScreen() {
           </Pressable>
         </View>
 
-        <Text style={styles.localNotice}>Saved on this device only. Shopping lists are not synced.</Text>
+        <Text accessibilityLiveRegion="polite" style={styles.localNotice}>{storageNotice}</Text>
 
         {activeLists.length > 1 && (
           <View style={styles.listPicker}>
@@ -296,7 +319,7 @@ export default function ShoppingScreen() {
                   const checked = item.checked;
                   const editing = editingItemId === item.id;
                   return (
-                    <View key={item.id} style={[styles.itemRow, (checked || purchased) && styles.itemRowDone]}>
+                    <View key={item.id} testID={`shopping-item-${item.id}`} style={[styles.itemRow, (checked || purchased) && styles.itemRowDone]}>
                       {editing ? (
                         <View style={styles.editForm}>
                           {renderTextField('Edit item name', editingName, setEditingName, 'Item name')}

@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import type { StoredAccountSession } from './contracts';
 
 const CONFIG_KEY = 'creative-cooking-account-api-url-v1';
+const POWERSYNC_CONFIG_KEY = 'creative-cooking-powersync-service-url-v1';
 const NATIVE_SESSION_KEY = 'creative-cooking-account-session-v1';
 const WEB_DATABASE = 'creative-cooking-account';
 const WEB_DATABASE_VERSION = 1;
@@ -85,6 +86,15 @@ export async function getStoredApiUrl(): Promise<string> {
 export async function setStoredApiUrl(apiUrl: string): Promise<void> {
   if (apiUrl) await AsyncStorage.setItem(CONFIG_KEY, apiUrl);
   else await AsyncStorage.removeItem(CONFIG_KEY);
+}
+
+export async function getStoredPowerSyncUrl(): Promise<string> {
+  return (await AsyncStorage.getItem(POWERSYNC_CONFIG_KEY)) ?? '';
+}
+
+export async function setStoredPowerSyncUrl(value: string): Promise<void> {
+  if (value) await AsyncStorage.setItem(POWERSYNC_CONFIG_KEY, value);
+  else await AsyncStorage.removeItem(POWERSYNC_CONFIG_KEY);
 }
 
 export async function getStoredSession(): Promise<StoredAccountSession | null> {
