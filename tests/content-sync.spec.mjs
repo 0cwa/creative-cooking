@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 const enabled = process.env.CONTENT_SYNC_E2E === '1';
 const baseUrl = process.env.CONTENT_SYNC_BASE_URL ?? 'http://127.0.0.1:8081/creative-cooking/';
 const apiUrl = process.env.CONTENT_SYNC_API_URL ?? 'http://127.0.0.1:8788';
+const serviceUrl = process.env.CONTENT_SYNC_SERVICE_URL ?? 'http://127.0.0.1:8092';
 const privateChatCanary = 'PRIVATE_CHAT_CANARY_DO_NOT_UPLOAD';
 const privateAllergyCanary = 'Private allergy canary';
 const providerKeyCanary = 'device-local-provider-key-canary-do-not-upload';
@@ -52,6 +53,9 @@ function auditPage(page, audit) {
       mutationId: typeof parsedBody?.mutationId === 'string' ? parsedBody.mutationId : null,
       spaceId: new URL(request.url()).pathname.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null,
       operationTypes,
+      personalPreferenceFields: Array.isArray(parsedBody?.operations)
+        ? parsedBody.operations.filter((operation) => operation?.type === 'personal.preference.set').map((operation) => operation.field)
+        : [],
       recipeSaves: Array.isArray(parsedBody?.operations)
         ? parsedBody.operations.filter((operation) => operation?.type === 'recipe.save').map((operation) => ({
             opId: operation.opId,
@@ -171,8 +175,25 @@ async function login(page, email, password) {
 async function configureApi(page) {
   await page.getByLabel('API base URL').fill(apiUrl);
   await page.getByRole('button', { name: 'Save API URL' }).click();
-  await page.getByRole('textbox', { name: 'PowerSync Service URL' }).fill('http://127.0.0.1:8092');
+  await page.getByRole('textbox', { name: 'PowerSync Service URL' }).fill(serviceUrl);
   await page.getByRole('button', { name: 'Save PowerSync Service URL' }).click();
+}
+
+async function storedSessionToken(page) {
+  return page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('creative-cooking-account', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const session = await new Promise((resolve, reject) => {
+      const request = database.transaction('session', 'readonly').objectStore('session').get('current');
+      request.onsuccess = () => resolve(request.result ?? null);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return session?.token ?? null;
+  });
 }
 
 async function openCookingWorkspace(page, expectedWorkspaceName = null) {
@@ -228,11 +249,14 @@ test('built PWA migrates guest history and synchronizes household records betwee
   const runId = process.env.CONTENT_SYNC_RUN_ID ?? `cc-content-${Date.now()}-${randomBytes(5).toString('hex')}`;
   const ownerEmail = `${runId}-owner@example.test`;
   const memberEmail = `${runId}-member@example.test`;
+  const viewerEmail = `${runId}-viewer@example.test`;
+  const outsiderEmail = `${runId}-outsider@example.test`;
   const password = randomBytes(24).toString('base64url');
   const householdName = `Sync Kitchen ${runId.slice(-8)}`;
   const sharedItem = `Shared Pantry ${runId.slice(-8)}`;
   const memberItem = `Member Pantry ${runId.slice(-8)}`;
   const offlineMemberItem = `Offline Pantry ${runId.slice(-8)}`;
+  const viewerOnlyItem = `Viewer must not add ${runId.slice(-8)}`;
   const historicalEffectName = `Historical effect must not run ${runId.slice(-8)}`;
   const householdEffectName = `Household proposal effect ${runId.slice(-8)}`;
   const deniedEffectName = `Denied proposal remains pending ${runId.slice(-8)}`;
@@ -281,9 +305,21 @@ test('built PWA migrates guest history and synchronizes household records betwee
     personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
     providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
   };
+  const viewerAudit = {
+    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
+    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
+    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
+  };
+  const outsiderAudit = {
+    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
+    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
+    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
+  };
   const ownerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   let ownerSecondContext;
   let memberContext;
+  let viewerContext;
+  let outsiderContext;
 
   try {
     markStage('checking local migration and shopping persistence');
@@ -694,6 +730,48 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByTestId('pantry-workspace-status')).toContainText('synced', { timeout: 30_000 });
     markStage('owner added the first household pantry record');
 
+    await openSettings(owner, true, householdName);
+    await owner.getByRole('button', { name: `View members of ${householdName}` }).click();
+    await owner.getByLabel(`Invitation email for ${householdName}`).fill(viewerEmail);
+    await owner.getByRole('button', { name: 'Invite as viewer' }).click();
+    await owner.getByRole('button', { name: `Invite member to ${householdName}` }).click();
+    const viewerInviteToken = await owner.getByLabel('One-time invitation token').inputValue();
+    expect(viewerInviteToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    viewerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const viewer = await viewerContext.newPage();
+    auditPage(viewer, viewerAudit);
+    await viewer.goto(routeUrl('settings'));
+    await configureApi(viewer);
+    await register(viewer, viewerEmail, password);
+    await viewer.getByLabel('Invitation token').fill(viewerInviteToken);
+    await viewer.getByRole('button', { name: 'Accept invitation' }).click();
+    const viewerWorkspaceChoice = viewer.getByRole('button', { name: `Use ${householdName} for cooking` });
+    await expect(viewerWorkspaceChoice).toBeVisible({ timeout: 20_000 });
+    await viewerWorkspaceChoice.click();
+    await expect(viewer.getByText(/^Your role here is viewer/)).toBeVisible({ timeout: 30_000 });
+    await openCookingWorkspace(viewer, householdName);
+    await expect(viewer.getByText(sharedItem, { exact: true })).toBeVisible({ timeout: 90_000 });
+    await expect(viewer.getByLabel('Ingredient and details')).toHaveAttribute('readonly');
+    await expect(viewer.getByRole('button', { name: 'Add ingredient' })).toBeDisabled();
+    await expect(viewer.getByText(/read-only for viewers/)).toBeVisible();
+    await expect(viewer.getByText(viewerOnlyItem, { exact: true })).toHaveCount(0);
+    await openSettings(viewer, true, householdName);
+    await expect(viewer.getByText('Your role here is viewer (read only).', { exact: true })).toBeVisible();
+    expect(viewerAudit.mutationRequests.some((request) => request.pantryUpserts.some((operation) => operation.name === viewerOnlyItem))).toBe(false);
+    markStage('viewer downloaded shared records and the app disabled pantry edits with a read-only explanation');
+
+    outsiderContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const outsider = await outsiderContext.newPage();
+    auditPage(outsider, outsiderAudit);
+    await outsider.goto(routeUrl('settings'));
+    await configureApi(outsider);
+    await register(outsider, outsiderEmail, password);
+    await openCookingWorkspace(outsider);
+    await expect(outsider.getByText(sharedItem, { exact: true })).toHaveCount(0);
+    await openSettings(outsider, true);
+    await expect(outsider.getByRole('button', { name: `Use ${householdName} for cooking` })).toHaveCount(0);
+    markStage('unrelated account had no household choice or downloaded pantry row');
+
     await openChefWorkspace(owner);
     const chefWorkspaceStatus = owner.getByTestId('chef-workspace-status');
     await expect(chefWorkspaceStatus).toContainText(householdName, { timeout: 30_000 });
@@ -798,6 +876,40 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await openSettings(ownerSecond, true, 'Personal');
     await expect(ownerSecond.getByRole('button', { name: `Remove allergy ${privateAllergyCanary}` })).toBeVisible();
     markStage('second browser context restored the same personal conversation and preferences');
+
+    const offlinePersonalCity = `Offline City ${runId.slice(-8)}`;
+    await openSettings(owner, true, householdName);
+    await ownerContext.route(`${apiUrl}/**`, (route) => route.abort('failed'));
+    await ownerContext.route(`${serviceUrl}/**`, (route) => route.abort('failed'));
+    await owner.reload();
+    await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByTestId('cooking-workspace-status')).toContainText('Saved workspace (membership unverified)', { timeout: 30_000 });
+    await expect(owner.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
+    const cityInput = owner.getByRole('textbox', { name: 'City', exact: true });
+    await expect(cityInput).toBeVisible();
+    await cityInput.fill(offlinePersonalCity);
+    await expect(cityInput).toHaveValue(offlinePersonalCity);
+    await expect(owner.getByTestId('offline-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+    await owner.reload();
+    await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByTestId('cooking-workspace-status')).toContainText('Saved workspace (membership unverified)', { timeout: 30_000 });
+    const restoredCityInput = owner.getByRole('textbox', { name: 'City', exact: true });
+    await expect(restoredCityInput).toHaveValue(offlinePersonalCity, { timeout: 30_000 });
+    markStage('private city preference survived an offline reload on the first device');
+    await ownerContext.unroute(`${apiUrl}/**`);
+    await ownerContext.unroute(`${serviceUrl}/**`);
+    await owner.getByRole('button', { name: 'Check account connection' }).click();
+    await expect(owner.getByText(`Signed in as ${ownerEmail}`, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
+    await expect.poll(() => ownerAudit.mutationResponses.some((response) => (
+      response.status === 200 && ownerAudit.mutationRequests.some((request) => (
+        request.mutationId === response.mutationId
+          && request.spaceId === ownerAudit.personalSpaceId
+          && request.personalPreferenceFields.includes('city')
+      ))
+    )), { timeout: 90_000 }).toBe(true);
+    await expect(ownerSecond.getByRole('textbox', { name: 'City', exact: true })).toHaveValue(offlinePersonalCity, { timeout: 90_000 });
+    markStage('private offline preference uploaded to the personal workspace and reached the second device');
 
     await openCookingWorkspace(owner, householdName);
     await expect(owner.getByTestId('pantry-screen').getByText(householdEffectName, { exact: true })).toHaveCount(1);
@@ -943,26 +1055,101 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(offlinePantryStatus).toContainText('offline unverified');
     await expect(offlinePantryStatus).not.toContainText(/· editor|· owner|· viewer/);
     await expect(member.getByText(offlineMemberItem, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await openSettings(owner, true, householdName);
+    await owner.getByRole('button', { name: `View members of ${householdName}` }).click();
+    await expect(owner.getByText(memberEmail, { exact: false })).toBeVisible();
+    await owner.getByLabel(`Remove ${memberEmail} from ${householdName}`).click();
+    await owner.getByLabel(`Confirm remove ${memberEmail}`).click();
+    await expect(owner.getByText(memberEmail, { exact: false })).toHaveCount(0);
+    const householdSpaceId = ownerAudit.mutationRequests.find((request) => request.pantryUpserts.some((operation) => operation.name === sharedItem))?.spaceId;
+    expect(householdSpaceId).toBeTruthy();
     await memberContext.setOffline(false);
-    await expect(offlinePantryStatus).toContainText(householdName, { timeout: 60_000 });
-    await expect(offlinePantryStatus).toContainText('editor', { timeout: 60_000 });
+    await member.goto(routeUrl('settings'));
+    const connectionCheck = member.getByRole('button', { name: 'Check account connection' });
+    if (await connectionCheck.count()) await connectionCheck.click();
+    await expect(member.getByText(`Signed in as ${memberEmail}`, { exact: true })).toBeVisible({ timeout: 60_000 });
+    const revokedWorkspaceChoice = member.getByRole('button', { name: `Use ${householdName} for cooking` });
+    if (await revokedWorkspaceChoice.count()) {
+      await member.getByRole('button', { name: 'Check account and household access' }).click();
+      await expect(revokedWorkspaceChoice).toHaveCount(0, { timeout: 30_000 });
+    }
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText('Personal', { timeout: 30_000 });
+    const originalMemberToken = await storedSessionToken(member);
+    expect(originalMemberToken).toBeTruthy();
+    const revokedWrite = await member.evaluate(async ({ api, token, spaceId, itemName, uniqueId }) => {
+      const response = await fetch(`${api}/v1/spaces/${spaceId}/content/mutations`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'omit',
+        body: JSON.stringify({
+          mutationId: `revoked-member-${uniqueId}`,
+          operations: [{ opId: `revoked-member-op-${uniqueId}`, type: 'pantry.upsert', id: `revoked-item-${uniqueId}`, name: itemName, preference: 3 }]
+        })
+      });
+      const body = await response.json();
+      return { status: response.status, errorCode: body?.error?.code ?? null };
+    }, { api: apiUrl, token: originalMemberToken, spaceId: householdSpaceId, itemName: offlineMemberItem, uniqueId: runId });
+    expect(revokedWrite).toEqual({ status: 403, errorCode: 'SPACE_ACCESS_DENIED' });
     await owner.goto(routeUrl(''));
-    await expect(owner.getByText(offlineMemberItem, { exact: true })).toBeVisible({ timeout: 90_000 });
-    markStage('offline household edit survived reload and transferred after reconnect');
+    await expect(owner.getByText(offlineMemberItem, { exact: true })).toHaveCount(0);
+
+    const [removedWorkspaceDownload] = await Promise.all([
+      member.waitForEvent('download'),
+      member.getByRole('button', { name: 'Export workspace recovery file' }).click()
+    ]);
+    const removedWorkspaceRecovery = JSON.parse(await readFile(await removedWorkspaceDownload.path(), 'utf8'));
+    const removedWorkspaceArchive = removedWorkspaceRecovery.archives.find((archive) => archive.scope_id === householdSpaceId && archive.kind === 'membership-removed');
+    const recoveryMutations = [
+      ...(removedWorkspaceRecovery.pending ?? []),
+      ...(removedWorkspaceRecovery.blocked ?? []),
+      ...(removedWorkspaceArchive ? JSON.parse(removedWorkspaceArchive.data_json).pending ?? [] : []),
+      ...(removedWorkspaceArchive ? JSON.parse(removedWorkspaceArchive.data_json).blocked ?? [] : [])
+    ];
+    const pendingEditExported = recoveryMutations.some((row) => {
+      try { return JSON.parse(row.payload_json).operations?.some((operation) => operation.name === offlineMemberItem); }
+      catch { return false; }
+    });
+    const archivedEditPreserved = removedWorkspaceArchive
+      ? JSON.parse(removedWorkspaceArchive.data_json).state.pantry.some((item) => item.name === offlineMemberItem)
+      : false;
+    expect(pendingEditExported || archivedEditPreserved, JSON.stringify({
+      archives: removedWorkspaceRecovery.archives.map((archive) => ({ scopeId: archive.scope_id, kind: archive.kind })),
+      currentStatePantry: removedWorkspaceRecovery.state.pantry.map((item) => item.name),
+      pending: removedWorkspaceRecovery.pending.map((row) => row.mutation_id),
+      blocked: removedWorkspaceRecovery.blocked.map((row) => row.mutation_id),
+      memberStatus: await member.getByTestId('cooking-workspace-status').textContent().catch(() => null),
+      memberNoticeVisible: await member.getByText(new RegExp(`Access to ${householdName} was removed`)).count(),
+      memberAccountFailures: memberAudit.accountFailures,
+      memberMutationFailures: memberAudit.mutationFailures
+    })).toBe(true);
+    markStage(`removed editor switched to personal space and exported pending work via ${pendingEditExported ? 'blocked outbox record' : 'membership archive'}`);
+
+    await member.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(member.getByText('Not signed in', { exact: true })).toBeVisible();
+    await login(member, outsiderEmail, password);
+    await openCookingWorkspace(member);
+    await expect(member.getByText(offlineMemberItem, { exact: true })).toHaveCount(0);
+    await expect(member.getByText(sharedItem, { exact: true })).toHaveCount(0);
+    markStage('switching from removed member to a different account did not expose old cooking data');
 
     expect(ownerAudit.contentRequests).toBeGreaterThan(0);
     expect(ownerSecondAudit.credentialStatuses).toContain(200);
     expect(memberAudit.contentRequests).toBeGreaterThan(0);
     expect(ownerAudit.personalDataUploaded).toBe(true);
     expect(ownerSecondAudit.personalDataUploaded).toBe(false);
-    expect(ownerAudit.privateDataLeaked || ownerSecondAudit.privateDataLeaked || memberAudit.privateDataLeaked).toBe(false);
-    expect(ownerAudit.providerDataLeaked || ownerSecondAudit.providerDataLeaked || memberAudit.providerDataLeaked, JSON.stringify({
+    expect(ownerAudit.privateDataLeaked || ownerSecondAudit.privateDataLeaked || memberAudit.privateDataLeaked
+      || viewerAudit.privateDataLeaked || outsiderAudit.privateDataLeaked).toBe(false);
+    expect(ownerAudit.providerDataLeaked || ownerSecondAudit.providerDataLeaked || memberAudit.providerDataLeaked
+      || viewerAudit.providerDataLeaked || outsiderAudit.providerDataLeaked, JSON.stringify({
       owner: ownerAudit.providerLeakRequests,
       ownerSecond: ownerSecondAudit.providerLeakRequests,
-      member: memberAudit.providerLeakRequests
+      member: memberAudit.providerLeakRequests,
+      viewer: viewerAudit.providerLeakRequests,
+      outsider: outsiderAudit.providerLeakRequests
     })).toBe(false);
-    expect(ownerAudit.pageErrors + ownerSecondAudit.pageErrors + memberAudit.pageErrors).toBe(0);
-    const browserAudits = [ownerAudit, ownerSecondAudit, memberAudit];
+    expect(ownerAudit.pageErrors + ownerSecondAudit.pageErrors + memberAudit.pageErrors
+      + viewerAudit.pageErrors + outsiderAudit.pageErrors).toBe(0);
+    const browserAudits = [ownerAudit, ownerSecondAudit, memberAudit, viewerAudit, outsiderAudit];
     const expectedConsoleMessages = new Set([
       'Failed to load resource: net::ERR_FAILED',
       'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
@@ -975,13 +1162,13 @@ test('built PWA migrates guest history and synchronizes household records betwee
     expect(unexpectedConsoleErrors, JSON.stringify({
       owner: ownerAudit.consoleErrorMessages,
       ownerSecond: ownerSecondAudit.consoleErrorMessages,
-      member: memberAudit.consoleErrorMessages
+      member: memberAudit.consoleErrorMessages,
+      viewer: viewerAudit.consoleErrorMessages,
+      outsider: outsiderAudit.consoleErrorMessages
     })).toEqual([]);
     for (const audit of browserAudits) {
       const count = (needle) => audit.consoleErrorMessages.filter((message) => message === needle).length;
-      const abortedMutations = audit.requestFailures.filter((failure) => (
-        failure.error === 'net::ERR_FAILED' && /\/content\/mutations$/.test(failure.path)
-      )).length;
+      const failedNetworkRequests = audit.requestFailures.filter((failure) => failure.error === 'net::ERR_FAILED').length;
       const offlineApiFailures = audit.requestFailures.filter((failure) => (
         failure.error === 'net::ERR_INTERNET_DISCONNECTED' && /^\/v1\//.test(failure.path)
       )).length;
@@ -989,7 +1176,9 @@ test('built PWA migrates guest history and synchronizes household records betwee
       const abortedWasmLoads = audit.requestFailures.filter((failure) => (
         failure.error === 'net::ERR_ABORTED' && failure.path.endsWith('.wasm')
       )).length;
-      expect(count('Failed to load resource: net::ERR_FAILED')).toBeLessThanOrEqual(abortedMutations);
+      // The intentional offline route block also aborts account and PowerSync
+      // requests, so correlate browser console noise with all failed requests.
+      expect(count('Failed to load resource: net::ERR_FAILED')).toBeLessThanOrEqual(failedNetworkRequests);
       expect(count('Failed to load resource: net::ERR_INTERNET_DISCONNECTED')).toBeLessThanOrEqual(offlineApiFailures);
       expect(count('Failed to load resource: the server responded with a status of 403 (Forbidden)')).toBeLessThanOrEqual(deniedResponses);
       expect(count(wasmStreamingMessage)).toBeLessThanOrEqual(abortedWasmLoads);
@@ -1005,9 +1194,17 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await ownerSecond.goto(routeUrl('settings'));
     await ownerSecond.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(ownerSecond.getByText('Not signed in', { exact: true })).toBeVisible();
+    await viewer.goto(routeUrl('settings'));
+    await viewer.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(viewer.getByText('Not signed in', { exact: true })).toBeVisible();
+    await outsider.goto(routeUrl('settings'));
+    await outsider.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(outsider.getByText('Not signed in', { exact: true })).toBeVisible();
   } finally {
     const closeContexts = Promise.allSettled([
       memberContext?.close(),
+      viewerContext?.close(),
+      outsiderContext?.close(),
       ownerSecondContext?.close(),
       ownerContext.close()
     ]);

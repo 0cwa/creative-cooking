@@ -383,14 +383,25 @@ export function AccountSharingSection() {
         </View>
 
         {offline && (
-          <View style={styles.buttonRow}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Check account connection" disabled={busy} onPress={() => void run(refreshAccountWorkspace)} style={[styles.primaryButton, busy && styles.disabledButton]}>
-              <Text style={styles.primaryButtonText}>{busy ? 'Checking…' : 'Check connection'}</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Sign out from saved session" disabled={busy} onPress={() => void run(signOut)} style={[styles.smallButton, busy && styles.disabledButton]}>
-              <Text style={styles.smallButtonText}>Sign out</Text>
-            </Pressable>
-          </View>
+          <>
+            <View style={styles.statusBox}>
+              <Text testID="cooking-workspace-status" style={styles.statusTitle}>
+                {content.contentWorkspaceName} · {content.contentSyncStatus.replaceAll('-', ' ')}
+              </Text>
+              <Text style={styles.warning}>This saved workspace is available on this device. Current account and household membership have not been confirmed.</Text>
+              <Text testID="offline-local-persistence-status" style={styles.help}>
+                {content.localPersistenceStatus === 'saving' ? 'Saving locally' : content.localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
+              </Text>
+            </View>
+            <View style={styles.buttonRow}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Check account connection" disabled={busy} onPress={() => void run(refreshAccountWorkspace)} style={[styles.primaryButton, busy && styles.disabledButton]}>
+                <Text style={styles.primaryButtonText}>{busy ? 'Checking…' : 'Check connection'}</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Sign out from saved session" disabled={busy} onPress={() => void run(signOut)} style={[styles.smallButton, busy && styles.disabledButton]}>
+                <Text style={styles.smallButtonText}>Sign out</Text>
+              </Pressable>
+            </View>
+          </>
         )}
 
         {!sessionActive && account.apiUrl && (
