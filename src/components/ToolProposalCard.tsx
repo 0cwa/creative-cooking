@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { proposalPresentation } from '@/chef/proposals';
 import { formatRecipeIngredientLine } from '@/domain/recipeEditing';
@@ -6,15 +7,20 @@ import type { ChefToolProposal } from '@/domain/types';
 
 type Props = {
   proposal: ChefToolProposal;
-  onApply(): boolean;
+  onApply(): Promise<'applied' | 'queued' | false>;
 };
 
 export function ToolProposalCard({ proposal, onApply }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [waitingForSync, setWaitingForSync] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
   const presentation = useMemo(() => proposalPresentation(proposal), [proposal]);
   const applied = proposal.status === 'applied';
   const recipe = presentation.recipe;
+  useEffect(() => {
+    if (applied) setWaitingForSync(false);
+  }, [applied]);
 
   const actionStyle = presentation.actionTone === 'destructive'
     ? styles.destructiveButton
@@ -23,7 +29,7 @@ export function ToolProposalCard({ proposal, onApply }: Props) {
       : styles.neutralButton;
 
   return (
-    <View style={[styles.card, applied && styles.cardApplied]}>
+    <View testID={`chef-proposal-${proposal.id}`} style={[styles.card, applied && styles.cardApplied]}>
       <View style={styles.heading}>
         <View style={styles.headingCopy}>
           <Text style={styles.eyebrow}>{applied ? 'APPLIED' : presentation.eyebrow}</Text>
@@ -80,20 +86,28 @@ export function ToolProposalCard({ proposal, onApply }: Props) {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={applied ? `${presentation.actionLabel} applied` : presentation.actionLabel}
-          accessibilityState={{ disabled: applied || applying }}
-          disabled={applied || applying}
+          accessibilityState={{ disabled: applied || applying || waitingForSync }}
+          disabled={applied || applying || waitingForSync}
           onPress={() => {
-            if (applying || applied) return;
+            if (applying || applied || waitingForSync) return;
+            setApplyError(null);
             setApplying(true);
-            if (!onApply()) setApplying(false);
+            void onApply().then((result) => {
+              if (result === 'queued') setWaitingForSync(true);
+              if (result === false) setWaitingForSync(false);
+            }).catch((error) => {
+              setWaitingForSync(false);
+              setApplyError(error instanceof Error ? error.message : 'The suggestion remains pending because the change could not be saved.');
+            }).finally(() => setApplying(false));
           }}
-          style={[styles.actionButton, actionStyle, (applied || applying) && styles.actionDisabled]}
+          style={[styles.actionButton, actionStyle, (applied || applying || waitingForSync) && styles.actionDisabled]}
         >
           <Text style={styles.actionButtonText}>
-            {applied ? '✓ Applied' : applying ? 'Applying…' : presentation.actionTone === 'positive' ? `＋ ${presentation.actionLabel}` : presentation.actionLabel}
+            {applied ? '✓ Applied' : applying ? 'Applying…' : waitingForSync ? 'Waiting for sync…' : presentation.actionTone === 'positive' ? `＋ ${presentation.actionLabel}` : presentation.actionLabel}
           </Text>
         </Pressable>
       </View>
+      {applyError ? <Text accessibilityRole="alert" style={styles.applyError}>{applyError}</Text> : null}
     </View>
   );
 }
@@ -159,5 +173,6 @@ const styles = StyleSheet.create({
   neutralButton: { backgroundColor: '#334155' },
   destructiveButton: { backgroundColor: '#b91c1c' },
   actionDisabled: { backgroundColor: '#94a3b8' },
+  applyError: { color: '#b91c1c', fontSize: 13, lineHeight: 18 },
   actionButtonText: { color: 'white', fontSize: 13, fontWeight: '900' }
 });

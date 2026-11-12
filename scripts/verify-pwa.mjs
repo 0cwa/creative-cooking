@@ -47,11 +47,15 @@ assert.match(sw, /caches\.match\(appRoot\)/);
 assert.match(sw, /url\.origin !== self\.location\.origin/);
 assert.match(sw, /@huggingface\/transformers@3\.8\.1/);
 assert.match(read('whisper-worker.js').toString('utf8'), /onnx-community\/whisper-tiny/);
+assert.ok(read('_expo/static/js/web/wa-sqlite-async.wasm').length > 1_000_000, 'PWA must include the PowerSync SQLite runtime');
 
 const index = read('index.html').toString('utf8');
 assert.match(index, /\/creative-cooking\/manifest\.json/);
 assert.match(index, /\/creative-cooking\/sw\.js/);
 assert.match(index, /scope:\s*['"]\/creative-cooking\/['"]/);
+for (const [, source] of index.matchAll(/<script[^>]+src="([^"]+)"/g)) {
+  assert.ok(source.startsWith('/creative-cooking/'), `PWA bundle must load under its GitHub Pages base path: ${source}`);
+}
 
 const htmlFiles = walk(root)
   .filter((path) => path.endsWith('.html'))

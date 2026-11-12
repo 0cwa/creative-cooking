@@ -1,21 +1,22 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 
 async function readPersistedState(page) {
-  return page.evaluate(async () => {
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('creative-cooking', 1);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const raw = await new Promise((resolve, reject) => {
-      const transaction = database.transaction('app-state', 'readonly');
-      const request = transaction.objectStore('app-state').get('creative-cooking-state-v1');
-      request.onsuccess = () => resolve(request.result ?? '');
-      request.onerror = () => reject(request.error);
-    });
-    database.close();
-    return raw ? JSON.parse(raw) : null;
-  });
+  const previousUrl = page.url();
+  await page.goto('./shopping');
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
+  await page.goto('./');
+  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+  await page.getByLabel('Open settings').click();
+  await expect(page.getByText('Data & Storage', { exact: true })).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export backup' }).click();
+  const download = await downloadPromise;
+  const backup = JSON.parse(await readFile(await download.path(), 'utf8'));
+  await page.goto(previousUrl);
+  return backup.state;
 }
 
 function contrastRatio(foreground, background) {
@@ -63,22 +64,9 @@ test('shopping records migrate, persist, and purchase independently from recipe 
 
   await page.goto('./recipes');
   await expect(page.getByText('Lentil bowl', { exact: true })).toBeVisible();
-  await expect.poll(async () => (await readPersistedState(page))?.shopping?.items?.length).toBe(2);
-  const migratedIds = await page.evaluate(async () => {
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('creative-cooking', 1);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const raw = await new Promise((resolve, reject) => {
-      const transaction = database.transaction('app-state', 'readonly');
-      const request = transaction.objectStore('app-state').get('creative-cooking-state-v1');
-      request.onsuccess = () => resolve(request.result ?? '');
-      request.onerror = () => reject(request.error);
-    });
-    database.close();
-    return JSON.parse(raw).shopping.items.map((item) => item.id);
-  });
+  const migratedState = await readPersistedState(page);
+  expect(migratedState.shopping.items).toHaveLength(2);
+  const migratedIds = migratedState.shopping.items.map((item) => item.id);
 
   await page.getByLabel('Open recipe Lentil bowl').click();
   await expect(page.getByLabel('2 portions')).toBeVisible();
@@ -99,14 +87,16 @@ test('shopping records migrate, persist, and purchase independently from recipe 
   await expect(page.getByRole('dialog').getByText('Bright lentil bowl', { exact: true })).toBeVisible();
   await expect(page.getByText(/1 tbsp olive oil/).first()).toBeVisible();
 
+  await page.getByLabel('Close recipe').click();
   const afterRecipeEdit = await readPersistedState(page);
   expect(afterRecipeEdit.recipes[0].ingredients).toHaveLength(3);
   expect(afterRecipeEdit.recipes[0].ingredients.find((ingredient) => ingredient.name === 'lemon')?.needsShopping).toBe(true);
   expect(afterRecipeEdit.shopping.items.map((item) => item.id)).toEqual(migratedIds);
   expect(afterRecipeEdit.shopping.items).toHaveLength(2);
 
+  await page.getByLabel('Open recipe Bright lentil bowl').click();
   await page.getByRole('button', { name: 'Add ingredients to shopping list (2)' }).click();
-  await expect(page.getByText('Saved on this device only. Shopping lists are not synced.')).toBeVisible();
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
   await page.getByLabel('New shopping list name').fill('Dinner');
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Dinner', exact: true })).toBeVisible();
@@ -127,7 +117,7 @@ test('shopping records migrate, persist, and purchase independently from recipe 
   await expect(page.getByRole('button', { name: /Add ingredients to shopping list/ })).toHaveCount(0);
   await page.getByLabel('Close recipe').click();
   await page.goto('./shopping');
-  await expect(page.getByText('Saved on this device only. Shopping lists are not synced.')).toBeVisible();
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
 
   await page.getByLabel('New shopping list name').fill('Kitchen extras');
   await page.getByRole('button', { name: 'Create', exact: true }).click();
@@ -145,6 +135,7 @@ test('shopping records migrate, persist, and purchase independently from recipe 
   await expect(page.getByText('2 rolls', { exact: true })).toBeVisible();
   await page.getByLabel('Remove kitchen paper').click();
   await expect(page.getByText('kitchen paper', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
 
   const beforeReload = await readPersistedState(page);
   expect(beforeReload.shopping.items.filter((item) => item.listId === 'shopping-list-legacy')).toHaveLength(2);
@@ -170,7 +161,7 @@ test('shopping records migrate, persist, and purchase independently from recipe 
 test('shopping lists work locally without recipes or accounts and retain logical removals', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('./shopping');
-  await expect(page.getByText('Saved on this device only. Shopping lists are not synced.')).toBeVisible();
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
   await expect(page.getByLabel('New shopping list name')).toHaveCount(1);
   const mobileLayout = await page.evaluate(() => ({
     viewportWidth: document.documentElement.clientWidth,
@@ -209,7 +200,7 @@ test('shopping lists work locally without recipes or accounts and retain logical
   await page.getByRole('button', { name: 'Remove list' }).click();
   await page.getByRole('button', { name: 'Confirm remove list' }).click();
   await expect(page.getByText('Create a list', { exact: true })).toBeVisible();
-  await expect.poll(async () => (await readPersistedState(page))?.shopping?.lists?.find((list) => list.name === 'Quick shop')?.removedAt ?? null).toBeTruthy();
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
   const removedState = await readPersistedState(page);
   const removedList = removedState.shopping.lists.find((list) => list.name === 'Quick shop');
   const removedItem = removedState.shopping.items.find((item) => item.name === 'white beans');

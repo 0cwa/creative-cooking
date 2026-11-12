@@ -66,13 +66,13 @@ function timestamp(value: unknown, field: string): string {
   return text;
 }
 
-function uniqueStrings(value: unknown, field: string): string[] {
+function stringIds(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw new Error(`Shopping data has an invalid ${field}.`);
   }
-  const items = value as string[];
-  if (new Set(items).size !== items.length) throw new Error(`Shopping data has duplicate ${field}.`);
-  return [...items];
+  // Purchase arrays are immutable ordered snapshots. Do not deduplicate or
+  // filter their values through today's live shopping or pantry rows.
+  return [...value] as string[];
 }
 
 /** Validates and copies persisted shopping state without dropping record metadata. */
@@ -136,8 +136,8 @@ export function validateShoppingState(value: unknown): ShoppingState {
       id: requiredString(entry.id, 'purchase ID'),
       listId: requiredString(entry.listId, 'purchase list ID'),
       purchaseCycleId: requiredString(entry.purchaseCycleId, 'purchase cycle ID'),
-      itemIds: uniqueStrings(entry.itemIds, 'purchase item IDs'),
-      pantryItemIds: uniqueStrings(entry.pantryItemIds, 'purchase pantry item IDs'),
+      itemIds: stringIds(entry.itemIds, 'purchase item IDs'),
+      pantryItemIds: stringIds(entry.pantryItemIds, 'purchase pantry item IDs'),
       purchasedAt: timestamp(entry.purchasedAt, 'purchase time')
     };
   });
@@ -175,9 +175,8 @@ export function validateShoppingState(value: unknown): ShoppingState {
       throw new Error('Shopping data has invalid purchases.');
     }
     purchaseIds.add(purchase.id);
-    if (purchase.itemIds.some((id) => itemById.get(id)?.listId !== purchase.listId)) {
-      throw new Error('Shopping data has a purchase with unrelated items.');
-    }
+    // Purchase item/pantry IDs are immutable historical snapshots. Rows may be
+    // removed or absent after a later cycle, so they are not live references.
   }
 
   return { lists, cycles, items, purchases };

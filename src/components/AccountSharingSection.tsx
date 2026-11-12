@@ -1,6 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useAppState } from '@/state/AppState';
+import { shareNativeBackup } from '@/storage/backupTransfer';
 import {
   acceptWorkspaceInvitation,
   createHousehold,
@@ -17,19 +19,34 @@ import {
   registerAccount,
   removeWorkspaceMember,
   setAccountApiUrl,
+  setPowerSyncServiceUrl,
   subscribeAccountWorkspace
 } from '@/account/accountWorkspace';
 import type { AccountWorkspace, WorkspaceInvitation, WorkspaceMember } from '@/account/contracts';
 
 type AuthMode = 'login' | 'register';
 
+function safeConflictRecipe(raw: string): { title?: string; description?: string } {
+  try {
+    const value = JSON.parse(raw) as { title?: unknown; description?: unknown };
+    return {
+      ...(typeof value.title === 'string' ? { title: value.title } : {}),
+      ...(typeof value.description === 'string' ? { description: value.description } : {})
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function AccountSharingSection() {
+  const content = useAppState();
   const account = useSyncExternalStore(
     subscribeAccountWorkspace,
     getAccountWorkspaceSnapshot,
     getAccountWorkspaceSnapshot
   );
   const [apiUrlDraft, setApiUrlDraft] = useState('');
+  const [powerSyncUrlDraft, setPowerSyncUrlDraft] = useState('');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -53,6 +70,7 @@ export function AccountSharingSection() {
   }, []);
 
   useEffect(() => setApiUrlDraft(account.apiUrl), [account.apiUrl]);
+  useEffect(() => setPowerSyncUrlDraft(account.powerSyncUrl), [account.powerSyncUrl]);
 
   useEffect(() => {
     setOneTimeToken('');
@@ -116,6 +134,15 @@ export function AccountSharingSection() {
       await setAccountApiUrl(apiUrlDraft);
     } catch (error) {
       setInputError(error instanceof Error ? error.message : 'The API URL could not be saved.');
+    }
+  };
+
+  const savePowerSyncUrl = async () => {
+    setInputError('');
+    try {
+      await setPowerSyncServiceUrl(powerSyncUrlDraft);
+    } catch (error) {
+      setInputError(error instanceof Error ? error.message : 'The PowerSync Service URL could not be saved.');
     }
   };
 
@@ -219,6 +246,54 @@ export function AccountSharingSection() {
     });
   };
 
+  const signOut = async () => {
+    setInputError('');
+    try {
+      await content.prepareAccountExit();
+      await logoutAccount();
+    } catch {
+      // The account store publishes the user-facing error; local content stays archived.
+    }
+  };
+
+  const exportRecovery = async () => {
+    setInputError('');
+    try {
+      const json = await content.exportWorkspaceRecovery();
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const file = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(file);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `creative-cooking-recovery-${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } else {
+        await shareNativeBackup(json);
+      }
+    } catch (error) {
+      setInputError(error instanceof Error ? error.message : 'The workspace recovery file could not be created.');
+    }
+  };
+
+  const mergeGuest = async () => {
+    setInputError('');
+    try {
+      await content.mergeGuestContent();
+    } catch (error) {
+      setInputError(error instanceof Error ? error.message : 'Local cooking data could not be merged.');
+    }
+  };
+
+  const keepGuest = async () => {
+    setInputError('');
+    try {
+      await content.keepGuestContent();
+    } catch (error) {
+      setInputError(error instanceof Error ? error.message : 'The local copy choice could not be saved.');
+    }
+  };
+
   const toggleSpace = (spaceId: string) => {
     setInputError('');
     setOneTimeToken('');
@@ -235,13 +310,13 @@ export function AccountSharingSection() {
     <View style={styles.section}>
       <Text accessibilityRole="header" style={styles.sectionTitle}>Account & sharing</Text>
       <Text style={styles.sectionSubtitle}>
-        Use an account for personal workspaces and household membership. Cooking content is still stored on this device and is not shared yet. Provider API keys stay on this device.
+        Keep cooking locally without an account, or use your personal workspace and optional household spaces. Chats and personal preferences follow your personal workspace; provider API keys and device choices stay on this device.
       </Text>
       <View style={styles.body}>
         <View style={styles.disclosure}>
           <Text style={styles.disclosureTitle}>What an account stores</Text>
           <Text style={styles.help}>
-            The service stores your account, session and household membership details. Cooking data has not been connected to households. When content sharing is added, service operators and authorized household members will be able to read it; it will not be end-to-end encrypted.
+            Recipes, pantry and shopping in a household workspace are stored on the service and readable by service operators and authorized household members. Chats, allergies, meal context, system prompt and city sync only to your owner-only personal workspace. The service can read this data; it is not end-to-end encrypted. Provider API keys, provider/model and dictation choices, active chat selection, and sync endpoint settings stay on this device.
           </Text>
         </View>
 
@@ -273,6 +348,25 @@ export function AccountSharingSection() {
           Leave this blank to use the app locally without an account. Remote services must use HTTPS; HTTP is accepted only for localhost development. Sign out before changing the API address.
         </Text>
 
+        <Text style={styles.label}>PowerSync Service URL</Text>
+        <View style={styles.inline}>
+          <TextInput
+            accessibilityLabel="PowerSync Service URL"
+            value={powerSyncUrlDraft}
+            onChangeText={setPowerSyncUrlDraft}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            placeholder="https://sync.example.com"
+            placeholderTextColor="#94a3b8"
+            style={styles.input}
+          />
+          <Pressable accessibilityRole="button" accessibilityLabel="Save PowerSync Service URL" disabled={busy} onPress={() => void savePowerSyncUrl()} style={[styles.smallButton, busy && styles.disabledButton]}>
+            <Text style={styles.smallButtonText}>Save</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.help}>This device-only address is separate from the account API. Leave it blank to keep account workspaces local until a sync service is configured. HTTP is accepted only for localhost development.</Text>
+
         <View accessibilityLiveRegion="polite" style={styles.statusBox}>
           <Text style={styles.statusTitle}>
             {account.status === 'loading' || account.status === 'restoring' ? 'Checking account…' :
@@ -283,6 +377,8 @@ export function AccountSharingSection() {
           </Text>
           {!!account.notice && <Text style={styles.success}>{account.notice}</Text>}
           {!!account.error && <Text style={styles.error}>{account.error}</Text>}
+          {!!content.storageError && <Text style={styles.error}>{content.storageError}</Text>}
+          {!!content.contentSyncError && <Text style={styles.error}>{content.contentSyncError}</Text>}
           {!!inputError && <Text style={styles.error}>{inputError}</Text>}
         </View>
 
@@ -291,7 +387,7 @@ export function AccountSharingSection() {
             <Pressable accessibilityRole="button" accessibilityLabel="Check account connection" disabled={busy} onPress={() => void run(refreshAccountWorkspace)} style={[styles.primaryButton, busy && styles.disabledButton]}>
               <Text style={styles.primaryButtonText}>{busy ? 'Checking…' : 'Check connection'}</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Sign out from saved session" disabled={busy} onPress={() => void run(logoutAccount)} style={[styles.smallButton, busy && styles.disabledButton]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Sign out from saved session" disabled={busy} onPress={() => void run(signOut)} style={[styles.smallButton, busy && styles.disabledButton]}>
               <Text style={styles.smallButtonText}>Sign out</Text>
             </Pressable>
           </View>
@@ -355,11 +451,9 @@ export function AccountSharingSection() {
               <Pressable accessibilityRole="button" accessibilityLabel="Check account and household access" disabled={busy} onPress={() => void run(refreshAccountWorkspace)} style={[styles.smallButton, busy && styles.disabledButton]}>
                 <Text style={styles.smallButtonText}>Check access</Text>
               </Pressable>
-              <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={busy} onPress={() => void run(logoutAccount)} style={[styles.smallButton, busy && styles.disabledButton]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={busy} onPress={() => void run(signOut)} style={[styles.smallButton, busy && styles.disabledButton]}>
                 <Text style={styles.smallButtonText}>Sign out</Text>
               </Pressable>
-            </View>
-
             <View style={styles.subsection}>
               <Text accessibilityRole="header" style={styles.subsectionTitle}>Workspaces</Text>
               {account.spaces.map((space) => (
@@ -375,7 +469,99 @@ export function AccountSharingSection() {
                   )}
                 </View>
               ))}
-              <Text style={styles.help}>These workspaces currently manage account membership only. Your pantry, recipes, chats, preferences and provider keys remain on this device.</Text>
+            </View>
+
+            <View style={styles.subsection}>
+              <Text accessibilityRole="header" style={styles.subsectionTitle}>Cooking workspace</Text>
+              <Text testID="cooking-workspace-status" style={styles.statusTitle}>{content.contentWorkspaceName} · {content.contentSyncStatus.replaceAll('-', ' ')}</Text>
+              {!!content.contentWorkspaceRole && <Text style={styles.help}>Your role here is {content.contentWorkspaceRole}{content.contentWorkspaceRole === 'viewer' ? ' (read only)' : ''}.</Text>}
+              {content.contentSyncStatus === 'offline-unverified' && <Text style={styles.warning}>This is a saved local copy. Current membership has not been confirmed while offline.</Text>}
+              {content.personalContentConflicts.length > 0 && (
+                <View style={styles.recoveryBox}>
+                  <Text style={styles.label}>Personal data changes need review</Text>
+                  <Text style={styles.help}>Your personal workspace accepted a newer value. The attempted changes remain in your local recovery export.</Text>
+                  {content.personalContentConflicts.slice(0, 8).map((conflict) => (
+                    <View key={conflict.id} style={styles.memberRow}>
+                      <Text style={styles.spaceName}>{conflict.field_key || conflict.entity_type || conflict.entity_identity}</Text>
+                      <Text style={styles.help}>{conflict.reason} · current version {conflict.current_version ?? 'unknown'}, edit based on {conflict.base_version ?? 'no prior version'}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              {account.spaces.map((space) => (
+                <Pressable
+                  key={`active-${space.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${space.name} for cooking`}
+                  accessibilityState={{ selected: content.contentWorkspaceId === space.id }}
+                  disabled={busy || content.contentWorkspaceId === space.id}
+                  onPress={() => void content.selectContentWorkspace(space.id).catch((error) => setInputError(error instanceof Error ? error.message : 'Workspace could not be opened.'))}
+                  style={[styles.spaceChoice, content.contentWorkspaceId === space.id && styles.spaceChoiceActive]}
+                >
+                  <Text style={[styles.spaceChoiceName, content.contentWorkspaceId === space.id && styles.spaceChoiceNameActive]}>{space.name}</Text>
+                  <Text style={[styles.help, content.contentWorkspaceId === space.id && styles.spaceChoiceNameActive]}>{space.kind} · {space.role}</Text>
+                </Pressable>
+              ))}
+              <Text style={styles.help}>A workspace switch changes which recipes, pantry and shopping list you are viewing. Chats, allergies, meal context, system prompt and city remain in your personal workspace and are never sent to a household.</Text>
+              {content.guestContentAvailable && (
+                <View style={styles.recoveryBox}>
+                  <Text style={styles.label}>Local cooking data is available</Text>
+                  {content.guestContentDecision === 'merge' ? (
+                    <Text style={styles.success}>Local cooking records were merged into this workspace. The original local copy remains saved.</Text>
+                  ) : content.guestContentDecision === 'keep' ? (
+                    <Text style={styles.help}>You chose to keep the local copy separate. It remains available on this device.</Text>
+                  ) : content.guestContentDecision === 'in-progress' ? (
+                    <>
+                      <Text style={styles.warning}>The local records and source archive are saved, but the server has not accepted every workspace upload yet. This import stays incomplete until all records, including shopping history, are accepted.</Text>
+                      {content.contentWorkspaceRole !== 'viewer' && (
+                        <Pressable accessibilityRole="button" accessibilityLabel={`Continue local cooking import into ${content.contentWorkspaceName}`} disabled={busy} onPress={() => void mergeGuest()} style={[styles.smallButton, busy && styles.disabledButton]}>
+                          <Text style={styles.smallButtonText}>Continue import</Text>
+                        </Pressable>
+                      )}
+                      <Text style={styles.help}>If the workspace shows attention or an upload error, export the recovery file to keep the pending details.</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.help}>Choose whether to add a separate copy to {content.contentWorkspaceName} or keep local cooking separate. Recipe and shopping IDs are remapped for this workspace so guest copies cannot collide.</Text>
+                      <View style={styles.buttonRow}>
+                        {content.contentWorkspaceRole !== 'viewer' && (
+                          <Pressable accessibilityRole="button" accessibilityLabel={`Merge local cooking into ${content.contentWorkspaceName}`} disabled={busy} onPress={() => void mergeGuest()} style={[styles.primaryButton, busy && styles.disabledButton]}>
+                            <Text style={styles.primaryButtonText}>Merge into workspace</Text>
+                          </Pressable>
+                        )}
+                        <Pressable accessibilityRole="button" accessibilityLabel="Keep local cooking separate" disabled={busy} onPress={() => void keepGuest()} style={[styles.smallButton, busy && styles.disabledButton]}>
+                          <Text style={styles.smallButtonText}>Keep local copy</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                  )}
+                </View>
+              )}
+              <View style={styles.buttonRow}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Export workspace recovery file" onPress={() => void exportRecovery()} style={styles.smallButton}>
+                  <Text style={styles.smallButtonText}>Export recovery file</Text>
+                </Pressable>
+                <Text style={styles.help}>Includes this workspace's local copy, pending edits, conflicts and saved archives.</Text>
+              </View>
+            </View>
+
+            {content.localRecipeConflicts.length > 0 && (
+              <View style={styles.subsection}>
+                <Text accessibilityRole="header" style={styles.subsectionTitle}>Recipe edits to review</Text>
+                {content.localRecipeConflicts.map((conflict) => {
+                  const attempted = safeConflictRecipe(conflict.attempted_json);
+                  const current = safeConflictRecipe(conflict.current_json);
+                  return (
+                    <View key={conflict.id} style={styles.recoveryBox}>
+                      <Text style={styles.label}>{attempted.title || current.title || conflict.recipe_id}</Text>
+                      <Text style={styles.warning}>{conflict.reason}</Text>
+                      <Text style={styles.help}>Your version: {attempted.title || 'Recipe removed'}{attempted.description ? ` · ${attempted.description}` : ''}</Text>
+                      <Text style={styles.help}>Workspace version: {current.title || 'Recipe removed'}{current.description ? ` · ${current.description}` : ''}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
             </View>
 
             <View style={styles.subsection}>
@@ -437,7 +623,7 @@ export function AccountSharingSection() {
                           </Pressable>
                         ))}
                       </View>
-                      <Text style={styles.help}>Editors and viewers currently receive membership access only. Cooking content is not shared by these roles yet.</Text>
+                      <Text style={styles.help}>Editors can update workspace cooking records. Viewers can read them but cannot save changes. Service operators can read workspace records.</Text>
                       <Pressable accessibilityRole="button" accessibilityLabel={`Invite member to ${space.name}`} disabled={busy || !inviteEmail.trim()} onPress={() => void sendInvite(space)} style={[styles.primaryButton, (busy || !inviteEmail.trim()) && styles.disabledButton]}>
                         <Text style={styles.primaryButtonText}>{busy ? 'Working…' : 'Create invitation'}</Text>
                       </Pressable>
@@ -448,7 +634,7 @@ export function AccountSharingSection() {
                           <Pressable accessibilityRole="button" accessibilityLabel="Copy invitation token" onPress={() => void copyInviteToken()} style={styles.smallButton}>
                             <Text style={styles.smallButtonText}>{copied ? 'Copied' : 'Copy token'}</Text>
                           </Pressable>
-                          <Text style={styles.warning}>Send this token only to {oneTimeInviteEmail || 'the invited email address'}. It is shown once here, expires in seven days and is not saved by the app.</Text>
+                      <Text style={styles.warning}>Send this token only to {oneTimeInviteEmail || 'the invited email address'}. It is shown once here, expires in seven days and is not saved by the app.</Text>
                         </View>
                       ) : null}
                       {invitations.length > 0 && (
@@ -518,6 +704,11 @@ const styles = StyleSheet.create({
   subsection: { gap: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
   subsectionTitle: { color: '#172033', fontSize: 15, fontWeight: '800' },
   spaceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  spaceChoice: { borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', borderRadius: 12, padding: 11, gap: 2 },
+  spaceChoiceActive: { borderColor: '#172033', backgroundColor: '#172033' },
+  spaceChoiceName: { color: '#172033', fontWeight: '800' },
+  spaceChoiceNameActive: { color: '#fff' },
+  recoveryBox: { backgroundColor: '#f8fafc', borderRadius: 12, padding: 12, gap: 7, borderWidth: 1, borderColor: '#cbd5e1' },
   spaceSummary: { flex: 1, gap: 3 },
   spaceName: { color: '#172033', fontWeight: '700' },
   detailSection: { gap: 11, backgroundColor: '#f8fafc', borderRadius: 12, padding: 12 },

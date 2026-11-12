@@ -1,16 +1,19 @@
 export class AccountApiError extends Error {
   readonly status: number;
   readonly code: string | null;
+  readonly payload: unknown;
 
   constructor(
     message: string,
     status: number,
-    code: string | null
+    code: string | null,
+    payload: unknown = null
   ) {
     super(message);
     this.name = 'AccountApiError';
     this.status = status;
     this.code = code;
+    this.payload = payload;
   }
 }
 
@@ -105,7 +108,7 @@ export async function accountApiRequest<T>(
     const errorPayload = (payload as { error?: { code?: unknown; message?: unknown } } | null)?.error;
     const code = typeof errorPayload?.code === 'string' ? errorPayload.code : null;
     const message = typeof errorPayload?.message === 'string' ? errorPayload.message : `The account service returned ${response.status}.`;
-    throw new AccountApiError(message, response.status, code);
+    throw new AccountApiError(message, response.status, code, payload);
   }
 
   return payload as T;
