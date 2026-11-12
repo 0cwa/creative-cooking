@@ -63,6 +63,7 @@ function auditPage(page, audit, privateTargets = {}) {
         ? parsedBody.operations.filter((operation) => operation?.type === 'recipe.save').map((operation) => ({
             opId: operation.opId,
             recipeId: operation.recipe?.id ?? null,
+            title: operation.recipe?.title ?? null,
             baseVersion: operation.baseVersion ?? null
           }))
         : [],
@@ -174,6 +175,15 @@ function auditPage(page, audit, privateTargets = {}) {
       }).catch(() => undefined);
     }
   });
+}
+
+function createAudit() {
+  return {
+    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
+    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false,
+    accountFailures: [], providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [],
+    pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
+  };
 }
 
 async function register(page, email, password) {
@@ -1499,5 +1509,213 @@ test('built PWA migrates guest history and synchronizes household records betwee
     ]);
     await Promise.race([closeContexts, new Promise((resolve) => setTimeout(resolve, 5_000))]);
     await browser.close().catch(() => undefined);
+  }
+});
+
+test('recipe conflicts preserve both versions and allow a restart-safe copy resolution', async ({ browser }) => {
+  test.skip(!enabled, 'Set CONTENT_SYNC_E2E=1 and start the local API and PowerSync Service to run this acceptance path.');
+  test.setTimeout(300_000);
+
+  const runId = `${process.env.CONTENT_SYNC_RUN_ID ?? `cc-recipe-${Date.now()}`}-recipe-${randomBytes(4).toString('hex')}`;
+  const ownerEmail = `${runId}-owner@example.test`;
+  const memberEmail = `${runId}-editor@example.test`;
+  const password = randomBytes(24).toString('base64url');
+  const householdName = `Recipe Conflict ${runId.slice(-8)}`;
+  const baseTitle = `Shared base ${runId.slice(-8)}`;
+  const ownerTitle = `Owner version ${runId.slice(-8)}`;
+  const memberTitle = `Editor version ${runId.slice(-8)}`;
+  const at = '2026-10-15T10:00:00.000Z';
+  const guestState = {
+    pantry: [],
+    recipes: [{
+      id: 'conflict-base-recipe',
+      title: baseTitle,
+      description: 'Shared starting description.',
+      portions: 2,
+      ingredients: [{ id: 'same-scoped-ingredient', name: 'lentils', amount: '1 cup' }],
+      steps: ['Soak the lentils.', 'Cook until soft.'],
+      stepIds: ['same-scoped-step-one', 'same-scoped-step-two'],
+      notes: ['Shared starting note.'],
+      createdAt: at,
+      updatedAt: at
+    }],
+    chatMessages: [],
+    chatHistory: [],
+    activeConversationId: null,
+    mealContext: { willingToShop: true, portions: 2, cooks: ['medium'] },
+    settings: {
+      systemPrompt: '', allergies: [], sendLocalTime: false, city: '',
+      providerId: 'openrouter', model: 'openrouter/free', dictationEngine: 'browser'
+    }
+  };
+  const ownerAudit = createAudit();
+  const memberAudit = createAudit();
+  const ownerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const memberContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+
+  try {
+    await ownerContext.addInitScript((state) => {
+      if (window.localStorage.getItem('creative-cooking-state-v1') === null) {
+        window.localStorage.setItem('creative-cooking-state-v1', JSON.stringify(state));
+      }
+    }, guestState);
+    const owner = await ownerContext.newPage();
+    auditPage(owner, ownerAudit);
+    await owner.goto(routeUrl('settings'));
+    await configureApi(owner);
+    await register(owner, ownerEmail, password);
+
+    await owner.getByLabel('Household name').fill(householdName);
+    await owner.getByRole('button', { name: 'Create household' }).click();
+    const ownerHouseholdChoice = owner.getByRole('button', { name: `Use ${householdName} for cooking` });
+    await expect(ownerHouseholdChoice).toBeVisible({ timeout: 30_000 });
+    await ownerHouseholdChoice.click();
+    await expect(owner.getByTestId('cooking-workspace-status')).toContainText(householdName, { timeout: 30_000 });
+    await owner.getByRole('button', { name: `Merge local cooking into ${householdName}` }).click();
+    await expect(owner.getByText('Local cooking records were merged into this workspace. The original local copy remains saved.')).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => ownerAudit.mutationRequests.some((request) => (
+      request.recipeSaves.some((save) => save.title === baseTitle)
+        && ownerAudit.mutationResponses.some((response) => response.mutationId === request.mutationId && response.status === 200)
+    )), { timeout: 90_000 }).toBe(true);
+
+    await owner.goto(routeUrl('recipes'));
+    await expect(owner.getByRole('button', { name: `Open recipe ${baseTitle}` })).toBeVisible({ timeout: 30_000 });
+    await openSettings(owner, true, householdName);
+    await owner.getByRole('button', { name: `View members of ${householdName}` }).click();
+    await owner.getByLabel(`Invitation email for ${householdName}`).fill(memberEmail);
+    await owner.getByRole('button', { name: 'Invite as editor' }).click();
+    await owner.getByRole('button', { name: `Invite member to ${householdName}` }).click();
+    const inviteToken = await owner.getByLabel('One-time invitation token').inputValue();
+    expect(inviteToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    const member = await memberContext.newPage();
+    auditPage(member, memberAudit);
+    await member.goto(routeUrl('settings'));
+    await configureApi(member);
+    await register(member, memberEmail, password);
+    await member.getByLabel('Invitation token').fill(inviteToken);
+    await member.getByRole('button', { name: 'Accept invitation' }).click();
+    await member.getByRole('button', { name: `Use ${householdName} for cooking` }).click();
+    await expect(member.getByText(/Your role here is editor/)).toBeVisible({ timeout: 30_000 });
+
+    for (const [clientName, page] of [['owner', owner], ['member', member]]) {
+      await page.goto(routeUrl('recipes'));
+      await expect(page.getByRole('button', { name: `Open recipe ${baseTitle}` })).toBeVisible({ timeout: 90_000 });
+      await page.goto(routeUrl('settings'));
+      await expect(page.getByTestId('cooking-workspace-status')).toContainText('synced', { timeout: 90_000 });
+      await page.goto(routeUrl('recipes'));
+      await expect(page.getByRole('button', { name: `Open recipe ${baseTitle}` }), `${clientName} should retain the shared recipe before disconnecting`).toBeVisible({ timeout: 30_000 });
+    }
+
+    await ownerContext.setOffline(true);
+    await memberContext.setOffline(true);
+    const editRecipe = async (page, title, description, ingredient, step, note) => {
+      await page.getByLabel(`Open recipe ${baseTitle}`).click();
+      await expect(page.getByLabel('Close recipe')).toBeVisible({ timeout: 30_000 });
+      await page.getByLabel(`Edit recipe ${baseTitle}`).click();
+      await expect(page.getByLabel('Recipe title')).toBeVisible({ timeout: 30_000 });
+      await page.getByLabel('Recipe title').fill(title);
+      await page.getByLabel('Recipe description').fill(description);
+      await page.getByLabel('Recipe ingredients').fill(`1 cup ${ingredient}\n1 tbsp olive oil`);
+      await page.getByLabel('Recipe method').fill(`1. ${step}\n2. Simmer until tender.`);
+      await page.getByLabel('Recipe notes').fill(note);
+      await page.getByLabel('Save recipe changes').click();
+      await expect(page.getByRole('dialog').getByText(title, { exact: true })).toBeVisible();
+      await page.getByLabel('Close recipe').click();
+    };
+    await editRecipe(owner, ownerTitle, 'Owner description retained.', 'owner lentils', 'Owner method retained.', 'Owner note retained.');
+    await editRecipe(member, memberTitle, 'Editor description retained.', 'editor lentils', 'Editor method retained.', 'Editor note retained.');
+    await owner.reload();
+    await member.reload();
+    await expect(owner.getByRole('button', { name: `Open recipe ${ownerTitle}` })).toBeVisible({ timeout: 30_000 });
+    await expect(member.getByRole('button', { name: `Open recipe ${memberTitle}` })).toBeVisible({ timeout: 30_000 });
+    markStage('both editors changed the same shared recipe offline and retained their local edits through reload');
+
+    await ownerContext.setOffline(false);
+    await restoreAccountConnection(owner, ownerEmail);
+    const ownerAccepted = (request) => request.recipeSaves.some((save) => save.title === ownerTitle);
+    await expect.poll(() => ownerAudit.mutationRequests.some((request) => (
+      ownerAccepted(request) && ownerAudit.mutationResponses.some((response) => response.mutationId === request.mutationId && response.status === 200)
+    )), { timeout: 90_000 }).toBe(true);
+    const ownerSave = ownerAudit.mutationRequests.find(ownerAccepted)?.recipeSaves.find((save) => save.title === ownerTitle);
+    expect(ownerSave?.baseVersion).toBe(1);
+
+    await memberContext.setOffline(false);
+    await restoreAccountConnection(member, memberEmail);
+    const memberAttempt = (request) => request.recipeSaves.some((save) => save.title === memberTitle);
+    await expect.poll(() => memberAudit.mutationFailures.some((failure) => (
+      failure.errorCode === 'RECIPE_VERSION_CONFLICT'
+        && memberAudit.mutationRequests.some((request) => request.mutationId === failure.mutationId && memberAttempt(request))
+    )), { timeout: 90_000 }).toBe(true);
+    const attemptedSave = memberAudit.mutationRequests.find(memberAttempt)?.recipeSaves.find((save) => save.title === memberTitle);
+    expect(attemptedSave?.recipeId).toBe(ownerSave?.recipeId);
+    expect(attemptedSave?.baseVersion).toBe(1);
+
+    await member.goto(routeUrl('settings'));
+    const conflictCard = member.locator('[data-testid^="recipe-conflict-"]').first();
+    await expect(conflictCard).toBeVisible({ timeout: 30_000 });
+    await expect(conflictCard).toContainText(memberTitle);
+    await expect(conflictCard).toContainText('Editor description retained.');
+    await expect(conflictCard).toContainText(ownerTitle);
+    await expect(conflictCard).toContainText('Owner description retained.');
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText('attention');
+    await conflictCard.getByRole('button', { name: 'Save my version as a new recipe' }).click();
+    await expect(conflictCard.getByText('Your version is saved as a separate recipe.')).toBeVisible();
+    await expect(member.getByText('Local cooking changes are saved on this device.', { exact: true })).toBeVisible({ timeout: 30_000 });
+    markStage('the stale recipe response showed both full versions and the member saved the attempted version as a new recipe');
+
+    await memberContext.setOffline(true);
+    await member.goto(routeUrl('recipes'));
+    await expect(member.getByRole('button', { name: `Open recipe ${memberTitle}` })).toBeVisible();
+    await member.reload();
+    await expect(member.getByRole('button', { name: `Open recipe ${memberTitle}` })).toBeVisible({ timeout: 30_000 });
+    await member.goto(routeUrl('settings'));
+    const restoredConflict = member.locator('[data-testid^="recipe-conflict-"]').first();
+    await expect(restoredConflict).toBeVisible();
+    await expect(restoredConflict.getByText('Your version is saved as a separate recipe.')).toBeVisible();
+    await restoredConflict.getByRole('button', { name: 'Keep workspace version' }).click();
+    await expect(member.locator('[data-testid^="recipe-conflict-"]')).toHaveCount(0);
+    await member.goto(routeUrl('recipes'));
+    await expect(member.getByRole('button', { name: `Open recipe ${ownerTitle}` })).toBeVisible({ timeout: 30_000 });
+    await member.reload();
+    await expect(member.getByRole('button', { name: `Open recipe ${ownerTitle}` })).toBeVisible({ timeout: 30_000 });
+
+    await member.goto(routeUrl('settings'));
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText('offline unverified', { timeout: 30_000 });
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText('membership unverified');
+    const [recoveryDownload] = await Promise.all([
+      member.waitForEvent('download'),
+      member.getByRole('button', { name: 'Export workspace recovery file' }).click()
+    ]);
+    const recovery = JSON.parse(await readFile(await recoveryDownload.path(), 'utf8'));
+    expect(Array.isArray(recovery.blocked)).toBe(true);
+    const attemptedConflictIsRecoverable = recovery.blocked.some((row) => {
+      try {
+        return JSON.parse(row.payload_json).operations.some((operation) => (
+          operation.type === 'recipe.save' && operation.recipe?.title === memberTitle
+        ));
+      } catch { return false; }
+    });
+    expect(attemptedConflictIsRecoverable).toBe(true);
+    markStage('the chosen workspace recipe survived offline reload, while the original blocked request remained exportable');
+
+    await memberContext.setOffline(false);
+    await restoreAccountConnection(member, memberEmail);
+    await expect.poll(() => memberAudit.mutationRequests.some((request) => (
+      request.recipeSaves.some((save) => save.title === memberTitle && save.recipeId !== ownerSave?.recipeId && save.baseVersion === null)
+        && memberAudit.mutationResponses.some((response) => response.mutationId === request.mutationId && response.status === 200)
+    )), { timeout: 90_000 }).toBe(true);
+
+    await owner.goto(routeUrl('recipes'));
+    await expect(owner.getByRole('button', { name: `Open recipe ${ownerTitle}` })).toBeVisible({ timeout: 90_000 });
+    await expect(owner.getByRole('button', { name: `Open recipe ${memberTitle}` })).toBeVisible({ timeout: 90_000 });
+    await member.goto(routeUrl('recipes'));
+    await expect(member.getByRole('button', { name: `Open recipe ${ownerTitle}` })).toBeVisible({ timeout: 90_000 });
+    await expect(member.getByRole('button', { name: `Open recipe ${memberTitle}` })).toBeVisible({ timeout: 90_000 });
+    expect(memberAudit.mutationRequests.some((request) => request.recipeSaves.some((save) => save.title === ownerTitle))).toBe(false);
+    expect(ownerAudit.pageErrors + memberAudit.pageErrors).toBe(0);
+    markStage('the accepted workspace recipe and the editor recovery copy converged to both clients');
+  } finally {
+    await Promise.allSettled([memberContext.close(), ownerContext.close()]);
   }
 });

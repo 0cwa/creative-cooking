@@ -4,6 +4,7 @@ import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversa
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
 import { normalizeRecipes } from '@/domain/recipeIdentity';
+import { recipeCopyFromConflict, sameRecipeConflictCopy } from '@/domain/recipeConflict';
 import {
   appendShoppingItems,
   applyShoppingPurchase,
@@ -109,6 +110,8 @@ type AppStateApi = PersistedState & {
   guestContentAvailable: boolean;
   guestContentDecision: 'merge' | 'keep' | 'in-progress' | null;
   localRecipeConflicts: import('@/content/useContentRuntime').LocalRecipeConflict[];
+  saveAttemptedRecipeAsCopy(conflictId: string): Recipe;
+  keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
   personalContentConflicts: import('@/content/contentStore').PersonalContentConflict[];
   recoveryArchives: import('@/content/contentStore').ArchivedWorkspace[];
   retryStorage(): Promise<boolean>;
@@ -306,6 +309,34 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     updateAppState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
   }, [ensureSharedEditAllowed, updateAppState]);
 
+  const saveAttemptedRecipeAsCopy = useCallback((conflictId: string): Recipe => {
+    if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
+    const conflict = content.recipeConflicts.find((item) => item.id === conflictId);
+    if (!conflict) throw new Error('This recipe conflict is no longer available. Export recovery data before continuing.');
+    const copy = recipeCopyFromConflict(conflict);
+    if (!copy) throw new Error('This attempted operation cannot be copied as a recipe. Its full details remain in the recovery export.');
+
+    const existing = appStateRef.current.recipes.find((recipe) => recipe.id === copy.id);
+    if (existing) {
+      if (!sameRecipeConflictCopy(existing, copy)) {
+        throw new Error('A different recipe already uses this recovery identity. The conflict remains available for export.');
+      }
+      return existing;
+    }
+
+    const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...input } = copy;
+    validateRecipe(input);
+    updateAppState((current) => current.recipes.some((recipe) => recipe.id === copy.id)
+      ? current
+      : { ...current, recipes: [copy, ...current.recipes] });
+    return copy;
+  }, [content.recipeConflicts, ensureSharedEditAllowed, updateAppState, validateRecipe]);
+
+  const keepWorkspaceRecipeVersion = useCallback(async (conflictId: string) => {
+    await content.flushCurrentWorkspace();
+    await content.keepWorkspaceRecipeVersion(conflictId);
+  }, [content.keepWorkspaceRecipeVersion, content.flushCurrentWorkspace]);
+
   const createShoppingList = useCallback((input: NewShoppingList) => {
     if (!ensureSharedEditAllowed()) return;
     updateAppState((current) => ({ ...current, shopping: createShoppingListCommand(current.shopping, input) }));
@@ -489,6 +520,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       guestContentAvailable: content.guestAdoption.available,
       guestContentDecision: content.guestAdoption.decision,
       localRecipeConflicts: content.recipeConflicts,
+      saveAttemptedRecipeAsCopy,
+      keepWorkspaceRecipeVersion,
       personalContentConflicts: content.personalConflicts,
       recoveryArchives: content.archives,
       retryStorage,
@@ -534,6 +567,8 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       hydrated,
       storageError,
       content,
+      saveAttemptedRecipeAsCopy,
+      keepWorkspaceRecipeVersion,
       retryStorage,
       addPantryItems,
       updatePantryByName,
