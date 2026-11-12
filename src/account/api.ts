@@ -19,21 +19,30 @@ export class AccountApiError extends Error {
 
 export class AccountTransportError extends Error {
   readonly mutationMayHaveCompleted: boolean;
+  readonly timedOut: boolean;
 
-  constructor(mutationMayHaveCompleted: boolean, action = 'this action') {
-    super(mutationMayHaveCompleted
-      ? `The connection ended before the service confirmed ${action}. It may have completed. Check the current account state before trying again; the app will not repeat the request automatically.`
-      : 'The account service could not be reached. Check the API address and connection, then retry.');
+  constructor(mutationMayHaveCompleted: boolean, action = 'this action', timedOut = false) {
+    super(timedOut
+      ? mutationMayHaveCompleted
+        ? `The account service did not confirm ${action} before the request timed out. It may have completed. Check the current account state before trying again; the app will not repeat the request automatically.`
+        : 'The account service did not respond before the request timed out. Check the API address and connection, then retry.'
+      : mutationMayHaveCompleted
+        ? `The connection ended before the service confirmed ${action}. It may have completed. Check the current account state before trying again; the app will not repeat the request automatically.`
+        : 'The account service could not be reached. Check the API address and connection, then retry.');
     this.name = 'AccountTransportError';
     this.mutationMayHaveCompleted = mutationMayHaveCompleted;
+    this.timedOut = timedOut;
   }
 }
+
+export const ACCOUNT_API_REQUEST_TIMEOUT_MS = 15_000;
 
 export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'DELETE';
   token?: string;
   body?: unknown;
   mutationLabel?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -79,37 +88,51 @@ export async function accountApiRequest<T>(
   if (options.body !== undefined) headers.set('Content-Type', 'application/json');
   if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
 
-  let response: Response;
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? ACCOUNT_API_REQUEST_TIMEOUT_MS;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
   try {
-    response = await fetchImpl(`${apiUrl}/v1${path}`, {
+    const response = await fetchImpl(`${apiUrl}/v1${path}`, {
       method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       credentials: 'omit',
       cache: 'no-store',
-      redirect: 'error'
+      redirect: 'error',
+      signal: controller.signal
     });
-  } catch {
-    throw new AccountTransportError(method !== 'GET', options.mutationLabel);
-  }
 
-  if (response.status === 204) return undefined as T;
+    if (response.status === 204) return undefined as T;
 
-  let payload: unknown = null;
-  try {
-    payload = await response.json();
-  } catch {
-    if (response.ok) {
-      throw new AccountApiError('The account service returned an unreadable response.', response.status, null);
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      if (controller.signal.aborted) {
+        throw new AccountTransportError(method !== 'GET', options.mutationLabel, timedOut);
+      }
+      if (response.ok) {
+        throw new AccountApiError('The account service returned an unreadable response.', response.status, null);
+      }
     }
-  }
 
-  if (!response.ok) {
-    const errorPayload = (payload as { error?: { code?: unknown; message?: unknown } } | null)?.error;
-    const code = typeof errorPayload?.code === 'string' ? errorPayload.code : null;
-    const message = typeof errorPayload?.message === 'string' ? errorPayload.message : `The account service returned ${response.status}.`;
-    throw new AccountApiError(message, response.status, code, payload);
-  }
+    if (!response.ok) {
+      const errorPayload = (payload as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+      const code = typeof errorPayload?.code === 'string' ? errorPayload.code : null;
+      const message = typeof errorPayload?.message === 'string' ? errorPayload.message : `The account service returned ${response.status}.`;
+      throw new AccountApiError(message, response.status, code, payload);
+    }
 
-  return payload as T;
+    return payload as T;
+  } catch (error) {
+    if (error instanceof AccountApiError || error instanceof AccountTransportError) throw error;
+    throw new AccountTransportError(method !== 'GET', options.mutationLabel, timedOut);
+  } finally {
+    clearTimeout(timeout);
+  }
 }

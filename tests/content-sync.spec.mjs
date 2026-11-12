@@ -8,6 +8,7 @@ const apiUrl = process.env.CONTENT_SYNC_API_URL ?? 'http://127.0.0.1:8788';
 const serviceUrl = process.env.CONTENT_SYNC_SERVICE_URL ?? 'http://127.0.0.1:8092';
 const privateChatCanary = 'PRIVATE_CHAT_CANARY_DO_NOT_UPLOAD';
 const privateAllergyCanary = 'Private allergy canary';
+const offlinePersonalChatCanary = 'OFFLINE_PERSONAL_CHAT_APPEND_CANARY';
 const providerKeyCanary = 'device-local-provider-key-canary-do-not-upload';
 
 function routeUrl(route) {
@@ -17,11 +18,12 @@ function routeUrl(route) {
 function redactFixtureSecrets(value) {
   return String(value)
     .replaceAll(privateChatCanary, '[private chat canary redacted]')
+    .replaceAll(offlinePersonalChatCanary, '[offline private chat canary redacted]')
     .replaceAll(providerKeyCanary, '[provider key canary redacted]')
     .replaceAll(privateAllergyCanary, '[private allergy canary redacted]');
 }
 
-function auditPage(page, audit) {
+function auditPage(page, audit, privateTargets = {}) {
   page.on('pageerror', (error) => {
     audit.pageErrors += 1;
     audit.pageErrorMessages.push(redactFixtureSecrets(error.message));
@@ -49,9 +51,10 @@ function auditPage(page, audit) {
     const operationTypes = Array.isArray(parsedBody?.operations)
       ? parsedBody.operations.map((operation) => operation?.type).filter((type) => typeof type === 'string')
       : [];
+    const spaceId = new URL(request.url()).pathname.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null;
     audit.mutationRequests.push({
       mutationId: typeof parsedBody?.mutationId === 'string' ? parsedBody.mutationId : null,
-      spaceId: new URL(request.url()).pathname.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null,
+      spaceId,
       operationTypes,
       personalPreferenceFields: Array.isArray(parsedBody?.operations)
         ? parsedBody.operations.filter((operation) => operation?.type === 'personal.preference.set').map((operation) => operation.field)
@@ -76,6 +79,22 @@ function auditPage(page, audit) {
         ? parsedBody.operations.filter((operation) => operation?.type === 'pantry.upsert').map(({ id, name, opId }) => ({ id, name, opId }))
         : []
     });
+    const operations = Array.isArray(parsedBody?.operations) ? parsedBody.operations : [];
+    if (privateTargets.offlineChat && operations.some((operation) => (
+      operation?.type === 'personal.chat.message.append'
+        && operation.message?.content === privateTargets.offlineChat
+    ))) {
+      if (spaceId === audit.personalSpaceId) audit.offlinePersonalChatUploaded = true;
+      else audit.privateDataLeaked = true;
+    }
+    if (privateTargets.offlineAllergy && operations.some((operation) => (
+      operation?.type === 'personal.allergy.set'
+        && operation.name === privateTargets.offlineAllergy.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
+        && operation.enabled === true
+    ))) {
+      if (spaceId === audit.personalSpaceId) audit.offlinePersonalAllergyUploaded = true;
+      else audit.privateDataLeaked = true;
+    }
     if (body.includes(providerKeyCanary)) {
       audit.providerDataLeaked = true;
       audit.providerLeakRequests.push({
@@ -260,6 +279,10 @@ test('built PWA migrates guest history and synchronizes household records betwee
   const historicalEffectName = `Historical effect must not run ${runId.slice(-8)}`;
   const householdEffectName = `Household proposal effect ${runId.slice(-8)}`;
   const deniedEffectName = `Denied proposal remains pending ${runId.slice(-8)}`;
+  const offlinePersonalCity = `Offline City ${runId.slice(-8)}`;
+  const offlinePersonalAllergy = `Offline allergy ${runId.slice(-8)}`;
+  const offlinePersonalChat = `${offlinePersonalChatCanary} ${runId.slice(-8)}`;
+  const offlineMealPortions = 6;
   const at = '2026-10-01T12:00:00.000Z';
   const legacy = {
     pantry: [],
@@ -329,7 +352,10 @@ test('built PWA migrates guest history and synchronizes household records betwee
       }
     }, legacy);
     const owner = await ownerContext.newPage();
-    auditPage(owner, ownerAudit);
+    auditPage(owner, ownerAudit, {
+      offlineChat: offlinePersonalChat,
+      offlineAllergy: offlinePersonalAllergy
+    });
     await owner.goto(routeUrl('shopping'));
     await expect(owner.getByText('Shopping list', { exact: true })).toBeVisible();
     await expect(owner.getByText(/Saved on this device only\.|Saved locally in Local on this device;/)).toBeVisible();
@@ -877,10 +903,9 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(ownerSecond.getByRole('button', { name: `Remove allergy ${privateAllergyCanary}` })).toBeVisible();
     markStage('second browser context restored the same personal conversation and preferences');
 
-    const offlinePersonalCity = `Offline City ${runId.slice(-8)}`;
     await openSettings(owner, true, householdName);
-    await ownerContext.route(`${apiUrl}/**`, (route) => route.abort('failed'));
-    await ownerContext.route(`${serviceUrl}/**`, (route) => route.abort('failed'));
+    await ownerContext.route('https://openrouter.ai/**', (route) => route.abort('failed'));
+    await ownerContext.setOffline(true);
     await owner.reload();
     await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(owner.getByTestId('cooking-workspace-status')).toContainText('Saved workspace (membership unverified)', { timeout: 30_000 });
@@ -890,16 +915,74 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await cityInput.fill(offlinePersonalCity);
     await expect(cityInput).toHaveValue(offlinePersonalCity);
     await expect(owner.getByTestId('offline-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+
+    const allergyInput = owner.getByRole('textbox', { name: 'Add allergies' });
+    await allergyInput.fill(offlinePersonalAllergy);
+    await owner.getByRole('button', { name: 'Add allergies' }).click();
+    await expect(owner.getByRole('button', { name: `Remove allergy ${offlinePersonalAllergy}` })).toBeVisible();
+    await expect(owner.getByTestId('offline-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+
+    await openChefWorkspace(owner);
+    await expect(owner.getByRole('button', { name: 'Edit meal context, 4 portions, 1 cooks' })).toBeVisible();
+    await owner.getByRole('button', { name: 'Edit meal context, 4 portions, 1 cooks' }).click();
+    await owner.getByRole('button', { name: 'Increase Portions' }).click();
+    await owner.getByRole('button', { name: 'Increase Portions' }).click();
+    await owner.getByRole('button', { name: 'Increase People cooking' }).click();
+    await owner.getByRole('radio', { name: 'Cook 2 energy: high' }).click();
+    await owner.getByRole('button', { name: 'Close meal context' }).click();
+    await expect(owner.getByRole('button', { name: `Edit meal context, ${offlineMealPortions} portions, 2 cooks` })).toBeVisible();
+    await owner.getByLabel('Message Chef').fill(offlinePersonalChat);
+    await owner.getByRole('button', { name: 'Send message' }).click();
+    await expect(owner.getByText(offlinePersonalChat, { exact: true })).toBeVisible();
+    await expect(owner.getByTestId('chef-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+
     await owner.reload();
+    await expect(owner.getByText(offlinePersonalChat, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByRole('button', { name: `Edit meal context, ${offlineMealPortions} portions, 2 cooks` })).toBeVisible();
+    await owner.goto(routeUrl('settings'));
     await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(owner.getByTestId('cooking-workspace-status')).toContainText('Saved workspace (membership unverified)', { timeout: 30_000 });
-    const restoredCityInput = owner.getByRole('textbox', { name: 'City', exact: true });
-    await expect(restoredCityInput).toHaveValue(offlinePersonalCity, { timeout: 30_000 });
-    markStage('private city preference survived an offline reload on the first device');
-    await ownerContext.unroute(`${apiUrl}/**`);
-    await ownerContext.unroute(`${serviceUrl}/**`);
-    await owner.getByRole('button', { name: 'Check account connection' }).click();
-    await expect(owner.getByText(`Signed in as ${ownerEmail}`, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByRole('textbox', { name: 'City', exact: true })).toHaveValue(offlinePersonalCity, { timeout: 30_000 });
+    await expect(owner.getByRole('button', { name: `Remove allergy ${offlinePersonalAllergy}` })).toBeVisible();
+    markStage('offline city, allergy, meal context, and chat edits survived a network-disabled browser reload');
+    await ownerContext.setOffline(false);
+    const signedInStatus = owner.getByText(`Signed in as ${ownerEmail}`, { exact: true });
+    const sessionStatus = owner.getByTestId('account-session-status');
+    const checkConnection = owner.getByRole('button', { name: 'Check account connection' });
+    let reconnectState = 'unknown';
+    try {
+      await expect.poll(async () => {
+        if (await sessionStatus.count() === 0) {
+          reconnectState = 'status-element-missing';
+          return false;
+        }
+        const label = (await sessionStatus.textContent())?.trim() ?? '';
+        if (!label) {
+          reconnectState = 'status-empty';
+          return false;
+        }
+        if (label.startsWith('Signed in as ')) {
+          reconnectState = 'signed-in';
+          return true;
+        }
+        if (label === 'Account could not be checked offline'
+          && await checkConnection.count() > 0
+          && await checkConnection.isEnabled()) {
+          reconnectState = 'retry-ready';
+          return true;
+        }
+        reconnectState = label === 'Session expired' ? 'expired'
+          : label === 'Not signed in' ? 'signed-out'
+            : label === 'Checking account…' ? 'restoring'
+              : label === 'Account could not be checked offline' ? 'offline-refreshing' : 'unknown';
+        return false;
+      }, { timeout: 30_000 }).toBe(true);
+    } catch {
+      throw new Error(`Account did not reach a retryable or signed-in state after reconnecting; visible session state was ${reconnectState}.`);
+    }
+    if (reconnectState === 'retry-ready') await checkConnection.click();
+    await expect(signedInStatus).toBeVisible({ timeout: 30_000 });
+    markStage('account membership was revalidated after connectivity returned');
     await expect(owner.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
     await expect.poll(() => ownerAudit.mutationResponses.some((response) => (
       response.status === 200 && ownerAudit.mutationRequests.some((request) => (
@@ -909,7 +992,20 @@ test('built PWA migrates guest history and synchronizes household records betwee
       ))
     )), { timeout: 90_000 }).toBe(true);
     await expect(ownerSecond.getByRole('textbox', { name: 'City', exact: true })).toHaveValue(offlinePersonalCity, { timeout: 90_000 });
-    markStage('private offline preference uploaded to the personal workspace and reached the second device');
+    await expect(ownerSecond.getByRole('button', { name: `Remove allergy ${offlinePersonalAllergy}` })).toBeVisible({ timeout: 90_000 });
+    expect(ownerAudit.offlinePersonalAllergyUploaded).toBe(true);
+    expect(ownerAudit.offlinePersonalChatUploaded).toBe(true);
+    const personalMealContextFields = new Set(ownerAudit.mutationRequests
+      .filter((request) => request.spaceId === ownerAudit.personalSpaceId)
+      .flatMap((request) => request.personalPreferenceFields));
+    expect(personalMealContextFields.has('mealContext.portions')).toBe(true);
+    expect(personalMealContextFields.has('mealContext.cooksCount')).toBe(true);
+    expect(personalMealContextFields.has('mealContext.cooks.1')).toBe(true);
+    await openChefWorkspace(ownerSecond);
+    await expect(ownerSecond.getByRole('button', { name: `Edit meal context, ${offlineMealPortions} portions, 2 cooks` })).toBeVisible({ timeout: 90_000 });
+    await expect(ownerSecond.getByText(privateChatCanary, { exact: true })).toBeVisible({ timeout: 90_000 });
+    await expect(ownerSecond.getByText(offlinePersonalChat, { exact: true })).toBeVisible({ timeout: 90_000 });
+    markStage('offline personal preferences, allergy, meal context, and chat reached the second owner context only through personal-space records');
 
     await openCookingWorkspace(owner, householdName);
     await expect(owner.getByTestId('pantry-screen').getByText(householdEffectName, { exact: true })).toHaveCount(1);
@@ -1037,6 +1133,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await openChefWorkspace(member);
     await expect(member.getByText('What sounds good?', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(member.getByText(privateChatCanary, { exact: true })).toHaveCount(0);
+    await expect(member.getByText(offlinePersonalChat, { exact: true })).toHaveCount(0);
     await expect(member.getByText(historicalEffectName, { exact: true })).toHaveCount(0);
     await openCookingWorkspace(member, householdName);
     await memberContext.setOffline(true);
@@ -1169,8 +1266,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
     for (const audit of browserAudits) {
       const count = (needle) => audit.consoleErrorMessages.filter((message) => message === needle).length;
       const failedNetworkRequests = audit.requestFailures.filter((failure) => failure.error === 'net::ERR_FAILED').length;
-      const offlineApiFailures = audit.requestFailures.filter((failure) => (
-        failure.error === 'net::ERR_INTERNET_DISCONNECTED' && /^\/v1\//.test(failure.path)
+      const offlineNetworkFailures = audit.requestFailures.filter((failure) => (
+        failure.error === 'net::ERR_INTERNET_DISCONNECTED'
       )).length;
       const deniedResponses = audit.mutationFailures.filter((failure) => failure.status === 403).length;
       const abortedWasmLoads = audit.requestFailures.filter((failure) => (
@@ -1179,7 +1276,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
       // The intentional offline route block also aborts account and PowerSync
       // requests, so correlate browser console noise with all failed requests.
       expect(count('Failed to load resource: net::ERR_FAILED')).toBeLessThanOrEqual(failedNetworkRequests);
-      expect(count('Failed to load resource: net::ERR_INTERNET_DISCONNECTED')).toBeLessThanOrEqual(offlineApiFailures);
+      expect(count('Failed to load resource: net::ERR_INTERNET_DISCONNECTED')).toBeLessThanOrEqual(offlineNetworkFailures);
       expect(count('Failed to load resource: the server responded with a status of 403 (Forbidden)')).toBeLessThanOrEqual(deniedResponses);
       expect(count(wasmStreamingMessage)).toBeLessThanOrEqual(abortedWasmLoads);
       expect(count('falling back to ArrayBuffer instantiation')).toBe(count(wasmStreamingMessage));

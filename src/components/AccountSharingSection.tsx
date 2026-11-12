@@ -368,7 +368,7 @@ export function AccountSharingSection() {
         <Text style={styles.help}>This device-only address is separate from the account API. Leave it blank to keep account workspaces local until a sync service is configured. HTTP is accepted only for localhost development.</Text>
 
         <View accessibilityLiveRegion="polite" style={styles.statusBox}>
-          <Text style={styles.statusTitle}>
+          <Text testID="account-session-status" style={styles.statusTitle}>
             {account.status === 'loading' || account.status === 'restoring' ? 'Checking account…' :
               account.status === 'local' ? 'Local on this device' :
                 account.status === 'signed-out' ? 'Not signed in' :
