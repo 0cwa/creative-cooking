@@ -40,6 +40,7 @@ import {
 import { pickNativeBackup, shareNativeBackup } from '@/storage/backupTransfer';
 import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
+import { AccountSharingSection } from '@/components/AccountSharingSection';
 
 function formatBytes(value?: number): string {
   if (!value || value < 1) return '0 B';
@@ -511,6 +512,8 @@ export default function SettingsScreen() {
           <TextInput accessibilityLabel="City" value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
           <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
         </Section>
+
+        <AccountSharingSection />
 
         <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
           <View style={styles.statusRow}>
