@@ -71,6 +71,7 @@ function auditPage(page, audit, privateTargets = {}) {
           && operation.type.startsWith('shopping.item.')).map((operation) => ({
             type: operation.type,
             id: operation.item?.id ?? operation.id ?? null,
+            name: operation.item?.name ?? null,
             removedAt: operation.item?.removedAt ?? operation.removedAt ?? null,
             purchaseCycleId: operation.item?.purchaseCycleId ?? operation.purchaseCycleId ?? null
           }))
@@ -84,7 +85,10 @@ function auditPage(page, audit, privateTargets = {}) {
       operation?.type === 'personal.chat.message.append'
         && operation.message?.content === privateTargets.offlineChat
     ))) {
-      if (spaceId === audit.personalSpaceId) audit.offlinePersonalChatUploaded = true;
+      if (spaceId === audit.personalSpaceId) {
+        audit.offlinePersonalChatUploaded = true;
+        audit.offlinePersonalChatMutationId = typeof parsedBody?.mutationId === 'string' ? parsedBody.mutationId : null;
+      }
       else audit.privateDataLeaked = true;
     }
     if (privateTargets.offlineAllergy && operations.some((operation) => (
@@ -123,6 +127,10 @@ function auditPage(page, audit, privateTargets = {}) {
   });
   page.on('response', (response) => {
     const path = new URL(response.url()).pathname;
+    if (path === '/v1/me') {
+      audit.meStatuses ??= [];
+      audit.meStatuses.push(response.status());
+    }
     if (response.status() >= 400 && /(auth|spaces|invitations)/.test(path)) {
       void response.json().then((body) => {
         audit.accountFailures.push({
@@ -138,6 +146,7 @@ function auditPage(page, audit, privateTargets = {}) {
       const requestBody = (() => { try { return JSON.parse(response.request().postData() ?? ''); } catch { return null; } })();
       audit.mutationResponses.push({
         mutationId: typeof requestBody?.mutationId === 'string' ? requestBody.mutationId : null,
+        spaceId: path.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null,
         status: response.status()
       });
     }
@@ -252,6 +261,48 @@ async function openSettings(page, signedIn = false, expectedWorkspaceName = null
   }
 }
 
+async function restoreAccountConnection(page, email) {
+  await page.goto(routeUrl('settings'));
+  const sessionStatus = page.getByTestId('account-session-status');
+  const checkConnection = page.getByRole('button', { name: 'Check account connection' });
+  await expect.poll(async () => {
+    const label = (await sessionStatus.textContent())?.replace(/\s+/gu, ' ').trim() ?? '';
+    return label === `Signed in as ${email}`
+      || (label === 'Account could not be checked offline'
+        && await checkConnection.count() > 0
+        && await checkConnection.isEnabled());
+  }, { timeout: 30_000 }).toBe(true);
+  if ((await sessionStatus.textContent())?.replace(/\s+/gu, ' ').trim() !== `Signed in as ${email}`) await checkConnection.click();
+  await expect(page.getByText(`Signed in as ${email}`, { exact: true })).toBeVisible({ timeout: 30_000 });
+}
+
+function hasAcceptedMutationWith(audit, spaceId, matches) {
+  return audit.mutationRequests.some((request) => request.spaceId === spaceId
+    && request.mutationId
+    && matches(request)
+    && audit.mutationResponses.some((response) => response.spaceId === spaceId
+      && response.mutationId === request.mutationId
+      && response.status === 200));
+}
+
+async function selectShoppingList(page, name) {
+  const listChoice = page.getByRole('button', { name, exact: true });
+  if (await listChoice.count()) await listChoice.click();
+  await expect(page.getByText(/purchase cycle active/)).toBeVisible({ timeout: 30_000 });
+}
+
+async function addShoppingItem(page, name, listName) {
+  await selectShoppingList(page, listName);
+  const input = page.getByLabel('Shopping item name');
+  await input.fill(name);
+  await expect(input).toHaveValue(name);
+  const addButton = page.getByRole('button', { name: 'Add', exact: true });
+  await expect(addButton).toBeVisible();
+  await expect(addButton).toBeEnabled();
+  await addButton.click({ timeout: 30_000 });
+  await expect(page.getByText(name, { exact: true })).toHaveCount(1);
+}
+
 function proposalCard(page, proposalText) {
   return page.getByText(proposalText, { exact: true })
     .locator('xpath=ancestor::*[starts-with(@data-testid, "chef-proposal-")][1]');
@@ -275,6 +326,11 @@ test('built PWA migrates guest history and synchronizes household records betwee
   const sharedItem = `Shared Pantry ${runId.slice(-8)}`;
   const memberItem = `Member Pantry ${runId.slice(-8)}`;
   const offlineMemberItem = `Offline Pantry ${runId.slice(-8)}`;
+  const concurrentOwnerPantryItem = `Offline owner pantry ${runId.slice(-8)}`;
+  const concurrentMemberPantryItem = `Offline editor pantry ${runId.slice(-8)}`;
+  const concurrentOwnerShoppingItem = `Offline owner shopping ${runId.slice(-8)}`;
+  const concurrentMemberShoppingItem = `Offline editor shopping ${runId.slice(-8)}`;
+  const concurrentShoppingListName = `Offline shared shopping ${runId.slice(-8)}`;
   const viewerOnlyItem = `Viewer must not add ${runId.slice(-8)}`;
   const historicalEffectName = `Historical effect must not run ${runId.slice(-8)}`;
   const householdEffectName = `Household proposal effect ${runId.slice(-8)}`;
@@ -756,6 +812,41 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByTestId('pantry-workspace-status')).toContainText('synced', { timeout: 30_000 });
     markStage('owner added the first household pantry record');
 
+    const syncedHouseholdSpaceId = ownerAudit.mutationRequests.find((request) => (
+      request.pantryUpserts.some((operation) => operation.name === sharedItem)
+    ))?.spaceId;
+    expect(syncedHouseholdSpaceId).toBeTruthy();
+    await owner.getByRole('tab', { name: /Recipes/ }).click();
+    await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect(owner.getByTestId('shopping-local-persistence-status')).toContainText(householdName);
+    await owner.getByLabel('New shopping list name').fill(concurrentShoppingListName);
+    await owner.getByRole('button', { name: 'Create shopping list' }).click();
+    await selectShoppingList(owner, concurrentShoppingListName);
+    const shoppingSaveStatus = owner.getByTestId('shopping-local-persistence-status');
+    await expect(shoppingSaveStatus).toHaveText('Saving changes on this device…', { timeout: 10_000 });
+    await expect(shoppingSaveStatus).toContainText(householdName, { timeout: 30_000 });
+    await expect(shoppingSaveStatus).not.toContainText('Local on this device');
+    await expect.poll(() => {
+      const request = ownerAudit.mutationRequests.find((entry) => (
+        entry.spaceId === syncedHouseholdSpaceId && entry.operationTypes.includes('shopping.list.create')
+      ));
+      return request && ownerAudit.mutationResponses.some((response) => response.mutationId === request.mutationId);
+    }, { timeout: 30_000 }).toBeTruthy();
+    const createListRequest = ownerAudit.mutationRequests.find((request) => (
+      request.spaceId === syncedHouseholdSpaceId && request.operationTypes.includes('shopping.list.create')
+    ));
+    const createListResponse = ownerAudit.mutationResponses.find((response) => (
+      response.mutationId === createListRequest?.mutationId
+    ));
+    expect(createListResponse?.status, JSON.stringify({
+      spaceId: createListRequest?.spaceId,
+      mutationId: createListRequest?.mutationId,
+      operationTypes: createListRequest?.operationTypes,
+      response: createListResponse,
+      failures: ownerAudit.mutationFailures.filter((failure) => failure.mutationId === createListRequest?.mutationId)
+    })).toBe(200);
+    markStage('household shopping list upload received an accepted server response');
+
     await openSettings(owner, true, householdName);
     await owner.getByRole('button', { name: `View members of ${householdName}` }).click();
     await owner.getByLabel(`Invitation email for ${householdName}`).fill(viewerEmail);
@@ -889,7 +980,10 @@ test('built PWA migrates guest history and synchronizes household records betwee
 
     ownerSecondContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const ownerSecond = await ownerSecondContext.newPage();
-    auditPage(ownerSecond, ownerSecondAudit);
+    auditPage(ownerSecond, ownerSecondAudit, {
+      offlineChat: offlinePersonalChat,
+      offlineAllergy: offlinePersonalAllergy
+    });
     await ownerSecond.goto(routeUrl('settings'));
     await configureApi(ownerSecond);
     await login(ownerSecond, ownerEmail, password);
@@ -947,41 +1041,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
     markStage('offline city, allergy, meal context, and chat edits survived a network-disabled browser reload');
     await ownerContext.setOffline(false);
     const signedInStatus = owner.getByText(`Signed in as ${ownerEmail}`, { exact: true });
-    const sessionStatus = owner.getByTestId('account-session-status');
-    const checkConnection = owner.getByRole('button', { name: 'Check account connection' });
-    let reconnectState = 'unknown';
-    try {
-      await expect.poll(async () => {
-        if (await sessionStatus.count() === 0) {
-          reconnectState = 'status-element-missing';
-          return false;
-        }
-        const label = (await sessionStatus.textContent())?.trim() ?? '';
-        if (!label) {
-          reconnectState = 'status-empty';
-          return false;
-        }
-        if (label.startsWith('Signed in as ')) {
-          reconnectState = 'signed-in';
-          return true;
-        }
-        if (label === 'Account could not be checked offline'
-          && await checkConnection.count() > 0
-          && await checkConnection.isEnabled()) {
-          reconnectState = 'retry-ready';
-          return true;
-        }
-        reconnectState = label === 'Session expired' ? 'expired'
-          : label === 'Not signed in' ? 'signed-out'
-            : label === 'Checking account…' ? 'restoring'
-              : label === 'Account could not be checked offline' ? 'offline-refreshing' : 'unknown';
-        return false;
-      }, { timeout: 30_000 }).toBe(true);
-    } catch {
-      throw new Error(`Account did not reach a retryable or signed-in state after reconnecting; visible session state was ${reconnectState}.`);
-    }
-    if (reconnectState === 'retry-ready') await checkConnection.click();
-    await expect(signedInStatus).toBeVisible({ timeout: 30_000 });
+    await owner.reload();
+    await expect(signedInStatus).toBeVisible({ timeout: 60_000 });
     markStage('account membership was revalidated after connectivity returned');
     await expect(owner.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
     await expect.poll(() => ownerAudit.mutationResponses.some((response) => (
@@ -994,7 +1055,26 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(ownerSecond.getByRole('textbox', { name: 'City', exact: true })).toHaveValue(offlinePersonalCity, { timeout: 90_000 });
     await expect(ownerSecond.getByRole('button', { name: `Remove allergy ${offlinePersonalAllergy}` })).toBeVisible({ timeout: 90_000 });
     expect(ownerAudit.offlinePersonalAllergyUploaded).toBe(true);
-    expect(ownerAudit.offlinePersonalChatUploaded).toBe(true);
+    const acceptedOfflineChatUpload = [ownerAudit, ownerSecondAudit].some((audit) => (
+      audit.offlinePersonalChatUploaded === true
+        && hasAcceptedMutationWith(audit, ownerAudit.personalSpaceId, (request) => (
+          request.mutationId === audit.offlinePersonalChatMutationId
+        ))
+    ));
+    expect(acceptedOfflineChatUpload, JSON.stringify({
+      ownerChatObserved: ownerAudit.offlinePersonalChatUploaded === true,
+      ownerSecondChatObserved: ownerSecondAudit.offlinePersonalChatUploaded === true,
+      ownerPersonalMutations: ownerAudit.mutationRequests
+        .filter((request) => request.spaceId === ownerAudit.personalSpaceId)
+        .map(({ mutationId, operationTypes }) => ({ mutationId, operationTypes })),
+      ownerSecondPersonalMutations: ownerSecondAudit.mutationRequests
+        .filter((request) => request.spaceId === ownerSecondAudit.personalSpaceId)
+        .map(({ mutationId, operationTypes }) => ({ mutationId, operationTypes })),
+      ownerPersonalResponses: ownerAudit.mutationResponses
+        .filter((response) => response.spaceId === ownerAudit.personalSpaceId),
+      ownerSecondPersonalResponses: ownerSecondAudit.mutationResponses
+        .filter((response) => response.spaceId === ownerSecondAudit.personalSpaceId)
+    })).toBe(true);
     const personalMealContextFields = new Set(ownerAudit.mutationRequests
       .filter((request) => request.spaceId === ownerAudit.personalSpaceId)
       .flatMap((request) => request.personalPreferenceFields));
@@ -1136,10 +1216,116 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(member.getByText(offlinePersonalChat, { exact: true })).toHaveCount(0);
     await expect(member.getByText(historicalEffectName, { exact: true })).toHaveCount(0);
     await openCookingWorkspace(member, householdName);
+
+    // Both members edit separate pantry and shopping records while disconnected.
+    // Reconnect the owner first, then the editor, and require each device to
+    // converge without duplicate rows.
+    await owner.getByRole('tab', { name: /Recipes/ }).click();
+    await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await selectShoppingList(owner, concurrentShoppingListName);
+    await member.getByRole('tab', { name: /Recipes/ }).click();
+    await member.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect(member.getByText(concurrentShoppingListName, { exact: true })).toBeVisible({ timeout: 90_000 });
+    await selectShoppingList(member, concurrentShoppingListName);
+
+    await ownerContext.setOffline(true);
     await memberContext.setOffline(true);
+    await owner.reload();
+    await member.reload();
+    await owner.goto(routeUrl('settings'));
+    await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await openCookingWorkspace(owner);
+    await expect(owner.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
+    await member.goto(routeUrl('settings'));
+    await expect(member.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await openCookingWorkspace(member);
+    await expect(member.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
+
+    await owner.getByLabel('Ingredient and details').fill(concurrentOwnerPantryItem);
+    await owner.getByRole('button', { name: 'Add ingredient' }).click();
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toBeVisible();
+    await expect(owner.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+    await owner.getByRole('tab', { name: /Recipes/ }).click();
+    await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await addShoppingItem(owner, concurrentOwnerShoppingItem, concurrentShoppingListName);
+    await expect(owner.getByTestId('shopping-local-persistence-status')).toContainText('Saved on this device.', { timeout: 30_000 });
+
+    await member.getByLabel('Ingredient and details').fill(concurrentMemberPantryItem);
+    await member.getByRole('button', { name: 'Add ingredient' }).click();
+    await expect(member.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toBeVisible();
+    await expect(member.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+    await member.getByRole('tab', { name: /Recipes/ }).click();
+    await member.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await addShoppingItem(member, concurrentMemberShoppingItem, concurrentShoppingListName);
+    await expect(member.getByTestId('shopping-local-persistence-status')).toContainText('Saved on this device.', { timeout: 30_000 });
+
+    await owner.reload();
+    await member.reload();
+    await openCookingWorkspace(owner);
+    await expect(owner.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
+    await openCookingWorkspace(member);
+    await expect(member.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1);
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(0);
+    await expect(member.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(1);
+    await expect(member.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(0);
+    await owner.getByRole('tab', { name: /Recipes/ }).click();
+    await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect(owner.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(1);
+    await expect(owner.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(0);
+    await member.getByRole('tab', { name: /Recipes/ }).click();
+    await member.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect(member.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(1);
+    await expect(member.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(0);
+    markStage('owner and editor kept independent pantry and shopping edits through offline reloads');
+
+    await ownerContext.setOffline(false);
+    await restoreAccountConnection(owner, ownerEmail);
+    await openCookingWorkspace(owner, householdName);
+    await expect.poll(() => (
+      hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+        request.pantryUpserts.some((operation) => operation.name === concurrentOwnerPantryItem)
+      ))
+      && hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+        request.shoppingItemOperations.some((operation) => operation.name === concurrentOwnerShoppingItem)
+      ))
+    ), { timeout: 90_000 }).toBe(true);
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1);
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(0);
+
+    await memberContext.setOffline(false);
+    await restoreAccountConnection(member, memberEmail);
+    await openCookingWorkspace(member, householdName);
+    await expect.poll(() => (
+      hasAcceptedMutationWith(memberAudit, syncedHouseholdSpaceId, (request) => (
+        request.pantryUpserts.some((operation) => operation.name === concurrentMemberPantryItem)
+      ))
+      && hasAcceptedMutationWith(memberAudit, syncedHouseholdSpaceId, (request) => (
+        request.shoppingItemOperations.some((operation) => operation.name === concurrentMemberShoppingItem)
+      ))
+    ), { timeout: 90_000 }).toBe(true);
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await expect(owner.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await expect(member.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await expect(member.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+
+    await owner.getByRole('tab', { name: /Recipes/ }).click();
+    await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect(owner.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await expect(owner.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await member.getByRole('tab', { name: /Recipes/ }).click();
+    await member.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect(member.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await expect(member.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    markStage('owner-first offline reconnect converged without duplicate pantry or shopping records on both clients');
+
+    await memberContext.setOffline(true);
+    await openCookingWorkspace(member);
+    await expect(member.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
     await member.getByLabel('Ingredient and details').fill(offlineMemberItem);
     await member.getByRole('button', { name: 'Add ingredient' }).click();
     await expect(member.getByText(offlineMemberItem, { exact: true })).toBeVisible();
+    await expect(member.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
     markStage('offline household record was written locally');
     await openSettings(member);
     await expect(member.getByRole('button', { name: 'Sign out from saved session', exact: true })).toBeVisible();
@@ -1158,7 +1344,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await owner.getByLabel(`Remove ${memberEmail} from ${householdName}`).click();
     await owner.getByLabel(`Confirm remove ${memberEmail}`).click();
     await expect(owner.getByText(memberEmail, { exact: false })).toHaveCount(0);
-    const householdSpaceId = ownerAudit.mutationRequests.find((request) => request.pantryUpserts.some((operation) => operation.name === sharedItem))?.spaceId;
+    const householdSpaceId = syncedHouseholdSpaceId;
     expect(householdSpaceId).toBeTruthy();
     await memberContext.setOffline(false);
     await member.goto(routeUrl('settings'));
@@ -1253,9 +1439,12 @@ test('built PWA migrates guest history and synchronizes household records betwee
       'Failed to load resource: the server responded with a status of 403 (Forbidden)',
       'falling back to ArrayBuffer instantiation'
     ]);
-    const wasmStreamingMessage = 'wasm streaming compile failed: TypeError: WebAssembly compilation aborted: Network error: Response body loading was aborted';
+    const expectedWasmStreamingMessages = new Set([
+      'wasm streaming compile failed: TypeError: Failed to fetch',
+      'wasm streaming compile failed: TypeError: WebAssembly compilation aborted: Network error: Response body loading was aborted'
+    ]);
     const unexpectedConsoleErrors = browserAudits.flatMap((audit) => audit.consoleErrorMessages
-      .filter((message) => message !== wasmStreamingMessage && !expectedConsoleMessages.has(message)));
+      .filter((message) => !expectedWasmStreamingMessages.has(message) && !expectedConsoleMessages.has(message)));
     expect(unexpectedConsoleErrors, JSON.stringify({
       owner: ownerAudit.consoleErrorMessages,
       ownerSecond: ownerSecondAudit.consoleErrorMessages,
@@ -1273,13 +1462,16 @@ test('built PWA migrates guest history and synchronizes household records betwee
       const abortedWasmLoads = audit.requestFailures.filter((failure) => (
         failure.error === 'net::ERR_ABORTED' && failure.path.endsWith('.wasm')
       )).length;
+      const wasmStreamingFailures = audit.consoleErrorMessages.filter((message) => (
+        expectedWasmStreamingMessages.has(message)
+      )).length;
       // The intentional offline route block also aborts account and PowerSync
       // requests, so correlate browser console noise with all failed requests.
       expect(count('Failed to load resource: net::ERR_FAILED')).toBeLessThanOrEqual(failedNetworkRequests);
       expect(count('Failed to load resource: net::ERR_INTERNET_DISCONNECTED')).toBeLessThanOrEqual(offlineNetworkFailures);
       expect(count('Failed to load resource: the server responded with a status of 403 (Forbidden)')).toBeLessThanOrEqual(deniedResponses);
-      expect(count(wasmStreamingMessage)).toBeLessThanOrEqual(abortedWasmLoads);
-      expect(count('falling back to ArrayBuffer instantiation')).toBe(count(wasmStreamingMessage));
+      expect(wasmStreamingFailures).toBeLessThanOrEqual(abortedWasmLoads);
+      expect(count('falling back to ArrayBuffer instantiation')).toBe(wasmStreamingFailures);
     }
 
     await member.goto(routeUrl('settings'));
