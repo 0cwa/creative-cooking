@@ -14,7 +14,7 @@
     "web": "expo start --web",
     "test": "node --experimental-strip-types --test src/domain/*.test.mjs src/chef/*.test.mjs src/storage/*.test.mjs src/llm/*.test.mjs src/llm/openrouter/*.test.mjs src/llm/webllm/*.test.mjs src/speech/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "build:web": "expo export -p web",
+    "build:web": "expo export -p web && node spikes/loro-runtime/copy-wasm-asset.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "check": "npm run test && npm run typecheck && EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web && npm run verify:pwa",
     "test:e2e": "playwright test"
@@ -36,7 +36,9 @@
     "expo-file-system": "~57.0.7",
     "expo-sharing": "~57.0.21",
     "expo-clipboard": "~57.0.2",
-    "@mlc-ai/web-llm": "0.2.82"
+    "@mlc-ai/web-llm": "0.2.82",
+    "loro-crdt": "1.17.1",
+    "loro-react-native": "1.10.3"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",

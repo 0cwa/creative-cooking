@@ -1,0 +1,8 @@
+[package]
+name = "loro-wire-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+loro = { version = "=1.10.3", features = ["counter", "jsonpath"] }
+serde_json = "1.0"

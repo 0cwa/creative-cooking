@@ -1,0 +1,54 @@
+--- uniffi-bindgen-react-native/typescript/src/ffi-converters.ts
++++ uniffi-bindgen-react-native/typescript/src/ffi-converters.ts
+@@ -331,14 +331,20 @@ export const FfiConverterArrayBuffer = (() => {
+     // Typed arrays are accepted by TS as array buffers,
+     // even though they are really ArrayBufferViews.
+     if (ArrayBuffer.isView(value)) {
+-      const ab = value.buffer;
+-      const start = value.byteOffset;
+-      const length = value.byteLength;
+-      if (start === 0 && ab.byteLength === length) {
++      const view = value as unknown as ArrayBufferView<ArrayBufferLike>;
++      const ab = view.buffer;
++      const start = view.byteOffset;
++      const length = view.byteLength;
++      if (ab instanceof ArrayBuffer && start === 0 && ab.byteLength === length) {
+         return ab;
+       }
+-      const end = start + length;
+-      return ab.slice(start, end);
++      const copy = new ArrayBuffer(length);
++      const source = new Uint8Array(ab, start, length);
++      const target = new Uint8Array(copy);
++      for (let index = 0; index < length; index += 1) {
++        target[index] = source[index]!;
++      }
++      return copy;
+     }
+     return value;
+   }
+--- uniffi-bindgen-react-native/typescript/src/ffi-types.ts
++++ uniffi-bindgen-react-native/typescript/src/ffi-types.ts
+@@ -31,7 +31,12 @@ export class RustBuffer {
+   }
+
+   static fromByteArray(buf: UniffiByteArray): RustBuffer {
+-    return new RustBuffer(buf.buffer);
++    const arrayBuffer = new ArrayBuffer(buf.byteLength);
++    const copy = new Uint8Array(arrayBuffer);
++    for (let index = 0; index < buf.byteLength; index += 1) {
++      copy[index] = buf[index]!;
++    }
++    return new RustBuffer(arrayBuffer);
+   }
+
+   get length(): number {
+@@ -43,7 +48,7 @@ export class RustBuffer {
+     return new Uint8Array(this.arrayBuffer);
+   }
+
+-  readArrayBuffer(numBytes: number): ArrayBufferLike {
++  readArrayBuffer(numBytes: number): ArrayBuffer {
+     const start = this.readOffset;
+     const end = this.checkOverflow(start, numBytes);
+     const value = this.arrayBuffer.slice(start, end);
