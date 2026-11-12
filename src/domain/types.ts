@@ -23,6 +23,7 @@ export type PantryItem = {
 };
 
 export type RecipeIngredient = {
+  id?: string;
   name: string;
   amount?: string;
   needsShopping?: boolean;
@@ -35,6 +36,8 @@ export type Recipe = {
   portions: number;
   ingredients: RecipeIngredient[];
   steps: string[];
+  /** Stable identities parallel to steps; absent in legacy records until normalized. */
+  stepIds?: string[];
   notes?: string[];
   createdAt: string;
   updatedAt: string;

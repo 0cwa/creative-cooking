@@ -1,4 +1,5 @@
 import type { AppSettings, ChatConversation, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
+import { normalizeRecipes } from '../domain/recipeIdentity.ts';
 
 type BackupEnvelope = {
   format: 'creative-cooking-backup';
@@ -39,7 +40,7 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
 
   const state = parsed.state;
   const pantry = Array.isArray(state.pantry) ? (state.pantry as PantryItem[]) : [];
-  const recipes = Array.isArray(state.recipes) ? (state.recipes as Recipe[]) : [];
+  const recipes = normalizeRecipes(Array.isArray(state.recipes) ? (state.recipes as Recipe[]) : []);
   const chatMessages = Array.isArray(state.chatMessages) ? (state.chatMessages as ChatMessage[]) : [];
   const chatHistory = Array.isArray(state.chatHistory) ? (state.chatHistory as ChatConversation[]) : [];
   const activeConversationId = typeof state.activeConversationId === 'string'
