@@ -163,7 +163,7 @@ async function reconcileRows(
   table: string,
   scope: ContentScope,
   desiredRows: ContentRecord[],
-  options: { tombstoneMissing?: boolean } = {}
+  options: { tombstoneMissing?: boolean; immutableExisting?: boolean } = {}
 ): Promise<void> {
   const currentRows = await transaction.getAll<ContentRecord>(`SELECT * FROM ${table} WHERE space_id = ?`, [scope.spaceId]);
   const currentById = new Map(currentRows.map((row) => [row.id, row]));
@@ -181,6 +181,11 @@ async function reconcileRows(
         await archiveNoResurrection(transaction, table, scope, desired, 'A removed record cannot be restored with its old ID. The attempted copy was preserved locally.');
         continue;
       }
+      // Personal conversations, messages, proposals, and allergy identities are
+      // create/append records. Status changes and removals use explicit commands.
+      // Re-encoding the aggregate must not overwrite server timestamps or replay
+      // a stale proposal status onto an existing replicated row.
+      if (options.immutableExisting) continue;
 
       const mutableColumns = rowColumns(desired).filter((column) => (
         column !== 'id' && column !== 'version' && column !== 'updated_by'
@@ -616,7 +621,14 @@ export async function persistWorkspaceState(
         await insertMutationBatches(transaction, scope.personalSpaceId, personalOperations);
         const personalRows = encodePersonalRows(state, scope.personalSpaceId);
         for (const table of PERSONAL_TABLES) {
-          await reconcileRows(transaction, table, { ...scope, spaceId: scope.personalSpaceId }, personalRows[table], { tombstoneMissing: true });
+          const immutableExisting = table === 'personal_allergies'
+            || table === 'personal_conversations'
+            || table === 'personal_chat_messages'
+            || table === 'personal_chat_proposals';
+          await reconcileRows(transaction, table, { ...scope, spaceId: scope.personalSpaceId }, personalRows[table], {
+            tombstoneMissing: true,
+            immutableExisting
+          });
         }
       }
       await writePrivateState(transaction, state, 'account', true);
