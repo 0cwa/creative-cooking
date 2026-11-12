@@ -21,13 +21,19 @@ export interface ServerConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
-  let configEnv = env;
   if (env === process.env) {
     const localEnvFile = join(process.cwd(), '.env');
     if (existsSync(localEnvFile)) process.loadEnvFile(localEnvFile);
-    if (env.NODE_ENV === 'test' && env.TEST_DATABASE_URL) {
-      configEnv = { ...env, DATABASE_URL: env.TEST_DATABASE_URL };
+  }
+  let configEnv = env;
+  if (env.NODE_ENV === 'test') {
+    if (!env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required in test mode.');
+    const testDatabase = new URL(env.TEST_DATABASE_URL);
+    const isLoopback = ['127.0.0.1', 'localhost', '[::1]'].includes(testDatabase.hostname);
+    if (!isLoopback || testDatabase.pathname !== '/creative_cooking_test') {
+      throw new Error('Test mode is restricted to the loopback creative_cooking_test database.');
     }
+    configEnv = { ...env, DATABASE_URL: env.TEST_DATABASE_URL };
   }
   const parsed = envSchema.parse(configEnv);
   const allowedOrigins = parsed.API_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean);

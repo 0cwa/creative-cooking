@@ -4,7 +4,7 @@ import { hashPassword } from './security.js';
 
 const config = loadConfig();
 const database = new URL(config.databaseUrl);
-if (!['127.0.0.1', 'localhost', '::1'].includes(database.hostname) || !['/creative_cooking', '/creative_cooking_test'].includes(database.pathname)) {
+if (!['127.0.0.1', 'localhost', '[::1]'].includes(database.hostname) || !['/creative_cooking', '/creative_cooking_test'].includes(database.pathname)) {
   throw new Error('Fixture seed is restricted to the local creative_cooking or creative_cooking_test database.');
 }
 const password = process.env.SEED_PASSWORD;

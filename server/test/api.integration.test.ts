@@ -7,7 +7,7 @@ import { hashOpaqueToken } from '../src/security.js';
 
 const config = loadConfig();
 const dbUrl = new URL(config.databaseUrl);
-if (!['127.0.0.1', 'localhost', '::1'].includes(dbUrl.hostname) || dbUrl.pathname !== '/creative_cooking_test') {
+if (!['127.0.0.1', 'localhost', '[::1]'].includes(dbUrl.hostname) || dbUrl.pathname !== '/creative_cooking_test') {
   throw new Error('API integration tests require the isolated loopback creative_cooking_test database.');
 }
 const pool = new Pool({ connectionString: config.databaseUrl, max: 12 });
