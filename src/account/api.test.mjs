@@ -43,6 +43,28 @@ test('ambiguous mutation transport failure is surfaced once without automatic re
   assert.equal(calls, 1);
 });
 
+test('request timeouts abort the fetch and keep mutation completion explicitly ambiguous', async () => {
+  let calls = 0;
+  let signal;
+  await assert.rejects(accountApiRequest('https://api.example.test', '/spaces', {
+    method: 'POST',
+    body: { kind: 'household', name: 'Home' },
+    timeoutMs: 5,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      signal = options.signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    }
+  }), (error) => error instanceof AccountTransportError
+    && error.mutationMayHaveCompleted
+    && error.timedOut
+    && /may have completed/.test(error.message));
+  assert.equal(calls, 1);
+  assert.equal(signal.aborted, true);
+});
+
 test('server error preserves machine code without retrying', async () => {
   let calls = 0;
   await assert.rejects(accountApiRequest('https://api.example.test', '/invitations/accept', {

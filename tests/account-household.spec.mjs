@@ -1,18 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { expect, test as base } from '@playwright/test';
-
-const test = base.extend({
-  browser: async ({ playwright }, use) => {
-    const browser = await playwright.chromium.connectOverCDP(
-      process.env.ACCOUNT_TEST_BROWSER_CDP ?? 'http://127.0.0.1:9222'
-    );
-    try {
-      await use(browser);
-    } finally {
-      await browser.close();
-    }
-  }
-});
+import { expect, test } from '@playwright/test';
 
 test.use({ trace: 'off' });
 
@@ -34,7 +21,7 @@ async function configureApi(page) {
 async function register(page, email, password) {
   await page.getByRole('button', { name: 'Create account mode' }).click();
   await page.getByLabel('Email address').fill(email);
-  await page.getByLabel('Password').fill(password);
+  await page.getByRole('textbox', { name: 'Password' }).fill(password);
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByText(`Signed in as ${email}`, { exact: true })).toBeVisible();
 }
@@ -91,34 +78,45 @@ test('built PWA registers, restores, manages household roles, enforces revocatio
   try {
     // The local-only cooking path works before account configuration.
     await owner.goto(appUrl);
+    await expect(owner.getByText('Pantry', { exact: true }).first()).toBeVisible();
+    await expect(owner.getByRole('progressbar', { name: 'Creative Cooking is getting the kitchen ready' })).toHaveCount(0);
     await owner.getByLabel('Ingredient and details').fill('local continuity lentils');
     await owner.getByLabel('Ingredient and details').press('Enter');
+    await expect(owner.getByText('local continuity lentils', { exact: true })).toBeVisible();
+    await expect(owner.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    await owner.reload({ waitUntil: 'domcontentloaded' });
     await expect(owner.getByText('local continuity lentils', { exact: true })).toBeVisible();
 
     await configureApi(owner);
     await register(owner, ownerEmail, password);
     await expect(owner.getByText('Personal workspace · owner')).toBeVisible();
-    await expect(owner.getByText(/Cooking content is still stored on this device and is not shared yet/)).toBeVisible();
+    await expect(owner.getByTestId('cooking-workspace-status')).not.toContainText('switching', { timeout: 30_000 });
 
     await owner.getByLabel('Household name').fill('Weeknight kitchen');
     await owner.getByRole('button', { name: 'Create household', exact: true }).click();
     await expect(owner.getByText('Weeknight kitchen', { exact: true }).first()).toBeVisible();
     await owner.reload({ waitUntil: 'domcontentloaded' });
     await expect(owner.getByText(`Signed in as ${ownerEmail}`, { exact: true })).toBeVisible();
-    await expect(owner.getByText('Weeknight kitchen', { exact: true })).toBeVisible();
+    await expect(owner.getByText('Weeknight kitchen', { exact: true }).first()).toBeVisible();
     const ownerToken = await storedToken(owner);
     expect(typeof ownerToken).toBe('string');
 
     // The explicit session refresh rotates the browser's bearer credential.
+    const refreshResponsePromise = owner.waitForResponse((response) => (
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/v1/auth/refresh'
+    ));
     await owner.getByRole('button', { name: 'Refresh account session' }).click();
-    await expect(owner.getByText('Session refreshed. The previous session token was revoked.')).toBeVisible();
+    const refreshResponse = await refreshResponsePromise;
+    expect(refreshResponse.status()).toBe(200);
+    await expect(owner.getByText('Session refreshed. The previous session token was revoked.')).toBeVisible({ timeout: 15_000 });
     const rotatedOwnerToken = await storedToken(owner);
     expect(rotatedOwnerToken).not.toBe(ownerToken);
     expect((await callApi(owner, ownerToken, '/me')).status).toBe(401);
     expect((await callApi(owner, rotatedOwnerToken, '/me')).status).toBe(200);
 
     await owner.getByLabel('View members of Weeknight kitchen').click();
-    await expect(owner.getByText(ownerEmail, { exact: false })).toBeVisible();
+    await expect(owner.getByText(ownerEmail, { exact: false }).last()).toBeVisible();
     await owner.getByLabel('Invitation email for Weeknight kitchen').fill(viewerEmail);
     await owner.getByLabel('Invite as viewer').click();
     await owner.getByLabel('Invite member to Weeknight kitchen').click();
@@ -148,7 +146,7 @@ test('built PWA registers, restores, manages household roles, enforces revocatio
     await register(viewer, viewerEmail, password);
     await viewer.getByLabel('Invitation token').fill(invitationToken);
     await viewer.getByRole('button', { name: 'Accept invitation' }).click();
-    await expect(viewer.getByText('Weeknight kitchen', { exact: true })).toBeVisible();
+    await expect(viewer.getByText('Weeknight kitchen', { exact: true }).first()).toBeVisible();
     await expect(viewer.getByText(/Household · viewer/)).toBeVisible();
     await viewer.getByLabel('View members of Weeknight kitchen').click();
     await expect(viewer.getByText(ownerEmail, { exact: false })).toBeVisible();
@@ -182,10 +180,25 @@ test('built PWA registers, restores, manages household roles, enforces revocatio
     // Invite the unrelated account as an editor, then verify the client leave flow.
     await owner.getByLabel('Invitation email for Weeknight kitchen').fill(outsiderEmail);
     await owner.getByLabel('Invite as editor').click();
+    const secondInviteResponsePromise = owner.waitForResponse((response) => (
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === `/v1/spaces/${household.id}/invitations`
+    ));
     await owner.getByLabel('Invite member to Weeknight kitchen').click();
+    const secondInviteResponse = await secondInviteResponsePromise;
+    expect(secondInviteResponse.status()).toBe(201);
+    const secondInvitePayload = await secondInviteResponse.json();
+    expect(secondInvitePayload.invitation.email).toBe(outsiderEmail);
+    expect(secondInvitePayload.invitation.role).toBe('editor');
     const secondInviteToken = await owner.getByLabel('One-time invitation token').inputValue();
+    expect(secondInviteToken).toBe(secondInvitePayload.invitation.token);
+    expect(secondInviteToken).not.toBe(invitationToken);
     await outsider.getByLabel('Invitation token').fill(secondInviteToken);
     await outsider.getByRole('button', { name: 'Accept invitation' }).click();
+    await expect.poll(async () => {
+      const response = await callApi(outsider, outsiderToken, '/me');
+      return response.body.spaces.find((space) => space.id === household.id)?.role ?? null;
+    }, { timeout: 15_000 }).toBe('editor');
     await expect(outsider.getByText(/Household · editor/)).toBeVisible();
     await outsider.getByLabel('View members of Weeknight kitchen').click();
     await outsider.getByLabel('Leave Weeknight kitchen').click();
@@ -219,6 +232,7 @@ test('built PWA registers, restores, manages household roles, enforces revocatio
     await expect(owner.getByText('Not signed in', { exact: true })).toBeVisible();
     expect((await callApi(owner, tokenBeforeLogout, '/me')).status).toBe(401);
     await owner.goto(appUrl);
+    await expect(owner.getByTestId('pantry-workspace-status')).toContainText('Local on this device', { timeout: 30_000 });
     await expect(owner.getByText('local continuity lentils', { exact: true })).toBeVisible();
   } finally {
     await Promise.all([ownerContext.close(), viewerContext.close(), outsiderContext.close()]);
