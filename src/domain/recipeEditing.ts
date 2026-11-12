@@ -189,6 +189,31 @@ export function parseRecipeIngredientsText(
   });
 }
 
+/** Keeps step identities attached through text edits and reorderings. */
+export function preserveRecipeStepIds(
+  steps: string[], previousSteps: string[], previousIds: string[] = [], recipeId = 'draft'
+): string[] {
+  const available = new Map<string, string[]>();
+  previousSteps.forEach((step, index) => {
+    const id = previousIds[index];
+    if (!id) return;
+    const key = step.trim();
+    available.set(key, [...(available.get(key) ?? []), id]);
+  });
+  const used = new Set<string>();
+  return steps.map((step, index) => {
+    const candidates = available.get(step.trim());
+    const id = candidates?.shift();
+    if (id && !used.has(id)) { used.add(id); return id; }
+    const base = `step-${recipeId}-${index}-${step.trim().length}`;
+    let candidate = base;
+    let suffix = 1;
+    while (used.has(candidate)) candidate = `${base}-${suffix++}`;
+    used.add(candidate);
+    return candidate;
+  });
+}
+
 export function formatRecipeTextList(items: string[] | undefined): string {
   return (items ?? []).join('\n');
 }

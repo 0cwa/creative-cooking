@@ -3,6 +3,8 @@ import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyVal
 import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversations';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
+import { normalizeRecipes } from '@/domain/recipeIdentity';
+import { preserveRecipeStepIds } from '@/domain/recipeEditing';
 import { isDictationEngine, isProviderId } from '@/domain/types';
 import type {
   AppSettings,
@@ -45,6 +47,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   return {
     ...DEFAULT_STATE,
     ...saved,
+    recipes: normalizeRecipes(Array.isArray(saved.recipes) ? saved.recipes : []),
     chatMessages,
     chatHistory: sortChatHistory(chatHistory),
     activeConversationId,
@@ -235,12 +238,12 @@ export function AppStateProvider({ children }: PropsWithChildren) {
     validateRecipe(input);
 
     const now = new Date().toISOString();
-    const recipe: Recipe = {
+    const recipe: Recipe = normalizeRecipes([{
       ...input,
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: now,
       updatedAt: now
-    };
+    }])[0];
     setState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
   }, [validateRecipe]);
@@ -263,7 +266,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
       ...current,
       recipes: current.recipes.map((recipe) => (
         recipe.id === id
-          ? { ...recipe, ...input, updatedAt: new Date().toISOString() }
+          ? { ...recipe, ...input, stepIds: preserveRecipeStepIds(input.steps, recipe.steps, recipe.stepIds, id), updatedAt: new Date().toISOString() }
           : recipe
       ))
     }));
@@ -357,7 +360,7 @@ export function AppStateProvider({ children }: PropsWithChildren) {
   }, []);
 
   const restoreState = useCallback((next: PersistedState) => {
-    setState(next);
+    setState({ ...next, recipes: normalizeRecipes(next.recipes ?? []) });
   }, []);
 
   const value = useMemo<AppStateApi>(
