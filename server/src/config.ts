@@ -5,6 +5,13 @@ import { join } from 'node:path';
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   SESSION_TOKEN_PEPPER: z.string().min(32),
+  SYNC_JWT_PRIVATE_KEY_B64URL: z.string().min(40),
+  SYNC_JWT_PUBLIC_KEY_B64URL: z.string().min(40),
+  SYNC_JWT_KEY_ID: z.string().min(1).max(80).default('creative-cooking-local-v1'),
+  SYNC_JWT_AUDIENCE: z.string().min(1).max(255).default('creative-cooking-sync'),
+  SYNC_JWT_ISSUER: z.string().min(1).max(255).default('creative-cooking-api'),
+  POWERSYNC_REPLICATION_PASSWORD: z.string().min(32),
+  POWERSYNC_STORAGE_PASSWORD: z.string().min(32),
   API_ORIGINS: z.string().default(''),
   HOST: z.string().default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
@@ -14,6 +21,13 @@ const envSchema = z.object({
 export interface ServerConfig {
   databaseUrl: string;
   sessionTokenPepper: string;
+  syncJwtPrivateKeyB64Url: string;
+  syncJwtPublicKeyB64Url: string;
+  syncJwtKeyId: string;
+  syncJwtAudience: string;
+  syncJwtIssuer: string;
+  powerSyncReplicationPassword: string;
+  powerSyncStoragePassword: string;
   allowedOrigins: string[];
   host: string;
   port: number;
@@ -46,6 +60,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     databaseUrl: parsed.DATABASE_URL,
     sessionTokenPepper: parsed.SESSION_TOKEN_PEPPER,
+    syncJwtPrivateKeyB64Url: parsed.SYNC_JWT_PRIVATE_KEY_B64URL,
+    syncJwtPublicKeyB64Url: parsed.SYNC_JWT_PUBLIC_KEY_B64URL,
+    syncJwtKeyId: parsed.SYNC_JWT_KEY_ID,
+    syncJwtAudience: parsed.SYNC_JWT_AUDIENCE,
+    syncJwtIssuer: parsed.SYNC_JWT_ISSUER,
+    powerSyncReplicationPassword: parsed.POWERSYNC_REPLICATION_PASSWORD,
+    powerSyncStoragePassword: parsed.POWERSYNC_STORAGE_PASSWORD,
     allowedOrigins,
     host: parsed.HOST,
     port: parsed.PORT,
