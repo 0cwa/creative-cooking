@@ -660,6 +660,224 @@ test('API enforces account, workspace, invite and current-session rules in Postg
     assert.equal(tombstone.rows[0]?.title, 'Deleted Recipe');
   });
 
+  await t.test('personal content is owner-only and proposal application is recoverable across workspaces', async () => {
+    const personalMutation = (mutationId: string, operations: unknown[]) => ({ mutationId, operations });
+    const personal = (token: string, mutation: unknown) =>
+      call('POST', `/v1/spaces/${ownerPersonalId}/content/mutations`, token, mutation);
+
+    const profileCreate = await personal(ownerToken, personalMutation('personal-profile-create', [
+      { opId: 'profile-system-prompt', type: 'personal.preference.set', field: 'systemPrompt', value: 'Cook carefully.', baseVersion: null },
+      { opId: 'profile-portions', type: 'personal.preference.set', field: 'mealContext.portions', value: 4, baseVersion: null },
+      { opId: 'profile-city', type: 'personal.preference.set', field: 'city', value: 'Uppsala', baseVersion: null },
+    ]));
+    assert.equal(profileCreate.statusCode, 200);
+    const promptUpdate = await personal(ownerToken, personalMutation('personal-profile-prompt-update', [
+      { opId: 'profile-system-prompt-update', type: 'personal.preference.set', field: 'systemPrompt', value: 'Keep it simple.', baseVersion: 1 },
+    ]));
+    assert.equal(promptUpdate.statusCode, 200);
+    const stalePrompt = personalMutation('personal-profile-prompt-stale', [
+      { opId: 'profile-system-prompt-stale', type: 'personal.preference.set', field: 'systemPrompt', value: 'Overwrite from an old device.', baseVersion: 1 },
+    ]);
+    const stalePromptReply = await personal(ownerToken, stalePrompt);
+    assert.equal(stalePromptReply.statusCode, 409);
+    assert.equal(stalePromptReply.body.error.code, 'PERSONAL_CONTENT_CONFLICT');
+    assert.equal((await personal(ownerToken, stalePrompt)).body.conflicts.length, 1);
+    const preferences = await pool.query<{ field_key: string; value: unknown; version: string }>(
+      `SELECT field_key, value, version FROM personal_profile_fields
+       WHERE space_id = $1 AND field_key = ANY($2::text[]) ORDER BY field_key`,
+      [ownerPersonalId, ['systemPrompt', 'mealContext.portions', 'city']],
+    );
+    assert.deepEqual(preferences.rows.map((row) => [row.field_key, row.value, Number(row.version)]), [
+      ['city', 'Uppsala', 1], ['mealContext.portions', 4, 1], ['systemPrompt', 'Keep it simple.', 2],
+    ]);
+    const profileConflictRows = await pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM personal_content_conflicts
+       WHERE space_id = $1 AND record_type = 'preference' AND entity_id = 'systemPrompt'`, [ownerPersonalId],
+    );
+    assert.equal(profileConflictRows.rows[0]?.count, 1);
+
+    assert.equal((await personal(ownerToken, personalMutation('personal-allergy-add', [
+      { opId: 'allergy-add', type: 'personal.allergy.set', name: 'Peanuts', enabled: true, baseVersion: null },
+    ]))).statusCode, 200);
+    assert.equal((await personal(ownerToken, personalMutation('personal-allergy-remove', [
+      { opId: 'allergy-remove', type: 'personal.allergy.set', name: 'PEANUTS', enabled: false, baseVersion: 1 },
+    ]))).statusCode, 200);
+    assert.equal((await personal(ownerToken, personalMutation('personal-allergy-readd', [
+      { opId: 'allergy-readd', type: 'personal.allergy.set', name: 'Peanuts', enabled: true, baseVersion: 2 },
+    ]))).statusCode, 200);
+    const allergy = await pool.query<{ name: string; deleted_at: Date | null; version: string }>(
+      'SELECT name, deleted_at, version FROM personal_allergies WHERE space_id = $1 AND normalized_name = $2',
+      [ownerPersonalId, 'peanuts'],
+    );
+    assert.equal(allergy.rows[0]?.name, 'Peanuts');
+    assert.equal(allergy.rows[0]?.deleted_at, null);
+    assert.equal(Number(allergy.rows[0]?.version), 3);
+
+    const beforeHistoryProposal = await pool.query<{ pantry: number; recipes: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM pantry_items WHERE space_id = $1 AND entity_id = 'history-proposal-effect-pantry') AS pantry,
+         (SELECT count(*)::int FROM recipes WHERE space_id = $1 AND entity_id = 'history-proposal-effect-recipe') AS recipes`,
+      [ownerPersonalId],
+    );
+    const historicalProposalCreate = {
+      opId: 'history-applied-proposal', type: 'personal.chat.proposal.create', conversationId: 'history-chat', messageId: 'history-message',
+      proposal: { id: 'history-proposal', toolName: 'add_pantry_and_recipe', arguments: '{"pantry":"history-proposal-effect-pantry","recipe":"history-proposal-effect-recipe"}', status: 'applied' },
+    };
+    const historicalProposal = personalMutation('personal-chat-history-import', [
+      { opId: 'history-conversation-create', type: 'personal.chat.conversation.create', conversation: { id: 'history-chat', title: 'Imported chat', createdAt: '2025-01-01T10:00:00.000Z' } },
+      { opId: 'history-assistant-message', type: 'personal.chat.message.append', conversationId: 'history-chat', message: { id: 'history-message', role: 'assistant', content: 'I would add the item and save the recipe.', createdAt: '2025-01-01T10:01:00.000Z' } },
+      historicalProposalCreate,
+    ]);
+    const historyCreate = await personal(ownerToken, historicalProposal);
+    assert.equal(historyCreate.statusCode, 200);
+    assert.equal(historyCreate.body.operations[2].historicalApplied, true);
+    const historicalProposalRow = await pool.query<{
+      id: string; status: string; applied_effect_space_id: string | null;
+      applied_effect_mutation_id: string | null; applied_effect_op_id: string | null;
+    }>(
+      `SELECT id, status, applied_effect_space_id, applied_effect_mutation_id, applied_effect_op_id
+       FROM personal_chat_proposals WHERE space_id = $1 AND conversation_id = 'history-chat' AND entity_id = 'history-proposal'`,
+      [ownerPersonalId],
+    );
+    assert.equal(historicalProposalRow.rows[0]?.id,
+      contentStorageId('personal_chat_proposals', ownerPersonalId, JSON.stringify(['history-chat', 'history-message']), 'history-proposal'));
+    assert.equal(historicalProposalRow.rows[0]?.status, 'applied');
+    assert.deepEqual([
+      historicalProposalRow.rows[0]?.applied_effect_space_id,
+      historicalProposalRow.rows[0]?.applied_effect_mutation_id,
+      historicalProposalRow.rows[0]?.applied_effect_op_id,
+    ], [null, null, null]);
+    const afterHistoryProposal = await pool.query<{ pantry: number; recipes: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM pantry_items WHERE space_id = $1 AND entity_id = 'history-proposal-effect-pantry') AS pantry,
+         (SELECT count(*)::int FROM recipes WHERE space_id = $1 AND entity_id = 'history-proposal-effect-recipe') AS recipes`,
+      [ownerPersonalId],
+    );
+    assert.deepEqual(afterHistoryProposal.rows[0], beforeHistoryProposal.rows[0]);
+    const exactHistoricalReplay = await personal(ownerToken, personalMutation('personal-chat-history-replay', [historicalProposalCreate]));
+    assert.equal(exactHistoricalReplay.statusCode, 200);
+    assert.equal(exactHistoricalReplay.body.operations[0].reason, 'already_exists');
+    const historyIdentityMismatch = await personal(ownerToken, personalMutation('personal-chat-history-status-mismatch', [
+      { ...historicalProposalCreate, opId: 'history-status-mismatch', proposal: { ...historicalProposalCreate.proposal, status: 'pending' } },
+    ]));
+    assert.equal(historyIdentityMismatch.statusCode, 409);
+    const unchangedHistoricalStatus = await pool.query<{ status: string; applied_effect_mutation_id: string | null }>(
+      `SELECT status, applied_effect_mutation_id FROM personal_chat_proposals
+       WHERE space_id = $1 AND conversation_id = 'history-chat' AND entity_id = 'history-proposal'`, [ownerPersonalId],
+    );
+    assert.deepEqual(unchangedHistoricalStatus.rows[0], { status: 'applied', applied_effect_mutation_id: null });
+
+    const liveChatCreate = await personal(ownerToken, personalMutation('personal-live-chat-create', [
+      { opId: 'live-conversation-create', type: 'personal.chat.conversation.create', conversation: { id: 'live-chat', title: 'Live chat', createdAt: '2026-11-12T08:00:00.000Z' } },
+      { opId: 'live-assistant-message', type: 'personal.chat.message.append', conversationId: 'live-chat', message: { id: 'live-message', role: 'assistant', content: 'I can add this pantry item.', createdAt: '2026-11-12T08:01:00.000Z' } },
+      { opId: 'live-proposal-create', type: 'personal.chat.proposal.create', conversationId: 'live-chat', messageId: 'live-message', proposal: { id: 'live-proposal', toolName: 'add_pantry', arguments: '{"name":"Proposal Flour"}', status: 'pending' } },
+    ]));
+    assert.equal(liveChatCreate.statusCode, 200);
+    const statusOperation = {
+      opId: 'live-proposal-status', type: 'personal.chat.proposal.setStatus', conversationId: 'live-chat',
+      messageId: 'live-message', proposalId: 'live-proposal', status: 'applied', baseVersion: 1,
+      effectSpaceId: householdId, effectMutationId: 'live-proposal-effect-owner', effectOpId: 'live-proposal-effect-op',
+    };
+    const recoverableStatus = personalMutation('live-proposal-status-after-restart', [statusOperation]);
+    const beforeEffect = await personal(ownerToken, recoverableStatus);
+    assert.equal(beforeEffect.statusCode, 409);
+    assert.equal(beforeEffect.body.error.code, 'PROPOSAL_EFFECT_NOT_ACKNOWLEDGED');
+    const uncachedStatus = await pool.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM content_mutations WHERE user_id = $1 AND mutation_id = $2',
+      [owner.user.id, recoverableStatus.mutationId],
+    );
+    assert.equal(uncachedStatus.rows[0]?.count, 0);
+
+    const memberEffect = await call('POST', `/v1/spaces/${householdId}/content/mutations`, memberToken, {
+      mutationId: 'live-proposal-effect-member',
+      operations: [{ opId: 'live-proposal-effect-member-op', type: 'pantry.upsert', id: 'live-proposal-effect-member-row', name: 'Member Effect', preference: 3 }],
+    });
+    assert.equal(memberEffect.statusCode, 200);
+    const otherActorReceipt = await personal(ownerToken, personalMutation('live-proposal-status-other-actor', [
+      { ...statusOperation, opId: 'live-proposal-status-other-actor-op', effectMutationId: 'live-proposal-effect-member', effectOpId: 'live-proposal-effect-member-op' },
+    ]));
+    assert.equal(otherActorReceipt.statusCode, 409);
+    assert.equal(otherActorReceipt.body.error.code, 'PROPOSAL_EFFECT_NOT_ACKNOWLEDGED');
+
+    const ownerEffect = {
+      mutationId: 'live-proposal-effect-owner',
+      operations: [{ opId: 'live-proposal-effect-op', type: 'pantry.upsert', id: 'live-proposal-effect-owner-row', name: 'Proposal Flour', preference: 3 }],
+    };
+    const acceptedEffect = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, ownerEffect);
+    assert.equal(acceptedEffect.statusCode, 200);
+    const wrongSpaceReceipt = await personal(ownerToken, personalMutation('live-proposal-status-wrong-space', [
+      { ...statusOperation, opId: 'live-proposal-status-wrong-space-op', effectSpaceId: memberPersonalId },
+    ]));
+    assert.equal(wrongSpaceReceipt.statusCode, 409);
+    const wrongOperationReceipt = await personal(ownerToken, personalMutation('live-proposal-status-wrong-op', [
+      { ...statusOperation, opId: 'live-proposal-status-wrong-op-op', effectOpId: 'not-the-accepted-op' },
+    ]));
+    assert.equal(wrongOperationReceipt.statusCode, 409);
+    const acceptedEffectReplay = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, ownerEffect);
+    assert.equal(acceptedEffectReplay.statusCode, 200);
+    assert.deepEqual(acceptedEffectReplay.body, acceptedEffect.body);
+    const ownerEffectRows = await pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pantry_items WHERE space_id = $1 AND entity_id = 'live-proposal-effect-owner-row'`, [householdId],
+    );
+    assert.equal(ownerEffectRows.rows[0]?.count, 1);
+
+    const appliedStatus = await personal(ownerToken, recoverableStatus);
+    assert.equal(appliedStatus.statusCode, 200);
+    const appliedStatusReplay = await personal(ownerToken, recoverableStatus);
+    assert.equal(appliedStatusReplay.statusCode, 200);
+    assert.deepEqual(appliedStatusReplay.body, appliedStatus.body);
+    const liveProposalRow = await pool.query<{
+      status: string; version: string; applied_effect_space_id: string;
+      applied_effect_mutation_id: string; applied_effect_op_id: string;
+    }>(
+      `SELECT status, version, applied_effect_space_id, applied_effect_mutation_id, applied_effect_op_id
+       FROM personal_chat_proposals WHERE space_id = $1 AND conversation_id = 'live-chat' AND entity_id = 'live-proposal'`,
+      [ownerPersonalId],
+    );
+    assert.deepEqual(liveProposalRow.rows[0], {
+      status: 'applied', version: '2', applied_effect_space_id: householdId,
+      applied_effect_mutation_id: 'live-proposal-effect-owner', applied_effect_op_id: 'live-proposal-effect-op',
+    });
+
+    const staleDelete = await personal(ownerToken, personalMutation('live-conversation-delete-stale', [
+      { opId: 'live-conversation-delete-stale-op', type: 'personal.chat.conversation.delete', id: 'live-chat', baseVersion: 3 },
+    ]));
+    assert.equal(staleDelete.statusCode, 409);
+    const deleteConversation = await personal(ownerToken, personalMutation('live-conversation-delete-current', [
+      { opId: 'live-conversation-delete-current-op', type: 'personal.chat.conversation.delete', id: 'live-chat', baseVersion: 4 },
+    ]));
+    assert.equal(deleteConversation.statusCode, 200);
+    const deletedConversation = await pool.query<{ deleted_at: Date | null; version: string }>(
+      "SELECT deleted_at, version FROM personal_conversations WHERE space_id = $1 AND entity_id = 'live-chat'", [ownerPersonalId],
+    );
+    assert.ok(deletedConversation.rows[0]?.deleted_at);
+    assert.equal(Number(deletedConversation.rows[0]?.version), 5);
+
+    const deviceOnlyField = await personal(ownerToken, personalMutation('personal-provider-setting-denied', [
+      { opId: 'personal-provider-setting', type: 'personal.preference.set', field: 'settings.providerId', value: 'openai', baseVersion: null },
+    ]));
+    assert.equal(deviceOnlyField.statusCode, 400);
+    const cachedHouseholdMutation = {
+      mutationId: 'personal-route-before-replay-check',
+      operations: [{ opId: 'personal-route-household-pantry', type: 'pantry.upsert', id: 'personal-route-household-row', name: 'Allowed household content', preference: 3 }],
+    };
+    assert.equal((await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, cachedHouseholdMutation)).statusCode, 200);
+    const personalOnHouseholdPath = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, {
+      mutationId: cachedHouseholdMutation.mutationId,
+      operations: [{ opId: 'personal-route-household-private', type: 'personal.preference.set', field: 'city', value: 'Private only', baseVersion: 1 }],
+    });
+    assert.equal(personalOnHouseholdPath.statusCode, 403);
+    assert.equal(personalOnHouseholdPath.body.error.code, 'PERSONAL_SPACE_REQUIRED');
+    const outsiderPrivateWrite = await personal(outsiderToken, personalMutation('outsider-personal-write', [
+      { opId: 'outsider-personal-preference', type: 'personal.preference.set', field: 'city', value: 'No', baseVersion: null },
+    ]));
+    assert.equal(outsiderPrivateWrite.statusCode, 403);
+    const viewerPrivateWrite = await personal(viewerToken, personalMutation('viewer-personal-write', [
+      { opId: 'viewer-personal-preference', type: 'personal.preference.set', field: 'city', value: 'No', baseVersion: null },
+    ]));
+    assert.equal(viewerPrivateWrite.statusCode, 403);
+  });
+
   assert.equal((await call('DELETE', `/v1/spaces/${householdId}/members/${viewer.user.id}`, ownerToken)).statusCode, 204);
   assert.equal((await call('GET', `/v1/spaces/${householdId}`, viewerToken)).statusCode, 403);
   assert.equal((await call('GET', '/v1/me', viewerToken)).statusCode, 200);

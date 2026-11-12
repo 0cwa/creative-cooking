@@ -4,6 +4,13 @@ import { z } from 'zod';
 import { ApiFault, requireAuth, requireMembershipInTransaction, transaction } from './authz.js';
 import type { ServerConfig } from './config.js';
 import { contentStorageId } from './contentIdentity.js';
+import {
+  applyPersonalContentOperation,
+  findPersonalContentConflicts,
+  isPersonalContentOperation,
+  personalContentOperationSchema,
+  type PersonalContentOperation,
+} from './personalContent.js';
 import { issuePowerSyncJwt, powerSyncJwks } from './syncAuth.js';
 
 const textId = z.string().trim().min(1).max(200);
@@ -208,6 +215,7 @@ const contentOperationSchema = z.discriminatedUnion('type', [
   shoppingItemRemoveSchema,
   shoppingPurchaseSchema,
   shoppingHistoryImportSchema,
+  ...personalContentOperationSchema.options,
 ]);
 
 const contentMutationSchema = z.object({
@@ -216,6 +224,19 @@ const contentMutationSchema = z.object({
 }).strict().superRefine((mutation, context) => {
   const seenOperations = new Set<string>();
   const seenRows = new Set<string>();
+  const seenPersonalRows = new Set<string>();
+  const personalConversationOperations = new Map<string, number>();
+  const firstConversationCreate = new Map<string, number>();
+  const firstAssistantMessage = new Map<string, number>();
+  mutation.operations.forEach((operation, index) => {
+    if (operation.type === 'personal.chat.conversation.create' && !firstConversationCreate.has(operation.conversation.id)) {
+      firstConversationCreate.set(operation.conversation.id, index);
+    }
+    if (operation.type === 'personal.chat.message.append' && operation.message.role === 'assistant') {
+      const key = JSON.stringify([operation.conversationId, operation.message.id]);
+      if (!firstAssistantMessage.has(key)) firstAssistantMessage.set(key, index);
+    }
+  });
   mutation.operations.forEach((operation, index) => {
     if (seenOperations.has(operation.opId)) {
       context.addIssue({ code: 'custom', path: ['operations', index, 'opId'], message: 'Operation IDs must be unique in a mutation.' });
@@ -228,7 +249,54 @@ const contentMutationSchema = z.object({
       context.addIssue({ code: 'custom', path: ['operations', index], message: 'A recipe can be changed only once per mutation.' });
     }
     if (rowKey) seenRows.add(rowKey);
+
+    let personalRowKey: string | null = null;
+    let conversationId: string | null = null;
+    if (operation.type === 'personal.preference.set') personalRowKey = `preference:${operation.field}`;
+    if (operation.type === 'personal.allergy.set') personalRowKey = `allergy:${operation.name.trim().toLocaleLowerCase('en')}`;
+    if (operation.type === 'personal.chat.conversation.create') {
+      personalRowKey = `conversation:${operation.conversation.id}`;
+      conversationId = operation.conversation.id;
+    }
+    if (operation.type === 'personal.chat.message.append') {
+      personalRowKey = `message:${JSON.stringify([operation.conversationId, operation.message.id])}`;
+      conversationId = operation.conversationId;
+    }
+    if (operation.type === 'personal.chat.proposal.create' || operation.type === 'personal.chat.proposal.setStatus') {
+      personalRowKey = `proposal:${JSON.stringify([operation.conversationId, operation.messageId, operation.type === 'personal.chat.proposal.create' ? operation.proposal.id : operation.proposalId])}`;
+      conversationId = operation.conversationId;
+    }
+    if (operation.type === 'personal.chat.conversation.delete') {
+      personalRowKey = `conversation:${operation.id}`;
+      conversationId = operation.id;
+    }
+    if (personalRowKey && seenPersonalRows.has(personalRowKey)) {
+      context.addIssue({ code: 'custom', path: ['operations', index], message: 'A personal record can be changed only once per mutation.' });
+    }
+    if (personalRowKey) seenPersonalRows.add(personalRowKey);
+    if (conversationId !== null) personalConversationOperations.set(conversationId, (personalConversationOperations.get(conversationId) ?? 0) + 1);
+
+    if (operation.type === 'personal.chat.message.append') {
+      const createIndex = firstConversationCreate.get(operation.conversationId);
+      if (createIndex !== undefined && createIndex > index) {
+        context.addIssue({ code: 'custom', path: ['operations', index], message: 'Create a conversation before appending its messages.' });
+      }
+    }
+    if (operation.type === 'personal.chat.proposal.create') {
+      const messageIndex = firstAssistantMessage.get(JSON.stringify([operation.conversationId, operation.messageId]));
+      if (messageIndex !== undefined && messageIndex > index) {
+        context.addIssue({ code: 'custom', path: ['operations', index], message: 'Append a proposal message before creating its proposals.' });
+      }
+    }
   });
+  const deletedConversations = new Set(mutation.operations
+    .filter((operation) => operation.type === 'personal.chat.conversation.delete')
+    .map((operation) => operation.id));
+  for (const conversationId of deletedConversations) {
+    if ((personalConversationOperations.get(conversationId) ?? 0) > 1) {
+      context.addIssue({ code: 'custom', path: ['operations'], message: 'Conversation deletion must be a separate mutation from changes to that conversation.' });
+    }
+  }
 });
 
 type ContentOperation = z.infer<typeof contentOperationSchema>;
@@ -955,6 +1023,14 @@ async function applyContentOperation(
   operation: ContentOperation,
 ) {
   switch (operation.type) {
+    case 'personal.preference.set':
+    case 'personal.allergy.set':
+    case 'personal.chat.conversation.create':
+    case 'personal.chat.message.append':
+    case 'personal.chat.proposal.create':
+    case 'personal.chat.proposal.setStatus':
+    case 'personal.chat.conversation.delete':
+      return applyPersonalContentOperation(client, userId, spaceId, operation as PersonalContentOperation);
     case 'pantry.upsert': return applyPantryUpsert(client, userId, spaceId, operation);
     case 'pantry.delete': return applyPantryDelete(client, userId, spaceId, operation);
     case 'recipe.save': return applyRecipeSave(client, userId, spaceId, operation);
@@ -994,7 +1070,14 @@ async function handleContentMutation(
 ): Promise<MutationReply> {
   return transaction(pool, async (client) => {
     // This lock/check intentionally precedes idempotency lookup and receipt replay.
-    await requireMembershipInTransaction(client, userId, spaceId, 'editor');
+    const membership = await requireMembershipInTransaction(client, userId, spaceId, 'editor');
+    const personalOperations = mutation.operations.filter(isPersonalContentOperation);
+    if (personalOperations.length > 0) {
+      const workspace = await client.query<{ created_by: string }>('SELECT created_by FROM spaces WHERE id = $1', [spaceId]);
+      if (membership.kind !== 'personal' || membership.role !== 'owner' || workspace.rows[0]?.created_by !== userId) {
+        throw new ApiFault(403, 'PERSONAL_SPACE_REQUIRED', 'Personal content can only be written to the signed-in owner’s personal workspace.');
+      }
+    }
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`content-mutation:${userId}:${mutation.mutationId}`]);
     const replay = await client.query<{ space_id: string; status_code: number; response: Record<string, unknown> }>(
       'SELECT space_id, status_code, response FROM content_mutations WHERE user_id = $1 AND mutation_id = $2 FOR UPDATE',
@@ -1026,6 +1109,18 @@ async function handleContentMutation(
         },
       });
       return response;
+    }
+
+    const personalConflicts = await findPersonalContentConflicts(client, userId, spaceId,
+      mutation.mutationId, personalOperations);
+    if (personalConflicts.length) {
+      return saveMutationReceipt(client, userId, spaceId, mutation.mutationId, {
+        statusCode: 409,
+        body: {
+          error: { code: 'PERSONAL_CONTENT_CONFLICT', message: 'Personal content changed elsewhere; both versions were kept for review.' },
+          conflicts: personalConflicts,
+        },
+      });
     }
 
     const results: Record<string, unknown>[] = [];

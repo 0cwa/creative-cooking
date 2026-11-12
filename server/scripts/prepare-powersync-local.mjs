@@ -23,7 +23,9 @@ if (!replicationPassword || replicationPassword.length < 32 || !storagePassword 
 
 const publicationTables = [
   'spaces', 'space_members', 'pantry_items', 'recipes', 'recipe_ingredients', 'recipe_steps', 'recipe_conflicts',
-  'shopping_lists', 'shopping_cycles', 'shopping_items', 'shopping_purchases',
+  'shopping_lists', 'shopping_cycles', 'shopping_items', 'shopping_purchases', 'personal_profile_fields',
+  'personal_allergies', 'personal_conversations', 'personal_chat_messages', 'personal_chat_proposals',
+  'personal_content_conflicts',
 ];
 const roleComments = 'creative-cooking local PowerSync fixture role';
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
@@ -57,7 +59,7 @@ try {
     );
     const actualTables = publication.rows.map((row) => row.tablename).sort();
     if (JSON.stringify(actualTables) !== JSON.stringify([...publicationTables].sort())) {
-      throw new Error(`The powersync publication table allowlist does not match migration 002 (found ${actualTables.length} tables).`);
+      throw new Error(`The powersync publication table allowlist does not match the SQL migrations (found ${actualTables.length} tables).`);
     }
 
     await ensureRole(client, 'cc_powersync_replication', replicationPassword, true, 5);
