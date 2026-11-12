@@ -9,6 +9,7 @@ import { InstallAppPrompt } from '@/components/InstallAppPrompt';
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
 import { requestPersistentStorageOnce } from '@/storage/persistence';
+import { initializeAccountWorkspace } from '@/account/accountWorkspace';
 
 function StorageFailureAlert() {
   const { storageError } = useAppState();
@@ -70,11 +71,19 @@ function BootTasks() {
   return null;
 }
 
+function AccountWorkspaceBootstrap() {
+  useEffect(() => {
+    void initializeAccountWorkspace();
+  }, []);
+  return null;
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AppStateProvider>
         <BootTasks />
+        <AccountWorkspaceBootstrap />
         <StorageFailureAlert />
         <StatusBar style="auto" />
         <Stack screenOptions={{ headerShown: false }}>
