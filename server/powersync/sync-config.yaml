@@ -1,0 +1,114 @@
+config:
+  edition: 3
+
+streams:
+  spaces:
+    auto_subscribe: true
+    query: |
+      SELECT CAST(s.id AS TEXT) AS id, CAST(s.id AS TEXT) AS space_id,
+        s.name, s.kind, s.created_at
+      FROM spaces s
+      WHERE s.id IN (
+        SELECT sm.space_id FROM space_members sm WHERE CAST(sm.user_id AS TEXT) = auth.user_id()
+      )
+
+  space_members:
+    auto_subscribe: true
+    query: |
+      SELECT CAST(space_id AS TEXT) || ':' || CAST(user_id AS TEXT) AS id,
+        CAST(space_id AS TEXT) AS space_id, CAST(user_id AS TEXT) AS user_id, role, joined_at
+      FROM space_members
+      WHERE CAST(user_id AS TEXT) = auth.user_id()
+
+  pantry_items:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, name, preference,
+        created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM pantry_items
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipes:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, title, description, portions,
+        notes, created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM recipes
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipe_ingredients:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, recipe_id, position, name, amount,
+        needs_shopping, metadata::text AS metadata, created_at, updated_at, deleted_at,
+        version, CAST(updated_by AS TEXT) AS updated_by
+      FROM recipe_ingredients
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipe_steps:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, recipe_id, position, text,
+        created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM recipe_steps
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipe_conflicts:
+    auto_subscribe: true
+    query: |
+      SELECT id, CAST(space_id AS TEXT) AS space_id, recipe_id, mutation_id, base_version,
+        current_version, attempted_content::text AS attempted_content, CAST(created_by AS TEXT) AS created_by,
+        created_at, resolved_at
+      FROM recipe_conflicts
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_lists:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, name, current_cycle_id,
+        created_at, updated_at, removed_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM shopping_lists
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_cycles:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, list_id, started_at
+      FROM shopping_cycles
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_items:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, list_id, name, recipe_id,
+        ingredient_id, display_quantity, display_unit, purchase_cycle_id, checked,
+        purchased_cycle_id, created_at, updated_at, removed_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM shopping_items
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_purchases:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, list_id, purchase_cycle_id,
+        item_ids, pantry_item_ids,
+        purchased_at, CAST(purchased_by AS TEXT) AS purchased_by
+      FROM shopping_purchases
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )

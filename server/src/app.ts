@@ -3,35 +3,22 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type preHandlerHookHandler } from 'fastify';
 import { Pool, type PoolClient } from 'pg';
 import { z } from 'zod';
+import { ApiFault, requireAuth, requireMembership, requireMembershipInTransaction, transaction } from './authz.js';
+import { registerContentRoutes } from './content.js';
 import type { ServerConfig } from './config.js';
 import { hashOpaqueToken, hashPassword, normalizeEmail, createOpaqueToken, verifyPassword } from './security.js';
 
+export { requireMembership, requireMembershipInTransaction } from './authz.js';
+
 const SESSION_DAYS = 30;
 const INVITATION_DAYS = 7;
-const rolePower = { viewer: 1, editor: 2, owner: 3 } as const;
-
-interface AuthContext {
-  userId: string;
-  email: string;
-  sessionId: string;
-  tokenHash: string;
-}
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    auth: AuthContext | null;
-  }
-}
-
-class ApiFault extends Error {
-  constructor(readonly statusCode: number, readonly code: string, message: string) {
-    super(message);
-  }
-}
 
 interface AppOptions {
   pool: Pool;
-  config: Pick<ServerConfig, 'sessionTokenPepper' | 'allowedOrigins' | 'logLevel'>;
+  config: Pick<ServerConfig,
+    'sessionTokenPepper' | 'allowedOrigins' | 'logLevel' | 'syncJwtAudience' | 'syncJwtIssuer'
+    | 'syncJwtKeyId' | 'syncJwtPrivateKeyB64Url' | 'syncJwtPublicKeyB64Url'
+  >;
   logger?: boolean;
 }
 
@@ -58,21 +45,6 @@ function parse<T extends z.ZodType>(reply: FastifyReply, schema: T, value: unkno
     return undefined;
   }
   return result.data;
-}
-
-async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await operation(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -109,46 +81,6 @@ async function userSpaces(pool: Pool, userId: string) {
   }));
 }
 
-export async function requireMembership(
-  pool: Pool,
-  userId: string,
-  spaceId: string,
-  minimumRole: 'viewer' | 'editor' | 'owner' = 'viewer',
-) {
-  const result = await pool.query<{ role: 'owner' | 'editor' | 'viewer'; kind: 'personal' | 'household' }>(
-    `SELECT m.role, s.kind
-     FROM spaces s JOIN space_members m ON m.space_id = s.id
-     WHERE s.id = $1 AND m.user_id = $2`,
-    [spaceId, userId],
-  );
-  const membership = result.rows[0];
-  if (!membership) throw new ApiFault(403, 'SPACE_ACCESS_DENIED', 'Current workspace membership is required.');
-  if (rolePower[membership.role] < rolePower[minimumRole]) {
-    throw new ApiFault(403, 'ROLE_REQUIRED', `Workspace role ${minimumRole} is required.`);
-  }
-  return membership;
-}
-
-export async function requireMembershipInTransaction(
-  client: PoolClient,
-  userId: string,
-  spaceId: string,
-  minimumRole: 'viewer' | 'editor' | 'owner',
-) {
-  await client.query('SELECT id FROM spaces WHERE id = $1 FOR SHARE', [spaceId]);
-  const result = await client.query<{ role: 'owner' | 'editor' | 'viewer'; kind: 'personal' | 'household' }>(
-    `SELECT m.role, s.kind FROM spaces s JOIN space_members m ON m.space_id = s.id
-     WHERE s.id = $1 AND m.user_id = $2 FOR SHARE OF m`,
-    [spaceId, userId],
-  );
-  const membership = result.rows[0];
-  if (!membership) throw new ApiFault(403, 'SPACE_ACCESS_DENIED', 'Current workspace membership is required.');
-  if (rolePower[membership.role] < rolePower[minimumRole]) {
-    throw new ApiFault(403, 'ROLE_REQUIRED', `Workspace role ${minimumRole} is required.`);
-  }
-  return membership;
-}
-
 async function authenticateRequest(request: FastifyRequest, reply: FastifyReply, pool: Pool, pepper: string): Promise<void> {
   const header = request.headers.authorization;
   const match = typeof header === 'string' ? /^Bearer ([A-Za-z0-9_-]{43})$/.exec(header) : null;
@@ -174,11 +106,6 @@ async function authenticateRequest(request: FastifyRequest, reply: FastifyReply,
 
 function authGuard(pool: Pool, pepper: string): preHandlerHookHandler {
   return async (request, reply) => authenticateRequest(request, reply, pool, pepper);
-}
-
-function requireAuth(request: FastifyRequest): AuthContext {
-  if (!request.auth) throw new ApiFault(401, 'AUTH_REQUIRED', 'A valid bearer session is required.');
-  return request.auth;
 }
 
 function paramSpace(reply: FastifyReply, request: FastifyRequest): { spaceId: string } | undefined {
@@ -490,6 +417,8 @@ export async function createApp({ pool, config, logger = true }: AppOptions): Pr
     await removeMembership(params.spaceId, auth.userId, auth.userId, false);
     return reply.code(204).send();
   });
+
+  await registerContentRoutes(app, pool, authGuard(pool, config.sessionTokenPepper), config);
 
   return app;
 }

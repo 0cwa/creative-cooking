@@ -2,6 +2,7 @@ name: creative-cooking-sync-local
 services:
   postgres:
     image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
     environment:
       POSTGRES_DB: creative_cooking
       POSTGRES_USER: creative_cooking
