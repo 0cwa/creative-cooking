@@ -10,7 +10,7 @@ import {
   parseRecipeIngredientsText,
   parseRecipeTextList,
   scaleRecipeIngredients,
-  shoppingIngredients
+  missingPantryIngredients
 } from '@/domain/recipeEditing';
 import type { Recipe } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
@@ -64,39 +64,36 @@ export default function RecipesScreen() {
   const {
     pantry,
     recipes,
-    addPantryItems,
     updateRecipe,
     deleteRecipe
   } = useAppState();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
-  const [checkedShopping, setCheckedShopping] = useState<Set<number>>(new Set());
 
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? null;
+  const missingShoppingIngredients = selected
+    ? new Set(missingPantryIngredients(selected.ingredients, pantry.map((item) => item.name)))
+    : new Set<Recipe['ingredients'][number]>();
   const shoppingRows = selected
     ? (() => {
-        const shopping = new Set(shoppingIngredients(selected.ingredients, pantry.map((item) => item.name)));
         return selected.ingredients
           .map((ingredient, index) => ({ ingredient, index }))
-          .filter(({ ingredient }) => shopping.has(ingredient));
+          .filter(({ ingredient }) => missingShoppingIngredients.has(ingredient));
       })()
     : [];
 
   const openRecipe = (recipe: Recipe) => {
     setSelectedId(recipe.id);
     setDraft(null);
-    setCheckedShopping(new Set());
   };
 
   const closeRecipe = () => {
     setSelectedId(null);
     setDraft(null);
-    setCheckedShopping(new Set());
   };
 
   const startEditing = () => {
     if (!selected) return;
-    setCheckedShopping(new Set());
     setDraft(toRecipeEditDraft(selected));
   };
 
@@ -119,7 +116,6 @@ export default function RecipesScreen() {
 
     try {
       updateRecipe(selected.id, cleaned);
-      setCheckedShopping(new Set());
       setDraft(null);
     } catch (error) {
       Alert.alert('Could not save recipe', error instanceof Error ? error.message : 'Unknown error');
@@ -140,49 +136,14 @@ export default function RecipesScreen() {
     }
   };
 
-  const toggleShoppingItem = (index: number) => {
-    setCheckedShopping((current) => {
-      const next = new Set(current);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  };
-
-  const addCheckedToPantry = () => {
-    if (!selected || !checkedShopping.size) return;
-
-    const purchasedNames = selected.ingredients
-      .filter((_, index) => checkedShopping.has(index))
-      .map((ingredient) => ingredient.name);
-
-    try {
-      updateRecipe(selected.id, {
-        ...toRecipeDraft(selected),
-        ingredients: selected.ingredients.map((ingredient, index) => (
-          checkedShopping.has(index)
-            ? { ...ingredient, needsShopping: undefined }
-            : ingredient
-        ))
-      });
-      addPantryItems(purchasedNames);
-      setCheckedShopping(new Set());
-      Alert.alert(
-        'Pantry updated',
-        purchasedNames.length === 1
-          ? `${purchasedNames[0]} was added to Pantry.`
-          : `${purchasedNames.length} ingredients were added to Pantry.`
-      );
-    } catch (error) {
-      Alert.alert('Could not update shopping list', error instanceof Error ? error.message : 'Unknown error');
-    }
-  };
-
   return (
     <Screen>
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
-        <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
+        <View style={styles.headerActions}>
+          <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
+        </View>
       </View>
 
       <FlashList
@@ -342,36 +303,23 @@ export default function RecipesScreen() {
 
                 <Text style={styles.sectionTitle}>Ingredients</Text>
                 {selected.ingredients.map((ingredient, index) => (
-                  <Text key={`${ingredient.name}-${index}`} style={styles.line}>• {ingredient.amount ? `${ingredient.amount} ` : ''}{ingredient.name}{ingredient.needsShopping ? '  🛒' : ''}</Text>
+                  <Text key={`${ingredient.name}-${index}`} style={styles.line}>• {ingredient.amount ? `${ingredient.amount} ` : ''}{ingredient.name}{ingredient.needsShopping && missingShoppingIngredients.has(ingredient) ? '  🛒' : ''}</Text>
                 ))}
 
                 {!!shoppingRows.length && (
                   <View style={styles.shoppingSection}>
-                    <Text style={styles.sectionTitle}>Shopping list</Text>
-                    <Text style={styles.shoppingHelp}>Ingredients marked “Need to buy” or missing from Pantry appear here. Check things off as you buy them, then add the checked ingredients back to Pantry.</Text>
-                    {shoppingRows.map(({ ingredient, index }) => {
-                      const checked = checkedShopping.has(index);
-                      return (
-                        <Pressable
-                          key={`shopping-${index}`}
-                          accessibilityRole="checkbox"
-                          accessibilityState={{ checked }}
-                          accessibilityLabel={`${ingredient.name} purchased`}
-                          onPress={() => toggleShoppingItem(index)}
-                          style={[styles.shoppingRow, checked && styles.shoppingRowChecked]}
-                        >
-                          <View style={[styles.checkbox, checked && styles.checkboxChecked]}><Text style={styles.checkboxText}>{checked ? '✓' : ''}</Text></View>
-                          <Text style={[styles.shoppingName, checked && styles.shoppingNameChecked]}>
-                            {ingredient.amount ? `${ingredient.amount} ` : ''}{ingredient.name}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                    {!!checkedShopping.size && (
-                      <Pressable accessibilityRole="button" onPress={addCheckedToPantry} style={styles.primaryAction}>
-                        <Text style={styles.primaryActionText}>Add checked to Pantry</Text>
-                      </Pressable>
-                    )}
+                    <Text style={styles.sectionTitle}>Need to shop?</Text>
+                    <Text style={styles.shoppingHelp}>Ingredients marked to buy or missing from Pantry can be added to a shopping list.</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        closeRecipe();
+                        router.push(`/shopping?recipeId=${encodeURIComponent(selected.id)}`);
+                      }}
+                      style={styles.primaryAction}
+                    >
+                      <Text style={styles.primaryActionText}>Add ingredients to shopping list ({shoppingRows.length})</Text>
+                    </Pressable>
                   </View>
                 )}
 
@@ -392,6 +340,9 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 32, lineHeight: 38, fontWeight: '800', color: '#172033' },
   settings: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  shoppingLink: { minHeight: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  shoppingLinkText: { color: '#172033', fontWeight: '800' },
   card: { marginHorizontal: 16, marginVertical: 6, padding: 17, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72 },
   cardTitle: { color: '#172033', fontWeight: '700', fontSize: 18 },
   cardDescription: { color: '#64748b', marginTop: 5, lineHeight: 19 },
@@ -403,7 +354,6 @@ const styles = StyleSheet.create({
   emptyText: { textAlign: 'center', color: '#64748b', lineHeight: 21, marginTop: 8 },
   recipeDetail: { padding: 22, paddingBottom: 60, maxWidth: 760, width: '100%', alignSelf: 'center' },
   detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28, gap: 12, flexWrap: 'wrap' },
-  headerActions: { flexDirection: 'row', gap: 14, alignItems: 'center' },
   detailAction: { minHeight: 44, minWidth: 64, justifyContent: 'center' },
   close: { color: '#334155', fontWeight: '700' },
   edit: { color: '#1d4ed8', fontWeight: '700' },
