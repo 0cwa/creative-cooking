@@ -1,0 +1,31 @@
+{
+  "name": "@creative-cooking/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/src/main.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "db:migrate": "tsx src/migrate.ts",
+    "db:seed": "tsx src/seed.ts",
+    "prepare:local": "node scripts/prepare-local-env.mjs",
+    "test": "NODE_ENV=test npm run db:migrate && NODE_ENV=test tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.4.1",
+    "@fastify/rate-limit": "11.2.2",
+    "argon2": "0.45.2",
+    "fastify": "5.12.8",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/pg": "8.15.6",
+    "tsx": "4.20.6",
+    "typescript": "6.0.3"
+  }
+}
