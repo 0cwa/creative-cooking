@@ -29,16 +29,22 @@
    }
 --- uniffi-bindgen-react-native/typescript/src/ffi-types.ts
 +++ uniffi-bindgen-react-native/typescript/src/ffi-types.ts
-@@ -31,7 +31,12 @@ export class RustBuffer {
+@@ -31,7 +31,18 @@ export class RustBuffer {
    }
 
    static fromByteArray(buf: UniffiByteArray): RustBuffer {
 -    return new RustBuffer(buf.buffer);
-+    const arrayBuffer = new ArrayBuffer(buf.byteLength);
-+    const copy = new Uint8Array(arrayBuffer);
-+    for (let index = 0; index < buf.byteLength; index += 1) {
-+      copy[index] = buf[index]!;
-+    }
++    const value = buf as unknown as {
++      buffer?: ArrayBufferLike;
++      byteOffset?: number;
++      byteLength?: number;
++    };
++    const sourceBuffer = value.buffer ?? (buf as unknown as ArrayBufferLike);
++    const sourceOffset = value.buffer === undefined ? 0 : (value.byteOffset ?? 0);
++    const sourceLength = value.byteLength ?? (sourceBuffer.byteLength - sourceOffset);
++    const source = new Uint8Array(sourceBuffer, sourceOffset, sourceLength);
++    const arrayBuffer = new ArrayBuffer(sourceLength);
++    new Uint8Array(arrayBuffer).set(source);
 +    return new RustBuffer(arrayBuffer);
    }
 

@@ -5,6 +5,7 @@ test('Loro web engine persists and reopens recipe updates across a page restart'
   const result = page.getByTestId('loro-result');
   await expect(result).toContainText('PASS');
   await expect(result).toContainText('offline update bytes=');
+  await expect(result).toContainText('stable row IDs=preserved');
   await expect(result).toContainText('portable snapshot import/export=true');
 
   await page.reload();

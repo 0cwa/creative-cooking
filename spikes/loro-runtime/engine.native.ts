@@ -1,4 +1,5 @@
 import { LoroDoc } from 'loro-react-native';
+import { NATIVE_WEB_BASE_SNAPSHOT, NATIVE_WEB_UPDATE } from './native-web-fixture';
 import { runLoroScenario, type LoroConstructor, type LoroDocPort, type LoroListPort, type LoroMapPort } from './engine.shared';
 
 type NativeDoc = InstanceType<typeof LoroDoc>;
@@ -54,5 +55,10 @@ class NativeDocAdapter implements LoroDocPort {
 }
 
 export function runScenario(priorSnapshot?: Uint8Array) {
-  return runLoroScenario(NativeDocAdapter as unknown as LoroConstructor, 'loro-react-native', priorSnapshot);
+  return runLoroScenario(
+    NativeDocAdapter as unknown as LoroConstructor,
+    'loro-react-native',
+    priorSnapshot,
+    { baseSnapshot: NATIVE_WEB_BASE_SNAPSHOT, update: NATIVE_WEB_UPDATE },
+  );
 }
