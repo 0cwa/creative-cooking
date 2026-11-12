@@ -28,7 +28,7 @@ const publicationTables = [
 const roleComments = 'creative-cooking local PowerSync fixture role';
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
 
-async function ensureRole(client, role, password, replication) {
+async function ensureRole(client, role, password, replication, connectionLimit) {
   const found = await client.query(
     `SELECT shobj_description(oid, 'pg_authid') AS comment FROM pg_roles WHERE rolname = $1`, [role],
   );
@@ -37,9 +37,9 @@ async function ensureRole(client, role, password, replication) {
     if (found.rows[0].comment !== roleComments) {
       throw new Error(`Role ${role} already exists and is not marked as this local fixture's role; it was left unchanged.`);
     }
-    await client.query(`ALTER ROLE ${role} WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE ${replication ? 'REPLICATION' : 'NOREPLICATION'} CONNECTION LIMIT 5 PASSWORD ${passwordLiteral}`);
+    await client.query(`ALTER ROLE ${role} WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE ${replication ? 'REPLICATION' : 'NOREPLICATION'} CONNECTION LIMIT ${connectionLimit} PASSWORD ${passwordLiteral}`);
   } else {
-    await client.query(`CREATE ROLE ${role} WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE ${replication ? 'REPLICATION' : 'NOREPLICATION'} CONNECTION LIMIT 5 PASSWORD ${passwordLiteral}`);
+    await client.query(`CREATE ROLE ${role} WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE ${replication ? 'REPLICATION' : 'NOREPLICATION'} CONNECTION LIMIT ${connectionLimit} PASSWORD ${passwordLiteral}`);
     const commentLiteral = (await client.query('SELECT quote_literal($1) AS quoted', [roleComments])).rows[0].quoted;
     await client.query(`COMMENT ON ROLE ${role} IS ${commentLiteral}`);
   }
@@ -60,8 +60,8 @@ try {
       throw new Error(`The powersync publication table allowlist does not match migration 002 (found ${actualTables.length} tables).`);
     }
 
-    await ensureRole(client, 'cc_powersync_replication', replicationPassword, true);
-    await ensureRole(client, 'cc_powersync_storage', storagePassword, false);
+    await ensureRole(client, 'cc_powersync_replication', replicationPassword, true, 5);
+    await ensureRole(client, 'cc_powersync_storage', storagePassword, false, 30);
     await client.query(`GRANT CONNECT ON DATABASE ${database.pathname.slice(1)} TO cc_powersync_replication, cc_powersync_storage`);
     await client.query('GRANT USAGE ON SCHEMA public TO cc_powersync_replication, cc_powersync_storage');
     await client.query(`GRANT SELECT ON TABLE ${publicationTables.map((name) => `public.${name}`).join(', ')} TO cc_powersync_replication`);
