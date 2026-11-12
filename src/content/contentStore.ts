@@ -1,7 +1,8 @@
 import type { CommonPowerSyncDatabase, Transaction } from '@powersync/common';
 import type { ContentMutationOperation, ContentMutationRequest } from '../account/contracts';
 import { DEFAULT_STATE } from '../domain/defaults';
-import type { ChefToolProposal, PersistedState } from '../domain/types';
+import type { ChefToolProposal, PersistedState, Recipe } from '../domain/types';
+import type { RecipeConflictSnapshot } from '../domain/recipeConflict';
 import { type ContentRows, type ContentRecord, decodeContentRows, encodeContentRows, privateStateFrom, mergeGuestPrivateState } from './recordCodec';
 import { remapGuestPersonalStateForWorkspace, remapGuestStateForWorkspace } from './adoptionMapping';
 import { buildContentMutationOperations, buildGuestAdoptionMutationOperations, splitContentOperations, withOperationIds } from './mutations';
@@ -31,6 +32,12 @@ type ContentReader = {
   getAll<T>(query: string, parameters?: unknown[]): Promise<T[]>;
   getOptional<T>(query: string, parameters?: unknown[]): Promise<T | null>;
 };
+type RecipeSnapshotOverride = {
+  spaceId: string;
+  recipeId: string;
+  version: number | null;
+  recipe: Recipe | null;
+};
 type MigrationReceipt = {
   migrationId: string;
   decision: 'merge' | 'keep' | 'in-progress';
@@ -43,6 +50,7 @@ type MigrationReceipt = {
 
 const LEGACY_MIGRATION_ID = 'legacy-aggregate-v1';
 const PRIVATE_ROW_ID = 'private-state';
+const RECIPE_SNAPSHOT_PREFIX = 'recipe-workspace-snapshot-v1:';
 const MIGRATION_BATCH_SIZE = 80;
 const RECORD_TABLE_ORDER = [
   'pantry_items',
@@ -281,6 +289,66 @@ async function readLocalJson<T>(db: CommonPowerSyncDatabase, table: 'local_migra
   } catch {
     return fallback;
   }
+}
+
+function recipeSnapshotOverrideId(spaceId: string, recipeId: string): string {
+  return `${RECIPE_SNAPSHOT_PREFIX}${shortHash(`${spaceId}\0${recipeId}`)}`;
+}
+
+function parseRecipeSnapshotOverride(value: string): RecipeSnapshotOverride | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<RecipeSnapshotOverride>;
+    if (!parsed || typeof parsed.spaceId !== 'string' || typeof parsed.recipeId !== 'string'
+      || !(parsed.version === null || (typeof parsed.version === 'number' && Number.isInteger(parsed.version) && parsed.version > 0))
+      || !(parsed.recipe === null || (parsed.recipe && parsed.recipe.id === parsed.recipeId))) return null;
+    return parsed as RecipeSnapshotOverride;
+  } catch {
+    return null;
+  }
+}
+
+async function readRecipeVersions(reader: ContentReader, spaceId: string): Promise<Map<string, number>> {
+  const rows = await reader.getAll<{ entity_id: string; version: number | null }>(
+    'SELECT entity_id, version FROM recipes WHERE space_id = ?', [spaceId]
+  );
+  const versions = new Map(rows.map((row) => [row.entity_id, Number(row.version) || 1]));
+  const overrides = await reader.getAll<{ value: string }>(
+    'SELECT value FROM local_profile_preferences WHERE id LIKE ?', [`${RECIPE_SNAPSHOT_PREFIX}%`]
+  );
+  for (const row of overrides) {
+    const override = parseRecipeSnapshotOverride(row.value);
+    if (!override || override.spaceId !== spaceId || override.version === null) continue;
+    versions.set(override.recipeId, Math.max(versions.get(override.recipeId) ?? 0, override.version));
+  }
+  return versions;
+}
+
+async function applyRecipeSnapshotOverrides<T extends Pick<PersistedState, 'recipes'>>(
+  reader: ContentReader,
+  spaceId: string,
+  recipeRows: ContentRecord[],
+  state: T
+): Promise<T> {
+  const overrides = await reader.getAll<{ value: string }>(
+    'SELECT value FROM local_profile_preferences WHERE id LIKE ?', [`${RECIPE_SNAPSHOT_PREFIX}%`]
+  );
+  if (!overrides.length) return state;
+  const physicalVersions = new Map(recipeRows.map((row) => [row.entity_id, Number(row.version) || 1]));
+  let recipes = state.recipes;
+  for (const row of overrides) {
+    const override = parseRecipeSnapshotOverride(row.value);
+    if (!override || override.spaceId !== spaceId) continue;
+    const physicalVersion = physicalVersions.get(override.recipeId);
+    if (override.version !== null && physicalVersion !== undefined && physicalVersion > override.version) continue;
+    const withoutRecipe = recipes.filter((recipe) => recipe.id !== override.recipeId);
+    if (override.recipe) {
+      recipes = [...withoutRecipe, override.recipe];
+      recipes.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
+    } else {
+      recipes = withoutRecipe;
+    }
+  }
+  return recipes === state.recipes ? state : { ...state, recipes };
 }
 
 type PersonalRowVersions = {
@@ -559,7 +627,10 @@ export async function loadWorkspaceState(
     'SELECT data_json FROM local_private_state WHERE id = ?',
     [PRIVATE_ROW_ID]
   );
-  const content = decodeContentRows(rows as Partial<ContentRows>, defaults);
+  const decodedContent = decodeContentRows(rows as Partial<ContentRows>, defaults);
+  const content = scope.kind === 'account'
+    ? await applyRecipeSnapshotOverrides(db, scope.spaceId, rows.recipes ?? [], decodedContent)
+    : decodedContent;
   if (scope.kind === 'guest' || !scope.personalSpaceId) {
     const privateState = privateStateFromStored(privateRow?.data_json ?? null, defaults);
     return { ...privateState, ...content };
@@ -595,14 +666,12 @@ export async function persistWorkspaceState(
   const rows = encodeContentRows(state, scope.spaceId);
   await db.writeTransaction(async (transaction) => {
     const previousState = await loadWorkspaceState(transaction, scope, DEFAULT_STATE);
-    const recipeRows = scope.kind === 'account'
-      ? await transaction.getAll<{ entity_id: string; version: number }>(
-        'SELECT entity_id, version FROM recipes WHERE space_id = ?', [scope.spaceId]
-      )
-      : [];
+    const recipeVersions = scope.kind === 'account'
+      ? await readRecipeVersions(transaction, scope.spaceId)
+      : new Map<string, number>();
     const operations = scope.kind === 'account'
       ? buildContentMutationOperations(previousState, state, {
-        recipes: new Map(recipeRows.map((row) => [row.entity_id, Number(row.version) || 1]))
+        recipes: recipeVersions
       })
       : [];
     for (const name of RECORD_TABLE_ORDER) {
@@ -705,10 +774,7 @@ export async function beginProposalAction(
     if (!privateMigrated) await migrateAccountPrivateAggregate(transaction, scope, before);
 
     const stored = await loadWorkspaceState(transaction, scope, DEFAULT_STATE);
-    const recipeRows = await transaction.getAll<{ entity_id: string; version: number }>(
-      'SELECT entity_id, version FROM recipes WHERE space_id = ?', [scope.spaceId]
-    );
-    const recipeVersions = new Map(recipeRows.map((row) => [row.entity_id, Number(row.version) || 1]));
+    const recipeVersions = await readRecipeVersions(transaction, scope.spaceId);
     const beforeShared = buildContentMutationOperations(stored, before, { recipes: recipeVersions });
     await insertMutationBatches(transaction, scope.spaceId, beforeShared, `${actionId}-prior-shared`);
 
@@ -907,9 +973,7 @@ export async function mergeGuestArchive(
   const remappedPersonal = scope.personalSpaceId
     ? remapGuestPersonalStateForWorkspace(guestState, migrationId, scope.personalSpaceId)
     : guestState;
-  const priorRecipeRows = await db.getAll<{ entity_id: string; version: number }>(
-    'SELECT entity_id, version FROM recipes WHERE space_id = ?', [scope.spaceId]
-  );
+  const priorRecipeVersions = await readRecipeVersions(db, scope.spaceId);
   const appendUnique = <T extends { id: string }>(first: T[], second: T[]) => {
     const ids = new Set(first.map((row) => row.id));
     return [...first, ...second.filter((row) => !ids.has(row.id))];
@@ -972,9 +1036,7 @@ export async function mergeGuestArchive(
       }
     };
     const adoptionOperations = buildGuestAdoptionMutationOperations(adoptionBaseline, adoptedState, {
-      recipes: new Map(priorRecipeRows
-        .filter((row) => !adoptedRecipeIds.has(row.entity_id))
-        .map((row) => [row.entity_id, Number(row.version) || 1]))
+      recipes: new Map([...priorRecipeVersions].filter(([entityId]) => !adoptedRecipeIds.has(entityId)))
     });
     const personalVersions = scope.personalSpaceId ? await readPersonalVersions(db, scope.personalSpaceId) : null;
     const personalOperations = personalVersions
@@ -1154,6 +1216,43 @@ export async function loadLocalRecipeConflicts(db: CommonPowerSyncDatabase, spac
   created_at: string;
 }>> {
   return db.getAll('SELECT id, recipe_id, attempted_json, current_json, reason, created_at FROM local_recipe_conflicts WHERE space_id = ? ORDER BY created_at DESC', [spaceId]);
+}
+
+/**
+ * Keep the selected server recipe version in local-only metadata. PowerSync
+ * owns the synchronized tables; editing those rows here would create phantom
+ * CRUD changes and race the next download. The rejected outbox row remains
+ * available for recovery export and is never replayed by this resolution.
+ */
+export async function keepWorkspaceRecipeSnapshot(
+  db: CommonPowerSyncDatabase,
+  spaceId: string,
+  conflictId: string,
+  recipeId: string,
+  snapshot: RecipeConflictSnapshot
+): Promise<void> {
+  await db.writeTransaction(async (transaction) => {
+    const conflict = await transaction.getOptional<{ recipe_id: string }>(
+      'SELECT recipe_id FROM local_recipe_conflicts WHERE id = ? AND space_id = ?', [conflictId, spaceId]
+    );
+    if (!conflict || conflict.recipe_id !== recipeId) {
+      throw new Error('This recipe conflict is no longer available in the selected workspace. Its recovery data was kept.');
+    }
+
+    if (snapshot.recipe && (snapshot.recipe.id !== recipeId || snapshot.version === null)) {
+      throw new Error('The saved workspace recipe snapshot is invalid. The conflict remains available for recovery.');
+    }
+
+    const override: RecipeSnapshotOverride = {
+      spaceId,
+      recipeId,
+      version: snapshot.version,
+      recipe: snapshot.recipe
+    };
+    await setLocalJson(transaction, 'local_profile_preferences', recipeSnapshotOverrideId(spaceId, recipeId), override);
+
+    await transaction.execute('DELETE FROM local_recipe_conflicts WHERE id = ? AND space_id = ?', [conflictId, spaceId]);
+  });
 }
 
 export type PersonalContentConflict = {

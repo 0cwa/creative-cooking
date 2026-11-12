@@ -23,6 +23,7 @@ import {
   subscribeAccountWorkspace
 } from '@/account/accountWorkspace';
 import type { AccountWorkspace, WorkspaceInvitation, WorkspaceMember } from '@/account/contracts';
+import { recipeCopyFromConflict } from '@/domain/recipeConflict';
 
 type AuthMode = 'login' | 'register';
 
@@ -36,6 +37,75 @@ function safeConflictRecipe(raw: string): { title?: string; description?: string
   } catch {
     return {};
   }
+}
+
+function RecipeConflictReview({
+  content,
+  onError
+}: {
+  content: ReturnType<typeof useAppState>;
+  onError: (message: string) => void;
+}) {
+  if (content.localRecipeConflicts.length === 0) return null;
+
+  return (
+    <View style={styles.subsection}>
+      <Text accessibilityRole="header" style={styles.subsectionTitle}>Recipe edits to review</Text>
+      {content.localRecipeConflicts.map((conflict) => {
+        const attempted = safeConflictRecipe(conflict.attempted_json);
+        const current = safeConflictRecipe(conflict.current_json);
+        const attemptedCopy = recipeCopyFromConflict(conflict);
+        const copySaved = attemptedCopy !== null
+          && content.recipes.some((recipe) => recipe.id === attemptedCopy.id);
+
+        return (
+          <View key={conflict.id} testID={`recipe-conflict-${conflict.id}`} style={styles.recoveryBox}>
+            <Text style={styles.label}>{attempted.title || current.title || conflict.recipe_id}</Text>
+            <Text style={styles.warning}>{conflict.reason}</Text>
+            <Text style={styles.help}>Your version: {attempted.title || 'Recipe removed'}{attempted.description ? ` · ${attempted.description}` : ''}</Text>
+            <Text style={styles.help}>Workspace version: {current.title || 'Recipe removed'}{current.description ? ` · ${current.description}` : ''}</Text>
+            {attemptedCopy && (
+              <>
+                <Text style={styles.help}>Save your attempted version as a separate recipe to keep both versions in this workspace. Its ingredient and step identities remain scoped to the new recipe.</Text>
+                {copySaved ? (
+                  <Text style={styles.success}>Your version is saved as a separate recipe.</Text>
+                ) : (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Save my version as a new recipe"
+                    disabled={!content.canEditSharedContent}
+                    onPress={() => {
+                      onError('');
+                      try {
+                        content.saveAttemptedRecipeAsCopy(conflict.id);
+                      } catch (error) {
+                        onError(error instanceof Error ? error.message : 'The attempted recipe could not be copied. It remains available in recovery export.');
+                      }
+                    }}
+                    style={[styles.smallButton, !content.canEditSharedContent && styles.disabledButton]}
+                  >
+                    <Text style={styles.smallButtonText}>Save my version as a new recipe</Text>
+                  </Pressable>
+                )}
+              </>
+            )}
+            <Text style={styles.help}>Use the workspace version captured when this conflict was reported. The rejected edit stays in the recovery export.</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Keep workspace version"
+              disabled={copySaved && content.localPersistenceStatus !== 'saved'}
+              onPress={() => void content.keepWorkspaceRecipeVersion(conflict.id).catch((error) => {
+                onError(error instanceof Error ? error.message : 'The workspace recipe could not be restored. Its recovery data remains saved.');
+              })}
+              style={[styles.smallButton, copySaved && content.localPersistenceStatus !== 'saved' && styles.disabledButton]}
+            >
+              <Text style={styles.smallButtonText}>Keep workspace version</Text>
+            </Pressable>
+          </View>
+        );
+      })}
+    </View>
+  );
 }
 
 export function AccountSharingSection() {
@@ -393,6 +463,14 @@ export function AccountSharingSection() {
                 {content.localPersistenceStatus === 'saving' ? 'Saving locally' : content.localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
               </Text>
             </View>
+            <Text style={styles.warning}>Changes made offline stay on this device until your current membership is confirmed. Review saved conflicts and export recovery data before signing out.</Text>
+            <RecipeConflictReview content={content} onError={setInputError} />
+            <View style={styles.buttonRow}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Export workspace recovery file" onPress={() => void exportRecovery()} style={styles.smallButton}>
+                <Text style={styles.smallButtonText}>Export recovery file</Text>
+              </Pressable>
+              <Text style={styles.help}>Includes pending edits, conflicts and saved archives on this device.</Text>
+            </View>
             <View style={styles.buttonRow}>
               <Pressable accessibilityRole="button" accessibilityLabel="Check account connection" disabled={busy} onPress={() => void run(refreshAccountWorkspace)} style={[styles.primaryButton, busy && styles.disabledButton]}>
                 <Text style={styles.primaryButtonText}>{busy ? 'Checking…' : 'Check connection'}</Text>
@@ -556,23 +634,7 @@ export function AccountSharingSection() {
               </View>
             </View>
 
-            {content.localRecipeConflicts.length > 0 && (
-              <View style={styles.subsection}>
-                <Text accessibilityRole="header" style={styles.subsectionTitle}>Recipe edits to review</Text>
-                {content.localRecipeConflicts.map((conflict) => {
-                  const attempted = safeConflictRecipe(conflict.attempted_json);
-                  const current = safeConflictRecipe(conflict.current_json);
-                  return (
-                    <View key={conflict.id} style={styles.recoveryBox}>
-                      <Text style={styles.label}>{attempted.title || current.title || conflict.recipe_id}</Text>
-                      <Text style={styles.warning}>{conflict.reason}</Text>
-                      <Text style={styles.help}>Your version: {attempted.title || 'Recipe removed'}{attempted.description ? ` · ${attempted.description}` : ''}</Text>
-                      <Text style={styles.help}>Workspace version: {current.title || 'Recipe removed'}{current.description ? ` · ${current.description}` : ''}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            )}
+            <RecipeConflictReview content={content} onError={setInputError} />
             </View>
 
             <View style={styles.subsection}>

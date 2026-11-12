@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { Dispatch, SetStateAction } from 'react';
 import type { CommonPowerSyncDatabase, SyncStatus } from '@powersync/common';
 import type { ChefToolProposal } from '../domain/types';
+import { keepWorkspaceRecipeVersion as applyWorkspaceRecipeVersion } from '../domain/recipeConflict';
 import {
   getAccountWorkspaceSnapshot,
   initializeAccountWorkspace,
@@ -17,6 +18,7 @@ import {
   beginProposalAction,
   guestAdoptionStatus,
   keepGuestArchive,
+  keepWorkspaceRecipeSnapshot,
   listLocalArchives,
   loadLocalRecipeConflicts,
   loadPersonalContentConflicts,
@@ -70,6 +72,7 @@ export type ContentRuntimeSnapshot = {
   localProfileId: string;
   markLocalStateChange(): number;
   selectWorkspace(spaceId: string): Promise<void>;
+  keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
   mergeGuestContent(): Promise<void>;
   keepGuestContent(): Promise<void>;
   prepareAccountExit(): Promise<void>;
@@ -205,7 +208,7 @@ export function useContentRuntime(
       const queue = await active.db.getUploadQueueStats();
       if (runtimeRef.current !== active) return;
       const pending = await active.db.getOptional<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM local_content_outbox WHERE state = 'pending'"
+        'SELECT COUNT(*) AS count FROM local_content_outbox'
       );
       const issues = await active.db.getOptional<{ count: number }>(
         'SELECT COUNT(*) AS count FROM local_sync_issues WHERE resolved_at IS NULL'
@@ -213,8 +216,12 @@ export function useContentRuntime(
       const proposalActions = await active.db.getOptional<{ count: number }>(
         'SELECT COUNT(*) AS count FROM local_proposal_actions'
       );
+      const recipeConflicts = await active.db.getOptional<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM local_recipe_conflicts'
+      );
       setSyncStatus(queue.count === 0 && Number(pending?.count ?? 0) === 0
-        && Number(issues?.count ?? 0) === 0 && Number(proposalActions?.count ?? 0) === 0 ? 'synced' : 'attention');
+        && Number(issues?.count ?? 0) === 0 && Number(proposalActions?.count ?? 0) === 0
+        && Number(recipeConflicts?.count ?? 0) === 0 ? 'synced' : 'attention');
     } catch {
       setSyncStatus('syncing');
     }
@@ -629,6 +636,51 @@ export function useContentRuntime(
     }
   }, [account.localProfileId, account.spaces, account.status, activateWorkspace]);
 
+  const keepWorkspaceRecipeVersion = useCallback(async (conflictId: string) => {
+    const active = runtimeRef.current;
+    const currentAccount = getAccountWorkspaceSnapshot();
+    if (!active || active.scope.kind !== 'account'
+      || active.scope.profileId !== currentAccount.localProfileId
+      || (currentAccount.status !== 'signed-in' && currentAccount.status !== 'offline')) {
+      throw new Error('Reconnect the same account before resolving this recipe conflict.');
+    }
+
+    await persistenceQueue.current;
+    const conflict = await active.db.getOptional<LocalRecipeConflict>(
+      `SELECT id, recipe_id, attempted_json, current_json, reason, created_at
+       FROM local_recipe_conflicts WHERE id = ? AND space_id = ?`,
+      [conflictId, active.scope.spaceId]
+    );
+    if (!conflict) throw new Error('This recipe conflict is no longer available. Its recovery data was kept.');
+    const resolution = applyWorkspaceRecipeVersion(stateRef.current, conflict);
+    if (!resolution) throw new Error('The saved workspace version is invalid. The conflict remains available for recovery.');
+
+    const editRevision = markLocalStateChange();
+    try {
+      await keepWorkspaceRecipeSnapshot(
+        active.db,
+        active.scope.spaceId,
+        conflict.id,
+        conflict.recipe_id,
+        resolution.snapshot
+      );
+    } catch (error) {
+      if (runtimeRef.current === active) setLocalPersistenceStatus('error');
+      throw error;
+    }
+    const afterAccount = getAccountWorkspaceSnapshot();
+    if (runtimeRef.current !== active || afterAccount.localProfileId !== active.scope.profileId) return;
+
+    markLocalStateCommitted(editRevision);
+    stateRef.current = resolution.state;
+    alreadyPersistedState.current = resolution.state;
+    persistedStateFingerprint.current = stableSerialize(resolution.state);
+    setState(resolution.state);
+    setLocalPersistenceStatus('saved');
+    await updateRecoveryDetails(active);
+    await setSyncFromStatus(active, active.db.currentStatus);
+  }, [markLocalStateChange, markLocalStateCommitted, setState, setSyncFromStatus, updateRecoveryDetails]);
+
   const refreshAdoption = useCallback(async () => {
     const active = runtimeRef.current;
     if (!active || active.scope.kind !== 'account') return;
@@ -820,6 +872,7 @@ export function useContentRuntime(
     localProfileId: account.localProfileId ?? LOCAL_PROFILE_ID,
     markLocalStateChange,
     selectWorkspace,
+    keepWorkspaceRecipeVersion,
     mergeGuestContent,
     keepGuestContent,
     prepareAccountExit,
