@@ -1039,6 +1039,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(viewerWorkspaceChoice).toBeVisible({ timeout: 20_000 });
     await viewerWorkspaceChoice.click();
     await expect(viewer.getByText(/^Your role here is viewer/)).toBeVisible({ timeout: 30_000 });
+    await expect(viewer.getByTestId('cooking-workspace-status')).toContainText(householdName, { timeout: 30_000 });
+    await expect(viewer.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
     await openCookingWorkspace(viewer, householdName);
     await expect(viewer.getByText(sharedItem, { exact: true })).toBeVisible({ timeout: 90_000 });
     await expect(viewer.getByLabel('Ingredient and details')).toHaveAttribute('readonly');
