@@ -184,7 +184,12 @@ async function checkEffectReceipt(
     ? results.filter((result) => typeof result === 'object' && result !== null && 'opId' in result
       && result.opId === operation.effectOpId)
     : [];
-  if (matching.length !== 1) {
+  const allApplied = Array.isArray(results)
+    && results.length > 0
+    && results.every((result) => typeof result === 'object' && result !== null
+      && 'opId' in result && typeof result.opId === 'string'
+      && 'status' in result && result.status === 'applied');
+  if (matching.length !== 1 || !allApplied) {
     throw new ApiFault(409, 'PROPOSAL_EFFECT_NOT_ACKNOWLEDGED', 'The proposal effect must be accepted before its personal status can change.');
   }
 }

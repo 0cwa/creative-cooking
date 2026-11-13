@@ -16,6 +16,7 @@ import {
 import { createContentOutboxDrain } from './outboxDrain.ts';
 import { withOperationIds } from './mutations';
 import { commitRecipeConflictSplit } from './recipeConflictPersistence';
+import { unappliedProposalEffectResults } from './proposalEffectReceipt';
 
 function mutationFromJson(value: string): ContentMutationRequest {
   const parsed = JSON.parse(value) as ContentMutationRequest;
@@ -149,6 +150,25 @@ async function uploadPendingForSpace(db: CommonPowerSyncDatabase, spaceId: strin
           data: { mutationId: row.mutation_id, operations: ignored }
         });
         return;
+      }
+
+      const proposalAction = await db.getOptional<{ id: string; effect_op_id: string }>(
+        'SELECT id, effect_op_id FROM local_proposal_actions WHERE space_id = ? AND effect_mutation_id = ?',
+        [spaceId, row.mutation_id]
+      );
+      if (proposalAction) {
+        const unapplied = unappliedProposalEffectResults(response, proposalAction.effect_op_id);
+        if (unapplied.length > 0) {
+          const error = { code: 'PROPOSAL_EFFECT_NOT_APPLIED', operations: unapplied };
+          await updateContentMutationState(db, row.id, 'blocked', error);
+          await recordLocalSyncIssue(db, {
+            spaceId,
+            type: 'proposal-effect-not-applied',
+            message: 'The server did not apply every Chef change. The suggestion remains pending and its effect is preserved in the recovery export.',
+            data: { mutationId: row.mutation_id, operations: unapplied }
+          });
+          return;
+        }
       }
       await acknowledgeContentMutation(db, row.id);
     } catch (error) {

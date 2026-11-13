@@ -390,6 +390,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
   const historicalEffectName = `Historical effect must not run ${runId.slice(-8)}`;
   const householdEffectName = `Household proposal effect ${runId.slice(-8)}`;
   const deniedEffectName = `Denied proposal remains pending ${runId.slice(-8)}`;
+  const ignoredEffectName = `Ignored proposal remains pending ${runId.slice(-8)}`;
   const offlinePersonalCity = `Offline City ${runId.slice(-8)}`;
   const offlinePersonalAllergy = `Offline allergy ${runId.slice(-8)}`;
   const offlinePersonalChat = `${offlinePersonalChatCanary} ${runId.slice(-8)}`;
@@ -409,11 +410,12 @@ test('built PWA migrates guest history and synchronizes household records betwee
     chatMessages: [
       { id: 'private-chat-message', role: 'user', content: privateChatCanary, createdAt: at },
       {
-        id: 'private-assistant-message', role: 'assistant', content: 'I have three saved pantry suggestions.', createdAt: '2026-10-01T12:01:00.000Z',
+        id: 'private-assistant-message', role: 'assistant', content: 'I have four saved pantry suggestions.', createdAt: '2026-10-01T12:01:00.000Z',
         proposals: [
           { id: 'historical-applied-proposal', toolName: 'pantry_add', arguments: JSON.stringify({ names: [historicalEffectName] }), status: 'applied' },
           { id: 'household-effect-proposal', toolName: 'pantry_add', arguments: JSON.stringify({ names: [householdEffectName] }), status: 'pending' },
-          { id: 'denied-effect-proposal', toolName: 'pantry_add', arguments: JSON.stringify({ names: [deniedEffectName] }), status: 'pending' }
+          { id: 'denied-effect-proposal', toolName: 'pantry_add', arguments: JSON.stringify({ names: [deniedEffectName] }), status: 'pending' },
+          { id: 'ignored-effect-proposal', toolName: 'pantry_remove', arguments: JSON.stringify({ name: ignoredEffectName }), status: 'pending' }
         ]
       }
     ],
@@ -574,6 +576,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByText('Local on this device', { exact: true })).toBeVisible();
     await owner.getByRole('textbox', { name: 'OpenRouter API key' }).fill(providerKeyCanary);
     await owner.getByRole('button', { name: 'Save OpenRouter API key' }).click();
+    await openSettings(owner);
     await configureApi(owner, apiUrlFor('owner'));
     await register(owner, ownerEmail, password);
     await owner.reload();
@@ -608,6 +611,12 @@ test('built PWA migrates guest history and synchronizes household records betwee
     let deniedEffectMutationId = null;
     let deniedEffectResponseStatus = null;
     const deniedEffectMutationIds = new Set();
+    let ignoredEffectPantryId = null;
+    let ignoredEffectMutationId = null;
+    let ignoredEffectResponseStatus = null;
+    let ignoredEffectOperationStatus = null;
+    let ignoredEffectServerDeleteStatus = null;
+    const ignoredEffectMutationIds = new Set();
     let shoppingPurchaseRequestCount = 0;
     let shoppingPurchaseResponseStatus = null;
     let shoppingPurchaseResponseLost = false;
@@ -673,6 +682,37 @@ test('built PWA migrates guest history and synchronizes household records betwee
       }
       if (pauseRetries) {
         await route.abort('failed');
+        return;
+      }
+
+      const ignoredProposalEffect = operations.find((operation) => (
+        operation?.type === 'pantry.delete' && operation.id === ignoredEffectPantryId
+      ));
+      if (ignoredProposalEffect) {
+        ignoredEffectMutationId = request.mutationId;
+        if (typeof request.mutationId === 'string') ignoredEffectMutationIds.add(request.mutationId);
+        const targetSpaceId = new URL(route.request().url()).pathname.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1];
+        if (!targetSpaceId) throw new Error('The ignored Chef effect request did not include its workspace path.');
+        const token = await storedSessionToken(owner);
+        if (!token) throw new Error('The owner session token was unavailable for the local race fixture.');
+        const deleteResponse = await fetch(`${apiUrlFor('owner')}/v1/spaces/${targetSpaceId}/content/mutations`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            mutationId: `${request.mutationId}-race-delete`,
+            operations: [{ opId: 'ignored-effect-race-delete-op', type: 'pantry.delete', id: ignoredEffectPantryId }]
+          })
+        });
+        const deleteBody = await deleteResponse.json();
+        ignoredEffectServerDeleteStatus = deleteResponse.status;
+        if (deleteResponse.status !== 200 || deleteBody.operations?.[0]?.status !== 'applied') {
+          throw new Error(`Could not create the server-side removal race for the ignored Chef effect: ${JSON.stringify({ status: deleteResponse.status, result: deleteBody.operations?.[0] })}`);
+        }
+        const effectResponse = await route.fetch();
+        const effectBody = await effectResponse.json();
+        ignoredEffectResponseStatus = effectResponse.status();
+        ignoredEffectOperationStatus = effectBody.operations?.find((result) => result.opId === ignoredProposalEffect.opId)?.status ?? null;
+        await route.fulfill({ response: effectResponse, body: JSON.stringify(effectBody) });
         return;
       }
 
@@ -819,6 +859,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     expect(ownerAudit.privateDataLeaked).toBe(false);
     expect(ownerAudit.providerDataLeaked).toBe(false);
     markStage('guest cooking and personal history adoption is acknowledged');
+
     const repeatedHistoryId = [...historyMutationIds].find((mutationId) => (mutationAttempts.get(mutationId)?.length ?? 0) > 1);
     expect(repeatedHistoryId).toBeTruthy();
     for (const attempts of mutationAttempts.values()) expect(new Set(attempts).size).toBe(1);
@@ -849,6 +890,73 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByText('Your role here is owner')).toBeVisible();
     markStage('household is selected as the cooking workspace');
     await openCookingWorkspace(owner, householdName);
+
+    ignoredEffectPantryId = `ignored-effect-pantry-${runId}`;
+    const ownerTokenForSeed = await storedSessionToken(owner);
+    expect(ownerTokenForSeed).toBeTruthy();
+    const ownerSpacesResponse = await fetch(`${apiUrlFor('owner')}/v1/me`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${ownerTokenForSeed}` }
+    });
+    const ownerSpacesBody = await ownerSpacesResponse.json();
+    expect(ownerSpacesResponse.status).toBe(200);
+    const ignoredEffectSpaceId = ownerSpacesBody.spaces?.find((space) => space.kind === 'household' && space.name === householdName)?.id;
+    expect(ignoredEffectSpaceId).toBeTruthy();
+    const seedResponse = await fetch(`${apiUrlFor('owner')}/v1/spaces/${ignoredEffectSpaceId}/content/mutations`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${ownerTokenForSeed}` },
+      body: JSON.stringify({
+        mutationId: `ignored-effect-seed-${runId}`,
+        operations: [{ opId: `ignored-effect-seed-op-${runId}`, type: 'pantry.upsert', id: ignoredEffectPantryId, name: ignoredEffectName, preference: 3 }]
+      })
+    });
+    const seedBody = await seedResponse.json();
+    expect(seedResponse.status).toBe(200);
+    expect(seedBody.operations?.[0]?.status).toBe('applied');
+    await expect(owner.getByText(ignoredEffectName, { exact: true })).toBeVisible({ timeout: 30_000 });
+    const ignoredStatusCountBefore = statusRequestCount;
+    await openChefWorkspace(owner);
+    const ignoredEffectCard = proposalCard(owner, ignoredEffectName);
+    await expect(ignoredEffectCard.getByRole('button', { name: 'Remove', exact: true })).toBeEnabled();
+    await ignoredEffectCard.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect.poll(() => ignoredEffectResponseStatus, { timeout: 30_000 }).toBe(200);
+    expect(ignoredEffectServerDeleteStatus).toBe(200);
+    expect(ignoredEffectOperationStatus).toBe('ignored');
+    expect(ignoredEffectMutationId).toBeTruthy();
+    expect([...ignoredEffectMutationIds]).toEqual([ignoredEffectMutationId]);
+    expect(statusRequestCount).toBe(ignoredStatusCountBefore);
+    expect(proposalStatusOperations.some((operation) => operation.proposalId === 'ignored-effect-proposal')).toBe(false);
+    await openSettings(owner, true, householdName);
+    const [ignoredEffectRecoveryDownload] = await Promise.all([
+      owner.waitForEvent('download'),
+      owner.getByRole('button', { name: 'Export workspace recovery file' }).click()
+    ]);
+    const ignoredEffectRecovery = JSON.parse(await readFile(await ignoredEffectRecoveryDownload.path(), 'utf8'));
+    const ignoredEffectAction = ignoredEffectRecovery.proposalActions.find((action) => action.effect_mutation_id === ignoredEffectMutationId);
+    expect(ignoredEffectAction, JSON.stringify({
+      effectMutationId: ignoredEffectMutationId,
+      proposalActions: ignoredEffectRecovery.proposalActions.map(({ id, space_id, effect_mutation_id, effect_op_id, stage }) => ({
+        id, space_id, effect_mutation_id, effect_op_id, stage
+      })),
+      blockedMutationIds: ignoredEffectRecovery.blocked.map((row) => row.mutation_id),
+      pendingMutationIds: ignoredEffectRecovery.pending.map((row) => row.mutation_id),
+      issueTypes: ignoredEffectRecovery.issues.map((issue) => issue.issue_type),
+      proposalStatus: ignoredEffectRecovery.state.chatMessages.flatMap((message) => message.proposals ?? [])
+        .find((proposal) => proposal.id === 'ignored-effect-proposal')?.status ?? null
+    })).toBeTruthy();
+    expect(ignoredEffectAction?.stage).toBe('effect-blocked');
+    expect(ignoredEffectAction?.effect_op_id).toBeTruthy();
+    expect(JSON.parse(ignoredEffectAction.effect_payload_json).operations[0].opId).toBe(ignoredEffectAction.effect_op_id);
+    expect(ignoredEffectRecovery.blocked.some((row) => row.mutation_id === ignoredEffectMutationId)).toBe(true);
+    const ignoredProposal = [
+      ...ignoredEffectRecovery.state.chatMessages,
+      ...ignoredEffectRecovery.state.chatHistory.flatMap((conversation) => conversation.messages)
+    ].flatMap((message) => message.proposals ?? [])
+      .find((proposal) => proposal.id === ignoredEffectAction.proposal_id);
+    expect(ignoredProposal?.status).toBe('pending');
+    markStage('ignored Chef effect remains pending with its exact effect link and outbox body in recovery export');
+    if (process.env.CONTENT_SYNC_IGNORED_EFFECT_ONLY === '1') return;
+
+    await openCookingWorkspace(owner, householdName);
     await owner.getByLabel('Ingredient and details').fill(sharedItem);
     await owner.getByRole('button', { name: 'Add ingredient' }).click();
     await expect(owner.getByText(sharedItem, { exact: true })).toBeVisible();
@@ -872,7 +980,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
         consoleErrors: ownerAudit.consoleErrorMessages
       })}`);
     }
-    await expect(owner.getByTestId('pantry-workspace-status')).toContainText('synced', { timeout: 30_000 });
+    await expect(owner.getByTestId('pantry-workspace-status')).toContainText('attention', { timeout: 30_000 });
     markStage('owner added the first household pantry record');
 
     const syncedHouseholdSpaceId = ownerAudit.mutationRequests.find((request) => (
@@ -1243,6 +1351,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await member.getByRole('button', { name: 'Accept invitation' }).click();
     await expect(member.getByRole('button', { name: `Use ${householdName} for cooking` })).toBeVisible({ timeout: 20_000 });
     await member.getByRole('button', { name: `Use ${householdName} for cooking` }).click();
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText(householdName, { timeout: 30_000 });
+    await expect(member.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
     await expect(member.getByText('Your role here is editor')).toBeVisible();
     markStage('second account accepted the invitation with editor role');
     await openCookingWorkspace(member, householdName);

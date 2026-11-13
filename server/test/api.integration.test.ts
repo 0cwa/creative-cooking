@@ -14,6 +14,7 @@ if (!['127.0.0.1', 'localhost', '[::1]'].includes(dbUrl.hostname) || dbUrl.pathn
 }
 const pool = new Pool({ connectionString: config.databaseUrl, max: 12 });
 const app = await createApp({ pool, config, logger: false });
+let requestSequence = 0;
 
 interface InjectResult {
   statusCode: number;
@@ -21,10 +22,18 @@ interface InjectResult {
   headers: Record<string, string | string[] | undefined>;
 }
 
-async function call(method: 'GET' | 'POST' | 'DELETE', url: string, token?: string, payload?: unknown, origin?: string): Promise<InjectResult> {
+async function call(
+  method: 'GET' | 'POST' | 'DELETE',
+  url: string,
+  token?: string,
+  payload?: unknown,
+  origin?: string,
+  remoteAddress = `198.51.100.${(requestSequence++ % 250) + 1}`,
+): Promise<InjectResult> {
   const response = await app.inject({
     method,
     url,
+    remoteAddress,
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(origin ? { origin } : {}),
@@ -89,12 +98,12 @@ test('API enforces account, workspace, invite and current-session rules in Postg
   let removedMemberHistoryMutation: unknown = null;
 
   const throttleResults = [];
-  for (let index = 0; index < 5; index += 1) {
-    throttleResults.push(await call('POST', '/v1/auth/register', undefined, {}));
+  for (let index = 0; index < 11; index += 1) {
+    throttleResults.push(await call('POST', '/v1/auth/register', undefined, undefined, undefined, '203.0.113.10'));
   }
   assert.deepEqual(
     throttleResults.map((result) => result.statusCode),
-    [400, 400, 400, 400, 429],
+    [...Array(10).fill(400), 429],
     JSON.stringify(throttleResults.map((result) => ({ status: result.statusCode, limit: result.headers['x-ratelimit-limit'], remaining: result.headers['x-ratelimit-remaining'] }))),
   );
 
@@ -798,6 +807,64 @@ test('API enforces account, workspace, invite and current-session rules in Postg
     ]));
     assert.equal(otherActorReceipt.statusCode, 409);
     assert.equal(otherActorReceipt.body.error.code, 'PROPOSAL_EFFECT_NOT_ACKNOWLEDGED');
+
+    const ignoredEffect = {
+      mutationId: 'live-proposal-effect-ignored',
+      operations: [{ opId: 'live-proposal-effect-ignored-op', type: 'pantry.delete', id: 'missing-proposal-effect-row' }],
+    };
+    const ignoredEffectAccepted = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, ignoredEffect);
+    assert.equal(ignoredEffectAccepted.statusCode, 200);
+    assert.equal(ignoredEffectAccepted.body.operations[0].status, 'ignored');
+    const ignoredEffectReplay = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, ignoredEffect);
+    assert.equal(ignoredEffectReplay.statusCode, 200);
+    assert.deepEqual(ignoredEffectReplay.body, ignoredEffectAccepted.body);
+    const ignoredEffectStatus = personalMutation('live-proposal-status-ignored-effect', [
+      { ...statusOperation, opId: 'live-proposal-status-ignored-effect-op', effectMutationId: ignoredEffect.mutationId,
+        effectOpId: ignoredEffect.operations[0]!.opId },
+    ]);
+    const ignoredEffectStatusResult = await personal(ownerToken, ignoredEffectStatus);
+    assert.equal(ignoredEffectStatusResult.statusCode, 409);
+    assert.equal(ignoredEffectStatusResult.body.error.code, 'PROPOSAL_EFFECT_NOT_ACKNOWLEDGED');
+    const ignoredStatusReceipt = await pool.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM content_mutations WHERE user_id = $1 AND mutation_id = $2',
+      [owner.user.id, ignoredEffectStatus.mutationId],
+    );
+    assert.equal(ignoredStatusReceipt.rows[0]?.count, 0);
+
+    const partialEffect = {
+      mutationId: 'live-proposal-effect-partial',
+      operations: [
+        { opId: 'live-proposal-effect-partial-first', type: 'pantry.upsert', id: 'live-proposal-effect-partial-row', name: 'Partially applied effect', preference: 3 },
+        { opId: 'live-proposal-effect-partial-ignored', type: 'pantry.delete', id: 'missing-partial-proposal-effect-row' },
+      ],
+    };
+    const partialEffectAccepted = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, partialEffect);
+    assert.equal(partialEffectAccepted.statusCode, 200);
+    assert.deepEqual(partialEffectAccepted.body.operations.map((result: { status: string }) => result.status), ['applied', 'ignored']);
+    const partialEffectStatus = personalMutation('live-proposal-status-partial-effect', [
+      { ...statusOperation, opId: 'live-proposal-status-partial-effect-op', effectMutationId: partialEffect.mutationId,
+        effectOpId: partialEffect.operations[0]!.opId },
+    ]);
+    const partialEffectStatusResult = await personal(ownerToken, partialEffectStatus);
+    assert.equal(partialEffectStatusResult.statusCode, 409);
+    assert.equal(partialEffectStatusResult.body.error.code, 'PROPOSAL_EFFECT_NOT_ACKNOWLEDGED');
+    const partialEffectReplay = await call('POST', `/v1/spaces/${householdId}/content/mutations`, ownerToken, partialEffect);
+    assert.equal(partialEffectReplay.statusCode, 200);
+    assert.deepEqual(partialEffectReplay.body, partialEffectAccepted.body);
+    const partialEffectRow = await pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pantry_items WHERE space_id = $1 AND entity_id = 'live-proposal-effect-partial-row'`, [householdId],
+    );
+    assert.equal(partialEffectRow.rows[0]?.count, 1);
+    const partialStatusReceipt = await pool.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM content_mutations WHERE user_id = $1 AND mutation_id = $2',
+      [owner.user.id, partialEffectStatus.mutationId],
+    );
+    assert.equal(partialStatusReceipt.rows[0]?.count, 0);
+    const stillPendingProposal = await pool.query<{ status: string; version: string }>(
+      `SELECT status, version FROM personal_chat_proposals
+       WHERE space_id = $1 AND conversation_id = 'live-chat' AND entity_id = 'live-proposal'`, [ownerPersonalId],
+    );
+    assert.deepEqual(stillPendingProposal.rows[0], { status: 'pending', version: '1' });
 
     const ownerEffect = {
       mutationId: 'live-proposal-effect-owner',
