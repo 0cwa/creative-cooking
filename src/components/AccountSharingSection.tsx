@@ -442,7 +442,7 @@ export function AccountSharingSection() {
             {account.status === 'loading' || account.status === 'restoring' ? 'Checking account…' :
               account.status === 'local' ? 'Local on this device' :
                 account.status === 'signed-out' ? 'Not signed in' :
-                  account.status === 'offline' ? 'Account could not be checked offline' :
+                  account.status === 'offline' ? 'Account access unverified' :
                     account.status === 'expired' ? 'Session expired' : `Signed in as ${account.user?.email ?? account.sessionEmail ?? 'account'}`}
           </Text>
           {!!account.notice && <Text style={styles.success}>{account.notice}</Text>}
@@ -463,7 +463,7 @@ export function AccountSharingSection() {
                 {content.localPersistenceStatus === 'saving' ? 'Saving locally' : content.localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
               </Text>
             </View>
-            <Text style={styles.warning}>Changes made offline stay on this device until your current membership is confirmed. Review saved conflicts and export recovery data before signing out.</Text>
+            <Text style={styles.warning}>Changes stay on this device until your current membership is confirmed. Review saved conflicts and export recovery data before signing out.</Text>
             <RecipeConflictReview content={content} onError={setInputError} />
             <View style={styles.buttonRow}>
               <Pressable accessibilityRole="button" accessibilityLabel="Export workspace recovery file" onPress={() => void exportRecovery()} style={styles.smallButton}>

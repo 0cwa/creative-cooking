@@ -29,7 +29,7 @@ export function PantryRow({
   );
 
   return (
-    <View style={styles.shell}>
+    <View testID={`pantry-item-${item.id}`} style={styles.shell}>
       <View style={styles.deleteBackdrop}><Text style={styles.deleteBackdropText}>Remove</Text></View>
       <Animated.View style={[styles.row, { transform: [{ translateX: x }] }]} {...responder.panHandlers}>
         <View style={styles.textWrap}>

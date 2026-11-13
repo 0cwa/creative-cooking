@@ -406,6 +406,29 @@ async function insertMutationBatches(
   return ids;
 }
 
+function operationDomainKey(operation: ContentMutationOperation): string {
+  const domain = { ...operation } as Record<string, unknown>;
+  delete domain.opId;
+  delete domain.baseVersion;
+  return stableSerialize(domain);
+}
+
+async function proposalEffectOperationKeys(transaction: Transaction, spaceId: string): Promise<Set<string>> {
+  const actions = await transaction.getAll<{ effect_payload_json: string }>(
+    'SELECT effect_payload_json FROM local_proposal_actions WHERE space_id = ?', [spaceId]
+  );
+  const keys = new Set<string>();
+  for (const action of actions) {
+    try {
+      const request = JSON.parse(action.effect_payload_json) as Partial<ContentMutationRequest>;
+      for (const operation of request.operations ?? []) keys.add(operationDomainKey(operation));
+    } catch {
+      // Keep malformed recovery data intact; the normal save path remains available.
+    }
+  }
+  return keys;
+}
+
 async function migrateAccountPrivateAggregate(
   transaction: Transaction,
   scope: Extract<ContentScope, { kind: 'account' }>,
@@ -669,10 +692,13 @@ export async function persistWorkspaceState(
     const recipeVersions = scope.kind === 'account'
       ? await readRecipeVersions(transaction, scope.spaceId)
       : new Map<string, number>();
+    const proposalEffectKeys = scope.kind === 'account'
+      ? await proposalEffectOperationKeys(transaction, scope.spaceId)
+      : new Set<string>();
     const operations = scope.kind === 'account'
       ? buildContentMutationOperations(previousState, state, {
         recipes: recipeVersions
-      })
+      }).filter((operation) => !proposalEffectKeys.has(operationDomainKey(operation)))
       : [];
     for (const name of RECORD_TABLE_ORDER) {
       await reconcileRows(transaction, tableName(scope, name), scope, rows[name], { tombstoneMissing: true });

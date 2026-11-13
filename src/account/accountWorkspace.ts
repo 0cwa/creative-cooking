@@ -275,6 +275,18 @@ async function restore(apiUrl: string, requestGeneration: number, session: Store
       });
       return;
     }
+    if (error instanceof AccountApiError && error.status !== 401) {
+      publish({
+        status: 'offline',
+        user: null,
+        localProfileId: session.userId ?? null,
+        sessionEmail: session.email,
+        spaces: [],
+        error: errorMessage(error),
+        notice: null
+      });
+      return;
+    }
     publish({
       status: snapshot.status === 'signed-in' ? 'signed-in' : 'expired',
       user: snapshot.user,

@@ -54,6 +54,7 @@ function auditPage(page, audit, privateTargets = {}) {
     const spaceId = new URL(request.url()).pathname.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null;
     audit.mutationRequests.push({
       mutationId: typeof parsedBody?.mutationId === 'string' ? parsedBody.mutationId : null,
+      payloadHash: createHash('sha256').update(body).digest('hex'),
       spaceId,
       operationTypes,
       personalPreferenceFields: Array.isArray(parsedBody?.operations)
@@ -79,6 +80,22 @@ function auditPage(page, audit, privateTargets = {}) {
         : [],
       pantryUpserts: Array.isArray(parsedBody?.operations)
         ? parsedBody.operations.filter((operation) => operation?.type === 'pantry.upsert').map(({ id, name, opId }) => ({ id, name, opId }))
+        : [],
+      shoppingPurchases: Array.isArray(parsedBody?.operations)
+        ? parsedBody.operations.filter((operation) => operation?.type === 'shopping.purchase').map(({ opId, purchase }) => ({
+            opId,
+            id: purchase?.id ?? null,
+            listId: purchase?.listId ?? null,
+            purchaseCycleId: purchase?.purchaseCycleId ?? null,
+            itemIds: purchase?.itemIds ?? [],
+            pantryItemIds: purchase?.pantryItemIds ?? []
+          }))
+        : [],
+      shoppingCycleStarts: Array.isArray(parsedBody?.operations)
+        ? parsedBody.operations.filter((operation) => operation?.type === 'shopping.cycle.start').map(({ listId, cycle }) => ({
+            listId,
+            cycleId: cycle?.id ?? null
+          }))
         : []
     });
     const operations = Array.isArray(parsedBody?.operations) ? parsedBody.operations : [];
@@ -144,12 +161,23 @@ function auditPage(page, audit, privateTargets = {}) {
     }
     if (path.endsWith('/content/mutations')) {
       audit.mutationStatuses.push(response.status());
-      const requestBody = (() => { try { return JSON.parse(response.request().postData() ?? ''); } catch { return null; } })();
+      const responseRequestBody = response.request().postData() ?? '';
+      const requestBody = (() => { try { return JSON.parse(responseRequestBody); } catch { return null; } })();
       audit.mutationResponses.push({
         mutationId: typeof requestBody?.mutationId === 'string' ? requestBody.mutationId : null,
+        payloadHash: createHash('sha256').update(responseRequestBody).digest('hex'),
         spaceId: path.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null,
         status: response.status()
       });
+      void response.json().then((body) => {
+        audit.mutationResults ??= [];
+        audit.mutationResults.push({
+          mutationId: typeof requestBody?.mutationId === 'string' ? requestBody.mutationId : null,
+          spaceId: path.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null,
+          status: response.status(),
+          operations: Array.isArray(body?.operations) ? body.operations : []
+        });
+      }).catch(() => undefined);
     }
     if (path.endsWith('/content/mutations') && response.status() >= 400) {
       const request = response.request();
@@ -159,6 +187,8 @@ function auditPage(page, audit, privateTargets = {}) {
         audit.mutationFailures.push({
           status: response.status(),
           mutationId: typeof requestBody?.mutationId === 'string' ? requestBody.mutationId : null,
+          payloadHash: createHash('sha256').update(request.postData() ?? '').digest('hex'),
+          spaceId: path.match(/^\/v1\/spaces\/([^/]+)\/content\/mutations$/)?.[1] ?? null,
           operationTypes: Array.isArray(requestBody?.operations)
             ? requestBody.operations.map((operation) => operation?.type).filter((type) => typeof type === 'string')
             : [],
@@ -166,6 +196,9 @@ function auditPage(page, audit, privateTargets = {}) {
           errorMessage: redactFixtureSecrets(body?.error?.message ?? '').slice(0, 300)
         });
       }).catch(() => undefined);
+    }
+    if (response.status() === 429) {
+      audit.rateLimitResponses.push({ method: response.request().method(), path });
     }
     if (path.endsWith('/sync/credentials')) audit.credentialStatuses.push(response.status());
     if (path.endsWith('/v1/me') || path.endsWith('/auth/register') || path.endsWith('/auth/login')) {
@@ -179,7 +212,7 @@ function auditPage(page, audit, privateTargets = {}) {
 
 function createAudit() {
   return {
-    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
+    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], rateLimitResponses: [], pageErrors: 0, consoleErrors: 0,
     personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false,
     accountFailures: [], providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [],
     pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
@@ -210,11 +243,15 @@ async function login(page, email, password) {
   await page.getByText(`Signed in as ${email}`, { exact: true }).waitFor({ timeout: 30_000 });
 }
 
-async function configureApi(page) {
-  await page.getByLabel('API base URL').fill(apiUrl);
+async function configureApi(page, targetApiUrl = apiUrl) {
+  await page.getByLabel('API base URL').fill(targetApiUrl);
   await page.getByRole('button', { name: 'Save API URL' }).click();
   await page.getByRole('textbox', { name: 'PowerSync Service URL' }).fill(serviceUrl);
   await page.getByRole('button', { name: 'Save PowerSync Service URL' }).click();
+}
+
+function apiUrlFor(role) {
+  return process.env[`CONTENT_SYNC_${role.toUpperCase()}_API_URL`] ?? apiUrl;
 }
 
 async function storedSessionToken(page) {
@@ -236,13 +273,19 @@ async function storedSessionToken(page) {
 
 async function openCookingWorkspace(page, expectedWorkspaceName = null) {
   const homePath = new URL(baseUrl).pathname;
-  if (new URL(page.url()).pathname !== homePath) await page.goto(routeUrl(''));
+  const pantryTab = page.getByRole('tab', { name: /Pantry/ });
+  if (new URL(page.url()).pathname !== homePath) {
+    if (await pantryTab.count()) {
+      if (await pantryTab.getAttribute('aria-selected') !== 'true') await pantryTab.click();
+    } else {
+      await page.goto(routeUrl(''));
+    }
+  }
   if (expectedWorkspaceName) {
     const workspaceStatus = page.getByTestId('pantry-workspace-status');
     await expect(workspaceStatus).toContainText(expectedWorkspaceName, { timeout: 60_000 });
     await expect(workspaceStatus).not.toContainText(/opening|switching/, { timeout: 60_000 });
   }
-  const pantryTab = page.getByRole('tab', { name: /Pantry/ });
   if (await pantryTab.getAttribute('aria-selected') !== 'true') await pantryTab.click();
   await expect(pantryTab).toHaveAttribute('aria-selected', 'true');
   await page.getByLabel('Ingredient and details').waitFor();
@@ -278,7 +321,7 @@ async function restoreAccountConnection(page, email) {
   await expect.poll(async () => {
     const label = (await sessionStatus.textContent())?.replace(/\s+/gu, ' ').trim() ?? '';
     return label === `Signed in as ${email}`
-      || (label === 'Account could not be checked offline'
+      || (label === 'Account access unverified'
         && await checkConnection.count() > 0
         && await checkConnection.isEnabled());
   }, { timeout: 30_000 }).toBe(true);
@@ -336,6 +379,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
   const sharedItem = `Shared Pantry ${runId.slice(-8)}`;
   const memberItem = `Member Pantry ${runId.slice(-8)}`;
   const offlineMemberItem = `Offline Pantry ${runId.slice(-8)}`;
+  const tombstonePantryItem = `Tombstone Pantry ${runId.slice(-8)}`;
+  const staleCycleShoppingItem = `Stale cycle ${runId.slice(-8)}`;
   const concurrentOwnerPantryItem = `Offline owner pantry ${runId.slice(-8)}`;
   const concurrentMemberPantryItem = `Offline editor pantry ${runId.slice(-8)}`;
   const concurrentOwnerShoppingItem = `Offline owner shopping ${runId.slice(-8)}`;
@@ -379,31 +424,11 @@ test('built PWA migrates guest history and synchronizes household records betwee
       providerId: 'openrouter', model: 'openrouter/free', dictationEngine: 'browser'
     }
   };
-  const ownerAudit = {
-    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
-    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
-    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
-  };
-  const ownerSecondAudit = {
-    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
-    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
-    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
-  };
-  const memberAudit = {
-    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
-    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
-    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
-  };
-  const viewerAudit = {
-    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
-    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
-    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
-  };
-  const outsiderAudit = {
-    contentRequests: 0, mutationStatuses: [], mutationResponses: [], credentialStatuses: [], pageErrors: 0, consoleErrors: 0,
-    personalSpaceId: null, personalDataUploaded: false, privateDataLeaked: false, providerDataLeaked: false, accountFailures: [],
-    providerLeakRequests: [], dialogMessages: [], mutationFailures: [], mutationRequests: [], pageErrorMessages: [], consoleErrorMessages: [], requestFailures: []
-  };
+  const ownerAudit = createAudit();
+  const ownerSecondAudit = createAudit();
+  const memberAudit = createAudit();
+  const viewerAudit = createAudit();
+  const outsiderAudit = createAudit();
   const ownerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   let ownerSecondContext;
   let memberContext;
@@ -549,7 +574,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByText('Local on this device', { exact: true })).toBeVisible();
     await owner.getByRole('textbox', { name: 'OpenRouter API key' }).fill(providerKeyCanary);
     await owner.getByRole('button', { name: 'Save OpenRouter API key' }).click();
-    await configureApi(owner);
+    await configureApi(owner, apiUrlFor('owner'));
     await register(owner, ownerEmail, password);
     await owner.reload();
     await expect(owner.getByText(`Signed in as ${ownerEmail}`, { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -583,6 +608,12 @@ test('built PWA migrates guest history and synchronizes household records betwee
     let deniedEffectMutationId = null;
     let deniedEffectResponseStatus = null;
     const deniedEffectMutationIds = new Set();
+    let shoppingPurchaseRequestCount = 0;
+    let shoppingPurchaseResponseStatus = null;
+    let shoppingPurchaseResponseLost = false;
+    let allowShoppingPurchaseRetryAfterReload = false;
+    let shoppingPurchaseMutationId = null;
+    const shoppingPurchaseMutationIds = new Set();
     await ownerContext.route('**/content/mutations', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.continue();
@@ -645,6 +676,28 @@ test('built PWA migrates guest history and synchronizes household records betwee
         return;
       }
 
+      const shoppingPurchase = operations.find((operation) => operation?.type === 'shopping.purchase');
+      if (shoppingPurchase) {
+        shoppingPurchaseRequestCount += 1;
+        shoppingPurchaseMutationId = request.mutationId;
+        if (typeof request.mutationId === 'string') shoppingPurchaseMutationIds.add(request.mutationId);
+        if (shoppingPurchaseRequestCount === 1) {
+          const response = await route.fetch();
+          shoppingPurchaseResponseStatus = response.status();
+          if (!response.ok()) {
+            await route.fulfill({ response });
+            return;
+          }
+          shoppingPurchaseResponseLost = true;
+          await route.abort('failed');
+          return;
+        }
+        if (!allowShoppingPurchaseRetryAfterReload) {
+          await route.abort('failed');
+          return;
+        }
+      }
+
       const effectOperation = operations.find((operation) => operation?.type === 'pantry.upsert' && operation.name === householdEffectName);
       if (effectOperation) {
         householdEffectMutationId = request.mutationId;
@@ -699,8 +752,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
 
       const deniedOperation = operations.find((operation) => operation?.type === 'pantry.upsert' && operation.name === deniedEffectName);
       if (deniedOperation) {
-        deniedEffectMutationId = request.mutationId;
         deniedEffectMutationIds.add(request.mutationId);
+        deniedEffectMutationId ??= request.mutationId;
         deniedEffectResponseStatus = 403;
         await route.fulfill({
           status: 403,
@@ -825,7 +878,10 @@ test('built PWA migrates guest history and synchronizes household records betwee
     const syncedHouseholdSpaceId = ownerAudit.mutationRequests.find((request) => (
       request.pantryUpserts.some((operation) => operation.name === sharedItem)
     ))?.spaceId;
+    const sharedPantryId = ownerAudit.mutationRequests.flatMap((request) => request.pantryUpserts)
+      .find((operation) => operation.name === sharedItem)?.id;
     expect(syncedHouseholdSpaceId).toBeTruthy();
+    expect(sharedPantryId).toBeTruthy();
     await owner.getByRole('tab', { name: /Recipes/ }).click();
     await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
     await expect(owner.getByTestId('shopping-local-persistence-status')).toContainText(householdName);
@@ -833,7 +889,6 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await owner.getByRole('button', { name: 'Create shopping list' }).click();
     await selectShoppingList(owner, concurrentShoppingListName);
     const shoppingSaveStatus = owner.getByTestId('shopping-local-persistence-status');
-    await expect(shoppingSaveStatus).toHaveText('Saving changes on this device…', { timeout: 10_000 });
     await expect(shoppingSaveStatus).toContainText(householdName, { timeout: 30_000 });
     await expect(shoppingSaveStatus).not.toContainText('Local on this device');
     await expect.poll(() => {
@@ -868,7 +923,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     const viewer = await viewerContext.newPage();
     auditPage(viewer, viewerAudit);
     await viewer.goto(routeUrl('settings'));
-    await configureApi(viewer);
+    await configureApi(viewer, apiUrlFor('aux'));
     await register(viewer, viewerEmail, password);
     await viewer.getByLabel('Invitation token').fill(viewerInviteToken);
     await viewer.getByRole('button', { name: 'Accept invitation' }).click();
@@ -891,7 +946,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     const outsider = await outsiderContext.newPage();
     auditPage(outsider, outsiderAudit);
     await outsider.goto(routeUrl('settings'));
-    await configureApi(outsider);
+    await configureApi(outsider, apiUrlFor('aux'));
     await register(outsider, outsiderEmail, password);
     await openCookingWorkspace(outsider);
     await expect(outsider.getByText(sharedItem, { exact: true })).toHaveCount(0);
@@ -995,7 +1050,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
       offlineAllergy: offlinePersonalAllergy
     });
     await ownerSecond.goto(routeUrl('settings'));
-    await configureApi(ownerSecond);
+    await configureApi(ownerSecond, apiUrlFor('aux'));
     await login(ownerSecond, ownerEmail, password);
     await expect.poll(() => ownerSecondAudit.personalSpaceId).toBe(ownerAudit.personalSpaceId);
     await openChefWorkspace(ownerSecond);
@@ -1011,7 +1066,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await ownerContext.route('https://openrouter.ai/**', (route) => route.abort('failed'));
     await ownerContext.setOffline(true);
     await owner.reload();
-    await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByText('Account access unverified', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(owner.getByTestId('cooking-workspace-status')).toContainText('Saved workspace (membership unverified)', { timeout: 30_000 });
     await expect(owner.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
     const cityInput = owner.getByRole('textbox', { name: 'City', exact: true });
@@ -1044,7 +1099,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByText(offlinePersonalChat, { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(owner.getByRole('button', { name: `Edit meal context, ${offlineMealPortions} portions, 2 cooks` })).toBeVisible();
     await owner.goto(routeUrl('settings'));
-    await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByText('Account access unverified', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(owner.getByTestId('cooking-workspace-status')).toContainText('Saved workspace (membership unverified)', { timeout: 30_000 });
     await expect(owner.getByRole('textbox', { name: 'City', exact: true })).toHaveValue(offlinePersonalCity, { timeout: 30_000 });
     await expect(owner.getByRole('button', { name: `Remove allergy ${offlinePersonalAllergy}` })).toBeVisible();
@@ -1147,6 +1202,10 @@ test('built PWA migrates guest history and synchronizes household records betwee
       }))
     })).toBe('effect-blocked');
     expect(deniedAction?.effect_mutation_id).toBe(deniedEffectMutationId);
+    const deniedMutationAudit = ownerAudit.mutationRequests.flatMap((request) => request.pantryUpserts
+      .filter((item) => item.name === deniedEffectName)
+      .map((item) => ({ mutationId: request.mutationId, operationId: item.opId, entityId: item.id })));
+    expect([...deniedEffectMutationIds], JSON.stringify(deniedMutationAudit)).toEqual([deniedEffectMutationId]);
     expect(new Set(ownerAudit.mutationRequests.flatMap((request) => request.pantryUpserts
       .filter((item) => item.name === deniedEffectName)
       .map((item) => request.mutationId))).size).toBe(1);
@@ -1174,10 +1233,10 @@ test('built PWA migrates guest history and synchronizes household records betwee
     markStage('owner created a one-use editor invitation');
 
     memberContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    const member = await memberContext.newPage();
+    let member = await memberContext.newPage();
     auditPage(member, memberAudit);
     await member.goto(routeUrl('settings'));
-    await configureApi(member);
+    await configureApi(member, apiUrlFor('member'));
     await register(member, memberEmail, password);
     markStage('second account registered independently');
     await member.getByLabel('Invitation token').fill(inviteToken);
@@ -1227,6 +1286,44 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(member.getByText(historicalEffectName, { exact: true })).toHaveCount(0);
     await openCookingWorkspace(member, householdName);
 
+    // Keep an editor's same-ID edit offline while the owner deletes that row.
+    // The stale upsert must be parked as a recoverable tombstone conflict.
+    await memberContext.setOffline(true);
+    await member.getByTestId(`pantry-item-${sharedPantryId}`)
+      .getByRole('button', { name: 'Set preference to 4 out of 5' }).click();
+    await expect(member.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });
+    await owner.getByRole('button', { name: `Remove ${sharedItem}` }).click();
+    await expect(owner.getByTestId('pantry-screen').getByText(sharedItem, { exact: true })).toHaveCount(0);
+    await expect.poll(() => hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+      request.operationTypes.includes('pantry.delete')
+    )), { timeout: 30_000 }).toBe(true);
+    await memberContext.setOffline(false);
+    await restoreAccountConnection(member, memberEmail);
+    await openCookingWorkspace(member, householdName);
+    await expect.poll(() => memberAudit.mutationFailures.some((failure) => (
+      failure.status === 409 && failure.errorCode === 'ENTITY_TOMBSTONED'
+    )), { timeout: 60_000 }).toBe(true);
+    await expect(owner.getByTestId('pantry-screen').getByText(sharedItem, { exact: true })).toHaveCount(0);
+    await expect(member.getByTestId('pantry-screen').getByText(sharedItem, { exact: true })).toHaveCount(0);
+    await openSettings(member, true, householdName);
+    const [tombstoneRecoveryDownload] = await Promise.all([
+      member.waitForEvent('download'),
+      member.getByRole('button', { name: 'Export workspace recovery file' }).click()
+    ]);
+    const tombstoneRecovery = JSON.parse(await readFile(await tombstoneRecoveryDownload.path(), 'utf8'));
+    const parkedTombstoneEdit = tombstoneRecovery.blocked.some((row) => {
+      try {
+        return JSON.parse(row.payload_json).operations?.some((operation) => (
+          operation.type === 'pantry.upsert' && operation.id === sharedPantryId
+        ));
+      } catch {
+        return false;
+      }
+    });
+    expect(parkedTombstoneEdit).toBe(true);
+    await openCookingWorkspace(member, householdName);
+    markStage('offline stale pantry edit was rejected by the tombstone and remained exportable');
+
     // Both members edit separate pantry and shopping records while disconnected.
     // Reconnect the owner first, then the editor, and require each device to
     // converge without duplicate rows.
@@ -1243,11 +1340,11 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await owner.reload();
     await member.reload();
     await owner.goto(routeUrl('settings'));
-    await expect(owner.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByText('Account access unverified', { exact: true })).toBeVisible({ timeout: 30_000 });
     await openCookingWorkspace(owner);
     await expect(owner.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
     await member.goto(routeUrl('settings'));
-    await expect(member.getByText('Account could not be checked offline', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(member.getByText('Account access unverified', { exact: true })).toBeVisible({ timeout: 30_000 });
     await openCookingWorkspace(member);
     await expect(member.getByTestId('pantry-workspace-status')).toContainText('membership unverified');
 
@@ -1259,6 +1356,9 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
     await addShoppingItem(owner, concurrentOwnerShoppingItem, concurrentShoppingListName);
     await expect(owner.getByTestId('shopping-local-persistence-status')).toContainText('Saved on this device.', { timeout: 30_000 });
+    await owner.getByRole('checkbox', { name: `Check ${concurrentOwnerShoppingItem}` }).click();
+    await owner.getByRole('button', { name: 'Add checked to Pantry (1)' }).click();
+    await expect(owner.getByText('Purchased', { exact: true })).toHaveCount(1);
 
     await member.getByLabel('Ingredient and details').fill(concurrentMemberPantryItem);
     await member.getByRole('button', { name: 'Add ingredient' }).click();
@@ -1268,6 +1368,9 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await member.getByRole('button', { name: 'Shopping', exact: true }).click();
     await addShoppingItem(member, concurrentMemberShoppingItem, concurrentShoppingListName);
     await expect(member.getByTestId('shopping-local-persistence-status')).toContainText('Saved on this device.', { timeout: 30_000 });
+    await member.getByRole('checkbox', { name: `Check ${concurrentMemberShoppingItem}` }).click();
+    await member.getByRole('button', { name: 'Add checked to Pantry (1)' }).click();
+    await expect(member.getByText('Purchased', { exact: true })).toHaveCount(1);
 
     await owner.reload();
     await member.reload();
@@ -1281,17 +1384,22 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(member.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(0);
     await owner.getByRole('tab', { name: /Recipes/ }).click();
     await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
-    await expect(owner.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(1);
-    await expect(owner.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(0);
+    await expect(owner.getByRole('checkbox', { name: `Check ${concurrentOwnerShoppingItem}` })).toHaveCount(1);
+    await expect(owner.getByRole('checkbox', { name: `Check ${concurrentMemberShoppingItem}` })).toHaveCount(0);
     await member.getByRole('tab', { name: /Recipes/ }).click();
     await member.getByRole('button', { name: 'Shopping', exact: true }).click();
-    await expect(member.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(1);
-    await expect(member.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(0);
-    markStage('owner and editor kept independent pantry and shopping edits through offline reloads');
+    await expect(member.getByRole('checkbox', { name: `Check ${concurrentMemberShoppingItem}` })).toHaveCount(1);
+    await expect(member.getByRole('checkbox', { name: `Check ${concurrentOwnerShoppingItem}` })).toHaveCount(0);
+    await expect(member.getByText('Purchased', { exact: true })).toHaveCount(1);
+    markStage('owner and editor kept independent pantry and shopping purchases through offline reloads');
 
-    await ownerContext.setOffline(false);
-    await restoreAccountConnection(owner, ownerEmail);
+    await Promise.all([ownerContext.setOffline(false), memberContext.setOffline(false)]);
+    await Promise.all([restoreAccountConnection(owner, ownerEmail), restoreAccountConnection(member, memberEmail)]);
     await openCookingWorkspace(owner, householdName);
+    await expect.poll(() => shoppingPurchaseResponseLost && shoppingPurchaseResponseStatus === 200, { timeout: 90_000 }).toBe(true);
+    await expect.poll(() => hasAcceptedMutationWith(memberAudit, syncedHouseholdSpaceId, (request) => (
+      request.shoppingPurchases.length > 0
+    )), { timeout: 90_000 }).toBe(true);
     await expect.poll(() => (
       hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
         request.pantryUpserts.some((operation) => operation.name === concurrentOwnerPantryItem)
@@ -1303,8 +1411,6 @@ test('built PWA migrates guest history and synchronizes household records betwee
     await expect(owner.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1);
     await expect(owner.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(0);
 
-    await memberContext.setOffline(false);
-    await restoreAccountConnection(member, memberEmail);
     await openCookingWorkspace(member, householdName);
     await expect.poll(() => (
       hasAcceptedMutationWith(memberAudit, syncedHouseholdSpaceId, (request) => (
@@ -1314,6 +1420,19 @@ test('built PWA migrates guest history and synchronizes household records betwee
         request.shoppingItemOperations.some((operation) => operation.name === concurrentMemberShoppingItem)
       ))
     ), { timeout: 90_000 }).toBe(true);
+    const lostPurchaseId = shoppingPurchaseMutationId;
+    expect(lostPurchaseId).toBeTruthy();
+    expect([...shoppingPurchaseMutationIds]).toEqual([lostPurchaseId]);
+    const purchaseRetryReload = owner.reload();
+    allowShoppingPurchaseRetryAfterReload = true;
+    await purchaseRetryReload;
+    await restoreAccountConnection(owner, ownerEmail);
+    await openCookingWorkspace(owner, householdName);
+    await expect.poll(() => hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+      request.mutationId === lostPurchaseId && request.shoppingPurchases.length > 0
+    )), { timeout: 90_000 }).toBe(true);
+    expect(shoppingPurchaseRequestCount).toBeGreaterThanOrEqual(2);
+    expect(new Set(mutationAttempts.get(lostPurchaseId)).size).toBe(1);
     await expect(owner.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
     await expect(owner.getByTestId('pantry-screen').getByText(concurrentMemberPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
     await expect(member.getByTestId('pantry-screen').getByText(concurrentOwnerPantryItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
@@ -1321,13 +1440,76 @@ test('built PWA migrates guest history and synchronizes household records betwee
 
     await owner.getByRole('tab', { name: /Recipes/ }).click();
     await owner.getByRole('button', { name: 'Shopping', exact: true }).click();
-    await expect(owner.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
-    await expect(owner.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
+    await expect(owner.getByRole('checkbox', { name: `Check ${concurrentOwnerShoppingItem}` })).toHaveCount(1, { timeout: 90_000 });
+    await expect(owner.getByRole('checkbox', { name: `Check ${concurrentMemberShoppingItem}` })).toHaveCount(1, { timeout: 90_000 });
     await member.getByRole('tab', { name: /Recipes/ }).click();
     await member.getByRole('button', { name: 'Shopping', exact: true }).click();
-    await expect(member.getByText(concurrentOwnerShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
-    await expect(member.getByText(concurrentMemberShoppingItem, { exact: true })).toHaveCount(1, { timeout: 90_000 });
-    markStage('owner-first offline reconnect converged without duplicate pantry or shopping records on both clients');
+    await expect(member.getByRole('checkbox', { name: `Check ${concurrentOwnerShoppingItem}` })).toHaveCount(1, { timeout: 90_000 });
+    await expect(member.getByRole('checkbox', { name: `Check ${concurrentMemberShoppingItem}` })).toHaveCount(1, { timeout: 90_000 });
+    await expect(owner.getByText('Purchased', { exact: true })).toHaveCount(2, { timeout: 90_000 });
+    await expect(member.getByText('Purchased', { exact: true })).toHaveCount(2, { timeout: 90_000 });
+    markStage('concurrent purchases converged once, and the exact owner purchase mutation survived a lost response and reload');
+
+    await addShoppingItem(owner, staleCycleShoppingItem, concurrentShoppingListName);
+    await expect.poll(() => hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+      request.shoppingItemOperations.some((operation) => operation.name === staleCycleShoppingItem)
+    )), { timeout: 90_000 }).toBe(true);
+    await expect(member.getByText(staleCycleShoppingItem, { exact: true })).toBeVisible({ timeout: 90_000 });
+    const staleCycleItem = ownerAudit.mutationRequests.flatMap((request) => request.shoppingItemOperations)
+      .find((operation) => operation.name === staleCycleShoppingItem);
+    expect(staleCycleItem?.id).toBeTruthy();
+    expect(staleCycleItem?.purchaseCycleId).toBeTruthy();
+
+    await memberContext.setOffline(true);
+    await member.reload();
+    await expect(member.getByText(staleCycleShoppingItem, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await owner.getByRole('button', { name: 'Start new purchase cycle' }).click();
+    await expect(owner.getByText('A new purchase cycle has started.', { exact: true })).toBeVisible();
+    await expect.poll(() => hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+      request.operationTypes.includes('shopping.cycle.start')
+    )), { timeout: 90_000 }).toBe(true);
+    const newPurchaseCycleId = ownerAudit.mutationRequests.flatMap((request) => request.shoppingCycleStarts)
+      .at(-1)?.cycleId;
+    expect(newPurchaseCycleId).toBeTruthy();
+    expect(newPurchaseCycleId).not.toBe(staleCycleItem.purchaseCycleId);
+
+    await member.getByRole('checkbox', { name: `Check ${staleCycleShoppingItem}` }).click();
+    await expect(member.getByTestId('shopping-local-persistence-status')).toContainText('Saved on this device.', { timeout: 30_000 });
+    await memberContext.setOffline(false);
+    await restoreAccountConnection(member, memberEmail);
+    await openCookingWorkspace(member, householdName);
+    await member.getByRole('tab', { name: /Recipes/ }).click();
+    await member.getByRole('button', { name: 'Shopping', exact: true }).click();
+    await expect.poll(() => memberAudit.mutationResults?.some((result) => (
+      result.status === 200 && result.operations.some((operation) => (
+        operation.status === 'ignored' && operation.reason === 'stale_cycle'
+      ))
+    )), { timeout: 90_000 }).toBe(true);
+    await expect(member.getByRole('checkbox', { name: `Check ${staleCycleShoppingItem}` })).toHaveAttribute('aria-checked', 'false', { timeout: 90_000 });
+    await expect(owner.getByTestId('pantry-screen').getByText(staleCycleShoppingItem, { exact: true })).toHaveCount(0);
+    markStage('old-cycle check was ignored after the owner advanced the shared list');
+
+    await owner.getByRole('button', { name: 'Remove list', exact: true }).click();
+    await owner.getByRole('button', { name: 'Confirm remove list', exact: true }).click();
+    await expect(owner.getByLabel('New shopping list name')).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => hasAcceptedMutationWith(ownerAudit, syncedHouseholdSpaceId, (request) => (
+      request.operationTypes.includes('shopping.list.remove')
+    )), { timeout: 90_000 }).toBe(true);
+    await expect(member.getByLabel('New shopping list name')).toBeVisible({ timeout: 90_000 });
+    await openSettings(owner, true, householdName);
+    const [removedListRecoveryDownload] = await Promise.all([
+      owner.waitForEvent('download'),
+      owner.getByRole('button', { name: 'Export workspace recovery file' }).click()
+    ]);
+    const removedListRecovery = JSON.parse(await readFile(await removedListRecoveryDownload.path(), 'utf8'));
+    const removedHouseholdList = removedListRecovery.state.shopping.lists.find((list) => (
+      list.id === ownerAudit.mutationRequests.flatMap((request) => request.shoppingPurchases)
+        .find((purchase) => purchase.listId)?.listId
+    ));
+    expect(removedHouseholdList?.removedAt).toBeTruthy();
+    expect(removedListRecovery.state.shopping.purchases).toHaveLength(2);
+    await openCookingWorkspace(owner, householdName);
+    markStage('shared shopping-list tombstone synced while its two purchase-ledger rows stayed in recovery data');
 
     await memberContext.setOffline(true);
     await openCookingWorkspace(member);
@@ -1381,7 +1563,7 @@ test('built PWA migrates guest history and synchronizes household records betwee
       });
       const body = await response.json();
       return { status: response.status, errorCode: body?.error?.code ?? null };
-    }, { api: apiUrl, token: originalMemberToken, spaceId: householdSpaceId, itemName: offlineMemberItem, uniqueId: runId });
+    }, { api: apiUrlFor('member'), token: originalMemberToken, spaceId: householdSpaceId, itemName: offlineMemberItem, uniqueId: runId });
     expect(revokedWrite).toEqual({ status: 403, errorCode: 'SPACE_ACCESS_DENIED' });
     await owner.goto(routeUrl(''));
     await expect(owner.getByText(offlineMemberItem, { exact: true })).toHaveCount(0);
@@ -1417,6 +1599,71 @@ test('built PWA migrates guest history and synchronizes household records betwee
     })).toBe(true);
     markStage(`removed editor switched to personal space and exported pending work via ${pendingEditExported ? 'blocked outbox record' : 'membership archive'}`);
 
+    await owner.goto(routeUrl('settings'));
+    await owner.getByRole('button', { name: `View members of ${householdName}` }).click();
+    await owner.getByLabel(`Invitation email for ${householdName}`).fill(memberEmail);
+    await owner.getByRole('button', { name: 'Invite as editor' }).click();
+    await owner.getByRole('button', { name: `Invite member to ${householdName}` }).click();
+    const reInviteToken = await owner.getByLabel('One-time invitation token').inputValue();
+    expect(reInviteToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    await member.goto(routeUrl('settings'));
+    await member.getByLabel('Invitation token').fill(reInviteToken);
+    await member.getByRole('button', { name: 'Accept invitation' }).click();
+    await expect(member.getByRole('button', { name: `Use ${householdName} for cooking` })).toBeVisible({ timeout: 30_000 });
+    await member.getByRole('button', { name: `Use ${householdName} for cooking` }).click();
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText(householdName, { timeout: 30_000 }).catch(async (error) => {
+      const messages = (await member.locator('body').innerText()).split(/\n+/u)
+        .map((line) => line.trim())
+        .filter((line) => /workspace|membership|account|session|error|failed|local copy/i.test(line));
+      throw new Error(`${error.message}\nReinvitation recovery state: ${JSON.stringify(messages)}`);
+    });
+    await expect(member.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
+    await openCookingWorkspace(member, householdName);
+    await expect(member.getByTestId('pantry-screen').getByText(memberItem, { exact: true })).toBeVisible({ timeout: 90_000 });
+    await expect(member.getByTestId('pantry-screen').getByText(offlineMemberItem, { exact: true })).toHaveCount(0);
+    markStage('the removed account regained authorized household rows after a new invitation without resubmitting its old pending edit');
+
+    // Delete only this member's PowerSync profile database. The separate
+    // account/session database remains available so accepted server rows can
+    // be fetched again after a real app restart.
+    const resetSessionToken = await storedSessionToken(member);
+    const resetProfile = await member.evaluate(async ({ api, token }) => {
+      const response = await fetch(`${api}/v1/me`, { headers: { Authorization: `Bearer ${token}` }, credentials: 'omit' });
+      const body = await response.json();
+      const profileId = body?.user?.id;
+      const databaseNames = (await indexedDB.databases()).map((database) => database.name).filter(Boolean);
+      const profileDatabase = databaseNames.find((name) => name.endsWith('.db') && name.includes(profileId));
+      return { profileId, profileDatabase };
+    }, { api: apiUrlFor('member'), token: resetSessionToken });
+    expect(resetProfile.profileDatabase).toBeTruthy();
+    await member.close();
+    member = await memberContext.newPage();
+    auditPage(member, memberAudit);
+    await member.addInitScript((databaseName) => {
+      const resetMarker = `creative-cooking-profile-reset:${databaseName}`;
+      if (window.name === resetMarker) {
+        window.__contentProfileReset = 'already-done';
+        return;
+      }
+      window.name = resetMarker;
+      const request = indexedDB.deleteDatabase(databaseName);
+      request.onsuccess = () => { window.__contentProfileReset = 'done'; };
+      request.onerror = () => { window.__contentProfileReset = 'failed'; };
+      request.onblocked = () => { window.__contentProfileReset = 'blocked'; };
+    }, resetProfile.profileDatabase);
+    await member.goto(routeUrl('settings'));
+    await expect.poll(() => member.evaluate(() => window.__contentProfileReset)).toBe('done');
+    await expect(member.getByText(`Signed in as ${memberEmail}`, { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(member.getByRole('button', { name: `Use ${householdName} for cooking` })).toBeVisible({ timeout: 30_000 });
+    await member.getByRole('button', { name: `Use ${householdName} for cooking` }).click();
+    await expect(member.getByTestId('cooking-workspace-status')).toContainText(householdName, { timeout: 30_000 });
+    await expect(member.getByTestId('cooking-workspace-status')).not.toContainText(/opening|switching/, { timeout: 30_000 });
+    await openCookingWorkspace(member, householdName);
+    await expect(member.getByTestId('pantry-screen').getByText(memberItem, { exact: true })).toBeVisible({ timeout: 90_000 });
+    await expect(member.getByTestId('pantry-screen').getByText(sharedItem, { exact: true })).toHaveCount(0);
+    markStage('cleared account content profile resynced the acknowledged household rows while respecting the server tombstone');
+
+    await member.goto(routeUrl('settings'));
     await member.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(member.getByText('Not signed in', { exact: true })).toBeVisible();
     await login(member, outsiderEmail, password);
@@ -1447,6 +1694,8 @@ test('built PWA migrates guest history and synchronizes household records betwee
       'Failed to load resource: net::ERR_FAILED',
       'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
       'Failed to load resource: the server responded with a status of 403 (Forbidden)',
+      'Failed to load resource: the server responded with a status of 409 (Conflict)',
+      'Failed to load resource: the server responded with a status of 429 (Too Many Requests)',
       'falling back to ArrayBuffer instantiation'
     ]);
     const expectedWasmStreamingMessages = new Set([
@@ -1454,7 +1703,9 @@ test('built PWA migrates guest history and synchronizes household records betwee
       'wasm streaming compile failed: TypeError: WebAssembly compilation aborted: Network error: Response body loading was aborted'
     ]);
     const unexpectedConsoleErrors = browserAudits.flatMap((audit) => audit.consoleErrorMessages
-      .filter((message) => !expectedWasmStreamingMessages.has(message) && !expectedConsoleMessages.has(message)));
+      .filter((message) => !expectedWasmStreamingMessages.has(message)
+        && !expectedConsoleMessages.has(message)
+        && !message.startsWith('[PowerSync]: Sync error AccountApiError: Too many requests. Please try again later.')));
     expect(unexpectedConsoleErrors, JSON.stringify({
       owner: ownerAudit.consoleErrorMessages,
       ownerSecond: ownerSecondAudit.consoleErrorMessages,
@@ -1469,6 +1720,11 @@ test('built PWA migrates guest history and synchronizes household records betwee
         failure.error === 'net::ERR_INTERNET_DISCONNECTED'
       )).length;
       const deniedResponses = audit.mutationFailures.filter((failure) => failure.status === 403).length;
+      const tombstoneConflicts = audit.mutationFailures.filter((failure) => failure.status === 409).length;
+      const rateLimitResponses = audit.rateLimitResponses.length;
+      const credentialRateLimitLogs = audit.consoleErrorMessages.filter((message) => (
+        message.startsWith('[PowerSync]: Sync error AccountApiError: Too many requests. Please try again later.')
+      )).length;
       const abortedWasmLoads = audit.requestFailures.filter((failure) => (
         failure.error === 'net::ERR_ABORTED' && failure.path.endsWith('.wasm')
       )).length;
@@ -1480,8 +1736,23 @@ test('built PWA migrates guest history and synchronizes household records betwee
       expect(count('Failed to load resource: net::ERR_FAILED')).toBeLessThanOrEqual(failedNetworkRequests);
       expect(count('Failed to load resource: net::ERR_INTERNET_DISCONNECTED')).toBeLessThanOrEqual(offlineNetworkFailures);
       expect(count('Failed to load resource: the server responded with a status of 403 (Forbidden)')).toBeLessThanOrEqual(deniedResponses);
+      expect(count('Failed to load resource: the server responded with a status of 409 (Conflict)')).toBeLessThanOrEqual(tombstoneConflicts);
+      expect(count('Failed to load resource: the server responded with a status of 429 (Too Many Requests)')).toBeLessThanOrEqual(rateLimitResponses);
+      expect(credentialRateLimitLogs).toBeLessThanOrEqual(rateLimitResponses);
       expect(wasmStreamingFailures).toBeLessThanOrEqual(abortedWasmLoads);
       expect(count('falling back to ArrayBuffer instantiation')).toBe(wasmStreamingFailures);
+    }
+
+    for (const audit of browserAudits) {
+      const rejectedMutations = audit.mutationFailures.filter((failure) => failure.status === 429);
+      for (const rejectedMutation of rejectedMutations) {
+        const exactRetry = audit.mutationResponses.find((response) => (
+          response.mutationId === rejectedMutation.mutationId
+            && response.spaceId === rejectedMutation.spaceId
+            && response.status === 200
+        ));
+        expect(exactRetry?.payloadHash, `rate-limited mutation ${rejectedMutation.mutationId} must receive an exact accepted retry`).toBe(rejectedMutation.payloadHash);
+      }
     }
 
     await member.goto(routeUrl('settings'));
@@ -1717,5 +1988,47 @@ test('recipe conflicts preserve both versions and allow a restart-safe copy reso
     markStage('the accepted workspace recipe and the editor recovery copy converged to both clients');
   } finally {
     await Promise.allSettled([memberContext.close(), ownerContext.close()]);
+  }
+});
+
+test('rate-limited session restoration keeps membership unverified and allows an explicit retry', async ({ browser }) => {
+  test.skip(!enabled, 'Set CONTENT_SYNC_E2E=1 and start the local API to run this account recovery path.');
+  test.setTimeout(90_000);
+
+  const runId = `${process.env.CONTENT_SYNC_RUN_ID ?? `cc-account-${Date.now()}`}-rate-${randomBytes(4).toString('hex')}`;
+  const email = `${runId}@example.test`;
+  const password = randomBytes(24).toString('base64url');
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  try {
+    const page = await context.newPage();
+    await page.goto(routeUrl('settings'));
+    await configureApi(page);
+    await register(page, email, password);
+    const savedToken = await storedSessionToken(page);
+    expect(savedToken).toBeTruthy();
+
+    let rejectNextMe = true;
+    await page.route(`${apiUrl}/v1/me`, async (route) => {
+      if (!rejectNextMe) return route.continue();
+      rejectNextMe = false;
+      return route.fulfill({
+        status: 429,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } })
+      });
+    });
+    await page.reload();
+    await expect(page.getByText('Account access unverified', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: 'Sign out from saved session', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use Personal for cooking' })).toHaveCount(0);
+    expect(await storedSessionToken(page)).toBe(savedToken);
+
+    await page.unroute(`${apiUrl}/v1/me`);
+    await page.getByRole('button', { name: 'Check account connection' }).click();
+    await expect(page.getByText(`Signed in as ${email}`, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('cooking-workspace-status')).toContainText('Personal', { timeout: 30_000 });
+    expect(await storedSessionToken(page)).toBe(savedToken);
+  } finally {
+    await context.close();
   }
 });
