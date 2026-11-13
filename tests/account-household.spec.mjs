@@ -9,7 +9,8 @@ if (!apiUrl) throw new Error('Set ACCOUNT_TEST_API_URL to the local API base URL
 const appUrl = process.env.ACCOUNT_TEST_APP_URL ?? 'http://127.0.0.1:4173/creative-cooking/';
 
 async function configureApi(page) {
-  await page.goto(`${appUrl}settings`);
+  await page.goto(appUrl);
+  await page.getByRole('button', { name: 'Open settings' }).click();
   await expect(page.getByRole('heading', { name: 'Account & sharing' })).toBeVisible();
   const apiField = page.getByLabel('API base URL');
   if (await apiField.inputValue() !== apiUrl) {
@@ -237,4 +238,45 @@ test('built PWA registers, restores, manages household roles, enforces revocatio
   } finally {
     await Promise.all([ownerContext.close(), viewerContext.close(), outsiderContext.close()]);
   }
+});
+
+test('logout hides account cooking and restores it when signing back in', async ({ page }) => {
+  const email = `account-reentry-${randomUUID()}@example.test`;
+  const password = `Account-${randomUUID()}!`;
+  const accountOnlyItem = 'account archive failure lentils';
+
+  await configureApi(page);
+  await register(page, email, password);
+  await expect(page.getByText('Personal workspace · owner')).toBeVisible();
+  await expect(page.getByTestId('cooking-workspace-status')).toContainText('Personal', { timeout: 30_000 });
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
+  await page.getByLabel('Ingredient and details').fill(accountOnlyItem);
+  await page.getByRole('button', { name: 'Add ingredient' }).click();
+  await expect(page.getByText(accountOnlyItem, { exact: true })).toBeVisible();
+  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally', { timeout: 15_000 });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await expect(page.getByText(`Signed in as ${email}`, { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('cooking-workspace-status')).toContainText('Personal', { timeout: 30_000 });
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByText(accountOnlyItem, { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page.getByText('Not signed in', { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  await page.goto(appUrl);
+  await expect(page.getByText(accountOnlyItem, { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Sign in mode' }).click();
+  await page.getByLabel('Email address').fill(email);
+  await page.getByRole('textbox', { name: 'Password' }).fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByText(`Signed in as ${email}`, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByText(accountOnlyItem, { exact: true })).toBeVisible({ timeout: 30_000 });
 });

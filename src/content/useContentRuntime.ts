@@ -37,6 +37,7 @@ import {
 } from './contentStore';
 import { createPowerSyncConnector, flushPendingContentMutations } from './powerSyncConnector';
 import { PERSONAL_CONTENT_TABLES } from './powerSyncSchema';
+import { recoverAndActivateWorkspace } from './workspaceExit';
 
 export type ContentSyncStatus =
   | 'opening'
@@ -299,6 +300,7 @@ export function useContentRuntime(
     transitionReason: 'signout' | 'membership-removed' | 'workspace-switch'
   ) => {
     const current = runtimeRef.current;
+    const previousState = stateRef.current;
     const key = scopeKey(next.scope, profileId);
     const currentKey = current ? scopeKey(current.scope, current.scope.profileId) : null;
     if (current && currentKey === key) {
@@ -314,39 +316,59 @@ export function useContentRuntime(
     transitionInProgress.current = true;
     setSyncStatus('switching');
     try {
-      if (current) {
-        await enqueuePersist(current, stateRef.current);
-        if (current.scope.kind === 'account') {
-          await archiveWorkspaceState(current.db, current.scope, stateRef.current, transitionReason);
+      const activation = await recoverAndActivateWorkspace({
+        hidePreviousAccount: () => {
+          if (current?.scope.kind !== 'account') return;
+          // Hide the prior account's cooking data before any best-effort write
+          // or archive can fail. Its database remains local and recoverable.
+          stateRef.current = DEFAULT_STATE;
+          alreadyPersistedState.current = DEFAULT_STATE;
+          persistedStateFingerprint.current = stableSerialize(DEFAULT_STATE);
+          setState(DEFAULT_STATE);
+          setDatabase(null);
+          setScope(next.scope);
+          setWorkspaceName(next.name);
+          setRole(next.role);
+          setEditDenied(null);
+          setStorageError(null);
+        },
+        ...(current ? { persistPrevious: () => enqueuePersist(current, previousState) } : {}),
+        ...(current?.scope.kind === 'account'
+          ? { archivePrevious: async () => { await archiveWorkspaceState(current.db, current.scope, previousState, transitionReason); } }
+          : {}),
+        activateNext: async (recoveryErrors) => {
+          if (requestGeneration !== transitionGeneration.current) return null;
+          if (next.scope.kind === 'account' && next.scope.spaceId !== 'offline-unverified') {
+            await saveActiveWorkspaceSelection(next.db, {
+              spaceId: next.scope.spaceId,
+              workspaceKind: next.scope.workspaceKind,
+              personalSpaceId: next.scope.personalSpaceId
+            });
+          }
+          const nextState = await loadWorkspaceState(next.db, next.scope, DEFAULT_STATE);
+          if (requestGeneration !== transitionGeneration.current) return null;
+          runtimeRef.current = next;
+          stateRef.current = nextState;
+          alreadyPersistedState.current = nextState;
+          persistedStateFingerprint.current = stableSerialize(nextState);
+          setState(nextState);
+          setDatabase(next.db);
+          setScope(next.scope);
+          setWorkspaceName(next.name);
+          setRole(next.role);
+          setEditDenied(null);
+          setStorageError(recoveryErrors.length
+            ? 'The previous account workspace could not be fully saved or archived before switching. Its existing account profile remains on this device for recovery.'
+            : null);
+          setSyncError(null);
+          setSyncStatus(next.scope.kind === 'guest'
+            ? 'local-only'
+            : account.status === 'offline' ? 'offline-unverified' : endpointConfigured(account.powerSyncUrl) ? 'connecting' : 'unconfigured');
+          await updateRecoveryDetails(next);
+          return next;
         }
-      }
-      if (requestGeneration !== transitionGeneration.current) return null;
-      if (next.scope.kind === 'account' && next.scope.spaceId !== 'offline-unverified') {
-        await saveActiveWorkspaceSelection(next.db, {
-          spaceId: next.scope.spaceId,
-          workspaceKind: next.scope.workspaceKind,
-          personalSpaceId: next.scope.personalSpaceId
-        });
-      }
-      const nextState = await loadWorkspaceState(next.db, next.scope, DEFAULT_STATE);
-      if (requestGeneration !== transitionGeneration.current) return null;
-      runtimeRef.current = next;
-      stateRef.current = nextState;
-      alreadyPersistedState.current = nextState;
-      persistedStateFingerprint.current = stableSerialize(nextState);
-      setState(nextState);
-      setDatabase(next.db);
-      setScope(next.scope);
-      setWorkspaceName(next.name);
-      setRole(next.role);
-      setEditDenied(null);
-      setStorageError(null);
-      setSyncError(null);
-      setSyncStatus(next.scope.kind === 'guest'
-        ? 'local-only'
-        : account.status === 'offline' ? 'offline-unverified' : endpointConfigured(account.powerSyncUrl) ? 'connecting' : 'unconfigured');
-      await updateRecoveryDetails(next);
-      return next;
+      });
+      return activation.value;
     } finally {
       if (requestGeneration === transitionGeneration.current) {
         transitionInProgress.current = false;

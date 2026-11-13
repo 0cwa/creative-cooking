@@ -8,7 +8,6 @@ import {
 import type { ContentMutationOperation, ContentMutationRequest } from '../account/contracts';
 import {
   acknowledgeContentMutation,
-  enqueueContentMutation,
   listPendingContentMutations,
   recordLocalRecipeConflict,
   recordLocalSyncIssue,
@@ -16,6 +15,7 @@ import {
 } from './contentStore';
 import { createContentOutboxDrain } from './outboxDrain.ts';
 import { withOperationIds } from './mutations';
+import { commitRecipeConflictSplit } from './recipeConflictPersistence';
 
 function mutationFromJson(value: string): ContentMutationRequest {
   const parsed = JSON.parse(value) as ContentMutationRequest;
@@ -82,16 +82,18 @@ async function handleRecipeConflict(
       reason: 'The server accepted a newer version of this recipe. Both versions are preserved for review.'
     });
   }
-  await updateContentMutationState(db, row.id, 'conflict', error.payload);
-
   const remaining = parsed.operations.filter((operation) => !isConflictedRecipe(operation, conflictedIds));
-  if (remaining.length) {
-    const mutationId = stableRemainderId(parsed.mutationId);
-    await enqueueContentMutation(db, spaceId, {
+  const mutationId = stableRemainderId(parsed.mutationId);
+  await commitRecipeConflictSplit(db, {
+    rowId: row.id,
+    spaceId,
+    mutationId: parsed.mutationId,
+    error: error.payload,
+    remainder: remaining.length ? {
       mutationId,
       operations: withOperationIds(mutationId, remaining)
-    });
-  }
+    } : null
+  });
 }
 
 function isConflictedRecipe(operation: ContentMutationOperation, ids: Set<string>): boolean {
