@@ -1,8 +1,9 @@
 import type { PropsWithChildren } from 'react';
-import { SafeAreaView, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export function Screen({ children, testID }: PropsWithChildren<{ testID?: string }>) {
-  return <SafeAreaView testID={testID} style={styles.screen}>{children}</SafeAreaView>;
+  return <SafeAreaView edges={['top', 'right', 'bottom', 'left']} testID={testID} style={styles.screen}>{children}</SafeAreaView>;
 }
 
 const styles = StyleSheet.create({
