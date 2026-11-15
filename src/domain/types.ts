@@ -22,7 +22,55 @@ export type PantryItem = {
   updatedAt: string;
 };
 
+export type ShoppingList = {
+  id: string;
+  name: string;
+  currentCycleId: string;
+  createdAt: string;
+  updatedAt: string;
+  removedAt?: string;
+};
+
+export type ShoppingCycle = {
+  id: string;
+  listId: string;
+  startedAt: string;
+};
+
+export type ShoppingItem = {
+  id: string;
+  listId: string;
+  name: string;
+  recipeId?: string;
+  ingredientId?: string;
+  displayQuantity?: string;
+  displayUnit?: string;
+  purchaseCycleId: string;
+  checked: boolean;
+  purchasedCycleId?: string;
+  createdAt: string;
+  updatedAt: string;
+  removedAt?: string;
+};
+
+export type ShoppingPurchase = {
+  id: string;
+  listId: string;
+  purchaseCycleId: string;
+  itemIds: string[];
+  pantryItemIds: string[];
+  purchasedAt: string;
+};
+
+export type ShoppingState = {
+  lists: ShoppingList[];
+  cycles: ShoppingCycle[];
+  items: ShoppingItem[];
+  purchases: ShoppingPurchase[];
+};
+
 export type RecipeIngredient = {
+  id?: string;
   name: string;
   amount?: string;
   needsShopping?: boolean;
@@ -35,6 +83,8 @@ export type Recipe = {
   portions: number;
   ingredients: RecipeIngredient[];
   steps: string[];
+  /** Stable identities parallel to steps; absent in legacy records until normalized. */
+  stepIds?: string[];
   notes?: string[];
   createdAt: string;
   updatedAt: string;
@@ -86,6 +136,7 @@ export type AppSettings = {
 export type PersistedState = {
   pantry: PantryItem[];
   recipes: Recipe[];
+  shopping: ShoppingState;
   chatMessages: ChatMessage[];
   chatHistory: ChatConversation[];
   activeConversationId: string | null;

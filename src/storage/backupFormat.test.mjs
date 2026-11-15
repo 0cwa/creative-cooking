@@ -5,6 +5,7 @@ import { freshStateFromDefaults, parseBackupEnvelope, serializeBackupEnvelope } 
 const defaults = {
   pantry: [],
   recipes: [],
+  shopping: { lists: [], cycles: [], items: [], purchases: [] },
   chatMessages: [],
   chatHistory: [],
   activeConversationId: null,
@@ -56,6 +57,49 @@ test('backup parsing migrates missing nested settings and context fields from de
   assert.deepEqual(restored.settings.allergies, []);
   assert.deepEqual(restored.chatHistory, []);
   assert.equal(restored.activeConversationId, null);
+});
+
+test('version 1 backup imports flagged ingredients once and new exports use version 2', () => {
+  const raw = JSON.stringify({
+    format: 'creative-cooking-backup',
+    version: 1,
+    exportedAt: '2026-09-20T12:00:00.000Z',
+    state: {
+      recipes: [{
+        id: 'recipe-legacy',
+        title: 'Legacy meal',
+        portions: 2,
+        ingredients: [
+          { name: 'rice', amount: '1 cup', needsShopping: true },
+          { name: 'rice', amount: '1/2 cup', needsShopping: true }
+        ],
+        steps: ['Cook.'],
+        createdAt: '2026-09-18T10:00:00.000Z',
+        updatedAt: '2026-09-19T10:00:00.000Z'
+      }]
+    }
+  });
+  const first = parseBackupEnvelope(raw, defaults);
+  const second = parseBackupEnvelope(raw, defaults);
+  assert.deepEqual(second.shopping, first.shopping);
+  assert.equal(first.shopping.items.length, 2);
+  assert.notEqual(first.shopping.items[0].id, first.shopping.items[1].id);
+  assert.equal(JSON.parse(serializeBackupEnvelope(first, 'now')).version, 2);
+});
+
+test('version 2 backup requires explicit shopping state and preserves it on round-trip', () => {
+  const shopping = {
+    lists: [{ id: 'l1', name: 'Week', currentCycleId: 'c1', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+    cycles: [{ id: 'c1', listId: 'l1', startedAt: '2026-01-01T00:00:00.000Z' }],
+    items: [],
+    purchases: []
+  };
+  const state = { ...defaults, shopping };
+  const raw = serializeBackupEnvelope(state, 'now');
+  assert.deepEqual(parseBackupEnvelope(raw, defaults), state);
+  assert.throws(() => parseBackupEnvelope(JSON.stringify({
+    format: 'creative-cooking-backup', version: 2, state: { recipes: [] }
+  }), defaults), /missing its shopping data/);
 });
 
 test('backup round-trip preserves archived Chef conversations', () => {

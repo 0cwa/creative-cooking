@@ -16,7 +16,10 @@ const config: ExpoConfig = {
     shortName: 'Cook',
     favicon: './assets/icon-192.png'
   },
-  plugins: ['expo-router', 'expo-secure-store'],
+  plugins: ['expo-router', 'expo-secure-store', './plugins/withLoopbackNetworkSecurity'],
+  android: {
+    package: 'com.creativecooking.app'
+  },
   experiments: {
     typedRoutes: true,
     baseUrl

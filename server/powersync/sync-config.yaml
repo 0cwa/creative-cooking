@@ -1,0 +1,224 @@
+config:
+  edition: 3
+
+streams:
+  spaces:
+    auto_subscribe: true
+    query: |
+      SELECT CAST(s.id AS TEXT) AS id, CAST(s.id AS TEXT) AS space_id,
+        s.name, s.kind, s.created_at
+      FROM spaces s
+      WHERE s.id IN (
+        SELECT sm.space_id FROM space_members sm WHERE CAST(sm.user_id AS TEXT) = auth.user_id()
+      )
+
+  space_members:
+    auto_subscribe: true
+    query: |
+      SELECT CAST(space_id AS TEXT) || ':' || CAST(user_id AS TEXT) AS id,
+        CAST(space_id AS TEXT) AS space_id, CAST(user_id AS TEXT) AS user_id, role, joined_at
+      FROM space_members
+      WHERE CAST(user_id AS TEXT) = auth.user_id()
+
+  pantry_items:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, name, preference,
+        created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM pantry_items
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipes:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, title, description, portions,
+        notes, created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM recipes
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipe_ingredients:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, recipe_id, position, name, amount,
+        needs_shopping, metadata::text AS metadata, created_at, updated_at, deleted_at,
+        version, CAST(updated_by AS TEXT) AS updated_by
+      FROM recipe_ingredients
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipe_steps:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, recipe_id, position, text,
+        created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM recipe_steps
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  recipe_conflicts:
+    auto_subscribe: true
+    query: |
+      SELECT id, CAST(space_id AS TEXT) AS space_id, recipe_id, mutation_id, base_version,
+        current_version, attempted_content::text AS attempted_content, CAST(created_by AS TEXT) AS created_by,
+        created_at, resolved_at
+      FROM recipe_conflicts
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_lists:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, name, current_cycle_id,
+        created_at, updated_at, removed_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM shopping_lists
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_cycles:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, list_id, started_at
+      FROM shopping_cycles
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_items:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, list_id, name, recipe_id,
+        ingredient_id, display_quantity, display_unit, purchase_cycle_id, checked,
+        purchased_cycle_id, created_at, updated_at, removed_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM shopping_items
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  shopping_purchases:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, list_id, purchase_cycle_id,
+        item_ids, pantry_item_ids,
+        purchased_at, CAST(purchased_by AS TEXT) AS purchased_by
+      FROM shopping_purchases
+      WHERE space_id IN (
+        SELECT space_id FROM space_members WHERE CAST(user_id AS TEXT) = auth.user_id()
+      )
+
+  personal_profile_fields:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, field_key,
+        value::text AS value, created_at, updated_at, deleted_at, version,
+        CAST(updated_by AS TEXT) AS updated_by
+      FROM personal_profile_fields
+      WHERE space_id IN (
+        SELECT s.id FROM spaces s
+        JOIN space_members m ON m.space_id = s.id
+        WHERE s.kind = 'personal'
+          AND CAST(s.created_by AS TEXT) = auth.user_id()
+          AND CAST(m.user_id AS TEXT) = auth.user_id()
+          AND m.role = 'owner'
+      )
+
+  personal_allergies:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, name, normalized_name,
+        created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM personal_allergies
+      WHERE space_id IN (
+        SELECT s.id FROM spaces s
+        JOIN space_members m ON m.space_id = s.id
+        WHERE s.kind = 'personal'
+          AND CAST(s.created_by AS TEXT) = auth.user_id()
+          AND CAST(m.user_id AS TEXT) = auth.user_id()
+          AND m.role = 'owner'
+      )
+
+  personal_conversations:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id, title,
+        created_at, updated_at, deleted_at, version, CAST(updated_by AS TEXT) AS updated_by
+      FROM personal_conversations
+      WHERE space_id IN (
+        SELECT s.id FROM spaces s
+        JOIN space_members m ON m.space_id = s.id
+        WHERE s.kind = 'personal'
+          AND CAST(s.created_by AS TEXT) = auth.user_id()
+          AND CAST(m.user_id AS TEXT) = auth.user_id()
+          AND m.role = 'owner'
+      )
+
+  personal_chat_messages:
+    auto_subscribe: true
+    query: |
+      SELECT personal_chat_messages.id, personal_chat_messages.entity_id,
+        CAST(personal_chat_messages.space_id AS TEXT) AS space_id,
+        personal_chat_messages.conversation_id, personal_chat_messages.role,
+        personal_chat_messages.content, personal_chat_messages.created_at,
+        personal_chat_messages.version, CAST(personal_chat_messages.updated_by AS TEXT) AS updated_by
+      FROM personal_chat_messages
+      JOIN personal_conversations
+        ON personal_conversations.space_id = personal_chat_messages.space_id
+        AND personal_conversations.entity_id = personal_chat_messages.conversation_id
+      WHERE personal_conversations.deleted_at IS NULL
+        AND personal_chat_messages.space_id IN (
+          SELECT s.id FROM spaces s
+          JOIN space_members m ON m.space_id = s.id
+          WHERE s.kind = 'personal'
+            AND CAST(s.created_by AS TEXT) = auth.user_id()
+            AND CAST(m.user_id AS TEXT) = auth.user_id()
+            AND m.role = 'owner'
+        )
+
+  personal_chat_proposals:
+    auto_subscribe: true
+    query: |
+      SELECT personal_chat_proposals.id, personal_chat_proposals.entity_id,
+        CAST(personal_chat_proposals.space_id AS TEXT) AS space_id,
+        personal_chat_proposals.conversation_id, personal_chat_proposals.message_id,
+        personal_chat_proposals.tool_name, personal_chat_proposals.arguments,
+        personal_chat_proposals.status,
+        personal_chat_proposals.created_at, personal_chat_proposals.updated_at, personal_chat_proposals.version,
+        CAST(personal_chat_proposals.updated_by AS TEXT) AS updated_by
+      FROM personal_chat_proposals
+      JOIN personal_conversations
+        ON personal_conversations.space_id = personal_chat_proposals.space_id
+        AND personal_conversations.entity_id = personal_chat_proposals.conversation_id
+      WHERE personal_conversations.deleted_at IS NULL
+        AND personal_chat_proposals.space_id IN (
+          SELECT s.id FROM spaces s
+          JOIN space_members m ON m.space_id = s.id
+          WHERE s.kind = 'personal'
+            AND CAST(s.created_by AS TEXT) = auth.user_id()
+            AND CAST(m.user_id AS TEXT) = auth.user_id()
+            AND m.role = 'owner'
+        )
+
+  personal_content_conflicts:
+    auto_subscribe: true
+    query: |
+      SELECT id, entity_id, CAST(space_id AS TEXT) AS space_id,
+        record_type AS entity_type, entity_id AS entity_identity,
+        CASE WHEN record_type = 'preference' THEN entity_id ELSE NULL END AS field_key,
+        mutation_id, op_id, base_version, current_version, attempted_content::text AS attempted_content,
+        reason, CAST(created_by AS TEXT) AS created_by, created_at, resolved_at
+      FROM personal_content_conflicts
+      WHERE space_id IN (
+        SELECT s.id FROM spaces s
+        JOIN space_members m ON m.space_id = s.id
+        WHERE s.kind = 'personal'
+          AND CAST(s.created_by AS TEXT) = auth.user_id()
+          AND CAST(m.user_id AS TEXT) = auth.user_id()
+          AND m.role = 'owner'
+      )

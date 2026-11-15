@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { ConversationHistoryModal } from '@/components/ConversationHistoryModal';
@@ -10,7 +10,6 @@ import { buildChefSystemPrompt } from '@/chef/context';
 import { proposalFingerprint } from '@/chef/proposals';
 import type { ChatMessage, ChefToolProposal, IngredientPreference, UiQuestion } from '@/domain/types';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
-import { applyChefProposal } from '@/llm/toolExecution';
 import { providerForId } from '@/llm/providers';
 import { modelCapabilities, providerMetadata } from '@/llm/registry';
 import { createDictationController, getOnDeviceDictationSupport, getPreferredDictationLanguage } from '@/speech/dictation';
@@ -142,12 +141,13 @@ export default function ChefScreen() {
   const stateSnapshot = useMemo(() => ({
     pantry: app.pantry,
     recipes: app.recipes,
+    shopping: app.shopping,
     chatMessages: app.chatMessages,
     chatHistory: app.chatHistory,
     activeConversationId: app.activeConversationId,
     mealContext: app.mealContext,
     settings: app.settings
-  }), [app.pantry, app.recipes, app.chatMessages, app.chatHistory, app.activeConversationId, app.mealContext, app.settings]);
+  }), [app.pantry, app.recipes, app.shopping, app.chatMessages, app.chatHistory, app.activeConversationId, app.mealContext, app.settings]);
 
   const showDictationRecovery = (reason?: string) => {
     const detail = reason?.trim() ?? '';
@@ -331,36 +331,10 @@ export default function ChefScreen() {
     }
   };
 
-  const applyProposal = (messageId: string, proposal: ChefToolProposal): boolean => {
-    try {
-      const outcome = applyChefProposal(proposal, {
-        addPantry: (names, preference: IngredientPreference = 3) => app.addPantryItems(names, preference),
-        updatePantry: app.updatePantryByName,
-        removePantry: app.removePantryByName,
-        setPantryPreference: app.setPantryPreferenceByName,
-        saveRecipe: app.saveRecipe,
-        validateRecipe: app.validateRecipe
-      });
-
-      let result: { ok?: boolean; message?: string; error?: string } = {};
-      try {
-        result = JSON.parse(outcome.result) as typeof result;
-      } catch {
-        throw new Error('Chef returned an unreadable change result.');
-      }
-      if (result.ok !== true) {
-        throw new Error(result.message || result.error || 'That change could not be applied.');
-      }
-
-      app.setChatProposalStatus(messageId, proposal.id, 'applied');
-      return true;
-    } catch (error) {
-      Alert.alert(
-        'Could not apply change',
-        error instanceof Error ? error.message : 'That suggested change could not be applied.'
-      );
-      return false;
-    }
+  const applyProposal = async (_messageId: string, proposal: ChefToolProposal): Promise<'applied' | 'queued' | false> => {
+    const conversationId = app.activeConversationId;
+    if (!conversationId) throw new Error('This Chef conversation is no longer active. The suggestion remains pending.');
+    return app.applyChefProposalEffect(conversationId, proposal);
   };
 
   const send = async (override?: string) => {
@@ -439,6 +413,12 @@ export default function ChefScreen() {
           <Pressable accessibilityRole="button" accessibilityLabel={`Edit meal context, ${app.mealContext.portions} portions, ${app.mealContext.cooks.length} cooks`} onPress={() => setContextOpen(true)} style={styles.contextChip}>
             <Text style={styles.contextChipText}>{app.mealContext.portions} portions · {app.mealContext.cooks.length} cook{app.mealContext.cooks.length === 1 ? '' : 's'}</Text>
           </Pressable>
+          <Text testID="chef-workspace-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
+            Cooking in {app.contentWorkspaceName} · {app.contentWorkspaceRole ?? 'local'} · {app.contentSyncStatus.replaceAll('-', ' ')}
+          </Text>
+          <Text testID="chef-local-persistence-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
+            {app.localPersistenceStatus === 'saving' ? 'Saving locally' : app.localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
+          </Text>
         </View>
 
         <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent} onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
@@ -645,6 +625,7 @@ const styles = StyleSheet.create({
   contextChipActive: { backgroundColor: '#14532d' },
   contextChipText: { color: '#475569', fontSize: 13, fontWeight: '600', textAlign: 'center' },
   contextChipTextActive: { color: 'white' },
+  workspaceStatus: { width: '100%', color: '#64748b', fontSize: 12, fontWeight: '700', paddingHorizontal: 4 },
   messages: { flex: 1 },
   messagesContent: { padding: 16, gap: 10, paddingBottom: 28 },
   messageGroup: { width: '100%', gap: 8 },

@@ -40,6 +40,7 @@ import {
 import { pickNativeBackup, shareNativeBackup } from '@/storage/backupTransfer';
 import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
+import { AccountSharingSection } from '@/components/AccountSharingSection';
 
 function formatBytes(value?: number): string {
   if (!value || value < 1) return '0 B';
@@ -57,6 +58,8 @@ export default function SettingsScreen() {
   const params = useLocalSearchParams<{ focus?: string }>();
   const app = useAppState();
   const [allergyInput, setAllergyInput] = useState('');
+  const [deviceTimeContext, setDeviceTimeContext] = useState<string | null>(null);
+  const [browserDictationSupport, setBrowserDictationSupport] = useState<ReturnType<typeof getOnDeviceDictationSupport> | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [hasKey, setHasKey] = useState(false);
   const [shareLink, setShareLink] = useState('');
@@ -75,9 +78,16 @@ export default function SettingsScreen() {
   const settingsScrollRef = useRef<ScrollView>(null);
   const dictationFocusHandledRef = useRef(false);
 
+  useEffect(() => {
+    const localTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown zone';
+    setDeviceTimeContext(`${localTime} · ${timeZone}`);
+    setBrowserDictationSupport(getOnDeviceDictationSupport('browser'));
+  }, []);
+
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
-  const browserDictationSupport = getOnDeviceDictationSupport('browser');
+  const browserDictationAvailable = browserDictationSupport?.available === true;
   const whisperDictationReady = whisperCapability?.available === true && whisperModelCached === true;
 
   useEffect(() => {
@@ -283,6 +293,7 @@ export default function SettingsScreen() {
   const snapshot = () => ({
     pantry: app.pantry,
     recipes: app.recipes,
+    shopping: app.shopping,
     chatMessages: app.chatMessages,
     chatHistory: app.chatHistory,
     activeConversationId: app.activeConversationId,
@@ -411,7 +422,7 @@ export default function SettingsScreen() {
         const raw = await pickNativeBackup();
         if (raw === null) return;
         app.restoreState(parseBackup(raw));
-        Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
+        Alert.alert('Backup restored', 'Pantry, shopping lists, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
         return;
       }
 
@@ -425,7 +436,7 @@ export default function SettingsScreen() {
             const file = input.files?.[0];
             if (!file) return;
             app.restoreState(parseBackup(await file.text()));
-            Alert.alert('Backup restored', 'Pantry, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
+            Alert.alert('Backup restored', 'Pantry, shopping lists, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
           } catch (error) {
             Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
           }
@@ -503,7 +514,7 @@ export default function SettingsScreen() {
           <View style={styles.toggleRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.label}>Send local time & time zone</Text>
-              <Text style={styles.help}>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown zone'}</Text>
+              <Text style={styles.help}>{deviceTimeContext ?? 'Shown from this device when Settings opens'}</Text>
             </View>
             <Switch accessibilityLabel="Send local time and time zone" value={app.settings.sendLocalTime} onValueChange={(sendLocalTime) => app.updateSettings({ sendLocalTime })} />
           </View>
@@ -511,6 +522,8 @@ export default function SettingsScreen() {
           <TextInput accessibilityLabel="City" value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
           <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
         </Section>
+
+        <AccountSharingSection />
 
         <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
           <View style={styles.statusRow}>
@@ -522,6 +535,13 @@ export default function SettingsScreen() {
             </View>
             <Text style={[styles.status, persistence?.persistent && styles.statusConnected]}>{persistenceLabel}</Text>
           </View>
+          <Text accessibilityLiveRegion="polite" style={styles.help}>
+            {app.localPersistenceStatus === 'saving'
+              ? 'Saving local cooking changes…'
+              : app.localPersistenceStatus === 'error'
+                ? 'Local save needs attention.'
+                : 'Local cooking changes are saved on this device.'}
+          </Text>
           {!!app.storageError && (
             <View style={styles.storageErrorBox}>
               <Text style={styles.storageErrorTitle}>Local data is not being saved</Text>
@@ -693,14 +713,14 @@ export default function SettingsScreen() {
                 accessibilityRole="radio"
                 accessibilityLabel="Use browser dictation engine"
                 aria-checked={app.settings.dictationEngine === 'browser'}
-                aria-disabled={!browserDictationSupport.available}
-                accessibilityState={{ checked: app.settings.dictationEngine === 'browser', disabled: !browserDictationSupport.available }}
-                disabled={!browserDictationSupport.available}
+                aria-disabled={!browserDictationAvailable}
+                accessibilityState={{ checked: app.settings.dictationEngine === 'browser', disabled: !browserDictationAvailable }}
+                disabled={!browserDictationAvailable}
                 onPress={() => selectDictationEngine('browser')}
                 style={[
                   styles.providerButton,
                   app.settings.dictationEngine === 'browser' && styles.providerButtonActive,
-                  !browserDictationSupport.available && styles.disabledButton
+                  !browserDictationAvailable && styles.disabledButton
                 ]}
               >
                 <Text style={[
@@ -730,10 +750,13 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
             </View>
-            {!browserDictationSupport.available && (
+            {browserDictationSupport === null && (
+              <Text style={styles.help}>Checking browser speech support…</Text>
+            )}
+            {browserDictationSupport !== null && !browserDictationAvailable && (
               <Text style={styles.warning}>Browser speech is unavailable here. Download Whisper below, then select it as the dictation engine.</Text>
             )}
-            {app.settings.dictationEngine === 'browser' && browserDictationSupport.available && (
+            {app.settings.dictationEngine === 'browser' && browserDictationAvailable && (
               <Text style={styles.help}>Chef’s mic currently uses your browser’s on-device English speech.</Text>
             )}
             {app.settings.dictationEngine === 'whisper' && whisperDictationReady && (
