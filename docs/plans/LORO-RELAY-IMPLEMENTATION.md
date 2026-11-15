@@ -90,3 +90,7 @@ Budget hosting from measured encrypted object volume, egress, storage, backups a
 ## Contract integration
 
 The [bounded policy contracts](LORO-POLICY-CONTRACTS.md) refine these recommendations: defaults are profiles assembled from typed agreements, not a global security ranking. Phase 1 specifies canonical hashes, exact acceptance/consent bindings, recipient disclosure profiles and incompatible infrastructure terms. Phase 2 labels sources and preserves affected interests and local-only work. Phase 3 binds admission proofs, adult-counted quorums and every trust event to the policy hash and checkpoint; recovered private identity alone cannot vote or receive fresh household keys. Phase 4 binds envelopes and release decisions to those hashes and revalidates queued actions without claiming global freshness. Phase 5 limits personal guardian packages to owner-consented scope and separately checks shared grants. Phase 6 tests these boundaries and their actual platform enforcement. Unknown or conflicting policies remain pending; historical restrictions and affected consents survive group changes. The isolated model is illustrative, not a runtime authorization engine.
+
+## Related comparison and diagrams
+
+See the [TAlkCo comparison](TALKCO-COMPARISON.md) and [sync options diagrams](SYNC-OPTIONS-DIAGRAMS.md), including the [standalone gallery](visuals/sync-options-diagrams.html).
