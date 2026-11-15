@@ -86,11 +86,17 @@ function run() {
   assert.equal(v5[1].adultVote.electorate,2); assert.equal(v5[1].quarantined.length,2);
   assert.equal(v5[0].quarantined.length,1); assert.equal(v5[0].personalRecovery.guardians.thresholdCanRead,false);
   assert.equal(v5[1].personalRecovery.guardians.thresholdCanRead,true);
-  const clean = new LoroDoc(); clean.setPeerId(9); clean.getMap('recipe').set('name','Rice');
+  const checkpointDoc = new LoroDoc(); checkpointDoc.setPeerId(8);
+  checkpointDoc.getMap('recipe').set('name','Rice'); checkpointDoc.getMap('recipe').set('note','family recipe');
+  checkpointDoc.getMap('shopping').set('existing','beans');
+  const chosenSnapshot = checkpointDoc.export({mode:'snapshot'});
+  const clean = new LoroDoc(); clean.import(chosenSnapshot); clean.setPeerId(9);
   for (const op of v5[1].selected) if (op.effect === 'add rice') clean.getMap('shopping').set(op.id,'rice');
   const cleanReload = new LoroDoc(); cleanReload.import(clean.export({mode:'snapshot'}));
-  assert.equal(cleanReload.getMap('recipe').get('name'),'Rice'); assert.equal(cleanReload.getMap('shopping').get('good'),'rice');
-  assert.equal(v5[1].rejectedHistoryExport.length,3);
+  assert.deepEqual(cleanReload.getMap('recipe').toJSON(), {name:'Rice',note:'family recipe'});
+  assert.deepEqual(cleanReload.getMap('shopping').toJSON(), {existing:'beans',good:'rice'});
+  assert.equal(cleanReload.getMap('shopping').get('bad2'),undefined);
+  assert.deepEqual(v5[1].rejectedHistoryExport,ops); assert.deepEqual(v5[1].quarantined,ops.slice(1));
   v5[1].cleanBranch = {preservedCheckpointEffects:v5[1].checkpoint.effects.length,recoveredBenignEffects:v5[1].selected.length,quarantinedEffects:v5[1].quarantined.length,excludedMaliciousEffects:v5[1].quarantined.filter(x=>x.effect!=='add rice').length};
   return {seed:'fixed-schedule-1',v1:connectivity,v2:shopping,v3:cases,v5,v4:{unilateral,quorum,rejoined,reorderedHeads:reordered.devices.AnaPhone.heads,diskReloadPreservesInboxOutbox:true},limitations:['Signatures, key possession and confirmation are assumed; no cryptography or security proof.','Disk reload checks serialized state, not atomic commits or crash consistency.','No relay order establishes authority; policy decisions remain open.']};
 }
