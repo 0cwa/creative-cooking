@@ -111,7 +111,7 @@
 </section>
 
 <section class="sx-panel" id="sx-panel-pc" role="tabpanel" aria-labelledby="sx-tab-pc" hidden>
-  <p class="sx-note">Ana and Ben are equal adults with different preferences: Ana uses an AI chef, Ben keeps his own data off external AI. Each person's choices govern their own data; a shared item carries the agreement accepted when it was shared. Every applicable rule must allow a request, so the strictest one wins.</p>
+  <p class="sx-note">Ana and Ben are equal adults with different preferences: Ana uses an AI chef, Ben keeps his own data off external AI. Each person's choices govern their own data; a shared item carries the agreement accepted when it was shared. Every applicable source and recipient rule must permit the request; required consents and quorums are checked separately.</p>
   <div class="sx-controls">
     <label class="sx-field">Scenario
       <select id="pc-scenario">
@@ -179,10 +179,11 @@
     <label class="sx-check" id="rc-g-chi-wrap"><input type="checkbox" id="rc-g-chi">Chi returns a share</label>
     <label class="sx-check" id="rc-g-dee-wrap"><input type="checkbox" id="rc-g-dee">Dee returns a share</label>
     <label class="sx-check" id="rc-dup-wrap"><input type="checkbox" id="rc-dup">Chi holds two share copies</label>
-    <label class="sx-check" id="rc-consent-wrap"><input type="checkbox" id="rc-consent">Ana consents to this package</label>
+    <label class="sx-check" id="rc-consent-wrap"><input type="checkbox" id="rc-consent">Ana authorizes creating or releasing this package</label>
     <label class="sx-check" id="rc-confirm-wrap"><input type="checkbox" id="rc-confirm">Ben confirms Ana's new device</label>
   </fieldset>
   <p class="sx-readout" id="rc-readout" aria-live="polite"></p>
+  <p class="sx-note">Consent here authorizes creating or releasing the package. Withdrawing it cannot revoke shares, packages or plaintext already distributed.</p>
   <div class="sx-diagram" id="rc-diagram"></div>
   <p class="sx-note" id="rc-foot"></p>
   <details><summary>Diagram as text</summary><ol id="rc-alt"></ol></details>
@@ -699,7 +700,7 @@ function renderRC(){
   $('rc-g-chi-wrap').lastChild.textContent = escrow ? 'Chi supports the demand' : 'Chi returns a share';
   $('rc-g-dee-wrap').lastChild.textContent = escrow ? 'Dee supports the demand' : 'Dee returns a share';
   $('rc-g-ben-wrap').lastChild.textContent = escrow ? 'Ben supports the demand' : 'Ben returns a share';
-  $('rc-consent-wrap').lastChild.textContent = escrow ? 'Ana consents to escrow' : 'Ana consents to this package';
+  $('rc-consent-wrap').lastChild.textContent = escrow ? 'Ana authorizes creating or releasing her escrow package' : 'Ana authorizes creating or releasing this package';
   if (isRogue) renderRogue(s); else renderLanes(s);
 }
 const RC_READ = {
