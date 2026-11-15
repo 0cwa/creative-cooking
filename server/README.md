@@ -1,6 +1,6 @@
 # Creative Cooking API foundation
 
-This package implements account sessions and personal/household membership on PostgreSQL. It deliberately does not choose or implement the content replication engine. It creates no recipe, pantry, shopping, chat, sync, or provider-key rows.
+This package implements account sessions, personal/household membership, and content mutations on PostgreSQL. PowerSync distributes authorized content to local client databases. Provider API keys remain on the device. See [content sync and recovery](../docs/CONTENT-SYNC.md) for data ownership, recovery behavior, and support limits.
 
 ## Run locally
 
@@ -17,6 +17,20 @@ npm run dev
 `prepare:local` creates ignored `server/.env` with random credentials and mode `0600`, and never overwrites an existing file. The Postgres service uses the Docker Official Image `postgres:17.11-bookworm` pinned to index digest `sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27`, binds only to host loopback port `55439`, and uses a bounded 2 GiB temporary data filesystem, 2 CPU cores and 4 GiB memory. It creates separate `creative_cooking` and `creative_cooking_test` databases. Tests use only the latter, so they do not truncate local development data. `docker compose down` stops it; the database contents are intentionally ephemeral. Do not point this local Compose setup at production data.
 
 The API listens on `http://127.0.0.1:8787`. `API_ORIGINS` must contain exact browser origins, comma-separated, for example `https://your-name.github.io` for a GitHub Pages PWA. Localhost origins are allowed for development. Origins absent from that list are rejected; requests without an `Origin` header are supported for native clients. CORS does not allow credentials or cookies.
+
+## Run content sync locally
+
+After applying migrations, run these commands from `server/`:
+
+```sh
+npm ci --prefix powersync
+npm run powersync:prepare
+npm run powersync:start
+```
+
+Keep the API running in a separate terminal. The Service defaults to `http://127.0.0.1:8080`; configure that Service URL and the API URL separately in app Settings. `powersync:prepare` creates restricted local replication/storage roles and checks the 17-table publication allowlist. `prepare:local` generates the signing keys and Service credentials in the ignored `.env`. Test-mode API and Service processes must both use `NODE_ENV=test` so they select the same test database. The verified local runtime used PostgreSQL 16.15; the Compose PostgreSQL 17.11 image was unavailable under the validation host's image policy.
+
+Content mutations use `POST /v1/spaces/:spaceId/content/mutations` with `{ mutationId, operations }`. The API checks current membership before receipt replay, applies commands transactionally, and preserves conflicts and tombstones. `POST /v1/sync/credentials` issues short-lived signed Service credentials; `GET /v1/sync/jwks` publishes the verification keys. Sync Streams filter household data by current membership and personal data by its owner.
 
 ## Session model and deployment limits
 
