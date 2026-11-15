@@ -1,6 +1,6 @@
 # Sync options diagrams
 
-Evidence legend: **implemented** means source code exists; **model** means an executable illustration; **proposed** means design; **unverified** means evidence is missing. Sources: [comparison](TALKCO-COMPARISON.md), [relay plan](LORO-RELAY-IMPLEMENTATION.md), [contracts](LORO-POLICY-CONTRACTS.md), and [spike](../../spikes/relay-household-poc/README.md).
+Evidence legend: **implemented** means source code exists; **model** means an executable illustration; **proposed** means design; **unverified** means evidence is missing. Sources: [comparison](TALKCO-COMPARISON.md), [relay plan](LORO-RELAY-IMPLEMENTATION.md), [contracts](LORO-POLICY-CONTRACTS.md), and [spike](../../spikes/relay-household-poc/README.md). An [interactive explorer](visuals/sync-architecture-explorer.html) (HTML fragment, no network) shows the same relationships with one scenario at a time; `node docs/plans/visuals/check-sync-explorer.mjs` checks it against the spike model.
 
 ## Architecture alternatives
 

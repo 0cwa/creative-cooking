@@ -93,4 +93,4 @@ The [bounded policy contracts](LORO-POLICY-CONTRACTS.md) refine these recommenda
 
 ## Related comparison and diagrams
 
-See the [TAlkCo comparison](TALKCO-COMPARISON.md) and [sync options diagrams](SYNC-OPTIONS-DIAGRAMS.md), including the [standalone gallery](visuals/sync-options-diagrams.html).
+See the [TAlkCo comparison](TALKCO-COMPARISON.md) and [sync options diagrams](SYNC-OPTIONS-DIAGRAMS.md), including the [standalone gallery](visuals/sync-options-diagrams.html). The [interactive explorer](visuals/sync-architecture-explorer.html) lets you step through architecture owners, personal and shared contract decisions, recovery and rogue-device cases, and the TAlkCo comparison; its decisions come from a verbatim copy of the spike's Boolean contract model and are illustrations, not authorization.
