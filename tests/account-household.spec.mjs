@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 test.use({ trace: 'off' });
 
 const apiUrl = process.env.ACCOUNT_TEST_API_URL;
-if (!apiUrl) throw new Error('Set ACCOUNT_TEST_API_URL to the local API base URL before running the account household acceptance test.');
+test.skip(!apiUrl, 'Set ACCOUNT_TEST_API_URL to the local API base URL to run account household acceptance tests.');
 
 const appUrl = process.env.ACCOUNT_TEST_APP_URL ?? 'http://127.0.0.1:4173/creative-cooking/';
 
