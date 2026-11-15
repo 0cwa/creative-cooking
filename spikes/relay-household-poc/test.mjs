@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { LoroDoc } from 'loro-crdt';
-import { recovery, trust } from './model.mjs';
+import { recovery, trust, reconstruction } from './model.mjs';
 
 function run() {
   const base = new LoroDoc(); base.setPeerId(1);
@@ -76,6 +76,22 @@ function run() {
   const statePath = join(stateDir,'state.json'); writeFileSync(statePath,JSON.stringify(rejoined.devices));
   const loaded = JSON.parse(readFileSync(statePath,'utf8')); rmSync(stateDir,{recursive:true});
   assert.deepEqual(loaded,rejoined.devices); assert.equal(loaded.BenPhone.outbox[0].id,'local');
-  return {seed:'fixed-schedule-1',v1:connectivity,v2:shopping,v3:cases,v4:{unilateral,quorum,rejoined,reorderedHeads:reordered.devices.AnaPhone.heads,diskReloadPreservesInboxOutbox:true},limitations:['Signatures, key possession and confirmation are assumed; no cryptography or security proof.','Disk reload checks serialized state, not atomic commits or crash consistency.','No relay order establishes authority; policy decisions remain open.']};
+  const devicesV5 = [{id:'a1',adult:'Ana'},{id:'a2',adult:'Ana'},{id:'b1',adult:'Ben'}];
+  const ops = [{id:'good',device:'b1',effect:'add rice'}, {id:'bad1',device:'a1',effect:'delete recipe'}, {id:'bad2',device:'a2',effect:'clear list'}];
+  const v5 = [
+    reconstruction({devices:devicesV5,operations:ops.slice(0,2),checkpoint:{id:'base',trustedBy:'Ben',newBranch:'clean',effects:['recipe']},selected:['good'],deviceApprovals:['a1','b1'],adultApprovals:['Ana','Ben'],personalConsent:false}),
+    reconstruction({devices:devicesV5,operations:ops,checkpoint:{id:'base',trustedBy:'Ben',newBranch:'clean',effects:['recipe']},selected:['good'],deviceApprovals:['a1','a2'],adultApprovals:['Ana'],personalConsent:true})
+  ];
+  assert.equal(v5[1].deviceVote.approved,true); assert.equal(v5[1].adultVote.approved,false);
+  assert.equal(v5[1].adultVote.electorate,2); assert.equal(v5[1].quarantined.length,2);
+  assert.equal(v5[0].quarantined.length,1); assert.equal(v5[0].personalRecovery.guardians.thresholdCanRead,false);
+  assert.equal(v5[1].personalRecovery.guardians.thresholdCanRead,true);
+  const clean = new LoroDoc(); clean.setPeerId(9); clean.getMap('recipe').set('name','Rice');
+  for (const op of v5[1].selected) if (op.effect === 'add rice') clean.getMap('shopping').set(op.id,'rice');
+  const cleanReload = new LoroDoc(); cleanReload.import(clean.export({mode:'snapshot'}));
+  assert.equal(cleanReload.getMap('recipe').get('name'),'Rice'); assert.equal(cleanReload.getMap('shopping').get('good'),'rice');
+  assert.equal(v5[1].rejectedHistoryExport.length,3);
+  v5[1].cleanBranch = {preservedCheckpointEffects:v5[1].checkpoint.effects.length,recoveredBenignEffects:v5[1].selected.length,quarantinedEffects:v5[1].quarantined.length,excludedMaliciousEffects:v5[1].quarantined.filter(x=>x.effect!=='add rice').length};
+  return {seed:'fixed-schedule-1',v1:connectivity,v2:shopping,v3:cases,v5,v4:{unilateral,quorum,rejoined,reorderedHeads:reordered.devices.AnaPhone.heads,diskReloadPreservesInboxOutbox:true},limitations:['Signatures, key possession and confirmation are assumed; no cryptography or security proof.','Disk reload checks serialized state, not atomic commits or crash consistency.','No relay order establishes authority; policy decisions remain open.']};
 }
 const first = JSON.stringify(run(),null,2)+'\n'; assert.equal(JSON.stringify(run(),null,2)+'\n',first); process.stdout.write(first);

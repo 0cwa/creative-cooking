@@ -43,3 +43,13 @@ export function trust(events, threshold) {
   }
   return {proposals:[...proposals.values()],repeated,devices:views};
 }
+
+// Social checkpoint selection and operation labels are explicit scenario inputs.
+export function reconstruction({devices, operations, checkpoint, selected, deviceApprovals, adultApprovals, personalConsent}) {
+  const deviceVotes = [...new Set(deviceApprovals)].filter(id=>devices.some(d=>d.id===id));
+  const adults = [...new Set(devices.map(d=>d.adult))];
+  const adultVotes = [...new Set(adultApprovals)].filter(id=>adults.includes(id));
+  const chosen = operations.filter(op=>selected.includes(op.id));
+  if (!checkpoint.trustedBy || !checkpoint.newBranch) throw new Error('explicit checkpoint and new branch required');
+  return {editPermission:'any authorized device',checkpointChoiceBy:checkpoint.trustedBy, newBranch:checkpoint.newBranch, deviceVote:{votes:deviceVotes.length,threshold:2,approved:deviceVotes.length>=2},adultVote:{votes:adultVotes.length,electorate:adults.length,threshold:2,approved:adultVotes.length>=2},checkpoint,selected:chosen,quarantined:operations.filter(op=>!selected.includes(op.id)),rejectedHistoryExport:operations,personalRecovery:{codeOnly:{guardianAccess:false},guardians:{enabled:personalConsent,thresholdCanRead:personalConsent}}};
+}
