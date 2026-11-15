@@ -55,7 +55,7 @@ flowchart LR
 
 ```
 
-Recovery does not grant a vote or shared keys. Shamir sharing alone is not threshold signing.
+Recovery alone does not restore current household keys or votes. Shamir sharing alone is not threshold signing.
 
 ## Composed contracts
 
@@ -83,7 +83,7 @@ flowchart LR
 
   A0["One rogue of three"] --> B0["Independent checkpoint choice"]
 
-  A1["Two compromised of three"] --> B1["Majority can authorize a fork"]
+  A1["Two compromised of three"] --> B1["Device majority can be wrong"]
 
   A2["Competing heads"] --> B2["Keep visible and compare"]
 
