@@ -18,7 +18,7 @@ const validName=(s:string)=>/^[a-z0-9-]{1,100}$/.test(s);
 // never generates replacement identity material for an existing namespace.
 export async function openLocalWorkspace(name:string,create=false) {
  if(!validName(name))throw Error('MALFORMED');
- await sodium.ready;await initLoro();
+ await sodium.ready;await initLoro(new URL('./loro_wasm_bg.wasm?v=1.17.1',import.meta.url));
  const master=await openBrowserMaster(`${name}-master`);
  const db=await openIndexedDBStorage(`${name}-records`);
  const opening=indexedDB.open(`${name}-bootstrap`,1);opening.onupgradeneeded=()=>opening.result.createObjectStore('metadata');const meta=await request(opening);
