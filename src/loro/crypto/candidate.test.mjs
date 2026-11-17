@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync, sign, verify, createHash, randomBytes, createCipheriv, createDecipheriv} from 'node:crypto';
-import {candidateCodec, SUITE} from './candidate.mjs';
+import {candidateCodec, SUITE, ENCODED_LIMIT} from './candidate.mjs';
 import {candidatePairing, ceremonyBytes} from '../pairing/candidate.mjs';
 // Test-only provider: Node's AES-GCM exercises the injectable boundary, not the named candidate suite.
 const pair = generateKeyPairSync('ed25519'), key = randomBytes(32);
@@ -49,7 +49,44 @@ test('libsodium candidate transports real symmetric key material',async()=>{
  await assert.rejects(receiver.openKey(new TextEncoder().encode(duplicate)),/MALFORMED/);
  const altered=structuredClone(record); altered.header.version=2; await assert.rejects(receiver.openKey(new TextEncoder().encode(JSON.stringify(altered))),/UNSUPPORTED_VERSION/);
  altered.header.version=1; altered.header.suiteId='other'; await assert.rejects(receiver.openKey(new TextEncoder().encode(JSON.stringify(altered))),/UNSUPPORTED_SUITE/);
- await assert.rejects(receiver.openKey(new Uint8Array(2100000)),/TOO_LARGE/);
+ await assert.rejects(receiver.openKey(new Uint8Array(ENCODED_LIMIT + 1)),/TOO_LARGE/);
  await assert.rejects(receiver.openKey(new TextEncoder().encode('{"kind":"key","kind":"key"}')),/MALFORMED/);
  await assert.rejects(receiver.openKey(new TextEncoder().encode(' ' + new TextDecoder().decode(wrapped.bytes))),/MALFORMED/);
+});
+
+test('snapshots mutable input and header across asynchronous provider calls',async()=>{
+ const sodium=(await import('libsodium-wrappers')).default; await sodium.ready;
+ const {testProvider}=await import('./test-provider.mjs');
+ const signing=sodium.crypto_sign_keypair(), recipient=sodium.crypto_box_keypair();
+ const provider=testProvider(sodium,{signing,recipient,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
+ let resume, entered; const gate=()=>{let resolve; const promise=new Promise(r=>resolve=r); return [promise,resolve];};
+ let [pause,release]=gate(), [ready,signal]=gate();
+ const paused={...provider,encrypt:async (...args)=>{signal(); await pause; return provider.encrypt(...args);}};
+ const header={...h,authorDevice:'sender',policyHashes:['original']};
+ const plaintext=Buffer.from([7]);
+ const pending=candidateCodec(paused).sealContent(header,plaintext,'data'); await ready; header.policyHashes[0]='modified'; plaintext[0]=9; release();
+ const sealed=await pending; const codec=candidateCodec(provider);
+ const reopened=await codec.openContent(sealed.bytes); assert.equal(reopened.header.policyHashes[0],'original'); assert.deepEqual(reopened.value,new Uint8Array([7]));
+ [pause,release]=gate(); [ready,signal]=gate();
+ const slow={...provider,verify:async (...args)=>{signal(); await pause; return provider.verify(...args);}};
+ const original=Buffer.from(sealed.bytes), input=Buffer.from(original);
+ const opening=candidateCodec(slow).openContent(input); await ready;
+ const offset=input.indexOf(Buffer.from('"scopeId":"s"')); input[offset+11]='x'.charCodeAt(0); release();
+ const opened=await opening; assert.deepEqual(Buffer.from(opened.object.bytes),original);
+ input.fill(0); assert.deepEqual(Buffer.from(opened.object.bytes),original);
+});
+
+test('candidate size bounds agree for sealing and authenticated opening',async()=>{
+ const sodium=(await import('libsodium-wrappers')).default; await sodium.ready;
+ const {testProvider}=await import('./test-provider.mjs');
+ const signing=sodium.crypto_sign_keypair(), recipient=sodium.crypto_box_keypair();
+ const provider=testProvider(sodium,{signing,recipient,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
+ const codec=candidateCodec(provider), header={...h,authorDevice:'sender',policyHashes:Array.from({length:64},(_,i)=>String(i).padStart(3,'0')+'x'.repeat(250))};
+ const sealed=await codec.sealContent(header,new Uint8Array(1048576),'data'); assert.equal((await codec.openContent(sealed.bytes)).value.length,1048576);
+ const aad=new TextEncoder().encode(JSON.stringify(['creative-cooking/k2-candidate/v1','content/header',header]));
+ const encrypted=await provider.encrypt('data',new Uint8Array(1048577),aad);
+ const unsigned={kind:'content',header,encrypted:Buffer.from(encrypted).toString('hex')};
+ const sig=await provider.sign('sender',new TextEncoder().encode(JSON.stringify(['creative-cooking/k2-candidate/v1','content/signature',unsigned])));
+ const oversized=new TextEncoder().encode(JSON.stringify({...unsigned,signature:Buffer.from(sig).toString('hex')}));
+ await assert.rejects(codec.openContent(oversized),/TOO_LARGE/);
 });

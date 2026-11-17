@@ -1,6 +1,8 @@
 // Experimental candidate only: no C1 suite or production interoperability is approved.
 export const SUITE = 'candidate-ed25519-xchacha20-sealedbox-v1';
 export const LIMIT = 1024 * 1024;
+// Hex ciphertext plus bounded JSON header, including worst-case string escaping.
+export const ENCODED_LIMIT = 2 * (LIMIT + 256) + 320 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const fields = {
@@ -24,7 +26,7 @@ export function validateHeader(kind, h) {
       if (!Number.isSafeInteger(v) || v < 0) throw Error('MALFORMED');
     } else if (!id(v)) throw Error('MALFORMED');
   }
-  return Object.fromEntries(keys.map(k => [k, h[k]]));
+  return Object.fromEntries(keys.map(k => [k, lists.has(k) ? [...h[k]] : h[k]]));
 }
 const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
 function unhex(s, min, max) {
@@ -39,19 +41,22 @@ export function candidateCodec(provider) {
     const h = validateHeader(kind, header);
     if (!(value instanceof Uint8Array) || value.length > LIMIT || !id(ref)) throw Error('MALFORMED');
     const aad = domain(kind + '/header',h);
-    const encrypted = kind === 'content' ? await provider.encrypt(ref,value,aad) : await provider.wrap(h.recipientDevice,ref,aad);
+    const plaintext = new Uint8Array(value);
+    const encrypted = kind === 'content' ? await provider.encrypt(ref,plaintext,aad) : await provider.wrap(h.recipientDevice,ref,aad);
     if (!(encrypted instanceof Uint8Array) || encrypted.length < 16 || encrypted.length > LIMIT + 256) throw Error('MALFORMED');
     const unsigned = {kind,header:h,encrypted:hex(encrypted)};
     const signature = await provider.sign(kind === 'content' ? h.authorDevice : h.senderDevice,domain(kind + '/signature',unsigned));
     if (!(signature instanceof Uint8Array) || signature.length !== 64) throw Error('MALFORMED');
     const encoded = bytes({...unsigned,signature:hex(signature)});
+    if (encoded.length > ENCODED_LIMIT) throw Error('TOO_LARGE');
     const digest = await provider.hash(domain('object-id',hex(encoded)));
     if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
     return {id:hex(digest),bytes:encoded};
   }
   async function open(kind, input) {
     if (!(input instanceof Uint8Array)) throw Error('MALFORMED');
-    if (input.length > 2 * (LIMIT + 1024)) throw Error('TOO_LARGE');
+    if (input.length > ENCODED_LIMIT) throw Error('TOO_LARGE');
+    input = new Uint8Array(input); // Buffer.slice() aliases; copy before any asynchronous boundary.
     let record;
     try { record = JSON.parse(decoder.decode(input)); } catch { throw Error('MALFORMED'); }
     if (!exact(record,['kind','header','encrypted','signature']) || record.kind !== kind) throw Error('MALFORMED');
@@ -65,9 +70,10 @@ export function candidateCodec(provider) {
     const aad = domain(kind + '/header',h);
     const value = kind === 'content' ? await provider.decrypt(h,encrypted,aad) : await provider.unwrap(h,encrypted,aad);
     if (kind === 'content' ? !(value instanceof Uint8Array) : !id(value)) throw Error('INVALID_PROOF');
+    if (kind === 'content' && value.length > LIMIT) throw Error('TOO_LARGE');
     const digest = await provider.hash(domain('object-id',hex(input)));
     if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
-    return {header:h,value,object:{id:hex(digest),bytes:input.slice()}};
+    return {header:h,value,object:{id:hex(digest),bytes:new Uint8Array(input)}};
   }
   return {sealContent:(h,p,r)=>seal('content',h,p,r), wrapKey:(h,r)=>seal('key',h,new Uint8Array(),r), openContent:b=>open('content',b), openKey:b=>open('key',b)};
 }
