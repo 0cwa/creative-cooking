@@ -159,3 +159,10 @@ test('admission requires committed delegation and binds signed grant and manifes
   assert.deepEqual(await storage.readPairingAuthority(scope),before);
  } finally {database.close()}
 });
+
+test('household resolver returns immutable signing key references from the pinned node',async()=>{
+ const {database,storage}=isolatedStore();
+ try {const candidate=structuredClone(root);candidate.devices[0].signingKeyRef='different-key';candidate.head=await rootPin(provider,candidate);await initializeAuthority(storage,candidate,candidate.head,provider);
+ const result=await resolveRuntimeAuthority(storage,scope,candidate.head,provider,'a');assert.deepEqual(result.signingKeyRefs,{a:'different-key',b:'b'});assert.throws(()=>{result.signingKeyRefs.a='wrong'},TypeError);assert.equal((await resolveRuntimeAuthority(storage,scope,candidate.head,provider,'a')).signingKeyRefs.a,'different-key');
+ } finally {database.close()}
+});

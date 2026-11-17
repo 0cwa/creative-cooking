@@ -99,7 +99,8 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
  const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();
  if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
  const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};
- return {scope:runtimeScope,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+ const signingKeyRefs=Object.freeze(Object.fromEntries(selected.devices.filter(d=>d.active).map(d=>[d.deviceId,d.signingKeyRef]).sort(([a],[b])=>a.localeCompare(b))));
+ return {scope:runtimeScope,signingKeyRefs,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
 }
 
 /** Persist explicit acceptance at the currently selected frozen parent. */

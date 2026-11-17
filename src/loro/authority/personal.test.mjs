@@ -12,7 +12,7 @@ test('signed pinned personal root limits access to its one owner and active devi
  const signature=Buffer.from(sodium.crypto_sign_detached(domain('personal-root-signature',root),kp.privateKey)).toString('hex');
  const pin=await personalRootPin(provider,root), scope={kind:'personal',id:'private'}, db=new DatabaseSync(':memory:'), conn={executeSync:(sql,args=[])=>{const s=db.prepare(sql);return {rows:sql.startsWith('SELECT')?s.all(...args):(s.run(...args),[])}}}, store=openSQLiteStorage(conn);
  await initializePersonalAuthority(store,scope,pin,provider,{version:1,root,signature});
- const a=await resolvePersonalAuthority(store,scope,pin,provider,'phone'); assert.equal(a.scope.ownerId,'alice'); assert.equal(a.scope.authorPeers.phone,'7');assert.equal(a.expectedAuthority.record.revision,0);
+ const a=await resolvePersonalAuthority(store,scope,pin,provider,'phone'); assert.equal(a.scope.ownerId,'alice'); assert.equal(a.scope.authorPeers.phone,'7');assert.equal(a.expectedAuthority.record.revision,0);assert.deepEqual(a.signingKeyRefs,{phone:'key'});assert.throws(()=>{a.signingKeyRefs.phone='other'},TypeError);assert.equal((await resolvePersonalAuthority(store,scope,pin,provider,'phone')).signingKeyRefs.phone,'key');
  await assert.rejects(resolvePersonalAuthority(store,scope,'wrong',provider,'phone'),/INVALID_AUTHORITY/);
  await assert.rejects(resolvePersonalAuthority(store,scope,pin,provider,'other'),/UNAUTHORIZED_DEVICE/);
  await assert.rejects(resolvePersonalAuthority(store,{kind:'household',id:'private'},pin,provider,'phone'),/INVALID_ROOT/);
