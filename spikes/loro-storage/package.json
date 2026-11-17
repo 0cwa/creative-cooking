@@ -1,0 +1,1 @@
+{"name":"loro-storage-spike","private":true,"type":"module","scripts":{"test":"node test.mjs"},"dependencies":{"loro-crdt":"1.17.1","playwright":"1.55.0"}}
