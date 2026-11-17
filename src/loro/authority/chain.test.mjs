@@ -21,7 +21,10 @@ async function item(name){const e=event(name),eventHash=hex(await provider.hash(
 test('durable siblings and signed deliberate selection survive reopen; failed CAS leaves state',async()=>{
  let fail=false; const store=openSQLiteStorage(conn,x=>{if(fail && x==='write')throw Error('fault')});
  await initializeAuthority(store,root,root.head,provider);
- const first=await observeSuccessor(store,scope,root.head,provider,await item('first'));
+ const firstItem=await item('first');
+ const first=await observeSuccessor(store,scope,root.head,provider,firstItem);
+ const reused=await item('second'); reused.approvals=firstItem.approvals;
+ await assert.rejects(observeSuccessor(store,scope,root.head,provider,reused),/CONTEXT_MISMATCH/);
  const second=await observeSuccessor(store,scope,root.head,provider,await item('second'));
  let view=await readAuthority(openSQLiteStorage(conn),scope,root.head,provider);
  assert.deepEqual(new Set(view.heads),new Set([first,second])); assert.equal(view.activeHead,root.head);
