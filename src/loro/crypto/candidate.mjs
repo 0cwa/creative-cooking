@@ -15,6 +15,7 @@ const id = x => typeof x === 'string' && x.length > 0 && encoder.encode(x).lengt
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));
 export function validateHeader(kind, h) {
   const base = fields[kind];
+  if(h&&h.version!==undefined&&h.version!==1&&!(kind==='content'&&[2,3,4].includes(h.version)))throw Error('UNSUPPORTED_VERSION');
   const keys = kind==='content' && ([2,3,4].includes(h?.version)) ? [...base,'disclosurePolicyHash','disclosurePolicyHashes','sourceEffectIds',...([3,4].includes(h.version)?['disclosureIncomplete']:[])] : base;
   if (!keys || !exact(h, keys)) throw Error('MALFORMED');
   if (h.version !== 1 && !(kind==='content' && ([2,3,4].includes(h.version)))) throw Error('UNSUPPORTED_VERSION');
