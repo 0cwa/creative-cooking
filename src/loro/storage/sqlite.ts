@@ -1,4 +1,4 @@
-import { StorageFailure, TransactionalStorage } from './core.ts';
+import { denseArray, StorageFailure, TransactionalStorage } from './core.ts';
 import type { TransactionRunner } from './core.ts';
 
 /** The subset of op-sqlite's synchronous connection API used here. */
@@ -6,7 +6,7 @@ export interface SQLiteConnection { executeSync(sql: string, params?: any[]): { 
 const encode = (v: unknown) => JSON.stringify(v, (_k,x) => x instanceof Uint8Array ? {__storageBytes:Array.from(x)} : x);
 const decode = (v: string) => { try { return JSON.parse(v, (_k,x) => {
   if (x && typeof x === 'object' && Object.hasOwn(x,'__storageBytes')) {
-    if (Object.keys(x).length !== 1 || !Array.isArray(x.__storageBytes) || !x.__storageBytes.every((n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 255)) throw new Error('invalid byte marker');
+    if (Object.keys(x).length !== 1 || !denseArray(x.__storageBytes, (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 255)) throw new Error('invalid byte marker');
     return new Uint8Array(x.__storageBytes);
   }
   return x;

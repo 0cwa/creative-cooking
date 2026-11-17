@@ -13,8 +13,13 @@ const snapshot = <T>(v: T): T => (v instanceof Uint8Array ? copy(v) : Array.isAr
 const corrupt = (): never => { throw new StorageFailure('CORRUPT'); };
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Uint8Array);
 const fields = (v: unknown, names: string[]): v is Record<string, any> => object(v) && Object.keys(v).length === names.length && names.every(k => Object.hasOwn(v,k));
+export const denseArray = (v: unknown, check: (item: any) => boolean): v is any[] => {
+  if (!Array.isArray(v)) return false;
+  for (let i = 0; i < v.length; i++) if (!Object.hasOwn(v,i) || !check(v[i])) return false;
+  return true;
+};
 const revision = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
-const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && Array.isArray(v.revisions) && v.revisions.length > 0 && v.revisions.every((x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision));
+const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && denseArray(v.revisions, (x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision)) && v.revisions.length > 0;
 const validateRecord = (k: string, v: any) => {
   if (v === undefined) return;
   const namespace = JSON.parse(k)[0];
@@ -24,7 +29,7 @@ const validateRecord = (k: string, v: any) => {
     case 'object': valid = fields(v,['bytes','branchHead','epochId']) && v.bytes instanceof Uint8Array && typeof v.branchHead === 'string' && !!v.branchHead && typeof v.epochId === 'string' && !!v.epochId; break;
     case 'inbox': valid = fields(v,['bytes']) && v.bytes instanceof Uint8Array; break;
     case 'local': case 'import': valid = fields(v,['inputKey','outcome']) && typeof v.inputKey === 'string' && outcomeShape(v.outcome); break;
-    case 'group': valid = fields(v,['inputKey','outcomes']) && typeof v.inputKey === 'string' && Array.isArray(v.outcomes) && v.outcomes.length > 0 && v.outcomes.every(outcomeShape); break;
+    case 'group': valid = fields(v,['inputKey','outcomes']) && typeof v.inputKey === 'string' && denseArray(v.outcomes,outcomeShape) && v.outcomes.length > 0; break;
     case 'receipt-state': valid = v === 'stored' || v === 'applied'; break;
     case 'cursor': case 'command': case 'effect': case 'applied': case 'receipt': valid = typeof v === 'string'; break;
   }
@@ -46,7 +51,7 @@ export class TransactionalStorage implements AtomicStorage {
       const records: { identity: string[]; value: unknown }[] = [];
       for (const k of await tx.keys()) {
         let parts: unknown; try { parts = JSON.parse(k); } catch { return corrupt(); }
-        if (!Array.isArray(parts) || !parts.every(x => typeof x === 'string')) return corrupt();
+        if (!denseArray(parts,x => typeof x === 'string')) return corrupt();
         if (parts[0] === namespace && parts[1] === scopeId) records.push({identity: parts.slice(2), value: snapshot(await tx.get(k))});
       }
       return {ok:true,value:records};
