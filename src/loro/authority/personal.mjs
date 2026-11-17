@@ -34,10 +34,37 @@ export async function resolvePersonalAuthority(storage,scope,pin,provider,author
  const result=await storage.readPairingAuthority(scope); if(!result.ok)throw Error(result.error); const record=result.value; if(!record)throw Error('MISSING_PARENT');
  let state; try {state=JSON.parse(dec.decode(record.authorityState))}catch{throw Error('MALFORMED')}
  if(hex(bytes(state))!==hex(record.authorityState) || record.acceptedParent!==pin || record.authorizationSnapshot!==await digest(provider,'personal-authority-state',state))throw Error('INVALID_AUTHORITY');
- const root=await verify(state,scope,pin,provider), active=root.devices.filter(d=>d.active), author=active.find(d=>d.deviceId===authorDevice);
+ const root=await verifyPersonalHistory(state,scope,pin,provider), active=root.devices.filter(d=>d.active), author=active.find(d=>d.deviceId===authorDevice);
  if(!author)throw Error('UNAUTHORIZED_DEVICE');
  const acceptedAuthors=active.map(d=>d.deviceId).sort();
  const authorPeers=Object.fromEntries(active.map(d=>[d.deviceId,d.peerId]).sort(([a],[b])=>a.localeCompare(b)));
  const signingKeyRefs=Object.freeze(Object.fromEntries(active.map(d=>[d.deviceId,d.signingKeyRef]).sort(([a],[b])=>a.localeCompare(b))));
  return {signingKeyRefs,scope:{scopeId:scope.id,ownerId:root.ownerId,documentId:root.documentId,documentGeneration:root.generation,branchHead:pin,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[pin],epochId:root.epochId,authorDevice,acceptedAuthors,authorPeers,acceptedRecipients:[...acceptedAuthors],suiteId:root.suiteId},expectedAuthority:{version:2,scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+}
+
+const admissionFields=['version','scopeId','ownerId','parentSnapshot','sponsorDeviceId','recipientDeviceId','recipientSigningKeyRef','recipientWrappingKeyRef','recipientSigningKey','recipientWrappingKey','peerId','transcriptHash','guardId'];
+const key32=x=>typeof x==='string'&&/^[0-9a-f]{64}$/.test(x);
+export function personalAdmissionBytes(a){if(!exact(a,admissionFields)||a.version!==1||!admissionFields.slice(1).every(k=>id(a[k]))||!key32(a.recipientSigningKey)||!key32(a.recipientWrappingKey)||a.recipientSigningKeyRef!==a.recipientSigningKey||a.recipientWrappingKeyRef!==a.recipientWrappingKey||!key32(a.transcriptHash)||!validPeer(a.peerId)||a.sponsorDeviceId===a.recipientDeviceId)throw Error('MALFORMED');return domain('personal-device-admission',canonical(a))}
+/** Replay all sponsor signatures from the pinned root. A successor adds a device to the
+ * existing owner; it never creates a human adult or changes the pinned root. */
+async function verifyPersonalHistory(state,scope,pin,provider){
+ if(state.version===1)return verify(state,scope,pin,provider);
+ if(!exact(state,['version','rootState','admissions'])||state.version!==2||!Array.isArray(state.admissions)||!state.admissions.length||state.admissions.length>127)throw Error('MALFORMED');
+ const root=structuredClone(await verify(state.rootState,scope,pin,provider));let previous=state.rootState;
+ for(let i=0;i<state.admissions.length;i++){
+  if(!Object.hasOwn(state.admissions,i))throw Error('MALFORMED');const item=state.admissions[i];if(!exact(item,['admission','signature']))throw Error('MALFORMED');const a=item.admission, payload=personalAdmissionBytes(a), signer=root.devices.find(x=>x.active&&x.deviceId===a.sponsorDeviceId),signature=sig(item.signature);
+  if(!signer||!signature||a.scopeId!==scope.id||a.ownerId!==root.ownerId||a.parentSnapshot!==await digest(provider,'personal-authority-state',previous)||root.devices.some(x=>x.deviceId===a.recipientDeviceId||x.peerId===a.peerId)||!await provider.verify(signer.signingKeyRef,payload,signature))throw Error('INVALID_PROOF');
+  root.devices.push({deviceId:a.recipientDeviceId,ownerId:a.ownerId,signingKeyRef:a.recipientSigningKeyRef,peerId:a.peerId,active:true});
+  previous={version:2,rootState:state.rootState,admissions:state.admissions.slice(0,i+1)};
+ }
+ return root;
+}
+/** Prepare a verified signed successor; the caller must atomically commit it with
+ * the pairing release or recipient installation and recheck the parent revision. */
+export async function preparePersonalAdmission(storage,scope,pin,provider,item){
+ const r=await storage.readPairingAuthority(scope);if(!r.ok)throw Error(r.error);const old=r.value;if(!old)throw Error('MISSING_PARENT');let state;try{state=JSON.parse(dec.decode(old.authorityState))}catch{throw Error('MALFORMED')}
+ if(old.acceptedParent!==pin||old.authorizationSnapshot!==await digest(provider,'personal-authority-state',state))throw Error('INVALID_AUTHORITY');await verifyPersonalHistory(state,scope,pin,provider);
+ if(state.version===2&&JSON.stringify(canonical(state.admissions.at(-1)))===JSON.stringify(canonical(item))){if(old.revision<1)throw Error('CORRUPT');const previous=state.admissions.length===1?state.rootState:{version:2,rootState:state.rootState,admissions:state.admissions.slice(0,-1)};return {expected:{scope:structuredClone(scope),revision:old.revision-1,acceptedParent:pin,authorizationSnapshot:await digest(provider,'personal-authority-state',previous),authorityState:bytes(previous)},next:structuredClone(old),replayed:true}}
+ const next=state.version===1?{version:2,rootState:state,admissions:[structuredClone(item)]}:{version:2,rootState:state.rootState,admissions:[...state.admissions,structuredClone(item)]};await verifyPersonalHistory(next,scope,pin,provider);
+ return {expected:structuredClone(old),next:{scope:structuredClone(scope),revision:old.revision+1,acceptedParent:pin,authorizationSnapshot:await digest(provider,'personal-authority-state',next),authorityState:bytes(next)}};
 }

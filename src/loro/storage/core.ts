@@ -40,7 +40,7 @@ const validateRecord = (k: string, v: any) => {
     case 'projection-document': valid = fields(v,['generation','operationId']) && revision(v.generation) && typeof v.operationId==='string'; break;
     case 'pairing-authority': valid = validatePairingAuthority(v).ok; break;
     case 'pairing-release': { const parsed = fields(v,['inputKey','release']) ? pairingReleaseKey(v.release) : null; valid = !!parsed && parsed.ok && parsed.value === v.inputKey; break; }
-    case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': valid = typeof v === 'string' && v.length > 0; break;
+    case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': case 'personal-admission-release': valid = typeof v === 'string' && v.length > 0; break;
     case 'document-owner': valid = typeof v==='string' && !!v; break;
     case 'document': valid = fields(v,['bytes','revision']) && v.bytes instanceof Uint8Array && revision(v.revision); break;
     case 'object': valid = fields(v,['bytes','branchHead','epochId']) && v.bytes instanceof Uint8Array && typeof v.branchHead === 'string' && !!v.branchHead && typeof v.epochId === 'string' && !!v.epochId; break;
@@ -244,6 +244,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await tx.put(guard,checked.value); await tx.put(packet,checked.value); await tx.put(outbox,checked.value); await tx.put(op,{inputKey:checked.value,release:r});
       return {ok:true,value:{release:snapshot(r),replayed:false}};
     }); } catch(e) { return fail(mapError(e)); }
+  }
+  /** Caller verifies the signed personal admission and possession evidence before entry. */
+  async commitPersonalAdmissionRelease(r:PairingRelease,next:PairingAuthorityRecord):Promise<PairingReleaseResult> {
+    const checked=pairingReleaseKey(r), valid=validatePairingAuthority(next); if(!checked.ok||!valid.ok||r.transcript.action!=='pairOwnDevice'||r.transcript.scope.kind!=='personal'||next.scope.kind!=='personal'||next.scope.id!==r.transcript.scope.id||next.revision!==r.expectedAuthorityRevision+1||next.acceptedParent!==r.transcript.acceptedParent)return fail('MALFORMED');r=snapshot(r);next=snapshot(next);
+    try{return await this.run(true,async tx=>{const s=r.transcript.scope,op=key('pairing-release',s.kind,s.id,r.operationId),guard=key('pairing-guard',r.guard.guardId),packet=key('pairing-packet',s.kind,s.id,r.packet.id),outbox=key('pairing-outbox',s.kind,s.id,r.operationId),transition=key('personal-admission-release',s.id,r.operationId),authorityKey=key('pairing-authority',s.kind,s.id),old=await tx.get(op),authority=await tx.get(authorityKey),binding=JSON.stringify(projectionCanonical(next));
+      if(old!==undefined){if(old.inputKey!==checked.value||await tx.get(transition)!==binding||!authority||JSON.stringify(projectionCanonical(authority))!==binding)conflict();await this.pairingComplete(tx,old.release,old.inputKey);return {ok:true,value:{release:snapshot(old.release),replayed:true}};}
+      if(authority&&(authority.scope.kind!==s.kind||authority.scope.id!==s.id))corrupt();
+      if(!authority||authority.revision!==r.expectedAuthorityRevision||authority.acceptedParent!==r.transcript.acceptedParent||authority.authorizationSnapshot!==r.transcript.authorizationSnapshot||await tx.get(guard)!==undefined||await tx.get(packet)!==undefined||await tx.get(outbox)!==undefined||await tx.get(transition)!==undefined)conflict();
+      for(const [k,v] of [[guard,checked.value],[packet,checked.value],[outbox,checked.value],[op,{inputKey:checked.value,release:r}],[transition,binding],[authorityKey,next]] as const){await tx.put(k,v);this.fault?.('personal-admission-release');}return {ok:true,value:{release:snapshot(r),replayed:false}};
+    });}catch(e){return fail(mapError(e))}
   }
   private async requireAuthority(tx: Tx, condition: LocalCommit['expectedAuthority']) {
     const {scope,record}=condition; const current=await tx.get(key('pairing-authority',scope.kind,scope.id));
