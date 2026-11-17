@@ -1,3 +1,4 @@
+import { allowsFreshLocalInference } from '@/loro/app/inference-gate.mjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -233,7 +234,7 @@ export default function ChefScreen() {
   };
 
   const runChef = async (messages: ChatMessage[]) => {
-    if (app.storageMode === 'fresh-local') return;
+    if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;
     setQuestion(null);
     setRunError(null);
     setStreamingText('');
@@ -346,7 +347,7 @@ export default function ChefScreen() {
     const userMessage = makeChatMessage('user', text);
     const messages = [...app.chatMessages, userMessage];
     app.appendChatMessage(userMessage);
-    if (app.storageMode === 'fresh-local') return;
+    if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;
     await runChef(messages);
   };
 
@@ -402,7 +403,7 @@ export default function ChefScreen() {
           </View>
         </View>
 
-        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Chef is not available in the fresh local preview yet. Messages stay private; external requests remain disabled until disclosure review is ready.</Text><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
+        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Messages stay private. External Chef requests are disabled until disclosure review is ready; the downloaded on-device model can run locally.</Text><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
         <View style={styles.contextStrip}>
           <Pressable
             accessibilityRole="button"
@@ -525,7 +526,7 @@ export default function ChefScreen() {
               editable={!dictationActive}
               value={input}
               onChangeText={setInput}
-              placeholder={app.storageMode === 'fresh-local' ? 'Write a private message…' : 'Type or dictate to Chef…'}
+              placeholder={app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Write a private message…' : 'Type or dictate to Chef…'}
               placeholderTextColor="#94a3b8"
               style={[styles.composer, dictationActive && styles.composerDictating]}
               multiline
@@ -535,7 +536,7 @@ export default function ChefScreen() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={busy ? 'Stop Chef response' : app.storageMode === 'fresh-local' ? 'Save private message' : 'Send message'}
+              accessibilityLabel={busy ? 'Stop Chef response' : app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Save private message' : 'Send message'}
               disabled={!busy && (!input.trim() || dictationActive)}
               onPress={busy ? stop : () => void send()}
               style={[styles.send, (!busy && (!input.trim() || dictationActive)) && styles.sendDisabled]}
