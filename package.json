@@ -18,7 +18,10 @@
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "check": "npm run test && npm run typecheck && EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web && npm run verify:pwa",
     "test:e2e": "playwright test",
-    "test:loro-contracts": "node --experimental-strip-types --test src/loro/contracts/*.test.mjs"
+    "test:loro-contracts": "node --experimental-strip-types --test src/loro/contracts/*.test.mjs",
+    "prepare:native": "node src/loro/native/prepare-native.mjs",
+    "preandroid": "npm run prepare:native",
+    "preios": "npm run prepare:native"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "0.2.82",
