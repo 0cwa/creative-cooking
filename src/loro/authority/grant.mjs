@@ -49,3 +49,15 @@ export async function checkAdmissionAgreement(parent,agreement,provider) {
   return {status:'accepted',delegationHash:hex(digest)};
  } catch {return {status:'deny',reason:'INVALID_PROOF'}}
 }
+
+/** Check the signed manifest association; source authorization and projection semantics remain separate. */
+export async function checkGrantManifest(parent,grant,manifest,snapshot,provider) {
+ try {
+  parent=structuredClone(parent); grant=structuredClone(grant); manifest=structuredClone(manifest);
+  if(!validParent(parent) || !exact(manifest,['version','sourceDocument','sourceCheckpointHash','sourcePolicyHashes','projectedStateHash','newDocumentId','newGeneration','schemaVersion']) || manifest.version!==1 || ![manifest.sourceDocument,manifest.sourceCheckpointHash,manifest.projectedStateHash,manifest.newDocumentId,manifest.schemaVersion].every(id) || !list(manifest.sourcePolicyHashes,64) || !(snapshot instanceof Uint8Array) || !snapshot.length || snapshot.length>8*1024*1024 || manifest.sourceDocument!==parent.runtime.documentId || manifest.newDocumentId===parent.runtime.documentId || manifest.newGeneration!==grant.newDocumentGeneration || JSON.stringify(manifest.sourcePolicyHashes)!==JSON.stringify(grant.sourcePolicyHashes)) return {status:'deny',reason:'INVALID_MANIFEST'};
+  const snapshotDigest=await provider.hash(domain('projection-snapshot',hex(snapshot)));
+  const manifestDigest=await provider.hash(domain('projection-manifest',manifest));
+  if(!(snapshotDigest instanceof Uint8Array) || snapshotDigest.length!==32 || !(manifestDigest instanceof Uint8Array) || manifestDigest.length!==32 || hex(snapshotDigest)!==manifest.projectedStateHash || hex(manifestDigest)!==grant.projectionManifestHash) return {status:'deny',reason:'INVALID_MANIFEST'};
+  return {status:'pending',reason:'SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED'};
+ } catch { return {status:'deny',reason:'INVALID_MANIFEST'} }
+}

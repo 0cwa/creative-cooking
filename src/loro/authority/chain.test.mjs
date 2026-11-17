@@ -8,7 +8,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement} from './chain.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement,checkCurrentAdmission} from './chain.mjs';
 await sodium.ready;
 const hex=b=>Buffer.from(b).toString('hex');
 const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
@@ -132,5 +132,29 @@ test('signed delegation persists and replays from the pinned parent; bad accepta
   const view=await readAuthority(storage,scope,root.head,provider);
   assert.equal(view.state.agreements.length,1);
   await assert.rejects(acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances}),/INVALID_AGREEMENT/);
+ } finally {database.close()}
+});
+
+test('admission requires committed delegation and binds signed grant and manifest without writes',async()=>{
+ const {database,storage}=isolatedStore();
+ try {
+  await initializeAuthority(storage,root,root.head,provider);
+  const agreement={version:1,householdId:'house',parentHead:root.head,policyHash:root.policyHash,roster:['a','b'],delegation:'currentCooking',sourcePolicyHashes:[root.policyHash]};
+  const acceptances=['a','b'].map(deviceId=>({adultId:deviceId,deviceId,signature:sign(deviceId,'admission-agreement-acceptance',{agreement,adultId:deviceId,deviceId})}));
+  const delegationHash=hex(await provider.hash(domain('admission-agreement',agreement)));
+  const e={...event('invite'),kind:'inviteAdult',subject:{adultId:'c'},nextPolicy:null};
+  const eventHash=hex(await provider.hash(domain('event',e)));
+  const approval={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a'};
+  const invitation={event:e,authorSignature:sign('a','event-signature',e),approvals:[{...approval,signature:sign('a','approval-signature',approval)}]};
+  const snapshot=new Uint8Array([1,2,3]);
+  const manifest={version:1,sourceDocument:'cooking',sourceCheckpointHash:'checkpoint',sourcePolicyHashes:[root.policyHash],projectedStateHash:hex(await provider.hash(domain('projection-snapshot',hex(snapshot)))),newDocumentId:'fresh',newGeneration:2,schemaVersion:'1'};
+  const grant={version:1,householdId:'house',parentHead:root.head,admissionEventHash:eventHash,sourcePolicyHashes:[root.policyHash],delegationHash,recipientAdult:'c',recipientDevices:['c1'],contentClasses:['recipe'],projectionManifestHash:hex(await provider.hash(domain('projection-manifest',manifest))),newDocumentGeneration:2,newEpochId:'fresh-epoch',keyEnvelopeRefs:['package']};
+  const signed={...grant,signatures:[{adultId:'a',deviceId:'a',signature:sign('a','current-state-grant-signature',{grant,adultId:'a',deviceId:'a'})}]};
+  await assert.rejects(checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,manifest,snapshot),/DELEGATION_REQUIRED/);
+  await acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances});
+  const before=await storage.readPairingAuthority(scope);
+  assert.equal((await checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,manifest,snapshot)).reason,'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED');
+  await assert.rejects(checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,{...manifest,newDocumentId:'other'},snapshot),/INVALID_MANIFEST/);
+  assert.deepEqual(await storage.readPairingAuthority(scope),before);
  } finally {database.close()}
 });

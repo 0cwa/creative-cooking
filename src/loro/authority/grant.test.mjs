@@ -35,3 +35,13 @@ test('agreement requires each frozen adult to accept the exact current-cooking d
  assert.equal((await checkAdmissionAgreement(parent,{...agreement,acceptances},provider)).status,'accepted');
  for(const bad of [{...agreement,delegation:'none',acceptances},{...agreement,sourcePolicyHashes:['other'],acceptances},{...agreement,acceptances:acceptances.slice(0,2)},{...agreement,acceptances:[acceptances[0],acceptances[0],acceptances[2]]}]) assert.equal((await checkAdmissionAgreement(parent,bad,provider)).status,'deny');
 });
+
+test('manifest binds exact fresh snapshot, source policy and signed grant',async()=>{
+ const {checkGrantManifest}=await import('./grant.mjs');
+ const snapshot=new Uint8Array([1,2,3]);
+ const digest=async(p,v)=>Buffer.from(await provider.hash(domain(p,v))).toString('hex');
+ const manifest={version:1,sourceDocument:'doc',sourceCheckpointHash:'checkpoint',sourcePolicyHashes:['policy'],projectedStateHash:await digest('projection-snapshot',Buffer.from(snapshot).toString('hex')),newDocumentId:'fresh',newGeneration:2,schemaVersion:'1'};
+ const grant={...unsigned,projectionManifestHash:await digest('projection-manifest',manifest)};
+ assert.equal((await checkGrantManifest(parent,grant,manifest,snapshot,provider)).reason,'SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED');
+ for(const [m,b] of [[{...manifest,newDocumentId:'doc'},snapshot],[{...manifest,sourceCheckpointHash:'other'},snapshot],[manifest,new Uint8Array([1,2,4])],[{...manifest,sourcePolicyHashes:['other']},snapshot]]) assert.equal((await checkGrantManifest(parent,grant,m,b,provider)).status,'deny');
+});

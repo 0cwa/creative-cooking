@@ -1,7 +1,7 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
 import {validateSuccessor, validParent, domain} from './validator.mjs';
-import {checkAdmissionAgreement} from './grant.mjs';
+import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest} from './grant.mjs';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const unhex=s=>typeof s==='string' && /^[0-9a-f]{128}$/.test(s) ? Uint8Array.from(s.match(/../g),x=>parseInt(x,16)) : null;
@@ -111,4 +111,26 @@ export async function acceptAdmissionAgreement(storage,scope,pin,provider,agreem
  state.agreements ??= []; state.agreements.push(agreement);
  await verifyAuthority(state,pin,provider); await save(storage,record,state,provider);
  return result.delegationHash;
+}
+
+/** Resolve admission evidence from the current pinned authority, without releasing keys. */
+export async function checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot) {
+ item=copy(item); grant=copy(grant); manifest=copy(manifest); snapshot=new Uint8Array(snapshot);
+ const {state,nodes}=await load(storage,scope,pin,provider), parent=nodes.get(state.activeHead);
+ if(item?.event?.kind!=='inviteAdult' || item.event.parentHead!==state.activeHead) throw Error('CONFLICT');
+ const admission=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
+ if(admission.reason!=='ADMISSION_AND_PROJECTION_REQUIRED') throw Error(admission.reason || 'INVALID_ADMISSION');
+ if(grant.admissionEventHash!==admission.eventHash || grant.recipientAdult!==item.event.subject.adultId) throw Error('CONTEXT_MISMATCH');
+ const proof=await checkGrantSignatures(parent,grant,provider);
+ if(proof.reason!=='ADMISSION_EVIDENCE_REQUIRED') throw Error(proof.reason || 'INVALID_PROOF');
+ let accepted=false;
+ for(const agreement of state.agreements ?? []) {
+  if(agreement.parentHead!==state.activeHead) continue;
+  const r=await checkAdmissionAgreement(parent,agreement,provider);
+  if(r.status==='accepted' && r.delegationHash===grant.delegationHash && JSON.stringify(agreement.sourcePolicyHashes)===JSON.stringify(grant.sourcePolicyHashes)) accepted=true;
+ }
+ if(!accepted) throw Error('DELEGATION_REQUIRED');
+ const association=await checkGrantManifest(parent,grant,manifest,snapshot,provider);
+ if(association.reason!=='SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED') throw Error(association.reason || 'INVALID_MANIFEST');
+ return {status:'pending',reason:'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED',admissionEventHash:admission.eventHash,grantHash:proof.grantHash};
 }
