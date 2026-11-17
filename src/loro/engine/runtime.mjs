@@ -28,6 +28,7 @@ export class OfflineRuntime {
     if (!record || record.acceptedParent !== s.branchHead || record.authorizationSnapshot !== s.authorizationSnapshot) throw new Error('INVALID_AUTHORITY');
     let state; try { state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState)); } catch { throw new Error('INVALID_AUTHORITY'); }
     if (!same(state,{acceptedAuthors:s.acceptedAuthors,acceptedRecipients:s.acceptedRecipients,epochId:s.epochId,policyHashes:s.policyHashes,documentId:s.documentId,documentGeneration:s.documentGeneration})) throw new Error('INVALID_AUTHORITY');
+    return {version:2,scope:record.scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
   }
   async document() {
     const stored=required(await this.storage.reopenDocument(this.scope.scopeId,this.scope.documentId));
@@ -36,7 +37,7 @@ export class OfflineRuntime {
   }
   async read() { const {doc}=await this.document(); return {recipe:doc.getMap('recipe').toJSON(), purchases:doc.getMap('purchases').toJSON()}; }
   async execute({operationId, command, deviceSequence}) {
-    await this.authorize();
+    const expectedAuthority=await this.authorize();
     checkCommand(command);
     if (!operationId || !Number.isSafeInteger(deviceSequence) || deviceSequence < 0) throw new Error('MALFORMED');
     const previous=required(await this.storage.getLocalOperation(this.scope.scopeId,operationId));
@@ -54,7 +55,7 @@ export class OfflineRuntime {
     const header={version:1,suiteId:this.scope.suiteId,scopeId:this.scope.scopeId,documentId:this.scope.documentId,documentGeneration:this.scope.documentGeneration,branchHead:this.scope.branchHead,policyHashes:this.scope.policyHashes,epochId:this.scope.epochId,authorDevice:this.scope.authorDevice,deviceSequence,predecessorRefs:meta.predecessors,semanticEffectIds:[command.effectId],payloadKind:'loro-update-v1'};
     const payload=encoder.encode(JSON.stringify({version:1,command,update:Array.from(update)}));
     const object=await this.codec.sealContent(header,payload,this.keyRef);
-    const result=await this.storage.commitLocal({scopeId:this.scope.scopeId,operationId,documents:[{documentId:this.scope.documentId,bytes:snapshot,expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:this.scope.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:[]}],outbound:[{object,branchHead:this.scope.branchHead,epochId:this.scope.epochId}]});
+    const result=await this.storage.commitLocal({scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:snapshot,expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:this.scope.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:[]}],outbound:[{object,branchHead:this.scope.branchHead,epochId:this.scope.epochId}]});
     // doc is disposable on both paths; every subsequent read reloads durable state.
     return required(result);
   }
@@ -67,7 +68,7 @@ export class OfflineRuntime {
     return {predecessors:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort()};
   }
   async importItem(item) {
-    await this.authorize();
+    const expectedAuthority=await this.authorize();
     const applied=required(await this.storage.getInboxApplication(this.scope.scopeId,item.itemId));
     if (applied) return {replayed:true};
     const opened=await this.codec.openContent(item.bytes), h=opened.header, s=this.scope;
@@ -88,7 +89,7 @@ export class OfflineRuntime {
     const command=payload.command, container=command.kind === 'recipe-title' ? 'cid:root-recipe:Map' : 'cid:root-purchases:Map';
     const key=command.kind === 'recipe-title' ? 'title' : command.effectId;
     if (!op || op.container !== container || op.content.type !== 'insert' || op.content.key !== key || op.content.value !== command.value) throw new Error('MALFORMED_UPDATE');
-    return required(await this.storage.commitImport({scopeId:s.scopeId,operationId:`import:${item.itemId}`,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],effectIds:h.semanticEffectIds}));
+    return required(await this.storage.commitImport({scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],effectIds:h.semanticEffectIds}));
   }
   async recoverInbox() {
     const items=required(await this.storage.listStagedInbox(this.scope.scopeId));

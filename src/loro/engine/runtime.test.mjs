@@ -17,8 +17,8 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
  const codec=()=>candidateCodec(testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey}));
  // Isolated preaccepted test identity; this is not product pairing.
  const scope={scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',authorizationSnapshot:'authority-v1',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',acceptedAuthors:['sender'],acceptedRecipients:['peer'],suiteId:SUITE};
- let fault=false;
- const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault && b==='local') throw Error('injected');}); return {db,storage,runtime:new OfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'})};};
+ let fault='';
+ const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault === b) throw Error('injected');}); return {db,storage,runtime:new OfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'})};};
  let a=open('a.sqlite'), b=open('b.sqlite');
  const stage=async (target,object,n)=>assert.equal((await target.storage.stageInbox({scopeId:'house',object:{id:object.objectId,bytes:object.bytes},source:'peer',expectedCursor:n===0?null:String(n-1),cursor:String(n)})).ok,true);
  try {
@@ -29,7 +29,7 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   await assert.rejects(denied.execute({operationId:'denied',command:{commandId:'denied',effectId:'denied',kind:'purchase',value:'x'},deviceSequence:0}),/INVALID_AUTHORITY/);
   await assert.rejects(denied.importItem({itemId:'no-object',bytes:new Uint8Array()}),/INVALID_AUTHORITY/);
   const title={commandId:'cmd-title',effectId:'effect-title',kind:'recipe-title',value:'Soup'};
-  fault=true; await assert.rejects(a.runtime.execute({operationId:'title',command:title,deviceSequence:1}),/IO/); fault=false;
+  fault='local'; await assert.rejects(a.runtime.execute({operationId:'title',command:title,deviceSequence:1}),/IO/); fault='';
   assert.deepEqual(await a.runtime.read(),{recipe:{},purchases:{}});
   await a.runtime.execute({operationId:'title',command:title,deviceSequence:1});
   assert.equal((await a.runtime.execute({operationId:'title',command:title,deviceSequence:1})).replayed,true);
@@ -43,6 +43,8 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   assert.equal((await b.runtime.recoverInbox())[0].error.message,'MISSING_DEPENDENCY');
   assert.deepEqual(await b.runtime.read(),{recipe:{},purchases:{eb:'beans'}});
   await stage(b,first,1); await stage(a,bo[0],0);
+  fault='import'; const failedImport=await a.runtime.recoverInbox(); assert.equal(failedImport[0].error.message,'IO'); fault='';
+  assert.deepEqual(await a.runtime.read(),{recipe:{title:'Soup'},purchases:{ea:'carrots'}});
   const evil=new LoroDoc(), v=evil.oplogVersion(); evil.getMap('recipe').set('title','injected');
   const badUpdate=evil.export({mode:'update',from:v});
   const badHeader={version:1,suiteId:SUITE,scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',deviceSequence:4,predecessorRefs:[],semanticEffectIds:['bad'],payloadKind:'loro-update-v1'};
