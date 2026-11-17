@@ -24,6 +24,11 @@ export async function commitCookingWithPolicy({runtime,service,input}) {
  prepared.commit.outbound[0].object=object;
  return must(await runtime.storage.commitLocalWithDisclosurePolicy(prepared.commit,record?.policyHash??null,expectedActiveHash));
 }
+/** Complete authenticated cooking header binding, before retaining incoming bytes. */
+export function validateCookingHeader(opened,itemId,s){
+ const h=opened.header,same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+ if(opened.object.id!==itemId||![2,3,4].includes(h.version)||h.scopeId!==s.scopeId||h.documentId!==s.documentId||h.documentGeneration!==s.documentGeneration||h.branchHead!==s.branchHead||h.epochId!==s.epochId||h.suiteId!==s.suiteId||!same(h.policyHashes,s.policyHashes)||!s.acceptedAuthors.includes(h.authorDevice)||h.payloadKind!=='loro-update-v1'||h.semanticEffectIds.length!==1)throw Error('INVALID_AUTHORITY');
+}
 /** Authenticate, validate and import a v2 source-policy envelope atomically. */
 export async function importCookingWithPolicy({runtime,service,item}) {
  item=structuredClone(item);if(!item||typeof item.itemId!=='string'||!(item.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
@@ -34,7 +39,7 @@ export async function importCookingWithPolicy({runtime,service,item}) {
  const opened=await runtime.codec.openContent(item.bytes,auth.signingKeyRefs),h=opened.header,s=runtime.scope;
  if(await runtime.storage.compromise.isQuarantined(s.scopeId,h.authorDevice))throw Error('QUARANTINED');
  const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
- if(opened.object.id!==item.itemId||![2,3,4].includes(h.version)||h.scopeId!==s.scopeId||h.documentId!==s.documentId||h.documentGeneration!==s.documentGeneration||h.branchHead!==s.branchHead||h.epochId!==s.epochId||h.suiteId!==s.suiteId||!same(h.policyHashes,s.policyHashes)||!s.acceptedAuthors.includes(h.authorDevice)||h.payloadKind!=='loro-update-v1'||h.semanticEffectIds.length!==1)throw Error('INVALID_AUTHORITY');
+ validateCookingHeader(opened,item.itemId,s);
  const alreadyApplied=must(await runtime.storage.getInboxApplication(s.scopeId,item.itemId));
  for(const policyHash of h.disclosurePolicyHashes)await service.validateStored(policyHash,context);
  let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value))}catch{throw Error('MALFORMED_UPDATE')}
