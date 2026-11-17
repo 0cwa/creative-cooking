@@ -1,0 +1,60 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {LoroDoc, decodeImportBlobMeta} from 'loro-crdt/nodejs';
+import sodium from 'libsodium-wrappers';
+import {openSQLiteStorage} from '../storage/sqlite.ts';
+import {candidateCodec, SUITE} from '../crypto/candidate.mjs';
+import {testProvider} from '../crypto/test-provider.mjs';
+import {OfflineRuntime} from './runtime.mjs';
+
+test('real Loro, SQLite and candidate encryption survive failures, reorder, duplicates and reopen',async()=>{
+ await sodium.ready;
+ const dir=mkdtempSync(join('/var/home/x/agent-scratch/creative-cooking/loro-implementation','runtime-test-'));
+ const signing=sodium.crypto_sign_keypair(), recipient=sodium.crypto_box_keypair(), dataKey=sodium.randombytes_buf(32);
+ const codec=()=>candidateCodec(testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey}));
+ // Isolated preaccepted test identity; this is not product pairing.
+ const scope={scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',authorizationSnapshot:'authority-v1',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',acceptedAuthors:['sender'],acceptedRecipients:['peer'],suiteId:SUITE};
+ let fault=false;
+ const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault && b==='local') throw Error('injected');}); return {db,storage,runtime:new OfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'})};};
+ let a=open('a.sqlite'), b=open('b.sqlite');
+ const stage=async (target,object,n)=>assert.equal((await target.storage.stageInbox({scopeId:'house',object:{id:object.objectId,bytes:object.bytes},source:'peer',expectedCursor:n===0?null:String(n-1),cursor:String(n)})).ok,true);
+ try {
+  const authorityState=new TextEncoder().encode(JSON.stringify({acceptedAuthors:scope.acceptedAuthors,acceptedRecipients:scope.acceptedRecipients,epochId:scope.epochId,policyHashes:scope.policyHashes,documentId:scope.documentId,documentGeneration:scope.documentGeneration}));
+  for (const client of [a,b]) assert.equal((await client.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'house'},revision:0,acceptedParent:scope.branchHead,authorizationSnapshot:scope.authorizationSnapshot,authorityState}})).ok,true);
+  await assert.rejects(a.runtime.outboundFor('stranger'),/INVALID_AUTHORITY/);
+  const denied=new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorizationSnapshot:'other'},keyRef:'data'});
+  await assert.rejects(denied.execute({operationId:'denied',command:{commandId:'denied',effectId:'denied',kind:'purchase',value:'x'},deviceSequence:0}),/INVALID_AUTHORITY/);
+  await assert.rejects(denied.importItem({itemId:'no-object',bytes:new Uint8Array()}),/INVALID_AUTHORITY/);
+  const title={commandId:'cmd-title',effectId:'effect-title',kind:'recipe-title',value:'Soup'};
+  fault=true; await assert.rejects(a.runtime.execute({operationId:'title',command:title,deviceSequence:1}),/IO/); fault=false;
+  assert.deepEqual(await a.runtime.read(),{recipe:{},purchases:{}});
+  await a.runtime.execute({operationId:'title',command:title,deviceSequence:1});
+  assert.equal((await a.runtime.execute({operationId:'title',command:title,deviceSequence:1})).replayed,true);
+  await assert.rejects(a.runtime.execute({operationId:'title',command:{...title,value:'Changed'},deviceSequence:1}),/CONFLICT/);
+  await a.runtime.execute({operationId:'purchase-a',command:{commandId:'ca',effectId:'ea',kind:'purchase',value:'carrots'},deviceSequence:2});
+  await b.runtime.execute({operationId:'purchase-b',command:{commandId:'cb',effectId:'eb',kind:'purchase',value:'beans'},deviceSequence:3});
+  const ao=await a.runtime.outboundFor('peer'), bo=await b.runtime.outboundFor('peer'); assert.equal(ao.length,2); assert.equal(bo.length,1);
+  const effects=await Promise.all(ao.map(async o=>[o,(await codec().openContent(o.bytes)).header.semanticEffectIds[0]]));
+  const first=effects.find(([,id])=>id==='effect-title')[0], later=effects.find(([,id])=>id==='ea')[0];
+  await stage(b,later,0);
+  assert.equal((await b.runtime.recoverInbox())[0].error.message,'MISSING_DEPENDENCY');
+  assert.deepEqual(await b.runtime.read(),{recipe:{},purchases:{eb:'beans'}});
+  await stage(b,first,1); await stage(a,bo[0],0);
+  const evil=new LoroDoc(), v=evil.oplogVersion(); evil.getMap('recipe').set('title','injected');
+  const badUpdate=evil.export({mode:'update',from:v});
+  const badHeader={version:1,suiteId:SUITE,scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',deviceSequence:4,predecessorRefs:[],semanticEffectIds:['bad'],payloadKind:'loro-update-v1'};
+  const bad=await codec().sealContent(badHeader,new TextEncoder().encode(JSON.stringify({version:1,command:{commandId:'bad',effectId:'bad',kind:'purchase',value:'beans'},update:Array.from(badUpdate)})),'data');
+  await stage(a,{objectId:bad.id,bytes:bad.bytes},1);
+  const rejected=await a.runtime.importItem({itemId:bad.id,bytes:bad.bytes}).catch(e=>e); assert.equal(rejected.message,'MALFORMED_UPDATE');
+  assert.ok((await b.runtime.recoverInbox()).every(x=>!x.error)); assert.ok((await a.runtime.recoverInbox()).some(x=>x.error?.message==='MALFORMED_UPDATE')); assert.equal((await a.storage.getInboxApplication('house',bad.id)).value,null);
+  assert.ok((await b.runtime.recoverInbox()).every(x=>x.result.replayed));
+  const state=await a.runtime.read(); assert.deepEqual(state,await b.runtime.read()); assert.deepEqual(state,{recipe:{title:'Soup'},purchases:{ea:'carrots',eb:'beans'}});
+  a.db.close(); b.db.close(); a=open('a.sqlite'); b=open('b.sqlite');
+  assert.deepEqual(await a.runtime.read(),state); assert.deepEqual(await b.runtime.read(),state);
+  assert.equal((await a.runtime.execute({operationId:'title',command:title,deviceSequence:1})).replayed,true);
+  assert.ok((await b.runtime.recoverInbox()).every(x=>x.result.replayed));
+ } finally {a.db.close(); b.db.close(); rmSync(dir,{recursive:true,force:true});}
+});
