@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "esbuild": "0.25.12",
+    "shamir-secret-sharing": "0.0.4"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node node.mjs",
+    "bundle": "esbuild browser.mjs --bundle --format=esm --outfile=browser-bundle.js"
+  }
+}
