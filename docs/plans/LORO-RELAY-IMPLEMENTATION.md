@@ -4,6 +4,8 @@ The [2026-11-17 interview decisions](LORO-IMPLEMENTATION-DECISIONS.md) are confi
 
 Status: revised implementation design, 2026-11-17, following confirmed product decisions. The current work revises documents and isolated models, not the production application or deployment. The PowerSync implementation remains on main and is archived at `origin/archive/powersync-2026-11-15`, commit `069d9abb10dd07bbde1ef13f69ae164f9a7d0143`. The planning root is `docs/loro-relay-plan`. There is no existing-data migration or dual write in scope. Eventual release must offer a clear fresh-start boundary and leave existing stored data intact until the user chooses; never silently reset or reinterpret it.
 
+See the [execution plan](LORO-EXECUTION-PLAN.md) for package ownership, dependencies and integration gates.
+
 ## Decision and evidence
 
 A household-first product: local-first Loro documents, equal adults, private personal data, visible trust branches, direct exchange, encrypted transfer files and an optional small encrypted HTTP mailbox. Routine edits are immediate and need no vote. Personal code recovery is independent; restoring current household authority requires separate admission evidence and current-adult confirmation. Guardian assistance is optional for the person but included in the first implementation, with explicit scope and thresholds. Adult admission defaults to all existing adults minus one, clamped to at least one; the two-adult consequence is deliberately accepted. A device vote is never an adult vote. Neither a majority nor a minority establishes truth.
