@@ -55,3 +55,12 @@ test('retry keeps original revision after subsequent writes and import faults re
  for(let boundary=1;boundary<=4;boundary++) { n=0;failAt=boundary;assert.equal((await s.commitImport(imp)).ok,false);assert.equal((await s.reopenDocument('scope','d')).value.revision,1); }
  failAt=0;assert.equal((await s.commitImport(imp)).ok,true);assert.equal((await s.commitImport(imp)).value.replayed,true);conn.db.close();
 });
+
+test('corrupt SQLite records fail closed without overwriting or false replay', async () => {
+ const conn=connection();const s=openSQLiteStorage(conn);const put=(k,v)=>conn.db.prepare('INSERT OR REPLACE INTO loro_records (key,value) VALUES (?,?)').run(JSON.stringify(k),JSON.stringify(v));
+ put(['document','s','d'],{revision:0});
+ assert.equal((await s.reopenDocument('s','d')).error,'CORRUPT');assert.equal((await s.commitLocal(child('s','bad','d',0))).error.code,'CORRUPT');
+ for(const byte of [256,-1,1.5,'2',null]) { put(['document','s','d'],{revision:0,bytes:{__storageBytes:[byte]}});assert.equal((await s.reopenDocument('s','d')).error,'CORRUPT'); }
+ conn.db.prepare('DELETE FROM loro_records').run();const c=child('s','ok','d');assert.equal((await s.commitLocal(c)).ok,true);assert.equal((await s.commitLocal(c)).value.replayed,true);
+ const op=JSON.parse(conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(JSON.stringify(['local','s','ok'])).value);op.outcome.revisions=[];put(['local','s','ok'],op);assert.equal((await s.commitLocal(c)).error.code,'CORRUPT');assert.equal((await s.reopenDocument('s','d')).value.revision,0);conn.db.close();
+});

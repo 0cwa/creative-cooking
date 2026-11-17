@@ -10,13 +10,36 @@ const mapError = (e: unknown): StorageError => e instanceof StorageFailure ? e.c
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 const copy = (v: Uint8Array) => new Uint8Array(v);
 const snapshot = <T>(v: T): T => (v instanceof Uint8Array ? copy(v) : Array.isArray(v) ? v.map(snapshot) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,snapshot(x)])) : v) as T;
+const corrupt = (): never => { throw new StorageFailure('CORRUPT'); };
+const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Uint8Array);
+const fields = (v: unknown, names: string[]): v is Record<string, any> => object(v) && Object.keys(v).length === names.length && names.every(k => Object.hasOwn(v,k));
+const revision = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
+const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && Array.isArray(v.revisions) && v.revisions.length > 0 && v.revisions.every((x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision));
+const validateRecord = (k: string, v: any) => {
+  if (v === undefined) return;
+  const namespace = JSON.parse(k)[0];
+  let valid = false;
+  switch (namespace) {
+    case 'document': valid = fields(v,['bytes','revision']) && v.bytes instanceof Uint8Array && revision(v.revision); break;
+    case 'object': valid = fields(v,['bytes','branchHead','epochId']) && v.bytes instanceof Uint8Array && typeof v.branchHead === 'string' && !!v.branchHead && typeof v.epochId === 'string' && !!v.epochId; break;
+    case 'inbox': valid = fields(v,['bytes']) && v.bytes instanceof Uint8Array; break;
+    case 'local': case 'import': valid = fields(v,['inputKey','outcome']) && typeof v.inputKey === 'string' && outcomeShape(v.outcome); break;
+    case 'group': valid = fields(v,['inputKey','outcomes']) && typeof v.inputKey === 'string' && Array.isArray(v.outcomes) && v.outcomes.length > 0 && v.outcomes.every(outcomeShape); break;
+    case 'receipt-state': valid = v === 'stored' || v === 'applied'; break;
+    case 'cursor': case 'command': case 'effect': case 'applied': case 'receipt': valid = typeof v === 'string'; break;
+  }
+  if (!valid) corrupt();
+};
+const validateOutcome = (outcome: SavedOutcome, docs: LocalCommit['documents']) => {
+  if (outcome.revisions.length !== docs.length || outcome.revisions.some((r,i) => r.documentId !== docs[i].documentId || r.revision !== (docs[i].expectedRevision === null ? 0 : docs[i].expectedRevision! + 1))) corrupt();
+};
 const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'reload-durable-state'}} => ({ok:false,error:{code,recovery:'reload-durable-state'}});
 
 /** Database transactions, not process locks, provide isolation. */
 export class TransactionalStorage implements AtomicStorage {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
-  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({get: tx.get, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
+  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];
     for (const id of ids) if (await tx.get(id) !== undefined) conflict();
@@ -55,7 +78,7 @@ export class TransactionalStorage implements AtomicStorage {
     const k = storageOperationKey(c,'local'); if (!k.ok) return fail(k.error); c = snapshot(c);
     try { return await this.run(true, async tx => {
       const old = await tx.get(key('local',c.scopeId,c.operationId));
-      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome) conflict(); await this.completedLocal(tx,c,k.value); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
+      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome) conflict(); validateOutcome(old.outcome,c.documents); await this.completedLocal(tx,c,k.value); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
       const outcome = await this.local(tx,c,k.value); this.fault?.('local');
       return {ok:true,value:{outcome,replayed:false}};
     }); } catch (e) { return fail(mapError(e)); }
@@ -64,7 +87,7 @@ export class TransactionalStorage implements AtomicStorage {
     const k = storageGroupKey(g); if (!k.ok) return fail(k.error); g = snapshot(g);
     try { return await this.run(true, async tx => {
       const old = await tx.get(key('group',g.groupId));
-      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcomes || old.outcomes.length !== g.children.length) conflict(); for (const c of g.children) { const ck = storageOperationKey(c,'local'); if (!ck.ok) throw new StorageFailure(ck.error); const operation = await tx.get(key('local',c.scopeId,c.operationId)); if (!operation || operation.inputKey !== ck.value || !operation.outcome) conflict(); await this.completedLocal(tx,c,ck.value); } return {ok:true,value:{outcomes:old.outcomes,replayed:true}}; }
+      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcomes || old.outcomes.length !== g.children.length) conflict(); for (const c of g.children) { const ck = storageOperationKey(c,'local'); if (!ck.ok) throw new StorageFailure(ck.error); const operation = await tx.get(key('local',c.scopeId,c.operationId)); if (!operation || operation.inputKey !== ck.value || !operation.outcome) conflict(); validateOutcome(operation.outcome,c.documents); const index = g.children.indexOf(c); validateOutcome(old.outcomes[index],c.documents); if (JSON.stringify(old.outcomes[index]) !== JSON.stringify(operation.outcome)) corrupt(); await this.completedLocal(tx,c,ck.value); } return {ok:true,value:{outcomes:old.outcomes,replayed:true}}; }
       for (const c of g.children) await this.identities(tx,c);
       const outcomes: SavedOutcome[] = [];
       for (const c of g.children) { const ck = storageOperationKey(c,'local'); if (!ck.ok) throw new StorageFailure(ck.error); outcomes.push(await this.local(tx,c,ck.value)); this.fault?.('child'); }
@@ -90,7 +113,7 @@ export class TransactionalStorage implements AtomicStorage {
     const k = storageOperationKey(c,'import'); if (!k.ok) return fail(k.error); c = snapshot(c);
     try { return await this.run(true,async tx => {
       const op = key('import',c.scopeId,c.operationId), old = await tx.get(op);
-      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome || await tx.get(key('applied',c.scopeId,c.itemId)) !== c.operationId || await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined) conflict(); for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== k.value) conflict(); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
+      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome || await tx.get(key('applied',c.scopeId,c.itemId)) !== c.operationId || await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined) conflict(); for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== k.value) conflict(); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
       for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== undefined) conflict();
       const outcome = await this.documents(tx,c.scopeId,c.documents); this.fault?.('import-documents');
