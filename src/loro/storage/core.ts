@@ -71,7 +71,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       let c: LocalCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='local' || parsed.length!==2) return corrupt(); c=parsed[1];
         for (const d of c.documents) d.bytes = decodeKeyBytes(d.bytes); for (const cmd of c.commands) cmd.payload = decodeKeyBytes(cmd.payload); for (const o of c.outbound) o.object.bytes = decodeKeyBytes(o.object.bytes);
       } catch { return corrupt(); }
-      const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.operationId!==operationId) return corrupt();
+      if (!Object.hasOwn(c,'expectedAuthority')) return {ok:false,error:'UNSUPPORTED_VERSION'}; const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.operationId!==operationId) return corrupt();
       validateOutcome(old.outcome,c.documents); try { await this.completedLocal(tx,c,old.inputKey); } catch (e) { if (e instanceof StorageFailure && e.code === 'CONFLICT') corrupt(); throw e; } return {ok:true,value:{commit:snapshot(c),outcome:snapshot(old.outcome)}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
@@ -80,7 +80,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(false,async tx => { const op=await tx.get(key('applied',scopeId,itemId)); if (op===undefined) return {ok:true,value:null};
       const old=await tx.get(key('import',scopeId,op)); if (!old || await tx.get(key('inbox',scopeId,itemId))===undefined) return corrupt();
       let c: ImportCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='import' || parsed.length!==2) return corrupt(); c=parsed[1]; for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes); } catch { return corrupt(); }
-      const checked=storageOperationKey(c,'import'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.itemId!==itemId || c.operationId!==op) return corrupt();
+      if (!Object.hasOwn(c,'expectedAuthority')) return {ok:false,error:'UNSUPPORTED_VERSION'}; const checked=storageOperationKey(c,'import'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.itemId!==itemId || c.operationId!==op) return corrupt();
       validateOutcome(old.outcome,c.documents); for (const id of c.effectIds) if (await tx.get(key('effect',scopeId,id))!==old.inputKey) return corrupt();
       return {ok:true,value:{operationId:op,outcome:snapshot(old.outcome)}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
@@ -130,6 +130,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:{release:snapshot(r),replayed:false}};
     }); } catch(e) { return fail(mapError(e)); }
   }
+  private async requireAuthority(tx: Tx, condition: LocalCommit['expectedAuthority']) {
+    const {scope,record}=condition; const current=await tx.get(key('pairing-authority',scope.kind,scope.id));
+    if (current && (current.scope.kind!==scope.kind || current.scope.id!==scope.id)) corrupt();
+    if (record === null) { if (current !== undefined) conflict(); return; }
+    if (!current || current.revision!==record.revision || current.acceptedParent!==record.acceptedParent || current.authorizationSnapshot!==record.authorizationSnapshot) conflict();
+  }
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];
     for (const id of ids) if (await tx.get(id) !== undefined) conflict();
@@ -169,6 +175,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(true, async tx => {
       const old = await tx.get(key('local',c.scopeId,c.operationId));
       if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome) conflict(); validateOutcome(old.outcome,c.documents); await this.completedLocal(tx,c,k.value); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
+      await this.requireAuthority(tx,c.expectedAuthority);
       const outcome = await this.local(tx,c,k.value); this.fault?.('local');
       return {ok:true,value:{outcome,replayed:false}};
     }); } catch (e) { return fail(mapError(e)); }
@@ -178,7 +185,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(true, async tx => {
       const old = await tx.get(key('group',g.groupId));
       if (old !== undefined) { if (old.inputKey !== k.value || !old.outcomes || old.outcomes.length !== g.children.length) conflict(); for (const c of g.children) { const ck = storageOperationKey(c,'local'); if (!ck.ok) throw new StorageFailure(ck.error); const operation = await tx.get(key('local',c.scopeId,c.operationId)); if (!operation || operation.inputKey !== ck.value || !operation.outcome) conflict(); validateOutcome(operation.outcome,c.documents); const index = g.children.indexOf(c); validateOutcome(old.outcomes[index],c.documents); if (JSON.stringify(old.outcomes[index]) !== JSON.stringify(operation.outcome)) corrupt(); await this.completedLocal(tx,c,ck.value); } return {ok:true,value:{outcomes:old.outcomes,replayed:true}}; }
-      for (const c of g.children) await this.identities(tx,c);
+      for (const c of g.children) { await this.requireAuthority(tx,c.expectedAuthority); await this.identities(tx,c); }
       const outcomes: SavedOutcome[] = [];
       for (const c of g.children) { const ck = storageOperationKey(c,'local'); if (!ck.ok) throw new StorageFailure(ck.error); outcomes.push(await this.local(tx,c,ck.value)); this.fault?.('child'); }
       await tx.put(key('group',g.groupId),{inputKey:k.value,outcomes}); this.fault?.('group');
@@ -204,6 +211,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(true,async tx => {
       const op = key('import',c.scopeId,c.operationId), old = await tx.get(op);
       if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome || await tx.get(key('applied',c.scopeId,c.itemId)) !== c.operationId || await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined) conflict(); for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== k.value) conflict(); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
+      await this.requireAuthority(tx,c.expectedAuthority);
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
       for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== undefined) conflict();
       const outcome = await this.documents(tx,c.scopeId,c.documents); this.fault?.('import-documents');

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openSQLiteStorage } from './sqlite.ts';
 
 const b = (...x) => new Uint8Array(x);
-const child = (scope,op,doc,revision=null) => ({scopeId:scope,operationId:op,documents:[{documentId:doc,bytes:b(1),expectedRevision:revision}],commands:[{version:1,commandId:op,effectId:op,documentId:doc,kind:'write',payload:b(2),dependencyEffectIds:[]}],outbound:[{object:{id:op,bytes:b(3)},branchHead:'h',epochId:'e'}]});
+const child = (scope,op,doc,revision=null) => ({expectedAuthority:{version:2,scope:{kind:'personal',id:scope},record:null},scopeId:scope,operationId:op,documents:[{documentId:doc,bytes:b(1),expectedRevision:revision}],commands:[{version:1,commandId:op,effectId:op,documentId:doc,kind:'write',payload:b(2),dependencyEffectIds:[]}],outbound:[{object:{id:op,bytes:b(3)},branchHead:'h',epochId:'e'}]});
 const connection = () => { const db = new DatabaseSync(':memory:'); return {db, executeSync:(sql,params=[]) => { const s=db.prepare(sql); return {rows:sql.startsWith('SELECT') ? s.all(...params) : (s.run(...params),[])}; }}; };
 test('SQLite group rollback, replay, identity conflicts, staging, import and receipts', async () => {
  const conn=connection(); let fault='child'; const s=openSQLiteStorage(conn, x=>{if(x===fault) throw Error('fault')});
@@ -20,7 +20,7 @@ test('SQLite group rollback, replay, identity conflicts, staging, import and rec
  const item={scopeId:'household',object:{id:'incoming',bytes:b(5)},source:'relay',expectedCursor:null,cursor:'opaque'};
  fault='inbox'; assert.equal((await s.stageInbox(item)).ok,false); fault=''; assert.equal((await s.stageInbox(item)).ok,true);
  assert.equal((await s.stageInbox({...item,object:{id:'other',bytes:b(6)}})).error,'CONFLICT');
- const imp={scopeId:'household',operationId:'import',itemId:'incoming',documents:[{documentId:'effect',bytes:b(8),expectedRevision:0}],effectIds:['remote']};
+ const imp={expectedAuthority:{version:2,scope:{kind:'personal',id:'household'},record:null},scopeId:'household',operationId:'import',itemId:'incoming',documents:[{documentId:'effect',bytes:b(8),expectedRevision:0}],effectIds:['remote']};
  fault='import-documents'; assert.equal((await s.commitImport(imp)).ok,false); assert.equal((await s.reopenDocument('household','effect')).value.revision,0);
  fault=''; assert.equal((await s.commitImport(imp)).value.replayed,false); assert.equal((await s.commitImport(imp)).value.replayed,true);
  const receipt={scopeId:'household',objectId:'b',receiptId:'r1',destination:'peer',recipientId:'peer',state:'applied',bytes:b(7)};
@@ -51,7 +51,7 @@ test('retry keeps original revision after subsequent writes and import faults re
  assert.equal((await s.commitLocal(child('scope','two','d',0))).value.outcome.revisions[0].revision,1);
  assert.equal((await s.commitLocal(first)).value.outcome.revisions[0].revision,0);
  const item={scopeId:'scope',object:{id:'i',bytes:b(4)},source:'s',expectedCursor:null,cursor:'c'}; assert.equal((await s.stageInbox(item)).ok,true);
- const imp={scopeId:'scope',operationId:'iop',itemId:'i',documents:[{documentId:'d',bytes:b(9),expectedRevision:1}],effectIds:['ie']};
+ const imp={expectedAuthority:{version:2,scope:{kind:'personal',id:'scope'},record:null},scopeId:'scope',operationId:'iop',itemId:'i',documents:[{documentId:'d',bytes:b(9),expectedRevision:1}],effectIds:['ie']};
  for(let boundary=1;boundary<=4;boundary++) { n=0;failAt=boundary;assert.equal((await s.commitImport(imp)).ok,false);assert.equal((await s.reopenDocument('scope','d')).value.revision,1); }
  failAt=0;assert.equal((await s.commitImport(imp)).ok,true);assert.equal((await s.commitImport(imp)).value.replayed,true);conn.db.close();
 });
@@ -121,7 +121,7 @@ test('recovery reads exact saved local operation and applied inbox outcome', asy
  const conn=connection(),s=openSQLiteStorage(conn),c=child('s','one','d'); assert.equal((await s.getLocalOperation('s','one')).value,null); assert.equal((await s.commitLocal(c)).ok,true);
  const saved=(await s.getLocalOperation('s','one')).value; assert.deepEqual(saved.commit,c); saved.commit.documents[0].bytes[0]=99; assert.deepEqual((await s.getLocalOperation('s','one')).value.commit,c);
  const item={scopeId:'s',object:{id:'in',bytes:b(1)},source:'p',expectedCursor:null,cursor:'c'}; await s.stageInbox(item); assert.equal((await s.getInboxApplication('s','in')).value,null);
- const imp={scopeId:'s',operationId:'imp',itemId:'in',documents:[{documentId:'d',bytes:b(5),expectedRevision:0}],effectIds:['e']}; await s.commitImport(imp); assert.equal((await s.getInboxApplication('s','in')).value.operationId,'imp');
+ const imp={expectedAuthority:{version:2,scope:{kind:'personal',id:'s'},record:null},scopeId:'s',operationId:'imp',itemId:'in',documents:[{documentId:'d',bytes:b(5),expectedRevision:0}],effectIds:['e']}; await s.commitImport(imp); assert.equal((await s.getInboxApplication('s','in')).value.operationId,'imp');
  conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['effect','s','e'])); assert.equal((await s.getInboxApplication('s','in')).error,'CORRUPT'); conn.db.close();
 });
 
@@ -135,4 +135,20 @@ test('pairing rejects misrouted packets in either direction without consuming gu
 
 test('saved local recovery reports corrupt missing effect', async () => {
  const conn=connection(),s=openSQLiteStorage(conn); await s.commitLocal(child('s','op','d')); conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['effect','s','op'])); assert.equal((await s.getLocalOperation('s','op')).error,'CORRUPT'); conn.db.close();
+});
+
+test('authority revisions guard local, import and every group child inside transaction', async () => {
+ const conn=connection(),s=openSQLiteStorage(conn); const scope={kind:'household',id:'h'}, rec={scope,revision:0,acceptedParent:'head',authorizationSnapshot:'snap',authorityState:b(1)}; await s.compareAndSwapPairingAuthority({expectedRevision:null,record:rec});
+ const expect={version:2,scope,record:{revision:0,acceptedParent:'head',authorizationSnapshot:'snap'}}; const c={...child('h','o','d'),expectedAuthority:expect};
+ assert.equal((await s.commitLocal(c)).ok,true); await s.compareAndSwapPairingAuthority({expectedRevision:0,record:{...rec,revision:1}});
+ assert.equal((await s.commitLocal(c)).value.replayed,true); const stale={...child('h','stale','next'),expectedAuthority:expect}; assert.equal((await s.commitLocal(stale)).error.code,'CONFLICT'); assert.equal((await s.reopenDocument('h','next')).value,null);
+ const item={scopeId:'h',object:{id:'in',bytes:b(4)},source:'p',expectedCursor:null,cursor:'c'}; await s.stageInbox(item);
+ const imp={scopeId:'h',operationId:'imp',itemId:'in',documents:[{documentId:'d',bytes:b(2),expectedRevision:0}],effectIds:['e'],expectedAuthority:expect}; assert.equal((await s.commitImport(imp)).error.code,'CONFLICT'); assert.equal((await s.getInboxApplication('h','in')).value,null);
+ const group={groupId:'authority-group',children:[child('p','p','d'),stale]}; assert.equal((await s.commitLocalGroup(group)).error.code,'CONFLICT'); assert.equal((await s.reopenDocument('p','d')).value,null);
+ const absent=child('h','bootstrap','x'); absent.expectedAuthority.scope=scope; assert.equal((await s.commitLocal(absent)).error.code,'CONFLICT');
+ const changed={...c,expectedAuthority:{...expect,record:{...expect.record,acceptedParent:'other'}}}; assert.equal((await s.commitLocal(changed)).error.code,'CONFLICT'); conn.db.close();
+});
+
+test('legacy operations are retained but recovery reports unsupported version', async () => {
+ const conn=connection(),s=openSQLiteStorage(conn),c=child('s','old','d'); await s.commitLocal(c); const k=JSON.stringify(['local','s','old']); const old=JSON.parse(conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(k).value); const input=JSON.parse(old.inputKey); delete input[1].expectedAuthority; old.inputKey=JSON.stringify(input); conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(old),k); assert.equal((await s.getLocalOperation('s','old')).error,'UNSUPPORTED_VERSION'); assert.ok(conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(k)); conn.db.close();
 });

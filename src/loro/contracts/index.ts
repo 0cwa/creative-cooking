@@ -1,3 +1,5 @@
+import { validPairingScope } from './pairing.ts';
+import type { PairingScope } from './pairing.ts';
 /** C0 interfaces are local contracts, not a wire encoding or cryptographic suite. */
 export const CONTRACT_VERSION = 'C0.1' as const;
 export const POLICY_SCHEMA_VERSION = 2 as const;
@@ -18,10 +20,11 @@ export type SemanticCommand = { version: 1; commandId: Id; effectId: Id; documen
 export type OutboxEntry = { object: ImmutableObject; branchHead: Id; epochId: Id };
 /** Revisions are safe nonnegative integers; null means the document must not exist. */
 export type DocumentWrite = DocumentOutput & { expectedRevision: number | null };
-export type LocalCommit = { scopeId: Id; operationId: Id; documents: readonly DocumentWrite[]; commands: readonly SemanticCommand[]; outbound: readonly OutboxEntry[] };
+export type AuthorityPrecondition = { version: 2; scope: PairingScope; record: {revision: number; acceptedParent: Id; authorizationSnapshot: Id} | null };
+export type LocalCommit = { expectedAuthority: AuthorityPrecondition; scopeId: Id; operationId: Id; documents: readonly DocumentWrite[]; commands: readonly SemanticCommand[]; outbound: readonly OutboxEntry[] };
 export type LocalCommitGroup = { groupId: Id; children: readonly LocalCommit[] };
 export type GroupCommitResult = Result<{ outcomes: readonly SavedOutcome[]; replayed: boolean }, { code: StorageError; recovery: 'reload-durable-state' }>;
-export type ImportCommit = { scopeId: Id; operationId: Id; itemId: Id; documents: readonly DocumentWrite[]; effectIds: readonly Id[] };
+export type ImportCommit = { expectedAuthority: AuthorityPrecondition; scopeId: Id; operationId: Id; itemId: Id; documents: readonly DocumentWrite[]; effectIds: readonly Id[] };
 export type StorageError = 'CAPACITY' | 'CONFLICT' | 'IO' | 'CORRUPT' | 'UNSUPPORTED_VERSION' | 'MALFORMED' | 'TOO_LARGE';
 export type SavedOutcome = { state: 'saved'; revisions: readonly { documentId: Id; revision: number }[] };
 export type CommitResult = Result<{ outcome: SavedOutcome; replayed: boolean }, { code: StorageError; recovery: 'reload-durable-state' }>;
@@ -56,7 +59,11 @@ const exact = (x: Record<string, unknown>, keys: string[]) => Object.keys(x).len
  * Document IDs must be strictly increasing by JS UTF-16 code unit order; other identity arrays are unique.
  * No Unicode normalization is performed. A namespace is always paired with scopeId. */
 export function storageOperationKey(input: unknown, kind: 'local' | 'import'): Result<string, 'MALFORMED' | 'TOO_LARGE'> {
-  if (!record(input) || !exact(input, kind === 'local' ? ['scopeId','operationId','documents','commands','outbound'] : ['scopeId','operationId','itemId','documents','effectIds']) || !storageId(input.scopeId) || !storageId(input.operationId) || (kind === 'import' && !storageId(input.itemId))) return {ok:false,error:'MALFORMED'};
+  if (!record(input) || !exact(input, kind === 'local' ? ['expectedAuthority','scopeId','operationId','documents','commands','outbound'] : ['expectedAuthority','scopeId','operationId','itemId','documents','effectIds']) || !storageId(input.scopeId) || !storageId(input.operationId) || (kind === 'import' && !storageId(input.itemId))) return {ok:false,error:'MALFORMED'};
+  {
+    const a = input.expectedAuthority;
+    if (!record(a) || !exact(a,['version','scope','record']) || a.version !== 2 || !validPairingScope(a.scope) || a.scope.id !== input.scopeId || !(a.record === null || (record(a.record) && exact(a.record,['revision','acceptedParent','authorizationSnapshot']) && Number.isSafeInteger(a.record.revision) && (a.record.revision as number) >= 0 && storageId(a.record.acceptedParent) && storageId(a.record.authorizationSnapshot)))) return {ok:false,error:'MALFORMED'};
+  }
   let total = 0, tooLarge = false;
   const bytes = (v: unknown): v is Uint8Array => { if (!(v instanceof Uint8Array)) return false; total += v.byteLength; if (v.byteLength > STORAGE_LIMITS.itemBytes || total > STORAGE_LIMITS.totalBytes) tooLarge = true; return true; };
   const docs = input.documents;
