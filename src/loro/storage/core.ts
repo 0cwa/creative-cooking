@@ -1,4 +1,6 @@
+import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
+import type { ProjectionPublication, ProjectionAtomicStorage } from '../contracts/projection.ts';
 import type { RuntimeStorageReader } from '../contracts/runtime-storage.ts';
 import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
@@ -9,7 +11,7 @@ export type TransactionRunner = <T>(write: boolean, body: (tx: Tx) => Promise<T>
 const key = (...parts: string[]) => JSON.stringify(parts);
 const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
 export class StorageFailure extends Error { readonly code: StorageError; constructor(code: StorageError) { super(code); this.code = code; } }
-const mapError = (e: unknown): StorageError => e instanceof StorageFailure ? e.code : e instanceof Error && (e.name === 'QuotaExceededError' || /SQLITE_FULL|database or disk is full/i.test(e.message)) ? 'CAPACITY' : 'IO';
+const mapError = (e: unknown): StorageError => e instanceof StorageFailure ? e.code : e instanceof Error && e.message==='LOCKED' ? 'LOCKED' : e instanceof Error && e.message==='CONFLICT' ? 'CONFLICT' : e instanceof Error && (e.name === 'QuotaExceededError' || /SQLITE_FULL|database or disk is full/i.test(e.message)) ? 'CAPACITY' : 'IO';
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 const copy = (v: Uint8Array) => new Uint8Array(v);
 const snapshot = <T>(v: T): T => (v instanceof Uint8Array ? copy(v) : Array.isArray(v) ? v.map(snapshot) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,snapshot(x)])) : v) as T;
@@ -29,6 +31,13 @@ const validateRecord = (k: string, v: any) => {
   const namespace = JSON.parse(k)[0];
   let valid = false;
   switch (namespace) {
+    case 'local-master-catalog': valid = validMasterCatalog(v) || (fields(v,['version','state','id']) && v.version===1 && v.state==='reserved' && typeof v.id==='string' && !!v.id); break;
+    case 'local-key': case 'local-key-operation': valid = validLocalRecord(v); break;
+    case 'projection-publication': valid = fields(v,['inputKey','input']) && typeof v.inputKey==='string' && projectionKey(v.input)===v.inputKey; break;
+    case 'projection-manifest': case 'projection-package': valid = v instanceof Uint8Array; break;
+    case 'projection-outbox': valid = fields(v,['packageId','recipientDevice']) && typeof v.packageId==='string' && typeof v.recipientDevice==='string'; break;
+    case 'projection-pending': valid = typeof v==='string'; break;
+    case 'projection-document': valid = fields(v,['generation','operationId']) && revision(v.generation) && typeof v.operationId==='string'; break;
     case 'pairing-authority': valid = validatePairingAuthority(v).ok; break;
     case 'pairing-release': { const parsed = fields(v,['inputKey','release']) ? pairingReleaseKey(v.release) : null; valid = !!parsed && parsed.ok && parsed.value === v.inputKey; break; }
     case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': valid = typeof v === 'string' && v.length > 0; break;
@@ -47,8 +56,22 @@ const validateOutcome = (outcome: SavedOutcome, docs: LocalCommit['documents']) 
 };
 const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'reload-durable-state'}} => ({ok:false,error:{code,recovery:'reload-durable-state'}});
 
+const validId = (x: unknown): x is string => typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256;
+const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
+function projectionKey(x: unknown): string | null {
+ if (!fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
+ const a=x.expectedAuthority, n=x.nextAuthority, m=x.manifest;
+ if (!fields(x.localKey,['record','catalog']) || !validLocalRecord(x.localKey.record) || !validMasterCatalog(x.localKey.catalog) || x.localKey.record.masterId!==x.localKey.catalog.id || x.localKey.record.identity.purpose!=='data' || x.localKey.record.identity.scope.kind!=='household' || x.localKey.record.identity.scope.id!==a?.scope?.id || x.localKey.record.identity.epochId!==x.epochId) return null;
+ if (!fields(a,['version','scope','record']) || a.version!==2 || !validPairingScope(a.scope) || a.scope.kind!=='household' || !fields(a.record,['revision','acceptedParent','authorizationSnapshot']) || !revision(a.record.revision) || a.record.revision>=Number.MAX_SAFE_INTEGER || ![a.record.acceptedParent,a.record.authorizationSnapshot].every(validId) || !validatePairingAuthority(n).ok || n.scope.kind!==a.scope.kind || n.scope.id!==a.scope.id || n.revision!==a.record.revision+1 || !fields(m,['id','bytes']) || !validId(m.id) || !(m.bytes instanceof Uint8Array) || !m.bytes.length) return null;
+ if (!denseArray(x.documents,(d:unknown)=>fields(d,['documentId','generation','bytes']) && validId(d.documentId) && revision(d.generation) && d.bytes instanceof Uint8Array && d.bytes.length>0) || !x.documents.length || x.documents.length>16 || !denseArray(x.packages,(p:unknown)=>fields(p,['id','recipientDevice','bytes']) && validId(p.id) && validId(p.recipientDevice) && p.bytes instanceof Uint8Array && p.bytes.length>0) || !x.packages.length || x.packages.length>128 || !denseArray(x.pendingEdits,(p:unknown)=>fields(p,['scopeId','operationId']) && validId(p.scopeId) && validId(p.operationId)) || x.pendingEdits.length>256) return null;
+ if (new Set(x.documents.map((d:any)=>d.documentId)).size!==x.documents.length || new Set(x.packages.map((p:any)=>p.id)).size!==x.packages.length || new Set(x.pendingEdits.map((p:any)=>JSON.stringify([p.scopeId,p.operationId]))).size!==x.pendingEdits.length) return null;
+ const blobs=[m.bytes,n.authorityState,...x.documents.map((d:any)=>d.bytes),...x.packages.map((p:any)=>p.bytes)];
+ if (blobs.some((b:Uint8Array)=>b.length>2_500_000) || blobs.reduce((n:number,b:Uint8Array)=>n+b.length,0)>8_000_000) return null;
+ return JSON.stringify(projectionCanonical(x));
+}
+
 /** Database transactions, not process locks, provide isolation. */
-export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage, RuntimeStorageReader {
+export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage, RuntimeStorageReader, ProjectionAtomicStorage {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
   constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({keys: () => tx.keys(), get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
@@ -73,7 +96,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const children: LocalCommit[]=[];
       for (const ref of refs as string[]) {
         let c: LocalCommit;
-        try { const p=JSON.parse(ref); if (!Array.isArray(p) || p.length!==2 || p[0]!=='local' || !object(p[1])) return corrupt(); c=p[1];
+        try { const p=JSON.parse(ref); if (!Array.isArray(p) || p.length!==2 || p[0]!=='local' || !object(p[1])) return corrupt(); c=p[1] as LocalCommit;
           if (!Object.hasOwn(c,'expectedAuthority')) return {ok:false,error:'UNSUPPORTED_VERSION'};
           for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes);
           for (const command of c.commands) command.payload=decodeKeyBytes(command.payload);
@@ -134,6 +157,55 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     write = snapshot(write);
     try { return await this.run(true,async tx => { const r=write.record, k=key('pairing-authority',r.scope.kind,r.scope.id), old=await tx.get(k); if (old && (old.scope.kind !== r.scope.kind || old.scope.id !== r.scope.id)) corrupt(); if ((old === undefined ? null : old.revision) !== write.expectedRevision) conflict(); await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
+  private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
+    const scope=p.expectedAuthority.scope.id;
+    let installed; try {installed=await findLocalKey(tx,p.localKey.record.operationId,p.localKey.record.identity);} catch {return corrupt();}
+    if (!installed || JSON.stringify(projectionCanonical(installed))!==JSON.stringify(projectionCanonical(p.localKey.record))) return corrupt();
+    const manifest=await tx.get(key('projection-manifest',scope,p.manifest.id));
+    if (!(manifest instanceof Uint8Array) || !sameBytes(manifest,p.manifest.bytes)) return corrupt();
+    for (const d of p.documents) {
+      const doc=await tx.get(key('document',scope,d.documentId)), meta=await tx.get(key('projection-document',scope,d.documentId));
+      // A document may have advanced after publication; its immutable association remains.
+      if (!doc || !meta || meta.generation!==d.generation || meta.operationId!==p.operationId || (doc.revision===0 && !sameBytes(doc.bytes,d.bytes))) return corrupt();
+    }
+    for (const pkg of p.packages) {
+      const bytes=await tx.get(key('projection-package',scope,pkg.id)), out=await tx.get(key('projection-outbox',scope,p.operationId,pkg.id));
+      if (!(bytes instanceof Uint8Array) || !sameBytes(bytes,pkg.bytes) || !out || out.packageId!==pkg.id || out.recipientDevice!==pkg.recipientDevice) return corrupt();
+    }
+    for (const pending of p.pendingEdits) {
+      if (await tx.get(key('projection-pending',scope,p.operationId,pending.scopeId,pending.operationId))!==inputKey || !await tx.get(key('local',pending.scopeId,pending.operationId))) return corrupt();
+    }
+  }
+  async getProjectionPublication(scopeId:string,operationId:string):Promise<Result<ProjectionPublication|null,StorageError>> {
+    if (!validId(scopeId) || !validId(operationId)) return {ok:false,error:'MALFORMED'};
+    try { return await this.run(false,async tx=>{ const old=await tx.get(key('projection-publication',scopeId,operationId)); if (!old) return {ok:true,value:null};
+      if (old.input.expectedAuthority.scope.id!==scopeId || old.input.operationId!==operationId) return corrupt();
+      await this.checkProjection(tx,old.input,old.inputKey); return {ok:true,value:snapshot(old.input)};
+    }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  async publishProjection(input:ProjectionPublication):Promise<Result<{replayed:boolean},StorageError>> {
+    const inputKey=projectionKey(input); if(inputKey===null)return {ok:false,error:'MALFORMED'}; input=snapshot(input);
+    try { return await this.run(true,async tx=>{
+      const scope=input.expectedAuthority.scope.id, op=key('projection-publication',scope,input.operationId), old=await tx.get(op);
+      if(old) { if(old.inputKey!==inputKey) conflict(); await this.checkProjection(tx,old.input,inputKey); return {ok:true,value:{replayed:true}}; }
+      await this.requireAuthority(tx,input.expectedAuthority);
+      const authority=await tx.get(key('pairing-authority','household',scope));
+      if(!authority || authority.revision!==input.expectedAuthority.record!.revision) conflict();
+      if(await tx.get(key('projection-manifest',scope,input.manifest.id))!==undefined) conflict();
+      for(const d of input.documents) if(await tx.get(key('document',scope,d.documentId))!==undefined || await tx.get(key('projection-document',scope,d.documentId))!==undefined) conflict();
+      for(const p of input.packages) if(await tx.get(key('projection-package',scope,p.id))!==undefined || await tx.get(key('projection-outbox',scope,input.operationId,p.id))!==undefined) conflict();
+      for(const p of input.pendingEdits) if(!await tx.get(key('local',p.scopeId,p.operationId)) || await tx.get(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId))!==undefined) conflict();
+      const installed=await installLocalKey(tx,input.localKey.record,input.localKey.catalog);
+      if(JSON.stringify(projectionCanonical(installed.record))!==JSON.stringify(projectionCanonical(input.localKey.record))) conflict();
+      await tx.put(key('projection-manifest',scope,input.manifest.id),copy(input.manifest.bytes));
+      for(const d of input.documents) { await tx.put(key('document',scope,d.documentId),{bytes:copy(d.bytes),revision:0}); await tx.put(key('projection-document',scope,d.documentId),{generation:d.generation,operationId:input.operationId}); }
+      for(const p of input.packages) { await tx.put(key('projection-package',scope,p.id),copy(p.bytes)); await tx.put(key('projection-outbox',scope,input.operationId,p.id),{packageId:p.id,recipientDevice:p.recipientDevice}); }
+      for(const p of input.pendingEdits) await tx.put(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId),inputKey);
+      await tx.put(key('pairing-authority','household',scope),input.nextAuthority);
+      await tx.put(op,{inputKey,input});
+      return {ok:true,value:{replayed:false}};
+    }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
   private async pairingComplete(tx: Tx, r: PairingRelease, inputKey: string) {
     const s=r.transcript.scope;
     for (const k of [key('pairing-guard',r.guard.guardId),key('pairing-packet',s.kind,s.id,r.packet.id),key('pairing-outbox',s.kind,s.id,r.operationId)]) if (await tx.get(k) !== inputKey) corrupt();
@@ -186,8 +258,17 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     for (let i=0;i<docs.length;i++) await tx.put(key('document',scope,docs[i].documentId), {bytes:copy(docs[i].bytes),revision:revisions[i].revision});
     return {state:'saved',revisions};
   }
+  /** Dependencies are scope-local and must precede their consumer in the transaction. */
+  private async requireDependencies(tx:Tx,scopeId:string,commands:readonly {effectId:string;dependencyEffectIds:readonly string[]}[]) {
+    const prior=new Set<string>();
+    for(const command of commands) {
+      for(const dep of command.dependencyEffectIds) if(!prior.has(dep) && await tx.get(key('effect',scopeId,dep))===undefined) conflict();
+      prior.add(command.effectId);
+    }
+  }
   private async local(tx: Tx, c: LocalCommit, inputKey: string) {
     await this.identities(tx,c);
+    await this.requireDependencies(tx,c.scopeId,c.commands);
     const outcome = await this.documents(tx,c.scopeId,c.documents);
     for (const command of c.commands) {
       await tx.put(key('command',c.scopeId,command.commandId), inputKey);
@@ -241,6 +322,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await this.requireAuthority(tx,c.expectedAuthority);
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
       for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined) conflict();
+      await this.requireDependencies(tx,c.scopeId,c.commands);
       const outcome = await this.documents(tx,c.scopeId,c.documents); this.fault?.('import-documents');
       for (const command of c.commands) { await tx.put(key('command',c.scopeId,command.commandId),k.value); await tx.put(key('effect',c.scopeId,command.effectId),k.value); }
       await tx.put(key('applied',c.scopeId,c.itemId),c.operationId);
