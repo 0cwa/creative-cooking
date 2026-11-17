@@ -1,3 +1,5 @@
+import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
+import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
 
@@ -25,6 +27,9 @@ const validateRecord = (k: string, v: any) => {
   const namespace = JSON.parse(k)[0];
   let valid = false;
   switch (namespace) {
+    case 'pairing-authority': valid = validatePairingAuthority(v).ok; break;
+    case 'pairing-release': { const parsed = fields(v,['inputKey','release']) ? pairingReleaseKey(v.release) : null; valid = !!parsed && parsed.ok && parsed.value === v.inputKey; break; }
+    case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': valid = typeof v === 'string' && v.length > 0; break;
     case 'document': valid = fields(v,['bytes','revision']) && v.bytes instanceof Uint8Array && revision(v.revision); break;
     case 'object': valid = fields(v,['bytes','branchHead','epochId']) && v.bytes instanceof Uint8Array && typeof v.branchHead === 'string' && !!v.branchHead && typeof v.epochId === 'string' && !!v.epochId; break;
     case 'inbox': valid = fields(v,['bytes']) && v.bytes instanceof Uint8Array; break;
@@ -41,7 +46,7 @@ const validateOutcome = (outcome: SavedOutcome, docs: LocalCommit['documents']) 
 const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'reload-durable-state'}} => ({ok:false,error:{code,recovery:'reload-durable-state'}});
 
 /** Database transactions, not process locks, provide isolation. */
-export class TransactionalStorage implements AtomicStorage {
+export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
   constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({keys: () => tx.keys(), get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
@@ -56,6 +61,41 @@ export class TransactionalStorage implements AtomicStorage {
       }
       return {ok:true,value:records};
     }); } catch (e) { return {ok:false,error:mapError(e)}; }
+  }
+  async readPairingAuthority(scope: PairingScope): Promise<Result<PairingAuthorityRecord | null, StorageError>> {
+    if (!validPairingScope(scope)) return {ok:false,error:'MALFORMED'};
+    scope = snapshot(scope);
+    try { return await this.run(false,async tx => { const v = await tx.get(key('pairing-authority',scope.kind,scope.id)); if (v && (v.scope.kind !== scope.kind || v.scope.id !== scope.id)) corrupt(); return {ok:true,value:v ? snapshot(v) : null}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  async compareAndSwapPairingAuthority(write: PairingAuthorityWrite): Promise<Result<void, StorageError>> {
+    if (!fields(write,['expectedRevision','record']) || !(write.expectedRevision === null || (revision(write.expectedRevision) && write.expectedRevision < Number.MAX_SAFE_INTEGER))) return {ok:false,error:'MALFORMED'};
+    const checked = validatePairingAuthority(write.record); if (!checked.ok) return checked;
+    if (write.record.revision !== (write.expectedRevision === null ? 0 : write.expectedRevision + 1)) return {ok:false,error:'MALFORMED'};
+    write = snapshot(write);
+    try { return await this.run(true,async tx => { const r=write.record, k=key('pairing-authority',r.scope.kind,r.scope.id), old=await tx.get(k); if (old && (old.scope.kind !== r.scope.kind || old.scope.id !== r.scope.id)) corrupt(); if ((old === undefined ? null : old.revision) !== write.expectedRevision) conflict(); await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  private async pairingComplete(tx: Tx, r: PairingRelease, inputKey: string) {
+    const s=r.transcript.scope;
+    for (const k of [key('pairing-guard',r.guard.guardId),key('pairing-packet',s.kind,s.id,r.packet.id),key('pairing-outbox',s.kind,s.id,r.operationId)]) if (await tx.get(k) !== inputKey) corrupt();
+  }
+  async findPairingRelease(scope: PairingScope, operationId: string): Promise<Result<PairingRelease | null, StorageError>> {
+    if (!validPairingScope(scope) || typeof operationId !== 'string' || !operationId || new TextEncoder().encode(operationId).length > 256) return {ok:false,error:'MALFORMED'};
+    scope=snapshot(scope);
+    try { return await this.run(false,async tx => { const old=await tx.get(key('pairing-release',scope.kind,scope.id,operationId)); if (!old) return {ok:true,value:null}; const r=old.release; if (r.operationId !== operationId || r.transcript.scope.kind !== scope.kind || r.transcript.scope.id !== scope.id) corrupt(); await this.pairingComplete(tx,r,old.inputKey); return {ok:true,value:snapshot(r)}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  async commitPairingRelease(r: PairingRelease): Promise<PairingReleaseResult> {
+    const checked=pairingReleaseKey(r); if (!checked.ok) return fail(checked.error === 'UNSUPPORTED_VERSION' ? 'UNSUPPORTED_VERSION' : checked.error); r=snapshot(r);
+    try { return await this.run(true,async tx => {
+      const s=r.transcript.scope, op=key('pairing-release',s.kind,s.id,r.operationId), guard=key('pairing-guard',r.guard.guardId), packet=key('pairing-packet',s.kind,s.id,r.packet.id), outbox=key('pairing-outbox',s.kind,s.id,r.operationId);
+      const old=await tx.get(op);
+      if (old !== undefined) { if (old.inputKey !== checked.value) conflict(); await this.pairingComplete(tx,old.release,old.inputKey); return {ok:true,value:{release:snapshot(old.release),replayed:true}}; }
+      if (await tx.get(guard) !== undefined || await tx.get(packet) !== undefined || await tx.get(outbox) !== undefined) conflict();
+      const authority=await tx.get(key('pairing-authority',s.kind,s.id));
+      if (authority && (authority.scope.kind !== s.kind || authority.scope.id !== s.id)) corrupt();
+      if (!authority || authority.revision !== r.expectedAuthorityRevision || authority.acceptedParent !== r.transcript.acceptedParent || authority.authorizationSnapshot !== r.transcript.authorizationSnapshot) conflict();
+      await tx.put(guard,checked.value); await tx.put(packet,checked.value); await tx.put(outbox,checked.value); await tx.put(op,{inputKey:checked.value,release:r});
+      return {ok:true,value:{release:snapshot(r),replayed:false}};
+    }); } catch(e) { return fail(mapError(e)); }
   }
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];

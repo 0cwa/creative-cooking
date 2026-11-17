@@ -69,3 +69,38 @@ test('listRecords returns scoped durable records without exposing stored bytes',
  const conn=connection();const s=openSQLiteStorage(conn);assert.equal((await s.commitLocal(child('a','one','d'))).ok,true);assert.equal((await s.commitLocal(child('b','two','d'))).ok,true);
  const list=await s.listRecords('document','a');assert.equal(list.ok,true);assert.equal(list.value.length,1);assert.deepEqual(list.value[0].identity,['d']);list.value[0].value.bytes[0]=42;assert.deepEqual((await s.reopenDocument('a','d')).value.bytes,b(1));conn.db.close();
 });
+
+test('pairing authority CAS and release survive reopen and reject reuse or stale authority', async () => {
+ const {fixturePairingRelease:p}=await import('../contracts/fixtures.ts'); const conn=connection(); let s=openSQLiteStorage(conn);
+ const authority={scope:p.transcript.scope,revision:0,acceptedParent:p.transcript.acceptedParent,authorizationSnapshot:p.transcript.authorizationSnapshot,authorityState:b(9)};
+ assert.equal((await s.compareAndSwapPairingAuthority({expectedRevision:null,record:authority})).ok,true);
+ const release={...p,expectedAuthorityRevision:0};
+ assert.equal((await s.commitPairingRelease({...release,expectedAuthorityRevision:1})).error.code,'CONFLICT');
+ assert.equal((await s.findPairingRelease(authority.scope,p.operationId)).value,null);
+ assert.equal((await s.commitPairingRelease(release)).value.replayed,false);
+ s=openSQLiteStorage(conn); const found=(await s.findPairingRelease(authority.scope,p.operationId)).value; assert.deepEqual(found,release);
+ assert.equal((await s.compareAndSwapPairingAuthority({expectedRevision:0,record:{...authority,revision:1}})).ok,true);
+ assert.equal((await s.commitPairingRelease(release)).value.replayed,true);
+ assert.equal((await s.commitPairingRelease({...release,packet:{...release.packet,bytes:b(8)}})).error.code,'CONFLICT');
+ assert.equal((await s.commitPairingRelease({...release,operationId:'other',packet:{...release.packet,id:'other'},outbox:{...release.outbox,objectId:'other'},outcome:{...release.outcome,packetId:'other'}})).error.code,'CONFLICT');
+ const next={...release,operationId:'next',guard:{...release.guard,guardId:'next'},packet:{...release.packet,id:'next'},outbox:{...release.outbox,objectId:'next'},outcome:{...release.outcome,packetId:'next'}};
+ assert.equal((await s.commitPairingRelease(next)).error.code,'CONFLICT');
+ assert.equal((await s.compareAndSwapPairingAuthority({expectedRevision:0,record:{...authority,revision:1}})).error,'CONFLICT');
+ const scope={kind:'household',id:authority.scope.id}; assert.equal((await s.readPairingAuthority(scope)).value,null);
+ const mismatched=structuredClone(next); mismatched.guard.direction='responder-to-initiator'; assert.equal((await s.commitPairingRelease(mismatched)).error.code,'MALFORMED');
+ mismatched.guard.direction='initiator-to-responder'; mismatched.guard.purpose='different'; assert.equal((await s.commitPairingRelease(mismatched)).error.code,'MALFORMED');
+ conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['pairing-guard',release.guard.guardId]));
+ assert.equal((await s.findPairingRelease(authority.scope,release.operationId)).error,'CORRUPT'); assert.equal((await s.commitPairingRelease(release)).error.code,'CORRUPT'); conn.db.close();
+});
+
+test('each pairing release write rolls back completely', async () => {
+ const {fixturePairingRelease:p}=await import('../contracts/fixtures.ts');
+ for(let boundary=1;boundary<=4;boundary++) {
+  const conn=connection(); let n=0, enabled=false; const s=openSQLiteStorage(conn,x=>{if(enabled && x==='write' && ++n===boundary) throw Error('injected')});
+  const authority={scope:p.transcript.scope,revision:0,acceptedParent:p.transcript.acceptedParent,authorizationSnapshot:p.transcript.authorizationSnapshot,authorityState:b(1)};
+  assert.equal((await s.compareAndSwapPairingAuthority({expectedRevision:null,record:authority})).ok,true); enabled=true;
+  assert.equal((await s.commitPairingRelease({...p,expectedAuthorityRevision:0})).error.code,'IO');
+  assert.equal((await s.findPairingRelease(authority.scope,p.operationId)).value,null);
+  assert.equal(conn.db.prepare('SELECT count(*) AS n FROM loro_records').get().n,1); conn.db.close();
+ }
+});
