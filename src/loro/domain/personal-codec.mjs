@@ -3,11 +3,11 @@ const encoder=new TextEncoder();
 const id=x=>typeof x==='string'&&x.length>0&&encoder.encode(x).length<=256;
 const exact=(x,keys)=>x&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
 const json=(x,depth=0)=>depth<=16&&(x===null||typeof x==='boolean'||typeof x==='string'||(typeof x==='number'&&Number.isFinite(x))||(Array.isArray(x)&&x.length<=10000&&Array.from({length:x.length},(_,i)=>Object.hasOwn(x,i)&&json(x[i],depth+1)).every(Boolean))||(x&&typeof x==='object'&&Object.getPrototypeOf(x)===Object.prototype&&Object.keys(x).length<=10000&&Object.values(x).every(v=>json(v,depth+1))));
-const preferenceKeys=new Set(['mealContext','systemPrompt','allergies','sendLocalTime','city','providerId','model','dictationEngine','activeConversationId']);
+const preferenceKeys=new Set(['mealContext','systemPrompt','allergies','sendLocalTime','city','providerId','model','dictationEngine','activeConversationId','recoveryReminderDismissed']);
 const validPreference=(key,v)=>{
  if(key==='mealContext')return exact(v,['willingToShop','portions','cooks'])&&typeof v.willingToShop==='boolean'&&Number.isSafeInteger(v.portions)&&v.portions>0&&Array.isArray(v.cooks)&&v.cooks.every(x=>['low','medium','high'].includes(x));
  if(key==='allergies')return Array.isArray(v)&&v.every(x=>typeof x==='string');
- if(key==='sendLocalTime')return typeof v==='boolean';
+ if(key==='sendLocalTime'||key==='recoveryReminderDismissed')return typeof v==='boolean';
  if(key==='activeConversationId')return v===null||id(v);
  if(key==='providerId')return ['openrouter','openai','anthropic','gemini','mistral','webllm'].includes(v);
  if(key==='dictationEngine')return ['browser','whisper'].includes(v);
