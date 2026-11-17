@@ -144,6 +144,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     validateOutcome(old.outcome,c.documents); try { await this.completedLocal(tx,c,old.inputKey); } catch(e) { if(e instanceof StorageFailure && e.code==='CONFLICT') return corrupt(); throw e; }
     return {commit:snapshot(c),outcome:snapshot(old.outcome)};
   }
+  /** Conservative archive manifest: retain every locally committed operation
+   * with an outbound object from the selected branch. No delivery is inferred. */
+  async listBranchLocalOperations(expectedAuthority:LocalCommit['expectedAuthority']):Promise<Result<{scopeId:string;operationId:string}[],StorageError>> {
+    expectedAuthority=snapshot(expectedAuthority);if(!expectedAuthority||expectedAuthority.scope?.kind!=='household'||!validId(expectedAuthority.scope.id)||!expectedAuthority.record||!validId(expectedAuthority.record.acceptedParent))return {ok:false,error:'MALFORMED'};
+    try{return await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scopeId=expectedAuthority.scope.id,head=expectedAuthority.record!.acceptedParent,result:{scopeId:string;operationId:string}[]=[];for(const raw of await tx.keys()){let parts:any;try{parts=JSON.parse(raw)}catch{continue}if(!Array.isArray(parts)||parts[0]!=='local'||parts[1]!==scopeId)continue;if(parts.length!==3||!validId(parts[2]))return corrupt();const found=await this.localOperation(tx,scopeId,parts[2]);if(!found)return corrupt();if(found.commit.outbound.some(x=>x.branchHead===head)){result.push({scopeId,operationId:parts[2]});if(result.length>256)throw new StorageFailure('TOO_LARGE')}}result.sort((a,b)=>a.operationId<b.operationId?-1:a.operationId>b.operationId?1:0);return {ok:true as const,value:result}})}catch(e){return {ok:false,error:mapError(e)}}
+  }
   async getLocalOperation(scopeId:string,operationId:string):Promise<Result<{commit:LocalCommit;outcome:SavedOutcome}|null,StorageError>> {
     if (![scopeId,operationId].every(validId)) return {ok:false,error:'MALFORMED'};
     try {return await this.run(false,async tx=>({ok:true,value:await this.localOperation(tx,scopeId,operationId)}));} catch(e){return {ok:false,error:mapError(e)};}

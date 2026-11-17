@@ -1,3 +1,4 @@
+import {validPairingScope} from '../contracts/pairing.ts';
 import {resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {openSequences} from './sequences.web.ts';
 
@@ -6,7 +7,8 @@ import {openSequences} from './sequences.web.ts';
 // to a runtime, so interrupted initialization can safely resume; an active
 // counter must always exist and is never recreated.
 async function joinedSequences({name,storage,scope,pin,provider,deviceId,operationId,prepare}:{name:string;storage:any;scope:any;pin:string;provider:any;deviceId:string;operationId:string;prepare:boolean}) {
- if(!/^[a-z0-9-]{1,100}$/.test(name)||scope?.kind!=='household'||typeof scope.id!=='string'||!scope.id||typeof pin!=='string'||!pin||typeof deviceId!=='string'||!deviceId||typeof operationId!=='string'||!operationId)throw Error('MALFORMED');
+ if(!/^[a-z0-9-]{1,100}$/.test(name)||!validPairingScope(scope)||scope.kind!=='household'||typeof pin!=='string'||!pin||typeof deviceId!=='string'||!deviceId||typeof operationId!=='string'||!operationId)throw Error('MALFORMED');
+ scope={kind:scope.kind,id:scope.id};
  const locks=globalThis.navigator?.locks;if(!locks)throw Error('LOCK_UNAVAILABLE');
  return locks.request(`creative-cooking/joined-sequences/v1/${name}`,{mode:'exclusive'},async()=>{
   const found=await storage.householdRecipient.find(scope.id,operationId);if(!found.ok)throw Error('INVALID_ADMISSION');

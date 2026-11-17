@@ -133,7 +133,8 @@ test('signed delegation persists and replays from the pinned parent; bad accepta
   assert.match(hash,/^[0-9a-f]{64}$/);
   const view=await readAuthority(storage,scope,root.head,provider);
   assert.equal(view.state.agreements.length,1);
-  await assert.rejects(acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances}),/INVALID_AGREEMENT/);
+  assert.equal(await acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances}),hash);
+  assert.equal((await readAuthority(storage,scope,root.head,provider)).revision,view.revision);
  } finally {database.close()}
 });
 
