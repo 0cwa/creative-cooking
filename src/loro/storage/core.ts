@@ -1,7 +1,7 @@
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
 
-type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void> };
+type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; keys(): Promise<string[]> };
 export type TransactionRunner = <T>(write: boolean, body: (tx: Tx) => Promise<T>) => Promise<T>;
 const key = (...parts: string[]) => JSON.stringify(parts);
 const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
@@ -39,7 +39,19 @@ const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'
 export class TransactionalStorage implements AtomicStorage {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
-  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
+  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({keys: () => tx.keys(), get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
+  /** Read durable records for runtime queues without exposing mutable stored buffers. */
+  async listRecords(namespace: 'document' | 'object' | 'inbox' | 'cursor' | 'receipt-state', scopeId: string): Promise<Result<readonly { identity: readonly string[]; value: unknown }[], StorageError>> {
+    try { return await this.run(false, async tx => {
+      const records: { identity: string[]; value: unknown }[] = [];
+      for (const k of await tx.keys()) {
+        let parts: unknown; try { parts = JSON.parse(k); } catch { return corrupt(); }
+        if (!Array.isArray(parts) || !parts.every(x => typeof x === 'string')) return corrupt();
+        if (parts[0] === namespace && parts[1] === scopeId) records.push({identity: parts.slice(2), value: snapshot(await tx.get(k))});
+      }
+      return {ok:true,value:records};
+    }); } catch (e) { return {ok:false,error:mapError(e)}; }
+  }
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];
     for (const id of ids) if (await tx.get(id) !== undefined) conflict();

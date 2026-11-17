@@ -64,3 +64,8 @@ test('corrupt SQLite records fail closed without overwriting or false replay', a
  conn.db.prepare('DELETE FROM loro_records').run();const c=child('s','ok','d');assert.equal((await s.commitLocal(c)).ok,true);assert.equal((await s.commitLocal(c)).value.replayed,true);
  const op=JSON.parse(conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(JSON.stringify(['local','s','ok'])).value);op.outcome.revisions=[];put(['local','s','ok'],op);assert.equal((await s.commitLocal(c)).error.code,'CORRUPT');assert.equal((await s.reopenDocument('s','d')).value.revision,0);conn.db.close();
 });
+
+test('listRecords returns scoped durable records without exposing stored bytes', async () => {
+ const conn=connection();const s=openSQLiteStorage(conn);assert.equal((await s.commitLocal(child('a','one','d'))).ok,true);assert.equal((await s.commitLocal(child('b','two','d'))).ok,true);
+ const list=await s.listRecords('document','a');assert.equal(list.ok,true);assert.equal(list.value.length,1);assert.deepEqual(list.value[0].identity,['d']);list.value[0].value.bytes[0]=42;assert.deepEqual((await s.reopenDocument('a','d')).value.bytes,b(1));conn.db.close();
+});

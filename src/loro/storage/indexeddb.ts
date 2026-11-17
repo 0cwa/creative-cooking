@@ -12,7 +12,7 @@ export async function openIndexedDBStorage(name: string, fault?: (boundary: stri
     const store = transaction.objectStore('records');
     const done = new Promise<void>((resolve,reject) => { transaction.oncomplete = () => resolve(); transaction.onabort = () => reject(transaction.error ?? new Error('transaction aborted')); transaction.onerror = () => {}; });
     try {
-      const result = await body({get: k => request(store.get(k)), put: async (k,v) => { await request(store.put(v,k)); }});
+      const result = await body({keys: async () => (await request(store.getAllKeys())).map(String), get: k => request(store.get(k)), put: async (k,v) => { await request(store.put(v,k)); }});
       await done; return result;
     } catch(e) { try { transaction.abort(); } catch {} await done.catch(() => {}); throw e; }
   };
