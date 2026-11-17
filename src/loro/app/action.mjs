@@ -1,4 +1,4 @@
-import {commitCookingBatchWithPolicy} from '../disclosure/cooking.mjs';
+import {commitCookingBatchWithPolicy,recoverCookingBatchWithPolicy} from '../disclosure/cooking.mjs';
 // Stable action IDs and command IDs are supplied by the caller and retained
 // across retries; saved commits are inspected before any allocation or sealing.
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
@@ -20,15 +20,17 @@ async function execute(runtime,sequences,actionId,commands,disclosure) {
  if(typeof actionId!=='string'||!actionId||!Array.isArray(commands)||!commands.length||commands.some(c=>typeof c?.commandId!=='string'||!c.commandId)||new Set(commands.map(c=>c.commandId)).size!==commands.length)throw Error('MALFORMED');
  commands=structuredClone(commands);
  if(runtime.authority?.kind==='household'&&!disclosure)throw Error('POLICY_REQUIRED');
- await runtime.authorize();
  const saved=must(await runtime.storage.getLocalOperation(runtime.scope.scopeId,actionId));
  let items;
  if(saved) {
   if(saved.commit.outbound.length!==commands.length)throw Error('CONFLICT');
   items=commands.map((command,i)=>{let header;try{header=JSON.parse(new TextDecoder().decode(saved.commit.outbound[i].object.bytes)).header}catch{throw Error('CORRUPT')}return {command,deviceSequence:header.deviceSequence}});
  } else {
+  await runtime.authorize();
   items=[];for(const command of commands)items.push({command,deviceSequence:await sequences.reserve(runtime.scope.scopeId,JSON.stringify([actionId,command.commandId]))});
  }
+ if(saved&&disclosure)return recoverCookingBatchWithPolicy({runtime,service:disclosure,operationId:actionId,items});
+ if(saved)await runtime.authorize();
  const commit=()=>disclosure?commitCookingBatchWithPolicy({runtime,service:disclosure,operationId:actionId,items}):runtime.executeBatch({operationId:actionId,items});
  try{return await commit()}catch(error){
   if(error?.message!=='CONFLICT')throw error;

@@ -178,7 +178,7 @@ export function checkPreconditions(doc, command, {importing=false,replaying=fals
     if (!c.dependencyEffectIds.includes(record.effectId)) throw new Error('MISSING_DEPENDENCY');
     if (c.kind==='shopping-cycle-start' && doc.getMap('shopping-cycles').get(d.cycleId)) throw new Error('CONFLICT');
     const versions=doc.getMap('shopping-item-versions');
-    if(c.kind==='shopping-item-put') {const prior=doc.getMap(mapName('shopping-item',d.itemId)).get('value');if(prior && prior.listId!==d.listId) throw new Error('CONFLICT');if(prior && !c.dependencyEffectIds.some(id=>{const v=versions.get(id);return v?.itemId===d.itemId && v.listId===d.listId;})) throw new Error('MISSING_DEPENDENCY');}
+    if(c.kind==='shopping-item-put') {const prior=doc.getMap(mapName('shopping-item',d.itemId)).get('value');if(prior && prior.listId!==d.listId) throw new Error('CONFLICT');if(prior && !c.dependencyEffectIds.includes(prior.effectId)) throw new Error('MISSING_DEPENDENCY');}
     if (c.kind==='purchase') for(const id of d.itemIds) {const item=doc.getMap(mapName('shopping-item',id)).get('value');if(!item || item.itemId!==id || item.listId!==d.listId || item.cycleId!==cycle || item.checked!==true || !c.dependencyEffectIds.includes(item.effectId)) throw new Error('MISSING_DEPENDENCY');}
     if(c.kind==='purchase') for(const added of d.pantryItems??[]) {if(doc.getMap('pantry-index').get(added.id)) throw new Error('CONFLICT');const item=doc.getMap(mapName('shopping-item',added.itemId)).get('value');if(!item || item.name!==added.name || !c.dependencyEffectIds.includes(item.effectId)) throw new Error('MISSING_DEPENDENCY');}
   }
