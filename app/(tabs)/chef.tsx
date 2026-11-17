@@ -340,12 +340,13 @@ export default function ChefScreen() {
 
   const send = async (override?: string) => {
     const text = (override ?? input).trim();
-    if (!text || busy || dictationActive || app.storageMode === 'fresh-local') return;
+    if (!text || busy || dictationActive) return;
 
     setInput('');
     const userMessage = makeChatMessage('user', text);
     const messages = [...app.chatMessages, userMessage];
     app.appendChatMessage(userMessage);
+    if (app.storageMode === 'fresh-local') return;
     await runChef(messages);
   };
 
@@ -401,7 +402,7 @@ export default function ChefScreen() {
           </View>
         </View>
 
-        {app.storageMode === 'fresh-local' ? <Text accessibilityRole="alert" style={styles.errorText}>Chef is not available in the fresh local preview yet. Messages and external requests are disabled until personal storage and disclosure review are ready.</Text> : null}
+        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Chef is not available in the fresh local preview yet. Messages stay private; external requests remain disabled until disclosure review is ready.</Text><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
         <View style={styles.contextStrip}>
           <Pressable
             accessibilityRole="button"
@@ -521,10 +522,10 @@ export default function ChefScreen() {
             <TextInput
               accessibilityLabel="Message Chef"
               accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : undefined}
-              editable={!dictationActive && app.storageMode !== 'fresh-local'}
+              editable={!dictationActive}
               value={input}
               onChangeText={setInput}
-              placeholder="Type or dictate to Chef…"
+              placeholder={app.storageMode === 'fresh-local' ? 'Write a private message…' : 'Type or dictate to Chef…'}
               placeholderTextColor="#94a3b8"
               style={[styles.composer, dictationActive && styles.composerDictating]}
               multiline
@@ -534,8 +535,8 @@ export default function ChefScreen() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={busy ? 'Stop Chef response' : 'Send message'}
-              disabled={app.storageMode === 'fresh-local' || (!busy && (!input.trim() || dictationActive))}
+              accessibilityLabel={busy ? 'Stop Chef response' : app.storageMode === 'fresh-local' ? 'Save private message' : 'Send message'}
+              disabled={!busy && (!input.trim() || dictationActive)}
               onPress={busy ? stop : () => void send()}
               style={[styles.send, (!busy && (!input.trim() || dictationActive)) && styles.sendDisabled]}
             >

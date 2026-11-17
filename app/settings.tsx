@@ -523,14 +523,14 @@ export default function SettingsScreen() {
           <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
         </Section>
 
-        <AccountSharingSection />
+        {app.storageMode === 'existing' ? <AccountSharingSection /> : null}
 
         {Platform.OS === 'web' ? <Section title="Cooking workspace" subtitle="Your existing workspace and fresh local preview use separate data.">
-          <Text style={styles.help}>The fresh local preview currently saves recipes and pantry only. Changes waiting to save must finish before switching.</Text>
+          <Text style={styles.help}>The fresh local preview saves recipes, pantry and personal settings. Shopping and Chef requests are not yet supported. Changes waiting to save must finish before switching.</Text>
           <Pressable accessibilityRole="button" accessibilityLabel={app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'} style={styles.smallButton} onPress={() => { void (async () => { try { if (app.localPersistenceStatus !== 'saved') throw new Error('Finish or retry local saving before switching.'); await app.flushCurrentWorkspace(); if (app.storageMode === 'fresh-local') globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy'); else { const name=globalThis.localStorage.getItem('creative-cooking-local-workspace-v1'); if(name)globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);else globalThis.localStorage.removeItem('creative-cooking-storage-choice-v1'); } globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/$/,'')}/`); } catch(e) { Alert.alert('Could not switch workspace',e instanceof Error?e.message:'Unknown error'); } })(); }}><Text style={styles.smallButtonText}>{app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'}</Text></Pressable>
         </Section> : null}
 
-        <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
+        {app.storageMode === 'existing' ? <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.label}>{Platform.OS === 'web' ? 'Browser storage · IndexedDB' : 'Device storage'}</Text>
@@ -571,7 +571,7 @@ export default function SettingsScreen() {
             <Pressable accessibilityRole="button" onPress={() => void importData()} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
           </View>
           <Pressable accessibilityRole="button" onPress={resetData} style={styles.textButton}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
-        </Section>
+        </Section> : <Section title="Data & Storage" subtitle="The fresh local preview stores data on this device."><Text style={styles.help}>Encrypted export, recovery and retention controls are not available yet. Your existing workspace remains separate.</Text>{app.localPersistenceStatus === 'error' ? <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable> : null}</Section>}
 
         <Section title="Master instructions" subtitle="Customize Chef’s style and priorities. Tool behavior, safety constraints, and app mechanics are managed separately and cannot be edited here.">
           <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
