@@ -1,7 +1,7 @@
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const ab = bytes => bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes).buffer;
 const snapshot = doc => doc.export({mode:'snapshot'});
-const update = doc => doc.export({mode:'updates'});
+const update = doc => doc.export({mode:'updates', from: new doc.constructor().version()});
 
 const title = doc => doc.toJSON().recipe?.title;
 const query = (db, sql, params=[]) => db.executeSync(sql,params).rows;
