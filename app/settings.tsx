@@ -1,3 +1,4 @@
+import { HouseholdApproval } from '@/loro/app/HouseholdApproval';
 import { CookingExchange } from '@/loro/app/CookingExchange';
 import { HouseholdInvitation } from '@/loro/app/HouseholdInvitation';
 import { HouseholdIdentity } from '@/loro/app/HouseholdIdentity';
@@ -532,7 +533,7 @@ export default function SettingsScreen() {
         {app.storageMode === 'existing' ? <AccountSharingSection /> : null}
 
         {Platform.OS === 'web' ? <Section title="Cooking workspace" subtitle="Your existing workspace and fresh local preview use separate data.">
-          <Text style={styles.help}>The fresh local preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported. Changes waiting to save must finish before switching.</Text>{app.storageMode === 'fresh-local' ? <><LoroWorkspaceStatus revision={app.localPersistenceStatus} /><RecoveryReminder /><HouseholdIdentity /><HouseholdInvitation /><CookingExchange /><DisclosureControls items={app.pantry} /></> : null}
+          <Text style={styles.help}>The fresh local preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported. Changes waiting to save must finish before switching.</Text>{app.storageMode === 'fresh-local' ? <><LoroWorkspaceStatus revision={app.localPersistenceStatus} /><RecoveryReminder /><HouseholdIdentity /><HouseholdInvitation /><HouseholdApproval /><CookingExchange /><DisclosureControls items={app.pantry} /></> : null}
           <Pressable accessibilityRole="button" accessibilityLabel={app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'} style={styles.smallButton} onPress={() => { void (async () => { try { if (app.localPersistenceStatus !== 'saved') throw new Error('Finish or retry local saving before switching.'); await app.flushCurrentWorkspace(); if (app.storageMode === 'fresh-local') globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy'); else { const name=globalThis.localStorage.getItem('creative-cooking-local-workspace-v1'); if(name)globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);else globalThis.localStorage.removeItem('creative-cooking-storage-choice-v1'); } globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/$/,'')}/`); } catch(e) { Alert.alert('Could not switch workspace',e instanceof Error?e.message:'Unknown error'); } })(); }}><Text style={styles.smallButtonText}>{app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'}</Text></Pressable>
         </Section> : null}
 
