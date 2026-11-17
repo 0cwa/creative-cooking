@@ -38,5 +38,5 @@ export async function resolvePersonalAuthority(storage,scope,pin,provider,author
  if(!author)throw Error('UNAUTHORIZED_DEVICE');
  const acceptedAuthors=active.map(d=>d.deviceId).sort();
  const authorPeers=Object.fromEntries(active.map(d=>[d.deviceId,d.peerId]).sort(([a],[b])=>a.localeCompare(b)));
- return {scope:{scopeId:scope.id,ownerId:root.ownerId,documentId:root.documentId,documentGeneration:root.generation,branchHead:pin,authorizationSnapshot:record.authorizationSnapshot,epochId:root.epochId,authorDevice,acceptedAuthors,authorPeers,acceptedRecipients:[...acceptedAuthors],suiteId:root.suiteId},expectedAuthority:{version:2,scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+ return {scope:{scopeId:scope.id,ownerId:root.ownerId,documentId:root.documentId,documentGeneration:root.generation,branchHead:pin,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[pin],epochId:root.epochId,authorDevice,acceptedAuthors,authorPeers,acceptedRecipients:[...acceptedAuthors],suiteId:root.suiteId},expectedAuthority:{version:2,scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
 }
