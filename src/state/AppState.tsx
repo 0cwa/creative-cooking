@@ -35,6 +35,7 @@ import type {
 import { loadState } from '@/storage/appStorage';
 import { useContentRuntime } from '@/content/useContentRuntime';
 import { useLoroContentRuntime } from '@/loro/app/useLoroContentRuntime';
+import { LoroWorkspaceContext } from '@/loro/app/WorkspaceStatus';
 import { planChefProposalEffect } from '@/chef/proposalEffect';
 
 function mergeState(saved: Partial<PersistedState> | null): PersistedState {
@@ -169,7 +170,7 @@ function LegacyAppStateProvider({children}:PropsWithChildren) {
 function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace:any}>) {
   const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
   const content=useLoroContentRuntime(state,setState,workspace);
-  return <AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local">{children}</AppStateBody>;
+  return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local">{children}</AppStateBody></LoroWorkspaceContext>;
 }
 function AppStateBody({children,state,setState,content,storageMode}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing'}>) {
   const appStateRef = useRef(state);
