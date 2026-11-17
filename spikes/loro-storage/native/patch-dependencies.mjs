@@ -143,3 +143,11 @@ await replaceFileOnce(
 );
 
 console.log(`Applied UniFFI ${uniffiPackage.version} TypeScript 6 and native byte-buffer patches plus Loro ${loroPackage.version} false-boolean and RN 0.86 JNI compatibility patches.`);
+
+// The isolated x86_64 harness builds libsodium with the locally installed CMake 4.
+const sodiumDirectory = path.join(projectRoot, 'node_modules/react-native-libsodium');
+const sodiumPackage = JSON.parse(await readFile(path.join(sodiumDirectory, 'package.json'), 'utf8'));
+assert.equal(sodiumPackage.version, '1.7.0');
+run('tar', ['--warning=no-unknown-keyword', '-xzf', path.join(sodiumDirectory, 'libsodium/build.tgz'), '-C', path.join(sodiumDirectory, 'libsodium')]);
+await replaceFileOnce(path.join(sodiumDirectory, 'android/CMakeLists.txt'), 'cmake_minimum_required(VERSION 3.4.1)', 'cmake_minimum_required(VERSION 3.5)', 'libsodium CMake version');
+await replaceFileOnce(path.join(sodiumDirectory, 'android/build.gradle'), 'abiFilters "x86", "x86_64", "armeabi-v7a", "arm64-v8a"', 'abiFilters "x86_64"', 'libsodium fixture ABI');
