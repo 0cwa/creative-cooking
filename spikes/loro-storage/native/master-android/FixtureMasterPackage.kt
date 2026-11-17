@@ -1,6 +1,9 @@
 package dev.creativecooking.loro.storagefixture
 
 import android.util.Base64
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.os.Environment
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.KeyInfo
@@ -62,6 +65,24 @@ class FixtureMaster(private val context: ReactApplicationContext) : ReactContext
  } }
 }
 class FixtureMasterPackage : ReactPackage {
- override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> = listOf(FixtureMaster(reactContext))
+ override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> = listOf(FixtureMaster(reactContext), ProofKeyInvalidator(reactContext))
  override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
+}
+
+// Test-only: invalidate exactly the fixture workspace key, never production aliases.
+class ProofKeyInvalidator(private val context: ReactApplicationContext) : ReactContextBaseJavaModule(context) {
+ override fun getName() = "ProofKeyInvalidator"
+ @ReactMethod fun publishFixture(data: String, promise: Promise) { try {
+  val bytes=Base64.decode(data,Base64.NO_WRAP);require(bytes.size in 1..3300000)
+  val values=ContentValues().apply {put(MediaStore.Downloads.DISPLAY_NAME,"cc-picker-fixture.json");put(MediaStore.Downloads.MIME_TYPE,"application/json");put(MediaStore.Downloads.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS)}
+  val uri=context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,values) ?: error("cannot create fixture")
+  try {context.contentResolver.openOutputStream(uri)?.use{it.write(bytes)} ?: error("cannot write fixture")} catch (e:Exception) {context.contentResolver.delete(uri,null,null);throw e}
+  promise.resolve(null)
+ } catch(e:Exception) {promise.reject("FIXTURE_FAILED","Could not create picker fixture")}}
+ @ReactMethod fun invalidate(promise: Promise) { try {
+  val id="[\"creative-cooking/master/v1\",\"proof-missing-master\",\"workspace-master\"]"
+  val digest=MessageDigest.getInstance("SHA-256").digest(id.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+  val store=KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+  store.deleteEntry("creative-cooking.loro.master.v1."+digest);promise.resolve(null)
+ } catch (e: Exception) {promise.reject("INVALIDATION_FAILED", "Fixture key invalidation failed")}}
 }
