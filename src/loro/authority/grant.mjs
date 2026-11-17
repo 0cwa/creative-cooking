@@ -51,7 +51,7 @@ export async function checkAdmissionAgreement(parent,agreement,provider) {
 }
 
 /** V2 binds the privacy-preserving policy sidecar without changing v1. */
-export function validPolicySeedManifest(manifest){return !!(manifest&&manifest.version===2&&exact(manifest,['version','sourceDocument','sourceCheckpointHash','sourcePolicyHashes','projectedStateHash','newDocumentId','newGeneration','schemaVersion','sourceRevision','policyBundleHash'])&&Number.isSafeInteger(manifest.sourceRevision)&&manifest.sourceRevision>=0&&id(manifest.policyBundleHash)&&/^registry-seed-v2\|[0-9a-f-]{36}\|[1-9][0-9]*$/.test(manifest.schemaVersion));}
+export function validPolicySeedManifest(manifest){return !!(manifest&&[2,3].includes(manifest.version)&&exact(manifest,['version','sourceDocument','sourceCheckpointHash','sourcePolicyHashes','projectedStateHash','newDocumentId','newGeneration','schemaVersion','sourceRevision','policyBundleHash'])&&Number.isSafeInteger(manifest.sourceRevision)&&manifest.sourceRevision>=0&&id(manifest.policyBundleHash)&&new RegExp(`^registry-seed-v${manifest.version}\\|[0-9a-f-]{36}\\|[1-9][0-9]*$`).test(manifest.schemaVersion));}
 /** Check the signed manifest association; source authorization and projection semantics remain separate. */
 export async function checkGrantManifest(parent,grant,manifest,snapshot,provider) {
  try {
