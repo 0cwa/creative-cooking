@@ -14,9 +14,28 @@ export function HouseholdInvitation(){
  const run=async(fn:()=>Promise<void>)=>{setBusy(true);setStatus('');try{await fn()}catch(e){setStatus(e instanceof Error?e.message:'The invitation step failed.')}finally{setBusy(false)}};
  const bounded=(text:string,set:(v:string)=>void)=>{if(encoder.encode(text).length>limit){setStatus('The pasted message is too large.');return}set(text);setStatus('')};
  const copy=async(text:string)=>{if(!await copyText(text))throw Error('Could not copy. Copy the displayed text manually.');setStatus('Copied.')};
- const refresh=async()=>{const out=await session.current.outgoing();setOutput(encode(out.ack??out.response??out.offer));setPhase(out.complete?'complete':out.ack?'ack':out.response?'response':'offer')};
+ const displayOutgoing=(out:any)=>{setOutput(encode(out.ack??out.response??out.offer));setPhase(out.complete?'complete':out.ack?'ack':out.response?'response':'offer')};
+ const refresh=async()=>displayOutgoing(await session.current.outgoing());
  const prepare=async()=>{const recipient=decode(identityText),delegation=await workspace.householdPairing.prepareDelegation({explicit:true});if(delegation.requiredAdults.length!==1)throw Error('Every existing adult must approve. Collecting additional adult approvals is not available on this screen yet.');if(workspace.household.scope.acceptedRecipients.length!==1)throw Error('Every existing device needs a key exchange. Additional device exchanges are not available on this screen yet.');const proposal=await workspace.householdPairing.prepareInvite({recipient,explicit:true});if(proposal.requiredApprovals!==1)throw Error('Every existing adult must approve. Collecting additional adult approvals is not available on this screen yet.');await workspace.householdPairing.acceptDelegation({agreement:{...delegation.agreement,acceptances:[delegation.acceptance]},explicit:true});const prepared=await workspace.householdPairing.prepareGrant({item:proposal.item,explicit:true}),ceremony=await workspace.householdPairing.prepareCeremony({item:proposal.item,grant:prepared.grant,manifest:prepared.manifest,seed:prepared.seed,explicit:true}),parent=await workspace.householdPairing.exportParent(),scope={kind:'household',id:workspace.household.scope.scopeId};draft.current={recipient,proposal,prepared,ceremony,parent,scope};offer.current={scope,item:proposal.item,grant:prepared.grant,ceremony};setOfferText(encode(offer.current));setCode('');setPhase('');setOutput('');setStatus('Share the latest public authority first. Compare its root and head independently, then share the invitation and compare the verification code separately.');};
- const begin=async()=>{const supplied=code.trim();let verifiedOffer:any;if(role==='recipient'){offer.current=decode(offerText);verifiedOffer=await workspace.householdPairing.verifyOffer({offer:offer.current,confirmedHash:supplied});verified.current=verifiedOffer;session.current=workspace.householdPairing.session({...verifiedOffer,role:'responder',confirmedHash:supplied})}else{if(!draft.current)throw Error('Prepare the invitation first.');const c=draft.current.ceremony;if(supplied!==c.oob.hash)throw Error('The verification code does not match.');session.current=workspace.householdPairing.session({transcript:c.transcript,guard:c.guard,oob:c.oob,role:'initiator',confirmedHash:supplied})}await session.current.initialize();await refresh()};
+ const begin=async()=>{
+  session.current=null;verified.current=null;setPhase('');setOutput('');setPeer('');
+  const supplied=code.trim();let nextOffer:any=null,nextVerified:any=null,nextSession:any;
+  if(role==='recipient'){
+   offer.current=null;
+   nextOffer=decode(offerText);
+   nextVerified=await workspace.householdPairing.verifyOffer({offer:nextOffer,confirmedHash:supplied});
+   nextSession=workspace.householdPairing.session({...nextVerified,role:'responder',confirmedHash:supplied});
+  }else{
+   if(!draft.current)throw Error('Prepare the invitation first.');
+   const c=draft.current.ceremony;
+   if(supplied!==c.oob.hash)throw Error('The verification code does not match.');
+   nextSession=workspace.householdPairing.session({transcript:c.transcript,guard:c.guard,oob:c.oob,role:'initiator',confirmedHash:supplied});
+  }
+  await nextSession.initialize();
+  const outgoing=await nextSession.outgoing();
+  if(role==='recipient'){offer.current=nextOffer;verified.current=nextVerified}
+  session.current=nextSession;displayOutgoing(outgoing);
+ };
  const advance=async()=>{if(!session.current)throw Error('Start verification first.');const incoming=decode(peer),state=await session.current.outgoing();if(!state.response)await session.current.respond(incoming,state.revision);else if(!state.ack)await session.current.acknowledge(incoming,state.revision);else if(!state.complete)await session.current.finish(incoming,state.revision);else throw Error('Verification is already complete.');setPeer('');await refresh()};
  const saveFile=(bytes:Uint8Array)=>{const url=URL.createObjectURL(new Blob([new Uint8Array(bytes).buffer],{type:'application/octet-stream'})),link=document.createElement('a');link.href=url;link.download='creative-cooking-household.bin';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setStatus('Encrypted household file prepared. Give it to the verified recipient.')};
  const recoverFile=async()=>{const prior=decode(recoveryText),operationId=prior?.item?.event?.proposalId,recipientDevice=prior?.item?.event?.subject?.devices?.[0]?.deviceId;if(typeof operationId!=='string'||typeof recipientDevice!=='string')throw Error('The invitation message is invalid.');saveFile(await workspace.householdPairing.transfer.seal({operationId,recipientDevice}))};
