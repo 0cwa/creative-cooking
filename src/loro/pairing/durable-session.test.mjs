@@ -38,3 +38,15 @@ test('existing recipient wraps fresh epoch only after both pinned devices comple
  f.dbs.forEach(d=>d.close());
 });
 test('outgoing recovery returns exact signed messages and rejects tampered stored state',()=>{const f=setup();try{const a=f.open('initiator'),b=f.open('responder'),ao=a.initialize(),bo=b.initialize(),response=a.respond(bo,0),saved=f.dbs[0].prepare('SELECT v FROM state WHERE k=?').get('session:s').v;assert.deepEqual(f.open('initiator').outgoing().response,response);const damaged=JSON.parse(saved);damaged.response.token='00'.repeat(32);f.dbs[0].prepare('UPDATE state SET v=? WHERE k=?').run(JSON.stringify(damaged),'session:s');assert.throws(()=>f.open('initiator').outgoing(),/INVALID_PROOF|CORRUPT/);assert.equal(f.dbs[0].prepare('SELECT v FROM state WHERE k=?').get('session:s').v,JSON.stringify(damaged));f.dbs[0].prepare('UPDATE state SET v=? WHERE k=?').run(saved,'session:s');assert.deepEqual(f.open('initiator').outgoing().response,response);assert.ok(ao)}finally{f.dbs.forEach(db=>db.close())}});
+
+test('outgoing rejects either missing half of an atomic response or acknowledgement without writes',()=>{
+ const f=setup();try{const a=f.open('initiator'),b=f.open('responder'),ao=a.initialize(),bo=b.initialize();a.respond(bo,0);const responseState=f.dbs[0].prepare('SELECT v FROM state WHERE k=?').get('session:s').v;const br=b.respond(ao,0);a.acknowledge(br,1);const ackState=f.dbs[0].prepare('SELECT v FROM state WHERE k=?').get('session:s').v;
+  for(const [saved,field]of [[responseState,'response'],[responseState,'peerOffer'],[ackState,'ack'],[ackState,'peerResponse']]){const damaged=JSON.parse(saved);delete damaged[field];const raw=JSON.stringify(damaged);f.dbs[0].prepare('UPDATE state SET v=? WHERE k=?').run(raw,'session:s');assert.throws(()=>f.open('initiator').outgoing(),/CORRUPT/);assert.equal(f.dbs[0].prepare('SELECT v FROM state WHERE k=?').get('session:s').v,raw)}
+ }finally{f.dbs.forEach(db=>db.close())}
+});
+test('outgoing reconstruction derives key correspondence without signing and requests readonly access',()=>{
+ const f=setup();const original=sodium.crypto_sign_detached;try{const offer=f.open('initiator').initialize(),transaction=f.stores[0].transaction.bind(f.stores[0]);let reads=0;f.stores[0].transaction=(fn,options)=>{assert.equal(options?.readOnly,true);reads++;return transaction(tx=>fn({...tx,put(){throw Error('UNEXPECTED_WRITE')}}))};sodium.crypto_sign_detached=()=>{throw Error('UNEXPECTED_SIGN')};const recovered=f.open('initiator').outgoing();assert.deepEqual(recovered.offer,offer);assert.equal(reads,1)}finally{sodium.crypto_sign_detached=original;f.dbs.forEach(db=>db.close())}
+});
+test('deterministic signing-key validation rejects a corrupted public-key suffix',()=>{
+ const f=setup();try{const keys=f.key('initiator'),bad=new Uint8Array(keys.signingSecret);bad[63]^=1;assert.throws(()=>durableSession(sodium,f.stores[0],{...keys,signingSecret:bad},f.t,f.g,'initiator',f.oob),/WRONG_LOCAL_KEY/)}finally{f.dbs.forEach(db=>db.close())}
+});
