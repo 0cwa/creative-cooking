@@ -1,3 +1,4 @@
+import { LocalKeys } from './local-keys.ts';
 import { RecipientRecords } from './recipient.ts';
 import { denseArray, StorageFailure, TransactionalStorage } from './core.ts';
 import type { TransactionRunner } from './core.ts';
@@ -30,5 +31,5 @@ export function openSQLiteStorage(db: SQLiteConnection, fault?: (boundary: strin
     };
     const result = pending.then(execute); pending = result.then(() => {},() => {}); return result;
   };
-  return Object.assign(new TransactionalStorage(run,fault), {recipient:new RecipientRecords(run,fault)});
+  return Object.assign(new TransactionalStorage(run,fault), {recipient:new RecipientRecords(run,fault),localKeys:(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit)});
 }

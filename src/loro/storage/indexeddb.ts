@@ -1,3 +1,4 @@
+import { LocalKeys } from './local-keys.ts';
 import { RecipientRecords } from './recipient.ts';
 import { TransactionalStorage } from './core.ts';
 import type { TransactionRunner } from './core.ts';
@@ -17,5 +18,5 @@ export async function openIndexedDBStorage(name: string, fault?: (boundary: stri
       await done; return result;
     } catch(e) { try { transaction.abort(); } catch {} await done.catch(() => {}); throw e; }
   };
-  return {storage:new TransactionalStorage(run,fault),recipient:new RecipientRecords(run,fault),close:() => db.close()};
+  return {storage:new TransactionalStorage(run,fault),recipient:new RecipientRecords(run,fault),localKeys:(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit),close:() => db.close()};
 }
