@@ -1,7 +1,16 @@
 // Stable action IDs and command IDs are supplied by the caller and retained
 // across retries; saved commits are inspected before any allocation or sealing.
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
-export async function executeAction(runtime,sequences,actionId,commands) {
+const queues=new WeakMap();
+export function executeAction(runtime,sequences,actionId,commands) {
+ const input=structuredClone(commands);
+ const previous=queues.get(runtime)??Promise.resolve();
+ const current=previous.catch(()=>{}).then(()=>execute(runtime,sequences,actionId,input));
+ queues.set(runtime,current);
+ void current.finally(()=>{if(queues.get(runtime)===current)queues.delete(runtime)}).catch(()=>{});
+ return current;
+}
+async function execute(runtime,sequences,actionId,commands) {
  if(typeof actionId!=='string'||!actionId||!Array.isArray(commands)||!commands.length||commands.some(c=>typeof c?.commandId!=='string'||!c.commandId)||new Set(commands.map(c=>c.commandId)).size!==commands.length)throw Error('MALFORMED');
  commands=structuredClone(commands);
  await runtime.authorize();
