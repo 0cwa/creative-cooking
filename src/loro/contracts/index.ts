@@ -1,5 +1,5 @@
 /** C0 interfaces are local contracts, not a wire encoding or cryptographic suite. */
-export const CONTRACT_VERSION = 'C0' as const;
+export const CONTRACT_VERSION = 'C0.1' as const;
 export const POLICY_SCHEMA_VERSION = 2 as const;
 export const INITIAL_FRAME_BYTES = 16 * 1024;
 export const REVIEW_LIMITS = { objects: 256, aggregateBytes: 8 * 1024 * 1024, objectBytes: 1024 * 1024, dependencies: 64 } as const;
@@ -16,16 +16,87 @@ export type ImmutableObject = { id: Id; bytes: Bytes };
 export type DocumentOutput = { documentId: Id; bytes: Bytes };
 export type SemanticCommand = { version: 1; commandId: Id; effectId: Id; documentId: Id; kind: string; payload: Bytes; dependencyEffectIds: readonly Id[] };
 export type OutboxEntry = { object: ImmutableObject; branchHead: Id; epochId: Id };
-export type LocalCommit = { document: DocumentOutput; commands: readonly SemanticCommand[]; outbound: readonly OutboxEntry[] };
-export type StorageError = 'CAPACITY' | 'CONFLICT' | 'IO' | 'CORRUPT' | 'UNSUPPORTED_VERSION';
-export type CommitResult = Result<{ state: 'saved' }, { code: StorageError; recovery: 'reload-durable-state' }>;
-export type InboxItem = { object: ImmutableObject; source: Id; cursor: string };
+/** Revisions are safe nonnegative integers; null means the document must not exist. */
+export type DocumentWrite = DocumentOutput & { expectedRevision: number | null };
+export type LocalCommit = { scopeId: Id; operationId: Id; documents: readonly DocumentWrite[]; commands: readonly SemanticCommand[]; outbound: readonly OutboxEntry[] };
+export type ImportCommit = { scopeId: Id; operationId: Id; itemId: Id; documents: readonly DocumentWrite[]; effectIds: readonly Id[] };
+export type StorageError = 'CAPACITY' | 'CONFLICT' | 'IO' | 'CORRUPT' | 'UNSUPPORTED_VERSION' | 'MALFORMED' | 'TOO_LARGE';
+export type SavedOutcome = { state: 'saved'; revisions: readonly { documentId: Id; revision: number }[] };
+export type CommitResult = Result<{ outcome: SavedOutcome; replayed: boolean }, { code: StorageError; recovery: 'reload-durable-state' }>;
+export type InboxItem = { scopeId: Id; object: ImmutableObject; source: Id; expectedCursor: string | null; cursor: string };
+/** A receipt is persisted as untrusted bytes; storage does not authenticate its claims. */
+export type OutboxReceipt = { scopeId: Id; objectId: Id; receiptId: Id; destination: 'relay' | 'peer'; recipientId: Id; state: 'stored' | 'applied'; bytes: Bytes };
 export interface AtomicStorage {
-  /** All document, effect and outbox writes succeed together. On failure discard mutated working state and reload. */
+  /** Authority must be revalidated by the caller, including on retries. Compare complete operation before revision checks.
+   * Identical replay returns its original outcome; conflicting reuse or partial pre-existing identity sets write nothing.
+   * All writes and revision comparisons occur in one database transaction, including across processes/tabs. */
   commitLocal(commit: LocalCommit): Promise<CommitResult>;
-  reopenDocument(documentId: Id): Promise<Result<DocumentOutput | null, StorageError>>;
+  reopenDocument(scopeId: Id, documentId: Id): Promise<Result<(DocumentOutput & { revision: number }) | null, StorageError>>;
+  /** Atomically stage immutable bytes and compare-and-swap the opaque per-scope/source cursor. */
   stageInbox(item: InboxItem): Promise<Result<void, StorageError>>;
-  commitImport(itemId: Id, document: DocumentOutput, effectIds: readonly Id[]): Promise<CommitResult>;
+  /** Atomically commit all outputs, effects and applied outcome; failure retains staged bytes. */
+  commitImport(commit: ImportCommit): Promise<CommitResult>;
+  /** Persist a receipt idempotently; conflicting reuse fails. Never erase objects, effects or retry history.
+   * Relay supports stored only; peer supports stored then applied per recipient. Applied does not imply another recipient's state. */
+  recordReceipt(receipt: OutboxReceipt): Promise<Result<{ replayed: boolean }, StorageError>>;
+}
+
+/** Provisional per-operation limits, measured in actual bytes; adapters must reject before any write. */
+export const STORAGE_LIMITS = { documents: 64, commands: 256, outbound: 256, effects: 256, itemBytes: 1024 * 1024, totalBytes: 8 * 1024 * 1024, idBytes: 256 } as const;
+const storageEncoder = new TextEncoder();
+const storageId = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && storageEncoder.encode(x).length <= STORAGE_LIMITS.idBytes;
+const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
+const exact = (x: Record<string, unknown>, keys: string[]) => Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x, k));
+/** Pure validation and deterministic comparison representation, not a wire or cryptographic encoding.
+ * Arrays retain order; byte arrays compare byte-for-byte; all IDs and associations participate.
+ * Document IDs must be strictly increasing by JS UTF-16 code unit order; other identity arrays are unique.
+ * No Unicode normalization is performed. A namespace is always paired with scopeId. */
+export function storageOperationKey(input: unknown, kind: 'local' | 'import'): Result<string, 'MALFORMED' | 'TOO_LARGE'> {
+  if (!record(input) || !exact(input, kind === 'local' ? ['scopeId','operationId','documents','commands','outbound'] : ['scopeId','operationId','itemId','documents','effectIds']) || !storageId(input.scopeId) || !storageId(input.operationId) || (kind === 'import' && !storageId(input.itemId))) return {ok:false,error:'MALFORMED'};
+  let total = 0, tooLarge = false;
+  const bytes = (v: unknown): v is Uint8Array => { if (!(v instanceof Uint8Array)) return false; total += v.byteLength; if (v.byteLength > STORAGE_LIMITS.itemBytes || total > STORAGE_LIMITS.totalBytes) tooLarge = true; return true; };
+  const docs = input.documents;
+  if (!Array.isArray(docs) || !docs.length) return {ok:false,error:'MALFORMED'};
+  if (docs.length > STORAGE_LIMITS.documents) return {ok:false,error:'TOO_LARGE'};
+  let previous = '';
+  for (const d of docs) {
+    if (!record(d) || !exact(d,['documentId','bytes','expectedRevision']) || !storageId(d.documentId) || (previous !== '' && previous >= d.documentId) || !bytes(d.bytes) || !(d.expectedRevision === null || (Number.isSafeInteger(d.expectedRevision) && (d.expectedRevision as number) >= 0 && (d.expectedRevision as number) < Number.MAX_SAFE_INTEGER))) return {ok:false,error:'MALFORMED'};
+    previous = d.documentId;
+  }
+  const unique = (xs: unknown[]): boolean => xs.every(storageId) && new Set(xs).size === xs.length;
+  if (kind === 'local') {
+    if (!Array.isArray(input.commands) || !input.commands.length || !Array.isArray(input.outbound)) return {ok:false,error:'MALFORMED'};
+    if (input.commands.length > STORAGE_LIMITS.commands || input.outbound.length > STORAGE_LIMITS.outbound) return {ok:false,error:'TOO_LARGE'};
+    const commandIds: unknown[] = [], effectIds: unknown[] = [], objectIds: unknown[] = [];
+    for (const c of input.commands) {
+      if (!record(c) || !exact(c,['version','commandId','effectId','documentId','kind','payload','dependencyEffectIds']) || c.version !== 1 || !storageId(c.commandId) || !storageId(c.effectId) || !storageId(c.documentId) || !docs.some(d => d.documentId === c.documentId) || !storageId(c.kind) || !bytes(c.payload) || !Array.isArray(c.dependencyEffectIds) || !unique(c.dependencyEffectIds)) return {ok:false,error:'MALFORMED'};
+      if (c.dependencyEffectIds.length > STORAGE_LIMITS.effects) return {ok:false,error:'TOO_LARGE'};
+      commandIds.push(c.commandId); effectIds.push(c.effectId);
+    }
+    for (const o of input.outbound) {
+      if (!record(o) || !exact(o,['object','branchHead','epochId']) || !storageId(o.branchHead) || !storageId(o.epochId) || !record(o.object) || !exact(o.object,['id','bytes']) || !storageId(o.object.id) || !bytes(o.object.bytes)) return {ok:false,error:'MALFORMED'};
+      objectIds.push(o.object.id);
+    }
+    if (!unique(commandIds) || !unique(effectIds) || !unique(objectIds)) return {ok:false,error:'MALFORMED'};
+  } else {
+    if (!Array.isArray(input.effectIds) || !unique(input.effectIds)) return {ok:false,error:'MALFORMED'};
+    if (input.effectIds.length > STORAGE_LIMITS.effects) return {ok:false,error:'TOO_LARGE'};
+  }
+  if (tooLarge) return {ok:false,error:'TOO_LARGE'};
+  // Fixed object-key order is supplied explicitly by recursively sorting keys, never by caller insertion order.
+  const canonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(canonical) : record(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
+  return {ok:true,value:JSON.stringify([kind, canonical(input)])};
+}
+export function validateStorageReceipt(input: unknown): Result<OutboxReceipt, 'MALFORMED' | 'TOO_LARGE'> {
+  if (!record(input) || !exact(input,['scopeId','objectId','receiptId','destination','recipientId','state','bytes']) || !storageId(input.scopeId) || !storageId(input.objectId) || !storageId(input.receiptId) || !storageId(input.recipientId) || !(input.bytes instanceof Uint8Array) || !((input.destination === 'relay' && input.state === 'stored') || (input.destination === 'peer' && (input.state === 'stored' || input.state === 'applied')))) return {ok:false,error:'MALFORMED'};
+  if (input.bytes.byteLength > STORAGE_LIMITS.itemBytes) return {ok:false,error:'TOO_LARGE'};
+  return {ok:true,value:input as OutboxReceipt};
+}
+/** Cursor values are opaque strings, including empty strings; null means no prior cursor. */
+export function validateInboxItem(input: unknown): Result<InboxItem, 'MALFORMED' | 'TOO_LARGE'> {
+  if (!record(input) || !exact(input,['scopeId','object','source','expectedCursor','cursor']) || !storageId(input.scopeId) || !storageId(input.source) || !record(input.object) || !exact(input.object,['id','bytes']) || !storageId(input.object.id) || !(input.object.bytes instanceof Uint8Array) || !(input.expectedCursor === null || typeof input.expectedCursor === 'string') || typeof input.cursor !== 'string') return {ok:false,error:'MALFORMED'};
+  if (input.object.bytes.byteLength > STORAGE_LIMITS.itemBytes || storageEncoder.encode(input.cursor).length > STORAGE_LIMITS.itemBytes || (typeof input.expectedCursor === 'string' && storageEncoder.encode(input.expectedCursor).length > STORAGE_LIMITS.itemBytes)) return {ok:false,error:'TOO_LARGE'};
+  return {ok:true,value:input as InboxItem};
 }
 export type ContentHeader = { version: 1; suiteId: string; scopeId: Id; documentId: Id; documentGeneration: number; branchHead: Id; policyHashes: readonly Id[]; epochId: Id; authorDevice: Id; deviceSequence: number; predecessorRefs: readonly Id[]; semanticEffectIds: readonly Id[]; payloadKind: string };
 export type KeyHeader = { version: 1; suiteId: string; scopeId: Id; branchHead: Id; policyHashes: readonly Id[]; epochId: Id; recipientDevice: Id; keyPurpose: string; senderDevice: Id };
