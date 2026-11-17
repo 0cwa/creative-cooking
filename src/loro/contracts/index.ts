@@ -205,3 +205,4 @@ export function validateGuardianPackage(input: unknown): Result<GuardianPackage,
 }
 
 export * from "./pairing.ts";
+export * from './runtime-storage.ts';

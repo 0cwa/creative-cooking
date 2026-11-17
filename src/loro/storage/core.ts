@@ -1,4 +1,5 @@
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
+import type { RuntimeStorageReader } from '../contracts/runtime-storage.ts';
 import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
@@ -46,7 +47,7 @@ const validateOutcome = (outcome: SavedOutcome, docs: LocalCommit['documents']) 
 const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'reload-durable-state'}} => ({ok:false,error:{code,recovery:'reload-durable-state'}});
 
 /** Database transactions, not process locks, provide isolation. */
-export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage {
+export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage, RuntimeStorageReader {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
   constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({keys: () => tx.keys(), get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
@@ -62,6 +63,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:records};
     }); } catch (e) { return {ok:false,error:mapError(e)}; }
   }
+  private async typedRecords<T>(namespace: 'document' | 'object' | 'inbox' | 'cursor' | 'receipt-state', scopeId: string, convert: (identity: readonly string[], value: any) => T): Promise<Result<readonly T[],StorageError>> {
+    if (typeof scopeId !== 'string' || !scopeId || new TextEncoder().encode(scopeId).length > 256) return {ok:false,error:'MALFORMED'};
+    const records=await this.listRecords(namespace,scopeId); if (!records.ok) return records;
+    try { return {ok:true,value:records.value.map(r=>convert(r.identity,r.value))}; } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  listDocuments(scopeId: string) { return this.typedRecords('document',scopeId,(i,v) => { if (i.length!==1 || !i[0]) return corrupt(); return {documentId:i[0],bytes:v.bytes as Uint8Array,revision:v.revision as number}; }); }
+  listOutboundObjects(scopeId: string) { return this.typedRecords('object',scopeId,(i,v) => { if (i.length!==1 || !i[0]) return corrupt(); return {objectId:i[0],bytes:v.bytes as Uint8Array,branchHead:v.branchHead as string,epochId:v.epochId as string}; }); }
+  listStagedInbox(scopeId: string) { return this.typedRecords('inbox',scopeId,(i,v) => { if (i.length!==1 || !i[0]) return corrupt(); return {itemId:i[0],bytes:v.bytes as Uint8Array}; }); }
+  listCursors(scopeId: string) { return this.typedRecords('cursor',scopeId,(i,v) => { if (i.length!==1 || !i[0]) return corrupt(); return {source:i[0],cursor:v as string}; }); }
+  listReceiptStates(scopeId: string) { return this.typedRecords('receipt-state',scopeId,(i,v) => { if (i.length!==3 || !i[0] || !i[2] || (i[1]!=='relay' && i[1]!=='peer') || (i[1]==='relay' && v==='applied')) return corrupt(); return {objectId:i[0],destination:i[1] as 'relay' | 'peer',recipientId:i[2],state:v as 'stored' | 'applied'}; }); }
   async readPairingAuthority(scope: PairingScope): Promise<Result<PairingAuthorityRecord | null, StorageError>> {
     if (!validPairingScope(scope)) return {ok:false,error:'MALFORMED'};
     scope = snapshot(scope);

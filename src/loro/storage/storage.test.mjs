@@ -104,3 +104,15 @@ test('each pairing release write rolls back completely', async () => {
   assert.equal(conn.db.prepare('SELECT count(*) AS n FROM loro_records').get().n,1); conn.db.close();
  }
 });
+
+test('typed runtime reads recover scoped records and recipient state as copies', async () => {
+ const conn=connection(),s=openSQLiteStorage(conn); assert.equal((await s.commitLocal(child('a','o','d'))).ok,true); assert.equal((await s.commitLocal(child('b','other','d'))).ok,true);
+ assert.equal((await s.stageInbox({scopeId:'a',object:{id:'in',bytes:b(8)},source:'relay',expectedCursor:null,cursor:'cur'})).ok,true);
+ assert.equal((await s.recordReceipt({scopeId:'a',objectId:'o',receiptId:'r',destination:'peer',recipientId:'p',state:'stored',bytes:b(4)})).ok,true);
+ const docs=(await s.listDocuments('a')).value; assert.equal(docs.length,1); docs[0].bytes[0]=77; assert.equal((await s.listDocuments('a')).value[0].bytes[0],1);
+ assert.deepEqual((await s.listOutboundObjects('a')).value.map(x=>x.objectId),['o']);
+ assert.deepEqual((await s.listStagedInbox('a')).value.map(x=>x.itemId),['in']);
+ assert.deepEqual((await s.listCursors('a')).value,[{source:'relay',cursor:'cur'}]);
+ assert.deepEqual((await s.listReceiptStates('a')).value,[{objectId:'o',destination:'peer',recipientId:'p',state:'stored'}]);
+ conn.db.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)').run(JSON.stringify(['receipt-state','a','o','invalid','p']),JSON.stringify('stored')); assert.equal((await s.listReceiptStates('a')).error,'CORRUPT'); conn.db.close();
+});
