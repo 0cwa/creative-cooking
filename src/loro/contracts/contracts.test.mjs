@@ -46,7 +46,7 @@ test('storage operations validate multi-document identity and compare the entire
   assert.equal(storageOperationKey({...op,documents:[{...op.documents[0],bytes:[1]}]},'local').error,'MALFORMED');
   assert.equal(storageOperationKey({...op,documents:[{...op.documents[0],bytes:new Uint8Array(STORAGE_LIMITS.itemBytes+1)}]},'local').error,'TOO_LARGE');
   assert.equal(storageOperationKey({...op,commands:[op.commands[0],op.commands[0]]},'local').error,'MALFORMED');
-  const imp = {expectedAuthority:{version:2,scope:{kind:'personal',id:'scope'},record:null},scopeId:'scope',operationId:'import',itemId:'in',documents:op.documents,effectIds:['e']};
+  const imp = {version:2,commands:[op.commands[0]],expectedAuthority:{version:2,scope:{kind:'personal',id:'scope'},record:null},scopeId:'scope',operationId:'import',itemId:'in',documents:op.documents,effectIds:['e']};
   assert.equal(storageOperationKey(imp,'import').ok,true);
   assert.equal(storageOperationKey({...imp,effectIds:['e','e']},'import').error,'MALFORMED');
 });

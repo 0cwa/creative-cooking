@@ -79,9 +79,9 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if (![scopeId,itemId].every(x=>typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256)) return {ok:false,error:'MALFORMED'};
     try { return await this.run(false,async tx => { const op=await tx.get(key('applied',scopeId,itemId)); if (op===undefined) return {ok:true,value:null};
       const old=await tx.get(key('import',scopeId,op)); if (!old || await tx.get(key('inbox',scopeId,itemId))===undefined) return corrupt();
-      let c: ImportCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='import' || parsed.length!==2) return corrupt(); c=parsed[1]; for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes); } catch { return corrupt(); }
-      if (!Object.hasOwn(c,'expectedAuthority')) return {ok:false,error:'UNSUPPORTED_VERSION'}; const checked=storageOperationKey(c,'import'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.itemId!==itemId || c.operationId!==op) return corrupt();
-      validateOutcome(old.outcome,c.documents); for (const id of c.effectIds) if (await tx.get(key('effect',scopeId,id))!==old.inputKey) return corrupt();
+      let c: ImportCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='import' || parsed.length!==2) return corrupt(); c=parsed[1]; for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes); if (c.version === 2 && Array.isArray(c.commands)) for (const command of c.commands) command.payload=decodeKeyBytes(command.payload); } catch { return corrupt(); }
+      if (!Object.hasOwn(c,'expectedAuthority') || c.version !== 2 || !Object.hasOwn(c,'commands')) return {ok:false,error:'UNSUPPORTED_VERSION'}; const checked=storageOperationKey(c,'import'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.itemId!==itemId || c.operationId!==op) return corrupt();
+      validateOutcome(old.outcome,c.documents); for (const command of c.commands) if (await tx.get(key('command',scopeId,command.commandId))!==old.inputKey || await tx.get(key('effect',scopeId,command.effectId))!==old.inputKey) return corrupt();
       return {ok:true,value:{operationId:op,outcome:snapshot(old.outcome)}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
@@ -210,12 +210,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const k = storageOperationKey(c,'import'); if (!k.ok) return fail(k.error); c = snapshot(c);
     try { return await this.run(true,async tx => {
       const op = key('import',c.scopeId,c.operationId), old = await tx.get(op);
-      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome || await tx.get(key('applied',c.scopeId,c.itemId)) !== c.operationId || await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined) conflict(); for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== k.value) conflict(); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
+      if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome || await tx.get(key('applied',c.scopeId,c.itemId)) !== c.operationId || await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined) conflict(); for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== k.value || await tx.get(key('effect',c.scopeId,command.effectId)) !== k.value) conflict(); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
       await this.requireAuthority(tx,c.expectedAuthority);
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
-      for (const id of c.effectIds) if (await tx.get(key('effect',c.scopeId,id)) !== undefined) conflict();
+      for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined) conflict();
       const outcome = await this.documents(tx,c.scopeId,c.documents); this.fault?.('import-documents');
-      for (const id of c.effectIds) await tx.put(key('effect',c.scopeId,id),k.value);
+      for (const command of c.commands) { await tx.put(key('command',c.scopeId,command.commandId),k.value); await tx.put(key('effect',c.scopeId,command.effectId),k.value); }
       await tx.put(key('applied',c.scopeId,c.itemId),c.operationId);
       await tx.put(op,{inputKey:k.value,outcome}); this.fault?.('import');
       return {ok:true,value:{outcome,replayed:false}};

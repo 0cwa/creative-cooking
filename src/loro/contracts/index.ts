@@ -24,7 +24,7 @@ export type AuthorityPrecondition = { version: 2; scope: PairingScope; record: {
 export type LocalCommit = { expectedAuthority: AuthorityPrecondition; scopeId: Id; operationId: Id; documents: readonly DocumentWrite[]; commands: readonly SemanticCommand[]; outbound: readonly OutboxEntry[] };
 export type LocalCommitGroup = { groupId: Id; children: readonly LocalCommit[] };
 export type GroupCommitResult = Result<{ outcomes: readonly SavedOutcome[]; replayed: boolean }, { code: StorageError; recovery: 'reload-durable-state' }>;
-export type ImportCommit = { expectedAuthority: AuthorityPrecondition; scopeId: Id; operationId: Id; itemId: Id; documents: readonly DocumentWrite[]; effectIds: readonly Id[] };
+export type ImportCommit = { version: 2; commands: readonly SemanticCommand[]; expectedAuthority: AuthorityPrecondition; scopeId: Id; operationId: Id; itemId: Id; documents: readonly DocumentWrite[]; effectIds: readonly Id[] };
 export type StorageError = 'CAPACITY' | 'CONFLICT' | 'IO' | 'CORRUPT' | 'UNSUPPORTED_VERSION' | 'MALFORMED' | 'TOO_LARGE';
 export type SavedOutcome = { state: 'saved'; revisions: readonly { documentId: Id; revision: number }[] };
 export type CommitResult = Result<{ outcome: SavedOutcome; replayed: boolean }, { code: StorageError; recovery: 'reload-durable-state' }>;
@@ -59,7 +59,7 @@ const exact = (x: Record<string, unknown>, keys: string[]) => Object.keys(x).len
  * Document IDs must be strictly increasing by JS UTF-16 code unit order; other identity arrays are unique.
  * No Unicode normalization is performed. A namespace is always paired with scopeId. */
 export function storageOperationKey(input: unknown, kind: 'local' | 'import'): Result<string, 'MALFORMED' | 'TOO_LARGE'> {
-  if (!record(input) || !exact(input, kind === 'local' ? ['expectedAuthority','scopeId','operationId','documents','commands','outbound'] : ['expectedAuthority','scopeId','operationId','itemId','documents','effectIds']) || !storageId(input.scopeId) || !storageId(input.operationId) || (kind === 'import' && !storageId(input.itemId))) return {ok:false,error:'MALFORMED'};
+  if (!record(input) || !exact(input, kind === 'local' ? ['expectedAuthority','scopeId','operationId','documents','commands','outbound'] : ['version','commands','expectedAuthority','scopeId','operationId','itemId','documents','effectIds']) || !storageId(input.scopeId) || !storageId(input.operationId) || (kind === 'import' && (!storageId(input.itemId) || input.version !== 2))) return {ok:false,error:'MALFORMED'};
   {
     const a = input.expectedAuthority;
     if (!record(a) || !exact(a,['version','scope','record']) || a.version !== 2 || !validPairingScope(a.scope) || a.scope.id !== input.scopeId || !(a.record === null || (record(a.record) && exact(a.record,['revision','acceptedParent','authorizationSnapshot']) && Number.isSafeInteger(a.record.revision) && (a.record.revision as number) >= 0 && storageId(a.record.acceptedParent) && storageId(a.record.authorizationSnapshot)))) return {ok:false,error:'MALFORMED'};
@@ -75,22 +75,26 @@ export function storageOperationKey(input: unknown, kind: 'local' | 'import'): R
     previous = d.documentId;
   }
   const unique = (xs: unknown[]): boolean => xs.every(storageId) && new Set(xs).size === xs.length;
+  if (!Array.isArray(input.commands) || (kind === 'local' && !input.commands.length)) return {ok:false,error:'MALFORMED'};
+  if (input.commands.length > STORAGE_LIMITS.commands) return {ok:false,error:'TOO_LARGE'};
+  const commandIds: unknown[] = [], effectIds: unknown[] = [];
+  for (const c of input.commands) {
+    if (!record(c) || !exact(c,['version','commandId','effectId','documentId','kind','payload','dependencyEffectIds']) || c.version !== 1 || !storageId(c.commandId) || !storageId(c.effectId) || !storageId(c.documentId) || !docs.some(d => d.documentId === c.documentId) || !storageId(c.kind) || !bytes(c.payload) || !Array.isArray(c.dependencyEffectIds) || !unique(c.dependencyEffectIds)) return {ok:false,error:'MALFORMED'};
+    if (c.dependencyEffectIds.length > STORAGE_LIMITS.effects) return {ok:false,error:'TOO_LARGE'};
+    commandIds.push(c.commandId); effectIds.push(c.effectId);
+  }
+  if (!unique(commandIds) || !unique(effectIds)) return {ok:false,error:'MALFORMED'};
   if (kind === 'local') {
-    if (!Array.isArray(input.commands) || !input.commands.length || !Array.isArray(input.outbound)) return {ok:false,error:'MALFORMED'};
-    if (input.commands.length > STORAGE_LIMITS.commands || input.outbound.length > STORAGE_LIMITS.outbound) return {ok:false,error:'TOO_LARGE'};
-    const commandIds: unknown[] = [], effectIds: unknown[] = [], objectIds: unknown[] = [];
-    for (const c of input.commands) {
-      if (!record(c) || !exact(c,['version','commandId','effectId','documentId','kind','payload','dependencyEffectIds']) || c.version !== 1 || !storageId(c.commandId) || !storageId(c.effectId) || !storageId(c.documentId) || !docs.some(d => d.documentId === c.documentId) || !storageId(c.kind) || !bytes(c.payload) || !Array.isArray(c.dependencyEffectIds) || !unique(c.dependencyEffectIds)) return {ok:false,error:'MALFORMED'};
-      if (c.dependencyEffectIds.length > STORAGE_LIMITS.effects) return {ok:false,error:'TOO_LARGE'};
-      commandIds.push(c.commandId); effectIds.push(c.effectId);
-    }
+    if (!Array.isArray(input.outbound)) return {ok:false,error:'MALFORMED'};
+    if (input.outbound.length > STORAGE_LIMITS.outbound) return {ok:false,error:'TOO_LARGE'};
+    const objectIds: unknown[] = [];
     for (const o of input.outbound) {
       if (!record(o) || !exact(o,['object','branchHead','epochId']) || !storageId(o.branchHead) || !storageId(o.epochId) || !record(o.object) || !exact(o.object,['id','bytes']) || !storageId(o.object.id) || !bytes(o.object.bytes)) return {ok:false,error:'MALFORMED'};
       objectIds.push(o.object.id);
     }
-    if (!unique(commandIds) || !unique(effectIds) || !unique(objectIds)) return {ok:false,error:'MALFORMED'};
+    if (!unique(objectIds)) return {ok:false,error:'MALFORMED'};
   } else {
-    if (!Array.isArray(input.effectIds) || !unique(input.effectIds)) return {ok:false,error:'MALFORMED'};
+    if (!Array.isArray(input.effectIds) || !unique(input.effectIds) || input.effectIds.length !== effectIds.length || !input.effectIds.every((id,i)=>id === effectIds[i])) return {ok:false,error:'MALFORMED'};
     if (input.effectIds.length > STORAGE_LIMITS.effects) return {ok:false,error:'TOO_LARGE'};
   }
   if (tooLarge) return {ok:false,error:'TOO_LARGE'};
