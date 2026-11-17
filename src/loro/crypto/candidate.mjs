@@ -35,6 +35,15 @@ function unhex(s, min, max) {
 }
 const bytes = x => encoder.encode(JSON.stringify(x));
 const domain = (purpose, value) => bytes(['creative-cooking/k2-candidate/v1',purpose,value]);
+/** Derive the candidate immutable ID from opaque encoded bytes with the same provider hash. */
+export async function candidateObjectId(provider, input) {
+  if (!(input instanceof Uint8Array)) throw Error('MALFORMED');
+  if (input.length > ENCODED_LIMIT) throw Error('TOO_LARGE');
+  const snapshot = new Uint8Array(input);
+  const digest = await provider.hash(domain('object-id',hex(snapshot)));
+  if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
+  return hex(digest);
+}
 // Provider owns private keys and implements reviewed primitive candidates. No private key bytes cross this API.
 export function candidateCodec(provider) {
   async function seal(kind, header, value, ref) {
@@ -49,9 +58,7 @@ export function candidateCodec(provider) {
     if (!(signature instanceof Uint8Array) || signature.length !== 64) throw Error('MALFORMED');
     const encoded = bytes({...unsigned,signature:hex(signature)});
     if (encoded.length > ENCODED_LIMIT) throw Error('TOO_LARGE');
-    const digest = await provider.hash(domain('object-id',hex(encoded)));
-    if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
-    return {id:hex(digest),bytes:encoded};
+    return {id:await candidateObjectId(provider,encoded),bytes:encoded};
   }
   async function open(kind, input) {
     if (!(input instanceof Uint8Array)) throw Error('MALFORMED');
@@ -71,9 +78,7 @@ export function candidateCodec(provider) {
     const value = kind === 'content' ? await provider.decrypt(h,encrypted,aad) : await provider.unwrap(h,encrypted,aad);
     if (kind === 'content' ? !(value instanceof Uint8Array) : !id(value)) throw Error('INVALID_PROOF');
     if (kind === 'content' && value.length > LIMIT) throw Error('TOO_LARGE');
-    const digest = await provider.hash(domain('object-id',hex(input)));
-    if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
-    return {header:h,value,object:{id:hex(digest),bytes:new Uint8Array(input)}};
+    return {header:h,value,object:{id:await candidateObjectId(provider,input),bytes:new Uint8Array(input)}};
   }
   return {sealContent:(h,p,r)=>seal('content',h,p,r), wrapKey:(h,r)=>seal('key',h,new Uint8Array(),r), openContent:b=>open('content',b), openKey:b=>open('key',b)};
 }
