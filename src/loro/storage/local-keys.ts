@@ -8,7 +8,7 @@ type Master={provision(id:string):Promise<void>;ensure?(id:string):Promise<void>
 const e=new TextEncoder(), key=(...x:string[])=>JSON.stringify(x), ck=key('local-master-catalog');
 const sentinel=e.encode('creative-cooking/local-master-check/v1');
 // Only known unrelated record namespaces may predate master provisioning.
-const unrelated=new Set(['disclosure-pending','disclosure-active','disclosure-policy','disclosure-source','disclosure-review','pairing-authority','pairing-release','pairing-guard','pairing-packet','pairing-outbox','document','document-owner','object','inbox','local','import','group','receipt-state','cursor','command','effect','applied','receipt','compromise-review','compromise-quarantine','compromise-notification','continuity-head','continuity-binding','compromise-intake','compromise-intake-item','projection-policy-seed','projection-seed','projection-seed-command','projection-seed-effect','recovery-readmission-challenge','recovery-challenge-consumed','recovery-install','recovery-device','recovery-reminder','recovery-generation','recovery-generation-head','recovery-generation-operation','recovery-custody-ack']);
+const unrelated=new Set(['disclosure-pending','disclosure-active','disclosure-policy','disclosure-policy-archive','disclosure-source','disclosure-review','pairing-authority','pairing-release','pairing-guard','pairing-packet','pairing-outbox','document','document-owner','object','inbox','local','import','group','receipt-state','cursor','command','effect','applied','receipt','compromise-review','compromise-quarantine','compromise-notification','continuity-head','continuity-binding','compromise-intake','compromise-intake-item','projection-policy-seed','projection-seed','projection-seed-command','projection-seed-effect','recovery-readmission-challenge','recovery-challenge-consumed','recovery-install','recovery-device','recovery-reminder','recovery-generation','recovery-generation-head','recovery-generation-operation','recovery-custody-ack']);
 function unrelatedRecordKey(k:string){try{const p=JSON.parse(k);return Array.isArray(p)&&p.length>0&&p.every((x:any)=>typeof x==='string')&&unrelated.has(p[0])}catch{return false}}
 const shape=(x:any,n:string[])=>x!==null&&typeof x==='object'&&!Array.isArray(x)&&!(x instanceof Uint8Array)&&Object.keys(x).length===n.length&&n.every(k=>Object.hasOwn(x,k));
 const id=(x:any)=>typeof x==='string'&&x.length>0&&e.encode(x).length<=256;
@@ -65,9 +65,9 @@ export class LocalKeys {
   if(!id(operationId)||!validLocalIdentity(identity)||identity.scope.kind!=='personal'||identity.purpose!=='data'||!bytes(secret,32,32))throw Error('MALFORMED');
   identity=copy(identity);const material=new Uint8Array(secret);try{const catalog=await this.unlock();if(await this.run(false,tx=>findLocalKey(tx,operationId,identity)))throw Error('CONFLICT');const wrapped=await this.master.wrap(catalog.id,material,context(identity));const record:LocalKeyRecord={version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped};if(!validLocalRecord(record))throw Error('LOCKED');return {record:copy(record),catalog:copy(catalog)}}finally{material.fill(0)}
  }
- /** Prepare an authenticated pairing key; existing material must match exactly. */
+ /** Prepare an authenticated pairing key; caller must atomically bind verified admission. */
  async preparePairedDataKey(operationId:string,identity:LocalKeyIdentity,secret:Uint8Array):Promise<{record:LocalKeyRecord;catalog:ReadyMasterCatalog}>{
-  if(!id(operationId)||!validLocalIdentity(identity)||identity.scope.kind!=='personal'||identity.purpose!=='data'||!bytes(secret,32,32))throw Error('MALFORMED');
+  if(!id(operationId)||!validLocalIdentity(identity)||identity.purpose!=='data'||!bytes(secret,32,32))throw Error('MALFORMED');
   identity=copy(identity);const material=new Uint8Array(secret);try{
    const catalog=await this.unlock(),old=await this.run(false,tx=>findLocalKey(tx,operationId,identity));
    if(old){await this.verify(old,catalog);await this.use(operationId,identity,key=>{if(!eq(key,material))throw Error('CONFLICT')});return {record:old,catalog};}
