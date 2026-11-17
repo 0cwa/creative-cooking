@@ -23,8 +23,9 @@ export function openNativeWorkspaceWith({name,create,openDatabase,openMaster,sod
  const previous=serial.get(name)??Promise.resolve();const current=previous.catch(()=>{}).then(()=>open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta}));serial.set(name,current);current.finally(()=>{if(serial.get(name)===current)serial.delete(name)}).catch(()=>{});return current;
 }
 async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta}){
- await sodium.ready;const db=openDatabase(name), master=openMaster(name);let sequences;
+ await sodium.ready;const db=openDatabase(name);let master,sequences;
  try {
+  master=openMaster(name);
   exec(db,'CREATE TABLE IF NOT EXISTS loro_bootstrap (id INTEGER PRIMARY KEY CHECK(id=1), stage TEXT NOT NULL, data BLOB NOT NULL)');
   const storage=openSQLiteStorage(db);
   const load=()=>rows(db,'SELECT stage,data FROM loro_bootstrap WHERE id=1')[0];
@@ -61,5 +62,5 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   if(!ready)await transaction(db,async()=>{const now=load();if(!now||!['sealed','ready'].includes(now.stage))throw Error('LOCKED');const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(now.data),aad));if(decoded.stage!==now.stage)throw Error('LOCKED');const {stage,...current}=decoded;if(JSON.stringify(current)!==JSON.stringify(r))throw Error('LOCKED');if(now.stage==='sealed'){const complete=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['ready',complete])}});
   const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
   return {household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!active.value,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,recovery,close:()=>{sequences.close();db.close();master.close()}};
- }catch(e){sequences?.close();db.close();master.close();throw e}
+ }catch(e){sequences?.close();db.close();master?.close();throw e}
 }
