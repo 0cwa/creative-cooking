@@ -115,16 +115,19 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:{group:snapshot(group),outcomes:snapshot(old.outcomes)}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
-  async getLocalOperation(scopeId: string, operationId: string): Promise<Result<{commit: LocalCommit; outcome: SavedOutcome} | null, StorageError>> {
-    if (![scopeId,operationId].every(x=>typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256)) return {ok:false,error:'MALFORMED'};
-    try { return await this.run(false,async tx => {
-      const old=await tx.get(key('local',scopeId,operationId)); if (!old) return {ok:true,value:null};
-      let c: LocalCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='local' || parsed.length!==2) return corrupt(); c=parsed[1];
-        for (const d of c.documents) d.bytes = decodeKeyBytes(d.bytes); for (const cmd of c.commands) cmd.payload = decodeKeyBytes(cmd.payload); for (const o of c.outbound) o.object.bytes = decodeKeyBytes(o.object.bytes);
-      } catch { return corrupt(); }
-      if (!Object.hasOwn(c,'expectedAuthority')) return {ok:false,error:'UNSUPPORTED_VERSION'}; const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.operationId!==operationId) return corrupt();
-      validateOutcome(old.outcome,c.documents); try { await this.completedLocal(tx,c,old.inputKey); } catch (e) { if (e instanceof StorageFailure && e.code === 'CONFLICT') corrupt(); throw e; } return {ok:true,value:{commit:snapshot(c),outcome:snapshot(old.outcome)}};
-    }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  private async localOperation(tx:Tx,scopeId:string,operationId:string):Promise<{commit:LocalCommit;outcome:SavedOutcome}|null> {
+    const old=await tx.get(key('local',scopeId,operationId)); if (!old) return null;
+    let c: LocalCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='local' || parsed.length!==2) return corrupt(); c=parsed[1];
+      for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes); for (const cmd of c.commands) cmd.payload=decodeKeyBytes(cmd.payload); for (const o of c.outbound) o.object.bytes=decodeKeyBytes(o.object.bytes);
+    } catch { return corrupt(); }
+    if (!Object.hasOwn(c,'expectedAuthority')) throw new StorageFailure('UNSUPPORTED_VERSION');
+    const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.operationId!==operationId) return corrupt();
+    validateOutcome(old.outcome,c.documents); try { await this.completedLocal(tx,c,old.inputKey); } catch(e) { if(e instanceof StorageFailure && e.code==='CONFLICT') return corrupt(); throw e; }
+    return {commit:snapshot(c),outcome:snapshot(old.outcome)};
+  }
+  async getLocalOperation(scopeId:string,operationId:string):Promise<Result<{commit:LocalCommit;outcome:SavedOutcome}|null,StorageError>> {
+    if (![scopeId,operationId].every(validId)) return {ok:false,error:'MALFORMED'};
+    try {return await this.run(false,async tx=>({ok:true,value:await this.localOperation(tx,scopeId,operationId)}));} catch(e){return {ok:false,error:mapError(e)};}
   }
   async getInboxApplication(scopeId: string, itemId: string): Promise<Result<{operationId: string; outcome: SavedOutcome} | null, StorageError>> {
     if (![scopeId,itemId].every(x=>typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256)) return {ok:false,error:'MALFORMED'};
@@ -160,6 +163,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
     const scope=p.expectedAuthority.scope.id;
+    const catalog=await tx.get(key('local-master-catalog'));
+    if (!validMasterCatalog(catalog) || JSON.stringify(projectionCanonical(catalog))!==JSON.stringify(projectionCanonical(p.localKey.catalog))) return corrupt();
     let installed; try {installed=await findLocalKey(tx,p.localKey.record.operationId,p.localKey.record.identity);} catch {return corrupt();}
     if (!installed || JSON.stringify(projectionCanonical(installed))!==JSON.stringify(projectionCanonical(p.localKey.record))) return corrupt();
     const manifest=await tx.get(key('projection-manifest',scope,p.manifest.id));
@@ -174,7 +179,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if (!(bytes instanceof Uint8Array) || !sameBytes(bytes,pkg.bytes) || !out || out.packageId!==pkg.id || out.recipientDevice!==pkg.recipientDevice) return corrupt();
     }
     for (const pending of p.pendingEdits) {
-      if (await tx.get(key('projection-pending',scope,p.operationId,pending.scopeId,pending.operationId))!==inputKey || !await tx.get(key('local',pending.scopeId,pending.operationId))) return corrupt();
+      if (await tx.get(key('projection-pending',scope,p.operationId,pending.scopeId,pending.operationId))!==inputKey || !await this.localOperation(tx,pending.scopeId,pending.operationId)) return corrupt();
     }
   }
   async getProjectionPublication(scopeId:string,operationId:string):Promise<Result<ProjectionPublication|null,StorageError>> {
@@ -195,7 +200,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(await tx.get(key('projection-manifest',scope,input.manifest.id))!==undefined) conflict();
       for(const d of input.documents) if(await tx.get(key('document-owner',scope,d.documentId))!==undefined || await tx.get(key('document',scope,d.documentId))!==undefined || await tx.get(key('projection-document',scope,d.documentId))!==undefined) conflict();
       for(const p of input.packages) if(await tx.get(key('projection-package',scope,p.id))!==undefined || await tx.get(key('projection-outbox',scope,input.operationId,p.id))!==undefined) conflict();
-      for(const p of input.pendingEdits) if(!await tx.get(key('local',p.scopeId,p.operationId)) || await tx.get(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId))!==undefined) conflict();
+      for(const p of input.pendingEdits) { if(!await this.localOperation(tx,p.scopeId,p.operationId)) conflict(); if(await tx.get(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId))!==undefined) conflict(); }
       const installed=await installLocalKey(tx,input.localKey.record,input.localKey.catalog);
       if(JSON.stringify(projectionCanonical(installed.record))!==JSON.stringify(projectionCanonical(input.localKey.record))) conflict();
       await tx.put(key('projection-manifest',scope,input.manifest.id),copy(input.manifest.bytes));
