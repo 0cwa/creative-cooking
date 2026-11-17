@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync, sign, verify, createHash, randomBytes, createCipheriv, createDecipheriv} from 'node:crypto';
-import {candidateCodec, candidateObjectId, SUITE, ENCODED_LIMIT} from './candidate.mjs';
+import {candidateCodec, candidateObjectId, validateHeader, SUITE, ENCODED_LIMIT} from './candidate.mjs';
 import {candidatePairing, ceremonyBytes} from '../pairing/candidate.mjs';
 // Test-only provider: Node's AES-GCM exercises the injectable boundary, not the named candidate suite.
 const pair = generateKeyPairSync('ed25519'), key = randomBytes(32);
@@ -102,3 +102,5 @@ test('object ID snapshots mutable input before asynchronous hash',async()=>{
  const pending=candidateObjectId(provider,input); await ready; input[0]=9; release(); assert.equal(await pending,expected);
  await assert.rejects(candidateObjectId(p,new Uint8Array(ENCODED_LIMIT+1)),/TOO_LARGE/);
 });
+
+test('v4 shopping envelope makes incomplete ancestry explicit and rejects malformed claims',()=>{const v4={...h,version:4,disclosurePolicyHash:'p',disclosurePolicyHashes:['p'],sourceEffectIds:[],disclosureIncomplete:false};assert.deepEqual(validateHeader('content',v4),v4);assert.throws(()=>validateHeader('content',{...v4,disclosureIncomplete:undefined}),/MALFORMED/);assert.throws(()=>validateHeader('content',{...v4,disclosurePolicyHash:null}),/MALFORMED/);assert.throws(()=>validateHeader('content',{...v4,disclosurePolicyHashes:[]}),/MALFORMED/);assert.equal(validateHeader('content',{...v4,disclosurePolicyHash:null,disclosurePolicyHashes:[],disclosureIncomplete:true}).disclosureIncomplete,true)});

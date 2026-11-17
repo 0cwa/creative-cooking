@@ -1,3 +1,4 @@
+import {readShoppingItem} from './registry.mjs';
 // Projection of the authenticated domain document. The caller obtains the document
 // through OfflineRuntime.document(), which enforces the selected authority head.
 const named=(kind,id)=>`${kind}:${encodeURIComponent(id)}`;
@@ -25,11 +26,11 @@ export function projectCooking(doc) {
   const v=state[name];if(!v.currentCycleId)return [];const id=decodeURIComponent(name.slice('shopping-list:'.length));
   const startedAt=cycles.find(c=>c.id===v.currentCycleId)?.startedAt;if(!startedAt)throw Error('INVALID_PROJECTION');
   const created=commands.find(c=>c.kind==='shopping-list-create'&&c.data.listId===id)?.data.at ?? null;
-  return [{id,...v,createdAt:created,updatedAt:null}];
- });
- const items=Object.keys(state).filter(x=>x.startsWith('shopping-item:')).sort().flatMap(name=>{
-  const v=state[name].value;if(!v)return [];return [{id:v.itemId,listId:v.listId,name:v.name,purchaseCycleId:v.cycleId,checked:v.checked,createdAt:null,updatedAt:v.at}];
+  return [{id,...v,createdAt:created,updatedAt:v.updatedAt??null}];
  });
  const purchases=Object.values(values(doc,'purchases')).sort((a,b)=>a.id.localeCompare(b.id)).map(({author,...p})=>p);
+ const items=Object.keys(state).filter(x=>x.startsWith('shopping-item:')).sort().flatMap(name=>{
+  const base=state[name].value;if(!base)return [];const cycle=state[named('shopping-list',base.listId)]?.currentCycleId;if(!cycle)return [];const v=readShoppingItem(doc,base.itemId,cycle),purchased=purchases.some(p=>p.listId===v.listId&&p.purchaseCycleId===cycle&&p.itemIds.includes(v.itemId)),optional=Object.fromEntries(['recipeId','ingredientId','displayQuantity','displayUnit','removedAt'].filter(k=>v[k]!==undefined&&v[k]!==null).map(k=>[k,v[k]]));return [{id:v.itemId,listId:v.listId,name:v.name,purchaseCycleId:cycle,checked:v.checked,createdAt:v.createdAt??null,updatedAt:v.updatedAt??v.at,...optional,...(purchased?{purchasedCycleId:cycle}:{})}];
+ });
  return {recipes,pantry,shopping:{lists,cycles,items,purchases}};
 }
