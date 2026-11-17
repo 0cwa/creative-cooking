@@ -166,13 +166,25 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
 
 /** Persist explicit acceptance at the currently selected frozen parent. */
 export async function acceptAdmissionAgreement(storage,scope,pin,provider,agreement) {
- agreement=copy(agreement); const {record,state,nodes}=await load(storage,scope,pin,provider);
- if(agreement.parentHead!==state.activeHead) throw Error('CONFLICT');
+ return (await acceptAdmissionAgreementWithOutcome(storage,scope,pin,provider,agreement)).delegationHash;
+}
+/** Exact replay is recognized against the same fresh state used for the CAS. */
+export async function acceptAdmissionAgreementWithOutcome(storage,scope,pin,provider,agreement) {
+ scope=copy(scope);agreement=copy(agreement);const {record,state,nodes}=await load(storage,scope,pin,provider);
+ if(agreement.parentHead!==state.activeHead)throw Error('CONFLICT');
  const result=await checkAdmissionAgreement(nodes.get(state.activeHead),agreement,provider);
- if(result.status!=='accepted') throw Error(result.reason);
- state.agreements ??= []; state.agreements.push(agreement);
- await verifyAuthority(state,pin,provider); await save(storage,record,state,provider);
- return result.delegationHash;
+ if(result.status!=='accepted')throw Error(result.reason);
+ const retained=current=>(current.agreements??[]).some(value=>JSON.stringify(canonical(value))===JSON.stringify(canonical(agreement)));
+ if(retained(state))return {delegationHash:result.delegationHash,replayed:true};
+ state.agreements??=[];state.agreements.push(agreement);
+ await verifyAuthority(state,pin,provider);
+ try{await save(storage,record,state,provider)}catch(error){
+  if(error?.message!=='CONFLICT')throw error;
+  const latest=await load(storage,scope,pin,provider);
+  if(latest.state.activeHead!==agreement.parentHead||!retained(latest.state))throw error;
+  return {delegationHash:result.delegationHash,replayed:true};
+ }
+ return {delegationHash:result.delegationHash,replayed:false};
 }
 
 /** Resolve admission evidence from the current pinned authority, without releasing keys. */

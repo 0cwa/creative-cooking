@@ -1,9 +1,6 @@
-import {readAuthority,verifyAuthority,acceptAdmissionAgreement} from '../authority/chain.mjs';
-import {checkAdmissionAgreement} from '../authority/grant.mjs';
+import {readAuthority,verifyAuthority,acceptAdmissionAgreementWithOutcome} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
-const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
-const same=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 /** One adult explicitly signs the current-cooking delegation; all adult
  * acceptances are required before the agreement can be retained. */
 export async function prepareHouseholdDelegation({storage,scope,pin,provider,adultId,deviceId,explicit}){
@@ -12,5 +9,6 @@ export async function prepareHouseholdDelegation({storage,scope,pin,provider,adu
 }
 /** The authority verifier checks every distinct adult and the selected parent. */
 export async function acceptHouseholdDelegation({storage,scope,pin,provider,agreement,explicit}){
- if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');const sc=structuredClone(scope),input=structuredClone(agreement),current=await readAuthority(storage,sc,pin,provider),verified=await verifyAuthority(current.state,pin,provider),parent=verified.nodes.get(current.activeHead),checked=await checkAdmissionAgreement(parent,input,provider);if(checked.status!=='accepted')throw Error(checked.reason||'INVALID_PROOF');if((current.state.agreements??[]).some(x=>same(x,input)))return {replayed:true,delegationHash:checked.delegationHash};const delegationHash=await acceptAdmissionAgreement(storage,sc,pin,provider,input);return {replayed:false,delegationHash};
+ if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
+ return acceptAdmissionAgreementWithOutcome(storage,structuredClone(scope),pin,provider,structuredClone(agreement));
 }
