@@ -1,6 +1,6 @@
 // Supplemental SQLite transaction test; the Android/Hermes binding requires its own proof.
 import {DatabaseSync} from 'node:sqlite';
-import {LoroDoc as WebLoroDoc} from '../node_modules/loro-crdt/nodejs/index.js';
+import {LoroDoc as WebLoroDoc} from 'loro-crdt/nodejs';
 import {run} from './scenario.js';
 import {unlinkSync} from 'node:fs';
 import assert from 'node:assert/strict';
