@@ -1,3 +1,4 @@
+import {workspaceRecovery} from './workspace-recovery.mjs';
 import sodium from 'libsodium-wrappers';
 import initLoro, { LoroDoc, decodeImportBlobMeta } from 'loro-crdt/web/loro_wasm.js';
 import {openIndexedDBStorage} from '../storage/indexeddb.ts';
@@ -73,6 +74,7 @@ async function openLockedWorkspace(name:string,create:boolean) {
   };
   const disclosure=disclosureService({storage:db.storage,scope:{kind:'household',id:r.house},rootPin:root.head,provider,deviceId:r.device});
   const policyPointer=await db.storage.readDisclosureActive(r.house);if(!policyPointer.ok)throw Error(policyPointer.error);if(policyPointer.value)await disclosure.active();
-  return {household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!policyPointer.value,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,close:()=>{sequences?.close();db.close();master.close();meta.close()}};
+  const recovery=workspaceRecovery({sodium,keys,run:db.recoveryTransaction,storage:db.storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
+  return {recovery,household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!policyPointer.value,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,close:()=>{sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {sequences?.close();db.close();master.close();meta.close();throw error}
 }
