@@ -77,6 +77,7 @@ export class OfflineRuntime {
     if (command.data.author !== undefined && command.data.author !== this.scope.authorDevice) throw new Error('INVALID_AUTHORITY');
     doc.setPeerId(this.scope.authorPeers[this.scope.authorDevice]);
     registry.checkPreconditions(doc,command);
+    registry.checkShoppingCompatibility(doc,command);
     const before=doc.oplogVersion();
     apply(doc,command);
     registry.validateOperations(command,doc.exportJsonUpdates(before,undefined,false).changes);
@@ -115,7 +116,7 @@ export class OfflineRuntime {
     return required(await this.storage.commitLocal({scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:staged.doc.export({mode:'snapshot'}),expectedRevision:initialRevision}],commands,outbound}));
   }
   async execute(input) {
-    if (['chef-accept','chef-effect'].includes(input?.command?.kind)) throw new Error('GROUP_REQUIRED');
+    if (['chef-accept','chef-effect','shopping-item-create','shopping-item-field','shopping-list-field'].includes(input?.command?.kind)) throw new Error('GROUP_REQUIRED');
     const prepared=await this.prepare(input);
     if (prepared.previous) return prepared.previous;
     return required(await this.storage.commitLocal(prepared.commit));
@@ -157,6 +158,7 @@ export class OfflineRuntime {
     const command=payload.command;
     registry.validateOperations(command,verifier.exportJsonUpdates(start,undefined,false).changes);
     registry.checkPreconditions(prior,command,{importing:true});
+    registry.checkShoppingCompatibility(doc,command);if(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h.version!==4)throw Error('UNSUPPORTED_VERSION');
     const status=doc.import(update);
     if (status.pending && status.pending.size) throw new Error('MISSING_DEPENDENCY');
     return required(await this.storage.commitImport({version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds}));

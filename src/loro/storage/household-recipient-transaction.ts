@@ -25,6 +25,10 @@ export class HouseholdRecipientTransaction {
   if(!id(scopeId)||!id(operationId))return {ok:false as const,error:'MALFORMED'};
   try{return await this.run(false,async tx=>{const p=await tx.get(k('recipient-admission',scopeId,operationId));if(p===undefined)return {ok:true as const,value:null};if(!exact(p,['fingerprint','input'])||!valid(p.input)||p.input.scopeId!==scopeId||p.input.operationId!==operationId||p.fingerprint!==JSON.stringify(canon(p.input)))fail('CORRUPT');return {ok:true as const,value:structuredClone(p.input)}})}catch(e){return {ok:false as const,error:e instanceof Error&&e.message==='CORRUPT'?'CORRUPT':'IO'}}
  }
+ async hasDevice(scopeId:string,deviceId:string){
+  if(!id(scopeId)||!id(deviceId))return {ok:false as const,error:'MALFORMED'};
+  try{return await this.run(false,async tx=>{let found=false;for(const slot of await tx.keys()){let parts:any;try{parts=JSON.parse(slot)}catch{continue}if(!Array.isArray(parts)||parts.length!==3||parts[0]!=='recipient-admission'||parts[1]!==scopeId)continue;const saved=await tx.get(slot);if(!exact(saved,['fingerprint','input'])||!valid(saved.input)||saved.fingerprint!==JSON.stringify(canon(saved.input))||saved.input.scopeId!==scopeId||saved.input.operationId!==parts[2])fail('CORRUPT');if(saved.input.receiptBody?.recipientDevice===deviceId)found=true}return {ok:true as const,value:found}})}catch(e){return {ok:false as const,error:e instanceof Error&&e.message==='CORRUPT'?'CORRUPT':'IO'}}
+ }
  async findByEvent(scopeId:string,eventHash:string){
   if(!id(scopeId)||!id(eventHash))return {ok:false as const,error:'MALFORMED'};
   try{const op=await this.run(false,tx=>tx.get(k('recipient-admission-event',scopeId,eventHash)));if(op===undefined)return {ok:true as const,value:null};if(!id(op))return {ok:false as const,error:'CORRUPT'};const result=await this.find(scopeId,op);if(!result.ok||!result.value||result.value.nextAuthority.acceptedParent!==eventHash)return {ok:false as const,error:'CORRUPT'};return result}catch{return {ok:false as const,error:'IO'}}
