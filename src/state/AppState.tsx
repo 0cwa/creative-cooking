@@ -123,6 +123,7 @@ type AppStateApi = PersistedState & {
   keepGuestContent(): Promise<void>;
   prepareAccountExit(): Promise<void>;
   flushCurrentWorkspace(): Promise<void>;
+  beginWorkspaceTransition(): () => void;
   exportWorkspaceRecovery(): Promise<string>;
   reportContentEditDenied(): void;
   addPantryItems(names: string[], preference?: IngredientPreference): void;
@@ -173,6 +174,9 @@ function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace
   return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local">{children}</AppStateBody></LoroWorkspaceContext>;
 }
 function AppStateBody({children,state,setState,content,storageMode}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing'}>) {
+  const transitionInProgress=useRef(false);
+  const [mutationsPaused,setMutationsPaused]=useState(false);
+  const beginWorkspaceTransition=useCallback(()=>{if(transitionInProgress.current)throw Error('A workspace switch is already in progress.');transitionInProgress.current=true;setMutationsPaused(true);let released=false;return()=>{if(released)return;released=true;transitionInProgress.current=false;setMutationsPaused(false)}},[]);
   const appStateRef = useRef(state);
   const pantryRef = useRef(state.pantry);
   appStateRef.current = state;
@@ -180,6 +184,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
   const updateAppState = useCallback((
     update: PersistedState | ((current: PersistedState) => PersistedState)
   ) => {
+    if(transitionInProgress.current)return;
     const current = appStateRef.current;
     const next = typeof update === 'function' ? update(current) : update;
     if (next === current) return;
@@ -191,8 +196,10 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
   const hydrated = content.hydrated;
   const storageError = content.storageError;
   const retryStorage = content.retryStorage;
+  const flushCurrentWorkspace=useCallback(()=>content.flushCurrentWorkspace(storageMode==='fresh-local'?appStateRef.current:undefined),[content.flushCurrentWorkspace,storageMode]);
 
   const ensureSharedEditAllowed = useCallback(() => {
+    if(transitionInProgress.current)return false;
     if (content.canEditShared) return true;
     content.reportEditDenied();
     return false;
@@ -528,7 +535,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       contentSyncStatus: content.syncStatus,
       contentSyncError: content.syncError,
       localPersistenceStatus: content.localPersistenceStatus,
-      canEditSharedContent: content.canEditShared,
+      canEditSharedContent: content.canEditShared&&!mutationsPaused,
       guestContentAvailable: content.guestAdoption.available,
       guestContentDecision: content.guestAdoption.decision,
       localRecipeConflicts: content.recipeConflicts,
@@ -541,7 +548,8 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       mergeGuestContent: content.mergeGuestContent,
       keepGuestContent: content.keepGuestContent,
       prepareAccountExit: content.prepareAccountExit,
-      flushCurrentWorkspace: content.flushCurrentWorkspace,
+      flushCurrentWorkspace,
+      beginWorkspaceTransition,
       exportWorkspaceRecovery: content.exportWorkspaceRecovery,
       reportContentEditDenied: content.reportEditDenied,
       addPantryItems,
@@ -580,6 +588,9 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       hydrated,
       storageError,
       content,
+      mutationsPaused,
+      beginWorkspaceTransition,
+      flushCurrentWorkspace,
       saveAttemptedRecipeAsCopy,
       keepWorkspaceRecipeVersion,
       retryStorage,
