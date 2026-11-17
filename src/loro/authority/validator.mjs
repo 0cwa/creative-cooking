@@ -2,7 +2,12 @@
 const enc = new TextEncoder();
 const id = x => typeof x === 'string' && x.length > 0 && x.length <= 256;
 const keys = (o, ks) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length === ks.length && ks.every(k => Object.hasOwn(o,k));
-const ids = a => Array.isArray(a) && a.length > 0 && a.length <= 64 && a.every(id) && new Set(a).size === a.length && a.every((v,i) => !i || a[i-1] < v);
+const dense = a => {
+ if (!Array.isArray(a)) return false;
+ for(let i=0;i<a.length;i++) if(!Object.hasOwn(a,i)) return false;
+ return true;
+};
+const ids = a => Array.isArray(a) && a.length > 0 && a.length <= 64 && dense(a) && a.every(id) && new Set(a).size === a.length && a.every((v,i) => !i || a[i-1] < v);
 const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
 const signature = s => typeof s === 'string' && /^[0-9a-f]{128}$/.test(s) ? Uint8Array.from(s.match(/../g), x => parseInt(x,16)) : null;
 const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k,canonical(v[k])])) : v;
@@ -12,13 +17,13 @@ const threshold = (p,n) => p.kind === 'fixed' ? p.fixedCount : p.kind === 'unani
 const deny = reason => ({status:'deny',reason});
 const pending = reason => ({status:'pending',reason});
 const validRuntime = (r,devices) => {
- if (!keys(r,['documentId','authorPeers','acceptedRecipients']) || !id(r.documentId) || !r.authorPeers || typeof r.authorPeers!=='object' || Array.isArray(r.authorPeers) || !Array.isArray(r.acceptedRecipients)) return false;
+ if (!keys(r,['documentId','authorPeers','acceptedRecipients']) || !id(r.documentId) || !r.authorPeers || typeof r.authorPeers!=='object' || Array.isArray(r.authorPeers) || !dense(r.acceptedRecipients)) return false;
  const active=devices.filter(d=>d.active).map(d=>d.deviceId).sort(), peers=Object.keys(r.authorPeers).sort();
  if (JSON.stringify(active)!==JSON.stringify(peers) || !active.length || active.length>128) return false;
  const values=Object.values(r.authorPeers), validPeer=p=>typeof p==='string' && p.length<=20 && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p)<=18446744073709551615n;
  return values.every(validPeer) && new Set(values).size===values.length && r.acceptedRecipients.every(x=>active.includes(x)) && new Set(r.acceptedRecipients).size===r.acceptedRecipients.length && r.acceptedRecipients.every((v,i)=>!i || r.acceptedRecipients[i-1]<v);
 };
-export const validParent = parent => !(!keys(parent,['householdId','head','policyHash','generation','epochId','roster','devices','policy','runtime']) || ![parent.householdId,parent.head,parent.policyHash,parent.epochId].every(id) || !Number.isSafeInteger(parent.generation) || parent.generation < 0 || !ids(parent.roster) || !policy(parent.policy,parent.roster.length) || !Array.isArray(parent.devices) || parent.devices.length > 128 || !parent.devices.every(d=>keys(d,['deviceId','adultId','signingKeyRef','active']) && id(d.deviceId) && id(d.signingKeyRef) && parent.roster.includes(d.adultId) && typeof d.active === 'boolean') || new Set(parent.devices.map(d=>d.deviceId)).size !== parent.devices.length || !validRuntime(parent.runtime,parent.devices));
+export const validParent = parent => !(!keys(parent,['householdId','head','policyHash','generation','epochId','roster','devices','policy','runtime']) || ![parent.householdId,parent.head,parent.policyHash,parent.epochId].every(id) || !Number.isSafeInteger(parent.generation) || parent.generation < 0 || !ids(parent.roster) || !policy(parent.policy,parent.roster.length) || !Array.isArray(parent.devices) || parent.devices.length > 128 || !dense(parent.devices) || !parent.devices.every(d=>keys(d,['deviceId','adultId','signingKeyRef','active']) && id(d.deviceId) && id(d.signingKeyRef) && parent.roster.includes(d.adultId) && typeof d.active === 'boolean') || new Set(parent.devices.map(d=>d.deviceId)).size !== parent.devices.length || !validRuntime(parent.runtime,parent.devices));
 const eventFields = ['version','suiteId','householdId','parentHead','policyHash','generation','epochId','proposalId','kind','authorDeviceId','frozenAdultRoster','subject','nextPolicy'];
 const approvalFields = ['version','householdId','eventHash','parentHead','policyHash','generation','epochId','adultId','deviceId','signature'];
 // The caller must authenticate and freeze the parent from the accepted authority record.

@@ -23,6 +23,19 @@ root.head=await rootPin(provider,root);
 const event=name=>({version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:'house',parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',proposalId:name,kind:'changePolicy',authorDeviceId:'a',frozenAdultRoster:['a','b'],subject:null,nextPolicy:{kind:'unanimous',fixedCount:null}});
 async function item(name){const e=event(name),eventHash=hex(await provider.hash(domain('event',e)));const approval={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a'};return {event:e,authorSignature:sign('a','event-signature',e),approvals:[{...approval,signature:sign('a','approval-signature',approval)}]}}
 function isolatedStore() {const database=new DatabaseSync(':memory:');return {database,storage:openSQLiteStorage({executeSync:(sql,params=[])=>{const statement=database.prepare(sql);return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])}}})};}
+for (const field of ['acceptedRecipients','roster','devices']) test(`sparse ${field} cannot initialize durable authority`,async()=>{
+ const {database,storage}=isolatedStore();
+ try {
+  const candidate=structuredClone(root);
+  if(field==='acceptedRecipients')candidate.runtime.acceptedRecipients=Array(1);
+  else candidate[field].length++;
+  candidate.head=await rootPin(provider,candidate);
+  await assert.rejects(initializeAuthority(storage,candidate,candidate.head,provider),/INVALID_ROOT/);
+  assert.equal((await storage.readPairingAuthority(scope)).value,null);
+  await initializeAuthority(storage,root,root.head,provider);
+  assert.equal((await readAuthority(storage,scope,root.head,provider)).activeHead,root.head);
+ } finally {database.close();}
+});
 test('authority state cannot be an array with named record fields',async()=>{
  const state=Object.assign([],{version:1,root,events:[],selections:[],activeHead:root.head});
  await assert.rejects(verifyAuthority(state,root.head,provider),/MALFORMED/);
