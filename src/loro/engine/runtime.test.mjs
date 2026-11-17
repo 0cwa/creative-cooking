@@ -14,16 +14,19 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
  await sodium.ready;
  const dir=mkdtempSync(join('/var/home/x/agent-scratch/creative-cooking/loro-implementation','runtime-test-'));
  const signing=sodium.crypto_sign_keypair(), recipient=sodium.crypto_box_keypair(), dataKey=sodium.randombytes_buf(32);
- const codec=()=>candidateCodec(testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey}));
+ const signingB=sodium.crypto_sign_keypair();
+ const codec=()=>{const provider=testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey}); provider.sign=async (who,bytes)=>sodium.crypto_sign_detached(bytes,who==='sender'?signing.privateKey:signingB.privateKey); provider.verify=async (who,bytes,signature)=>sodium.crypto_sign_verify_detached(signature,bytes,who==='sender'?signing.publicKey:signingB.publicKey); return candidateCodec(provider);};
  // Isolated preaccepted test identity; this is not product pairing.
- const scope={scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',authorizationSnapshot:'authority-v1',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',acceptedAuthors:['sender'],acceptedRecipients:['peer'],suiteId:SUITE};
+ const scope={scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',authorizationSnapshot:'authority-v1',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',acceptedAuthors:['sender','sender-b'],authorPeers:{sender:'1','sender-b':'2'},acceptedRecipients:['peer'],suiteId:SUITE};
  let fault='';
- const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault === b) throw Error('injected');}); return {db,storage,runtime:new OfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'})};};
+ const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault === b) throw Error('injected');}); return {db,storage,runtime:new OfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorDevice:name==='b.sqlite'?'sender-b':'sender'},keyRef:'data'})};};
  let a=open('a.sqlite'), b=open('b.sqlite');
  const stage=async (target,object,n)=>assert.equal((await target.storage.stageInbox({scopeId:'house',object:{id:object.objectId,bytes:object.bytes},source:'peer',expectedCursor:n===0?null:String(n-1),cursor:String(n)})).ok,true);
  try {
-  const authorityState=new TextEncoder().encode(JSON.stringify({acceptedAuthors:scope.acceptedAuthors,acceptedRecipients:scope.acceptedRecipients,epochId:scope.epochId,policyHashes:scope.policyHashes,documentId:scope.documentId,documentGeneration:scope.documentGeneration}));
+  const authorityState=new TextEncoder().encode(JSON.stringify({acceptedAuthors:scope.acceptedAuthors,authorPeers:scope.authorPeers,acceptedRecipients:scope.acceptedRecipients,epochId:scope.epochId,policyHashes:scope.policyHashes,documentId:scope.documentId,documentGeneration:scope.documentGeneration}));
   for (const client of [a,b]) assert.equal((await client.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'house'},revision:0,acceptedParent:scope.branchHead,authorizationSnapshot:scope.authorizationSnapshot,authorityState}})).ok,true);
+  assert.throws(()=>new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorPeers:{sender:'01','sender-b':'2'}},keyRef:'data'}),/MALFORMED_SCOPE/);
+  assert.throws(()=>new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorPeers:{sender:'1','sender-b':'1'}},keyRef:'data'}),/MALFORMED_SCOPE/);
   await assert.rejects(a.runtime.outboundFor('stranger'),/INVALID_AUTHORITY/);
   const denied=new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorizationSnapshot:'other'},keyRef:'data'});
   await assert.rejects(denied.execute({operationId:'denied',command:{commandId:'denied',effectId:'denied',kind:'purchase',value:'x'},deviceSequence:0}),/INVALID_AUTHORITY/);
@@ -45,7 +48,7 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   await stage(b,first,1); await stage(a,bo[0],0);
   fault='import'; const failedImport=await a.runtime.recoverInbox(); assert.equal(failedImport[0].error.message,'IO'); fault='';
   assert.deepEqual(await a.runtime.read(),{recipe:{title:'Soup'},purchases:{ea:'carrots'}});
-  const evil=new LoroDoc(), v=evil.oplogVersion(); evil.getMap('recipe').set('title','injected');
+  const evil=new LoroDoc(); evil.setPeerId('1'); const v=evil.oplogVersion(); evil.getMap('recipe').set('title','injected');
   const badUpdate=evil.export({mode:'update',from:v});
   const badHeader={version:1,suiteId:SUITE,scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',deviceSequence:4,predecessorRefs:[],semanticEffectIds:['bad'],payloadKind:'loro-update-v1'};
   const bad=await codec().sealContent(badHeader,new TextEncoder().encode(JSON.stringify({version:1,command:{commandId:'bad',effectId:'bad',kind:'purchase',value:'beans'},update:Array.from(badUpdate)})),'data');
@@ -69,5 +72,20 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   assert.deepEqual(JSON.parse(new TextDecoder().decode(committed.payload)),{commandId:'original-id',effectId:'original-effect',kind:'purchase',value:'carrots'});
   assert.equal((await a.runtime.read()).purchases['original-effect'],'carrots');
   assert.equal((await a.runtime.execute({operationId:'mutation',command:{commandId:'original-id',effectId:'original-effect',kind:'purchase',value:'carrots'},deviceSequence:5})).replayed,true);
+  // An authenticated signer cannot claim an unassigned or already-consumed Loro peer operation.
+  const forged=async(peer,effect)=>{const d=new LoroDoc();d.setPeerId(peer);const v=d.oplogVersion();d.getMap('purchases').set(effect,'forged');const u=d.export({mode:'update',from:v}); const h={...badHeader,deviceSequence:6,semanticEffectIds:[effect]};const command={commandId:effect,effectId:effect,kind:'purchase',value:'forged'};return codec().sealContent(h,new TextEncoder().encode(JSON.stringify({version:1,command,update:Array.from(u)})),'data');};
+  const wrong=await forged('99','wrong-peer'); await stage(b,{objectId:wrong.id,bytes:wrong.bytes},2);
+  await assert.rejects(b.runtime.importItem({itemId:wrong.id,bytes:wrong.bytes}),/MALFORMED_UPDATE/); assert.equal((await b.storage.getInboxApplication('house',wrong.id)).value,null);
+  const collision=await forged('1','collision'); await stage(b,{objectId:collision.id,bytes:collision.bytes},3);
+  await assert.rejects(b.runtime.importItem({itemId:collision.id,bytes:collision.bytes}),/MALFORMED_UPDATE/); assert.equal((await b.storage.getInboxApplication('house',collision.id)).value,null);
+  let releaseBoth, entered=0, bothEntered; const gate2=new Promise(r=>{releaseBoth=r;}), ready2=new Promise(r=>{bothEntered=r;});
+  const slowReal=codec(), slow={...slowReal,sealContent:async(...args)=>{const value=await slowReal.sealContent(...args); if(++entered===2) bothEntered(); await gate2; return value;}};
+  const racer=new OfflineRuntime({storage:a.storage,codec:slow,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+  const jobs=[1,2].map(i=>({operationId:`race-${i}`,deviceSequence:10+i,command:{commandId:`race-${i}`,effectId:`race-${i}`,kind:'purchase',value:`item-${i}`}}));
+  const writes=jobs.map(x=>racer.execute(x)); await ready2; releaseBoth(); const settled=await Promise.allSettled(writes);
+  assert.equal(settled.filter(x=>x.status==='fulfilled').length,1); const loser=settled.findIndex(x=>x.status==='rejected'); assert.match(settled[loser].reason.message,/CONFLICT/);
+  await a.runtime.execute(jobs[loser]); const afterRace=await a.runtime.read(); assert.equal(afterRace.purchases['race-1'],'item-1'); assert.equal(afterRace.purchases['race-2'],'item-2');
+  a.db.close(); a=open('a.sqlite'); assert.deepEqual(await a.runtime.read(),afterRace);
+
  } finally {a.db.close(); b.db.close(); rmSync(dir,{recursive:true,force:true});}
 });

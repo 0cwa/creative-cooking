@@ -20,6 +20,9 @@ function apply(doc, command) {
 export class OfflineRuntime {
   constructor({storage, codec, LoroDoc, decodeImportBlobMeta, scope, keyRef}) {
     this.storage=storage; this.codec=codec; this.LoroDoc=LoroDoc; this.decodeImportBlobMeta=decodeImportBlobMeta; this.scope=structuredClone(scope); this.keyRef=keyRef;
+    const peers=scope.authorPeers && Object.values(scope.authorPeers);
+    const validPeer=p=>typeof p==='string' && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p) <= 18446744073709551615n;
+    if (!peers || !peers.every(validPeer) || new Set(peers).size !== peers.length || Object.keys(scope.authorPeers).length !== scope.acceptedAuthors?.length || !scope.acceptedAuthors.every(a=>Object.hasOwn(scope.authorPeers,a))) throw new Error('MALFORMED_SCOPE');
     if (!scope.scopeId || !scope.documentId || !scope.branchHead || !scope.epochId || !scope.authorDevice || !scope.suiteId || !Array.isArray(scope.policyHashes) || !Array.isArray(scope.acceptedAuthors) || !scope.acceptedAuthors.includes(scope.authorDevice)) throw new Error('MALFORMED_SCOPE');
   }
   async authorize() {
@@ -27,7 +30,7 @@ export class OfflineRuntime {
     const record=required(await this.storage.readPairingAuthority({kind:'household',id:s.scopeId}));
     if (!record || record.acceptedParent !== s.branchHead || record.authorizationSnapshot !== s.authorizationSnapshot) throw new Error('INVALID_AUTHORITY');
     let state; try { state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState)); } catch { throw new Error('INVALID_AUTHORITY'); }
-    if (!same(state,{acceptedAuthors:s.acceptedAuthors,acceptedRecipients:s.acceptedRecipients,epochId:s.epochId,policyHashes:s.policyHashes,documentId:s.documentId,documentGeneration:s.documentGeneration})) throw new Error('INVALID_AUTHORITY');
+    if (!same(state,{acceptedAuthors:s.acceptedAuthors,authorPeers:s.authorPeers,acceptedRecipients:s.acceptedRecipients,epochId:s.epochId,policyHashes:s.policyHashes,documentId:s.documentId,documentGeneration:s.documentGeneration})) throw new Error('INVALID_AUTHORITY');
     return {version:2,scope:record.scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
   }
   async document() {
@@ -49,6 +52,7 @@ export class OfflineRuntime {
       return {outcome:previous.outcome,replayed:true};
     }
     const {doc,revision}=await this.document();
+    doc.setPeerId(this.scope.authorPeers[this.scope.authorDevice]);
     const before=doc.oplogVersion();
     apply(doc,command);
     const snapshot=doc.export({mode:'snapshot'}), update=doc.export({mode:'update',from:before});
@@ -66,7 +70,8 @@ export class OfflineRuntime {
     let operations=0;
     for (const [peer,end] of ends) operations += end-(starts.get(peer) ?? 0);
     if (meta.mode !== 'update' || meta.changeNum !== 1 || operations !== 1) throw new Error('MALFORMED_UPDATE');
-    return {predecessors:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort()};
+    if (ends.size !== 1) throw new Error('MALFORMED_UPDATE');
+    return {peer:[...ends.keys()][0],predecessors:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort()};
   }
   async importItem(item) {
     const expectedAuthority=await this.authorize();
@@ -80,7 +85,7 @@ export class OfflineRuntime {
     if (payload.command.effectId !== h.semanticEffectIds[0]) throw new Error('MALFORMED_UPDATE');
     const update=Uint8Array.from(payload.update);
     const meta=this.inspectUpdate(update);
-    if (!same(meta.predecessors,h.predecessorRefs)) throw new Error('MALFORMED_UPDATE');
+    if (meta.peer !== s.authorPeers[h.authorDevice] || !same(meta.predecessors,h.predecessorRefs)) throw new Error('MALFORMED_UPDATE');
     const {doc,revision}=await this.document();
     const before=doc.oplogVersion();
     const status=doc.import(update);
