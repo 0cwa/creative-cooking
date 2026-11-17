@@ -21,7 +21,7 @@ export class OfflineRuntime {
   constructor({storage, codec, LoroDoc, decodeImportBlobMeta, scope, keyRef}) {
     this.storage=storage; this.codec=codec; this.LoroDoc=LoroDoc; this.decodeImportBlobMeta=decodeImportBlobMeta; this.scope=structuredClone(scope); this.keyRef=keyRef;
     const peers=scope.authorPeers && Object.values(scope.authorPeers);
-    const validPeer=p=>typeof p==='string' && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p) <= 18446744073709551615n;
+    const validPeer=p=>typeof p==='string' && p.length <= 20 && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p) <= 18446744073709551615n;
     if (!peers || !peers.every(validPeer) || new Set(peers).size !== peers.length || Object.keys(scope.authorPeers).length !== scope.acceptedAuthors?.length || !scope.acceptedAuthors.every(a=>Object.hasOwn(scope.authorPeers,a))) throw new Error('MALFORMED_SCOPE');
     if (!scope.scopeId || !scope.documentId || !scope.branchHead || !scope.epochId || !scope.authorDevice || !scope.suiteId || !Array.isArray(scope.policyHashes) || !Array.isArray(scope.acceptedAuthors) || !scope.acceptedAuthors.includes(scope.authorDevice)) throw new Error('MALFORMED_SCOPE');
   }
@@ -95,7 +95,7 @@ export class OfflineRuntime {
     const command=payload.command, container=command.kind === 'recipe-title' ? 'cid:root-recipe:Map' : 'cid:root-purchases:Map';
     const key=command.kind === 'recipe-title' ? 'title' : command.effectId;
     if (!op || op.container !== container || op.content.type !== 'insert' || op.content.key !== key || op.content.value !== command.value) throw new Error('MALFORMED_UPDATE');
-    return required(await this.storage.commitImport({scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],effectIds:h.semanticEffectIds}));
+    return required(await this.storage.commitImport({version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:[]}],effectIds:h.semanticEffectIds}));
   }
   async recoverInbox() {
     const items=required(await this.storage.listStagedInbox(this.scope.scopeId));

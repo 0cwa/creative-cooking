@@ -86,6 +86,17 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   assert.equal(settled.filter(x=>x.status==='fulfilled').length,1); const loser=settled.findIndex(x=>x.status==='rejected'); assert.match(settled[loser].reason.message,/CONFLICT/);
   await a.runtime.execute(jobs[loser]); const afterRace=await a.runtime.read(); assert.equal(afterRace.purchases['race-1'],'item-1'); assert.equal(afterRace.purchases['race-2'],'item-2');
   a.db.close(); a=open('a.sqlite'); assert.deepEqual(await a.runtime.read(),afterRace);
+  await assert.rejects(b.runtime.execute({operationId:'reuse-imported-command',command:{commandId:'ca',effectId:'different-effect',kind:'purchase',value:'other'},deviceSequence:30}),/CONFLICT/);
+  const construct=async(command,sequence)=>{const source=(await b.storage.reopenDocument('house','cooking')).value, doc=new LoroDoc();doc.import(source.bytes);doc.setPeerId('2');const v=doc.oplogVersion();doc.getMap('purchases').set(command.effectId,command.value);const update=doc.export({mode:'update',from:v});const m=decodeImportBlobMeta(update,true);const header={...badHeader,authorDevice:'sender-b',deviceSequence:sequence,predecessorRefs:m.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort(),semanticEffectIds:[command.effectId]};return codec().sealContent(header,new TextEncoder().encode(JSON.stringify({version:1,command,update:Array.from(update)})),'data');};
+  const duplicate=await construct({commandId:'ca',effectId:'local-duplicate-effect',kind:'purchase',value:'other'},31);
+  await stage(a,{objectId:duplicate.id,bytes:duplicate.bytes},2);
+  await assert.rejects(a.runtime.importItem({itemId:duplicate.id,bytes:duplicate.bytes}),/CONFLICT/);
+  assert.equal((await a.storage.getInboxApplication('house',duplicate.id)).value,null);
+  const duplicateImported=await construct({commandId:'cb',effectId:'import-duplicate-effect',kind:'purchase',value:'other'},32);
+  await stage(a,{objectId:duplicateImported.id,bytes:duplicateImported.bytes},3);
+  await assert.rejects(a.runtime.importItem({itemId:duplicateImported.id,bytes:duplicateImported.bytes}),/CONFLICT/);
+  assert.equal((await a.storage.getInboxApplication('house',duplicateImported.id)).value,null);
+
 
  } finally {a.db.close(); b.db.close(); rmSync(dir,{recursive:true,force:true});}
 });
