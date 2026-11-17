@@ -1,11 +1,16 @@
 // Stable action IDs and command IDs are supplied by the caller and retained
 // across retries; saved commits are inspected before any allocation or sealing.
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
-const queues=new WeakMap();
+const queues=new WeakMap(),listeners=new WeakMap();
+export function subscribeActions(runtime,listener) {
+ let set=listeners.get(runtime);if(!set){set=new Set();listeners.set(runtime,set)}set.add(listener);
+ return ()=>{set.delete(listener);if(!set.size)listeners.delete(runtime)};
+}
+
 export function executeAction(runtime,sequences,actionId,commands) {
  const input=structuredClone(commands);
  const previous=queues.get(runtime)??Promise.resolve();
- const current=previous.catch(()=>{}).then(()=>execute(runtime,sequences,actionId,input));
+ const current=previous.catch(()=>{}).then(()=>execute(runtime,sequences,actionId,input)).then(result=>{for(const listener of listeners.get(runtime)??[]){try{listener()}catch{}}return result});
  queues.set(runtime,current);
  void current.finally(()=>{if(queues.get(runtime)===current)queues.delete(runtime)}).catch(()=>{});
  return current;
