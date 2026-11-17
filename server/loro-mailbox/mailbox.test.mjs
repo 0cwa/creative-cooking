@@ -4,7 +4,7 @@ import {generateKeyPairSync,sign,verify,createHash,randomBytes,createCipheriv,cr
 import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {openMailbox,randomMailboxSecrets} from './server.mjs';
-import {relayClient} from '../../src/loro/relay/client.mjs';
+import {relayClient,ed25519ReceiptVerifier} from '../../src/loro/relay/client.mjs';
 import {candidateCodec,SUITE} from '../../src/loro/crypto/candidate.mjs';
 import {testProvider} from '../../src/loro/crypto/test-provider.mjs';
 import sodium from 'libsodium-wrappers';
@@ -19,8 +19,8 @@ test('HTTP encrypted candidate, durable retry, quota, cursors, expiry and verifi
  const provider=testProvider(sodium,{signing,recipient,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
  const codec=candidateCodec(provider),h={version:1,suiteId:SUITE,scopeId:'scope',documentId:'doc',documentGeneration:0,branchHead:'head',policyHashes:[],epochId:'epoch',authorDevice:'sender',deviceSequence:1,predecessorRefs:[],semanticEffectIds:[],payloadKind:'update'};
  const one=await codec.sealContent(h,encoder.encode('secret recipe'),'data'),two=await codec.sealContent({...h,deviceSequence:2},encoder.encode('second'),'data'),three=await codec.sealContent({...h,deviceSequence:3},encoder.encode('third'),'data');
- const relayId=hash(relayKeys.publicKey.export({type:'spki',format:'der'})).toString('hex');
- const verifyReceipt=async(c,s)=>verify(null,Buffer.from(JSON.stringify(c)),relayKeys.publicKey,Buffer.from(s,'base64url'));
+ const {relayId,verifyReceipt}=await ed25519ReceiptVerifier(new Uint8Array(relayKeys.publicKey.export({type:'spki',format:'der'})));
+ assert.equal(relayId,hash(relayKeys.publicKey.export({type:'spki',format:'der'})).toString('hex'));
  async function start(){service=openMailbox({path,signingKey:relayKeys.privateKey,hashProvider,now:()=>now});await new Promise(r=>service.server.listen(0,'127.0.0.1',r));const baseUrl=`http://127.0.0.1:${service.server.address().port}`;return {baseUrl,client:relayClient({baseUrl,mailbox:secrets.id,relayId,...secrets,hashProvider,verifyReceipt})};}
  async function stop(){await new Promise((resolve,reject)=>service.server.close(e=>e?reject(e):resolve()));service.close();}
  try {let {baseUrl,client}=await start();service.provision({...secrets,quota:one.bytes.length+two.bytes.length,expires:2000});
