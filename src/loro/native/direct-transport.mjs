@@ -1,5 +1,5 @@
 import {verifyHouseholdSessionEvidence} from '../pairing/durable-session.mjs';
-import {MAX_FRAME,MAX_QUEUED_FRAMES,sendFrames} from '../transport/adapter.mjs';
+import {MAX_FRAME,MAX_OBJECT,MAX_TRANSFERS,MAX_PENDING_BYTES,MAX_QUEUED_FRAMES,sendFrames} from '../transport/adapter.mjs';
 /** Binary channel bridge. Callers must authenticate signaling and verify received frames. */
 export function nativeBinaryChannel(channel,{onFrame,onError}) {
  if(!channel||typeof channel.addEventListener!=='function'||typeof onFrame!=='function'||typeof onError!=='function')throw Error('MALFORMED');
@@ -35,10 +35,18 @@ export async function nativeDurableTransfer(channel,{sessionId,streamId,verifySe
  let header;try{header=JSON.parse(new TextDecoder().decode(probe[0]))}catch{throw Error('FRAMING_UNAVAILABLE')}
  if(probe.length!==1||header.payloadHash!==zero)throw Error('FRAMING_UNAVAILABLE');
  const probeReceiver=new framing.Reassembler(sessionId,MAX_FRAME,async()=>zero);let checked;try{checked=await probeReceiver.accept(probe[0])}catch{throw Error('FRAMING_UNAVAILABLE')}if(!checked||checked.bytes.length)throw Error('FRAMING_UNAVAILABLE');
- const receiver=new framing.Reassembler(sessionId,MAX_FRAME,sha256);let sendQueue=Promise.resolve(),closed=false;
+ const receiver=new framing.Reassembler(sessionId,MAX_FRAME,sha256);let sendQueue=Promise.resolve(),closed=false,outstanding=0,outstandingBytes=0;
  const bridge=nativeBinaryChannel(channel,{onError,onFrame:async frame=>{if(closed)throw Error('CLOSED');const object=await receiver.accept(frame);if(!object)return;if(object.streamId!==streamId)throw Error('SESSION');const cursors=await cursorFor(object.transferId);if(!cursors||typeof cursors.cursor!=='string'||!(cursors.expectedCursor===null||typeof cursors.expectedCursor==='string'))throw Error('MALFORMED');const receipt=await inbox.stage({transferId:object.transferId,bytes:object.bytes,expectedCursor:cursors.expectedCursor,cursor:cursors.cursor});await onReceipt(receipt)}});
  return {
-  send:(transferId,bytes)=>{if(closed)return Promise.reject(Error('CLOSED'));const payload=bytes instanceof Uint8Array?new Uint8Array(bytes):bytes;const run=sendQueue.then(async()=>{if(closed)throw Error('CLOSED');const frames=await framing.objectFrames({sessionId,streamId,transferId,bytes:payload},sha256);await sendFrames(channel,frames)});sendQueue=run.catch(()=>{});return run},
+  send:(transferId,bytes)=>{
+   if(closed)return Promise.reject(Error('CLOSED'));
+   if(!(bytes instanceof Uint8Array))return Promise.reject(Error('MALFORMED'));
+   const size=bytes.byteLength;if(size>MAX_OBJECT||outstanding>=MAX_TRANSFERS||outstandingBytes+size>MAX_PENDING_BYTES)return Promise.reject(Error('TOO_LARGE'));
+   outstanding++;outstandingBytes+=size;let payload;
+   try{payload=new Uint8Array(bytes)}catch(error){outstanding--;outstandingBytes-=size;return Promise.reject(error)}
+   const run=sendQueue.then(async()=>{if(closed)throw Error('CLOSED');const frames=await framing.objectFrames({sessionId,streamId,transferId,bytes:payload},sha256);await sendFrames(channel,frames)});
+   const settled=run.finally(()=>{outstanding--;outstandingBytes-=size});sendQueue=settled.then(()=>undefined,()=>undefined);return settled;
+  },
   applied:(objectId,transferId)=>inbox.applied(objectId,transferId),
   close:()=>{closed=true;bridge.close()},
  };
