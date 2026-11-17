@@ -2,6 +2,7 @@
 import {openLocalWorkspace} from './compat-root/app/bootstrap';
 import {open} from '@op-engineering/op-sqlite';
 import {File,Paths} from 'expo-file-system';
+import {directProof} from './direct-proof';
 import {writeEncryptedObject,readEncryptedObject} from './compat-root/native/file-transfer';
 import {LoroDoc} from './compat-root/native/loro';
 import sodium from './compat-root/native/sodium';
@@ -24,7 +25,7 @@ export async function workspaceProof(){
  if(!global.HermesInternal)throw Error('Hermes required');const scalar=sodium.from_hex('77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a');check(sodium.to_hex(sodium.crypto_scalarmult_base(scalar))==='8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a','RFC7748 X25519');scalar.fill(0);await missingStateChecks();const w=await openLocalWorkspace('workspace-proof',true);
  try{
   const prior=(await w.personal.document()).doc.getMap('personal-preferences').get('systemPrompt');
-  if(prior==='native proof complete'){const state=projectCooking((await w.household.document()).doc);check(state.shopping.purchases.some(x=>x.id==='purchase')&&state.pantry.some(x=>x.name==='Carrot'),'reopen purchase');check(state.recipes.some(x=>x.id==='recipe'&&x.title==='Rich stew'),'reopen recipe');await w.disclosure.active();await fileProof(w);return 'PASS missing state rejected; native bootstrap and persisted recipe, shopping, pantry, policy and authenticated file reopened';}
+  if(prior==='native proof complete'){const state=projectCooking((await w.household.document()).doc);check(state.shopping.purchases.some(x=>x.id==='purchase')&&state.pantry.some(x=>x.name==='Carrot'),'reopen purchase');check(state.recipes.some(x=>x.id==='recipe'&&x.title==='Rich stew'),'reopen recipe');await w.disclosure.active();await fileProof(w);await directProof(w);return 'PASS missing state rejected; native bootstrap and persisted recipe, shopping, pantry, policy and authenticated file and direct binary reopened';}
   if(w.needsDisclosureSetup){const policy=await prepareInitialPolicy({service:w.disclosure});await acceptInitialPolicy({service:w.disclosure,provider:w.disclosureProvider,deviceId:w.deviceId,policy,explicit:true})}
   const at='2026-01-01T00:00:00.000Z',author=w.deviceId;
   const old={version:1,kind:'pantry-create',commandId:'legacy',effectId:'legacy',dependencyEffectIds:[],data:{itemId:'legacy-pantry',name:'Old pantry',preference:3,at,author}};
@@ -41,9 +42,9 @@ export async function workspaceProof(){
   await save(setShoppingItemChecked(shopping,'item','cycle',true,at),pantry,'check-action');
   const purchase=applyShoppingPurchase(shopping,pantry,{id:'purchase',listId:'list',purchaseCycleId:'cycle',purchasedAt:at});await save(purchase.shopping,purchase.pantry,'purchase-action');
   doc=(await w.household.document()).doc;const result=projectCooking(doc);check(result.shopping.purchases.some(x=>x.id==='purchase')&&result.pantry.some(x=>x.name==='Carrot'),'purchase+pantry');
-  await fileProof(w);
+  await fileProof(w);await directProof(w);
   const source=doc.export({mode:'snapshot'}),seed=projectCurrentSeed({LoroDoc,source,seedId:'test-seed',peerId:'99',schemaVersion:4});verifyCurrentSeed({LoroDoc,snapshot:seed.snapshot,seed,schemaVersion:4});const seeded=new LoroDoc();seeded.import(seed.snapshot);check(projectCooking(seeded).shopping.purchases.some(x=>x.id==='purchase'),'v4 seed');
   const c={version:1,kind:'personal-preference-put',commandId:'complete',effectId:'complete',dependencyEffectIds:[],data:{key:'systemPrompt',value:'native proof complete'}};await executeAction(w.personal,w.sequences,'complete',[c]);
-  return 'PASS missing state rejected; native bootstrap, selected authority, policy, incomplete lineage, rich recipe, v4 shopping purchase+pantry, seed, authenticated file roundtrip and personal action';
+  return 'PASS missing state rejected; native bootstrap, selected authority, policy, incomplete lineage, rich recipe, v4 shopping purchase+pantry, seed, authenticated file and direct binary roundtrips and personal action';
  }finally{w.close()}
 }
