@@ -15,19 +15,19 @@ const id = x => typeof x === 'string' && x.length > 0 && encoder.encode(x).lengt
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));
 export function validateHeader(kind, h) {
   const base = fields[kind];
-  const keys = kind==='content' && h?.version===2 ? [...base,'disclosurePolicyHash','disclosurePolicyHashes','sourceEffectIds'] : base;
+  const keys = kind==='content' && (h?.version===2||h?.version===3) ? [...base,'disclosurePolicyHash','disclosurePolicyHashes','sourceEffectIds',...(h.version===3?['disclosureIncomplete']:[])] : base;
   if (!keys || !exact(h, keys)) throw Error('MALFORMED');
-  if (h.version !== 1 && !(kind==='content' && h.version===2)) throw Error('UNSUPPORTED_VERSION');
+  if (h.version !== 1 && !(kind==='content' && (h.version===2||h.version===3))) throw Error('UNSUPPORTED_VERSION');
   if (h.suiteId !== SUITE) throw Error('UNSUPPORTED_SUITE');
   for (const k of keys.slice(2)) {
     const v = h[k];
-    if (lists.has(k)) {
+    if (k==='disclosureIncomplete') { if(v!==true)throw Error('MALFORMED'); } else if(k==='disclosurePolicyHash' && h.version===3 && v===null) {} else if (lists.has(k)) {
       if (!Array.isArray(v) || v.length > 64 || !v.every(id) || new Set(v).size !== v.length) throw Error('MALFORMED');
     } else if (numbers.has(k)) {
       if (!Number.isSafeInteger(v) || v < 0) throw Error('MALFORMED');
     } else if (!id(v)) throw Error('MALFORMED');
   }
-  if(h.version===2 && (!h.disclosurePolicyHashes.length || !h.disclosurePolicyHashes.every((x,i)=>!i||h.disclosurePolicyHashes[i-1]<x) || !h.sourceEffectIds.every((x,i)=>!i||h.sourceEffectIds[i-1]<x)))throw Error('MALFORMED');
+  if((h.version===2||h.version===3) && ((h.version===2&&!h.disclosurePolicyHashes.length) || !h.disclosurePolicyHashes.every((x,i)=>!i||h.disclosurePolicyHashes[i-1]<x) || !h.sourceEffectIds.every((x,i)=>!i||h.sourceEffectIds[i-1]<x)))throw Error('MALFORMED');
   return Object.fromEntries(keys.map(k => [k, lists.has(k) ? [...h[k]] : h[k]]));
 }
 const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
