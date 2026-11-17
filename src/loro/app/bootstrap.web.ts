@@ -1,3 +1,4 @@
+import {prepareHouseholdInvite} from './household-invite.mjs';
 import {openHouseholdPins} from './household-pins.web.ts';
 import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
 import {householdSession} from './household-session.web.ts';
@@ -84,7 +85,7 @@ async function openLockedWorkspace(name:string,create:boolean) {
   const policyPointer=await db.storage.readDisclosureActive(r.house);if(!policyPointer.ok)throw Error(policyPointer.error);if(policyPointer.value)await disclosure.active();
   householdPins=await openHouseholdPins(name,master);
   ceremonyStore=await openSessionStore(`${name}-household-ceremonies`);
-  const householdPairing={identity:{version:1,adultId:r.adult,deviceId:r.device,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey)},exportParent:()=>exportHouseholdParent({storage:db.storage,scope:{kind:'household',id:r.house},pin:root.head,provider}),acceptParent:async(input:any)=>{const args=structuredClone(input);const result=await acceptHouseholdParent({...args,storage:db.storage,provider});await householdPins.save({version:1,scope:args.bundle.scope,pin:args.confirmedRootPin,head:args.confirmedSelectedHead});return result},acceptedParents:()=>householdPins.list(),session:(input:any)=>householdSession({...input,sodium,store:ceremonyStore,keys,signing,wrapping})};
+  const householdPairing={identity:{version:1,adultId:r.adult,deviceId:r.device,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey)},exportParent:()=>exportHouseholdParent({storage:db.storage,scope:{kind:'household',id:r.house},pin:root.head,provider}),acceptParent:async(input:any)=>{const args=structuredClone(input);const result=await acceptHouseholdParent({...args,storage:db.storage,provider});await householdPins.save({version:1,scope:args.bundle.scope,pin:args.confirmedRootPin,head:args.confirmedSelectedHead});return result},acceptedParents:()=>householdPins.list(),prepareInvite:(input:any)=>prepareHouseholdInvite({...input,storage:db.storage,scope:{kind:'household',id:r.house},pin:root.head,provider,store:ceremonyStore,sodium,adultId:r.adult,deviceId:r.device}),session:(input:any)=>householdSession({...input,sodium,store:ceremonyStore,keys,signing,wrapping})};
   const recovery=workspaceRecovery({sodium,keys,run:db.recoveryTransaction,storage:db.storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
   const guardianOwner=ownerGuardians({sodium,run:db.recoveryTransaction,storage:db.storage,authorityProvider:provider,scopeId:r.personal,owner:r.adult,deviceId:r.device,pin,keys,signing,master,masterId:'workspace-master'});
   const guardianTrustStores:any[]=[];
