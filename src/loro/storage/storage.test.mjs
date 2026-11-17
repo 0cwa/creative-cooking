@@ -30,3 +30,28 @@ test('SQLite group rollback, replay, identity conflicts, staging, import and rec
  assert.equal((await s.recordReceipt({...receipt,bytes:b(8)})).error,'CONFLICT');
  conn.db.close();
 });
+
+test('every group write rolls back, and a partial identity prevents replay', async () => {
+ const group={groupId:'g',children:[child('personal','a','chef'),child('household','b','effect')]};
+ for(let boundary=1;boundary<=11;boundary++) {
+  const conn=connection(); let writes=0; const s=openSQLiteStorage(conn,x=>{if(x==='write' && ++writes===boundary)throw Error('injected')});
+  assert.equal((await s.commitLocalGroup(group)).ok,false,`write ${boundary}`);
+  assert.equal((await s.reopenDocument('personal','chef')).value,null);
+  assert.equal((await s.reopenDocument('household','effect')).value,null);
+  assert.equal(conn.db.prepare('SELECT count(*) AS n FROM loro_records').get().n,0); conn.db.close();
+ }
+ const conn=connection(); const s=openSQLiteStorage(conn); assert.equal((await s.commitLocalGroup(group)).ok,true);
+ conn.db.prepare('DELETE FROM loro_records WHERE key = ?').run(JSON.stringify(['effect','personal','a']));
+ assert.equal((await s.commitLocalGroup(group)).error.code,'CONFLICT'); conn.db.close();
+});
+
+test('retry keeps original revision after subsequent writes and import faults retain staged bytes', async () => {
+ const conn=connection(); let n=0, failAt=0; const s=openSQLiteStorage(conn,x=>{if(x==='write' && ++n===failAt)throw Error('injected')});
+ const first=child('scope','one','d'); assert.equal((await s.commitLocal(first)).value.outcome.revisions[0].revision,0);
+ assert.equal((await s.commitLocal(child('scope','two','d',0))).value.outcome.revisions[0].revision,1);
+ assert.equal((await s.commitLocal(first)).value.outcome.revisions[0].revision,0);
+ const item={scopeId:'scope',object:{id:'i',bytes:b(4)},source:'s',expectedCursor:null,cursor:'c'}; assert.equal((await s.stageInbox(item)).ok,true);
+ const imp={scopeId:'scope',operationId:'iop',itemId:'i',documents:[{documentId:'d',bytes:b(9),expectedRevision:1}],effectIds:['ie']};
+ for(let boundary=1;boundary<=4;boundary++) { n=0;failAt=boundary;assert.equal((await s.commitImport(imp)).ok,false);assert.equal((await s.reopenDocument('scope','d')).value.revision,1); }
+ failAt=0;assert.equal((await s.commitImport(imp)).ok,true);assert.equal((await s.commitImport(imp)).value.replayed,true);conn.db.close();
+});

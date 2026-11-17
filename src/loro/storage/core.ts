@@ -16,7 +16,7 @@ const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'
 export class TransactionalStorage implements AtomicStorage {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
-  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.run = run; this.fault = fault; }
+  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({get: tx.get, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];
     for (const id of ids) if (await tx.get(id) !== undefined) conflict();
