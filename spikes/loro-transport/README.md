@@ -1,0 +1,7 @@
+# Direct transport spike
+
+Serve this directory using `agent-heavy -- python3 -m http.server 18765 --bind 127.0.0.1`. Open two independent tabs, create an offer in one, paste it into the other and create an answer, then paste the answer back. Send fixture. The HTTP server serves static files only; it does not exchange signaling or object bytes. Signaling must travel out of band. `node --test spikes/loro-transport/transport.test.mjs` runs boundary tests.
+
+C0 adaptation: the fixture reproduces `fixtureObject` exactly, but browser JavaScript cannot directly import its TypeScript source without a build. The JSON/base64 chunk format is spike-only, not an implementation of C0 ExchangeFrame or a frozen wire format. The sender observes an unauthenticated, in-memory receipt, which is neither C0 stored (durable) nor applied (imported). No encryption, signature, authority, object hash validation, or sync is implemented. Receiver staging is memory-only and lost on reload. A repeated immutable ID with different complete bytes is rejected while the receiver lives; K2 must verify actual object IDs and envelopes. The bundle currently shares the 16 KiB encoded frame limit, so it does not yet support every 1 MiB object accepted by chunking.
+
+Native preparation: `native.mjs` injects the react-native-webrtc peer constructor without changing shared dependencies. An actual native dependency, app harness, platform binary channel compatibility, and native runtime proof remain to be completed after reservation. No native build or device operation was performed.
