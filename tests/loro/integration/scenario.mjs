@@ -43,7 +43,7 @@ try{
  await call('a','close');await call('b','close');await connect();await call('a','parts','bulk-transfer',Array.from({length:count-1},(_,i)=>count-2-i));await call('b','incoming');await receipt('a','stored',bulkId);
  await call('a','parts','bulk-transfer',[0,0]);await delay(300);const pending=await call('b','pending');assert.equal(pending.incomplete,0);assert.equal(pending.received,0);assert.deepEqual(pending.errors,[]);
  await call('b','apply',bulkId,'bulk-transfer');await receipt('a','applied',bulkId);
- const state=await call('a','read');assert.deepEqual(state,await call('b','read'));assert.equal(state['recipe:r'].title,'Soup');assert.equal(state['recipe:r'].description,bulk.data.value);assert.deepEqual(Object.keys(state.purchases).sort(),['ea','eb']);
+ const state=await call('a','read');assert.deepEqual(state,await call('b','read'));assert.equal(state['recipe:r'].title,'Soup');assert.equal(state['recipe:r'].description,bulk.data.value);assert.equal(state['shopping-list:l'].currentCycleId,'c');assert.deepEqual(Object.keys(state.purchases).sort(),['ea','eb']);
  await call('a','reopen');await call('b','reopen');assert.deepEqual(await call('a','read'),state);assert.deepEqual(await call('b','read'),state);assert.equal((await call('a','execute','title',title,1)).replayed,true);
  const aStates=await call('a','states'),bStates=await call('b','states');assert.equal(aStates.filter(x=>x.state==='applied').length,5);assert.equal(bStates.filter(x=>x.state==='applied').length,1);
  const environments=await Promise.all([call('a','environment'),call('b','environment')]);

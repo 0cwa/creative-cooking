@@ -29,6 +29,9 @@ async function open(){
  const cursors=await db.storage.listCursors('house');if(!cursors.ok)throw Error(cursors.error);cursor=cursors.value.find(x=>x.source===other)?.cursor??null;
 }
 await open();
+// The file input is driven with a downloaded path by the isolated browser proof.
+const fileInput=document.createElement('input');fileInput.type='file';fileInput.id='object-file';document.body.append(fileInput);
+fileInput.addEventListener('change',async()=>{try{const bytes=new Uint8Array(await fileInput.files[0].arrayBuffer());const object=importFile(bytes);const next=String(++sequence);await adapter.stage({transferId:'file-transfer',bytes:object.bytes,expectedCursor:cursor,cursor:next});cursor=next;const items=await db.storage.listStagedInbox('house');if(!items.ok)throw Error(items.error);const item=items.value.find(x=>x.itemId===object.id);if(!item)throw Error('NOT_STAGED');await runtime.importItem(item);const retry=await runtime.importItem(item);window.fileResult={ok:true,id:object.id,replayed:retry.replayed};}catch(e){window.fileResult={ok:false,error:e.message};}});
 const wait=(target,event,condition)=>condition()?Promise.resolve():new Promise((resolve,reject)=>{let timer=setTimeout(()=>reject(Error('timeout '+event)),20000);target.addEventListener(event,()=>{if(condition()){clearTimeout(timer);resolve();}});});
 function attach(c){channel=c;channel.binaryType='arraybuffer';channel.onmessage=async e=>{try{if(typeof e.data==='string'){const r=JSON.parse(e.data);receipts.push({...r,bytes:Uint8Array.from(r.bytes)});return;}const r=await reassembler.accept(new Uint8Array(e.data));if(r)received.push(r);}catch(e){errors.push(String(e));}};}
 async function final(description,ip){await pc.setLocalDescription(description);await wait(pc,'icegatheringstatechange',()=>pc.iceGatheringState==='complete');const value=JSON.stringify(pc.localDescription).replace(/[a-f0-9-]+\.local/g,ip);return {device:who,value,signature:Array.from(sodium.crypto_sign_detached(enc.encode(value),identities[who].privateKey))};}
@@ -56,6 +59,7 @@ window.integration={
  async cleanup(){pc?.close();db.close();await new Promise((resolve,reject)=>{const q=indexedDB.deleteDatabase('loro-rtc-integration');q.onsuccess=resolve;q.onerror=()=>reject(q.error);q.onblocked=()=>reject(Error('DELETE_BLOCKED'));});},
  async denial(){try{await runtime.outboundFor('unaccepted');return false;}catch(e){return e.message==='INVALID_AUTHORITY';}},
  async signedTranscript(value){return {device:who,transcript:value,signature:Array.from(sodium.crypto_sign_detached(enc.encode(value),identities[who].privateKey)),publicKey:Array.from(identities[who].publicKey)};},
+ async downloadObject(id){const o=(await runtime.outboundFor(other)).find(x=>x.objectId===id);if(!o)throw Error('NOT_AUTHORIZED');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([exportFile({id:o.objectId,bytes:o.bytes})],{type:'application/octet-stream'}));a.download='loro-object.bundle';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);},
  async fileRoundtrip(id){const o=(await runtime.outboundFor(other)).find(x=>x.objectId===id);const data=exportFile({id:o.objectId,bytes:o.bytes});const parsed=importFile(data);const x=await codec.openContent(parsed.bytes);return parsed.id===x.object.id;},
 };
 
