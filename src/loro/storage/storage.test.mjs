@@ -116,3 +116,11 @@ test('typed runtime reads recover scoped records and recipient state as copies',
  assert.deepEqual((await s.listReceiptStates('a')).value,[{objectId:'o',destination:'peer',recipientId:'p',state:'stored'}]);
  conn.db.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)').run(JSON.stringify(['receipt-state','a','o','invalid','p']),JSON.stringify('stored')); assert.equal((await s.listReceiptStates('a')).error,'CORRUPT'); conn.db.close();
 });
+
+test('recovery reads exact saved local operation and applied inbox outcome', async () => {
+ const conn=connection(),s=openSQLiteStorage(conn),c=child('s','one','d'); assert.equal((await s.getLocalOperation('s','one')).value,null); assert.equal((await s.commitLocal(c)).ok,true);
+ const saved=(await s.getLocalOperation('s','one')).value; assert.deepEqual(saved.commit,c); saved.commit.documents[0].bytes[0]=99; assert.deepEqual((await s.getLocalOperation('s','one')).value.commit,c);
+ const item={scopeId:'s',object:{id:'in',bytes:b(1)},source:'p',expectedCursor:null,cursor:'c'}; await s.stageInbox(item); assert.equal((await s.getInboxApplication('s','in')).value,null);
+ const imp={scopeId:'s',operationId:'imp',itemId:'in',documents:[{documentId:'d',bytes:b(5),expectedRevision:0}],effectIds:['e']}; await s.commitImport(imp); assert.equal((await s.getInboxApplication('s','in')).value.operationId,'imp');
+ conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['effect','s','e'])); assert.equal((await s.getInboxApplication('s','in')).error,'CORRUPT'); conn.db.close();
+});

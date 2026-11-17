@@ -21,6 +21,7 @@ export const denseArray = (v: unknown, check: (item: any) => boolean): v is any[
   for (let i = 0; i < v.length; i++) if (!Object.hasOwn(v,i) || !check(v[i])) return false;
   return true;
 };
+const decodeKeyBytes = (x: unknown): Uint8Array => { if (!denseArray(x,n=>Number.isInteger(n) && n>=0 && n<=255)) return corrupt(); return new Uint8Array(x); };
 const revision = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
 const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && denseArray(v.revisions, (x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision)) && v.revisions.length > 0;
 const validateRecord = (k: string, v: any) => {
@@ -62,6 +63,27 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       }
       return {ok:true,value:records};
     }); } catch (e) { return {ok:false,error:mapError(e)}; }
+  }
+  async getLocalOperation(scopeId: string, operationId: string): Promise<Result<{commit: LocalCommit; outcome: SavedOutcome} | null, StorageError>> {
+    if (![scopeId,operationId].every(x=>typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256)) return {ok:false,error:'MALFORMED'};
+    try { return await this.run(false,async tx => {
+      const old=await tx.get(key('local',scopeId,operationId)); if (!old) return {ok:true,value:null};
+      let c: LocalCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='local' || parsed.length!==2) return corrupt(); c=parsed[1];
+        for (const d of c.documents) d.bytes = decodeKeyBytes(d.bytes); for (const cmd of c.commands) cmd.payload = decodeKeyBytes(cmd.payload); for (const o of c.outbound) o.object.bytes = decodeKeyBytes(o.object.bytes);
+      } catch { return corrupt(); }
+      const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.operationId!==operationId) return corrupt();
+      validateOutcome(old.outcome,c.documents); await this.completedLocal(tx,c,old.inputKey); return {ok:true,value:{commit:snapshot(c),outcome:snapshot(old.outcome)}};
+    }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  async getInboxApplication(scopeId: string, itemId: string): Promise<Result<{operationId: string; outcome: SavedOutcome} | null, StorageError>> {
+    if (![scopeId,itemId].every(x=>typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256)) return {ok:false,error:'MALFORMED'};
+    try { return await this.run(false,async tx => { const op=await tx.get(key('applied',scopeId,itemId)); if (op===undefined) return {ok:true,value:null};
+      const old=await tx.get(key('import',scopeId,op)); if (!old || await tx.get(key('inbox',scopeId,itemId))===undefined) return corrupt();
+      let c: ImportCommit; try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed[0]!=='import' || parsed.length!==2) return corrupt(); c=parsed[1]; for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes); } catch { return corrupt(); }
+      const checked=storageOperationKey(c,'import'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.itemId!==itemId || c.operationId!==op) return corrupt();
+      validateOutcome(old.outcome,c.documents); for (const id of c.effectIds) if (await tx.get(key('effect',scopeId,id))!==old.inputKey) return corrupt();
+      return {ok:true,value:{operationId:op,outcome:snapshot(old.outcome)}};
+    }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
   private async typedRecords<T>(namespace: 'document' | 'object' | 'inbox' | 'cursor' | 'receipt-state', scopeId: string, convert: (identity: readonly string[], value: any) => T): Promise<Result<readonly T[],StorageError>> {
     if (typeof scopeId !== 'string' || !scopeId || new TextEncoder().encode(scopeId).length > 256) return {ok:false,error:'MALFORMED'};
