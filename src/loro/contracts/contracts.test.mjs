@@ -62,3 +62,23 @@ test('receipt and cursor validation preserve distinct states and opaque cursors'
   assert.equal(validateInboxItem({...item,expectedCursor:null}).ok,true);
   assert.equal(validateInboxItem({...item,cursor:4}).error,'MALFORMED');
 });
+
+test('atomic group compares personal and household children and rejects partial identities', async () => {
+  const { storageGroupKey, classifyStorageGroup, STORAGE_LIMITS } = await import('./index.ts');
+  const child = (scope, operation, byte) => ({scopeId:scope,operationId:operation,documents:[{documentId:'doc',expectedRevision:null,bytes:new Uint8Array([byte])}],commands:[{version:1,commandId:'command',effectId:'effect',documentId:'doc',kind:'accept',payload:new Uint8Array([byte]),dependencyEffectIds:[]}],outbound:[{object:{id:'object',bytes:new Uint8Array([byte])},branchHead:'head',epochId:'epoch'}]});
+  const group = {groupId:'chef-accept',children:[child('personal','proposal',1),child('household','effect',2)]};
+  const result = storageGroupKey(group); assert.equal(result.ok,true);
+  assert.equal(storageGroupKey(structuredClone(group)).value,result.value);
+  const changed = structuredClone(group); changed.children[1].outbound[0].object.bytes[0] = 3;
+  const changedKey = storageGroupKey(changed).value;
+  assert.notEqual(changedKey,result.value);
+  assert.notEqual(storageGroupKey({...group,children:[...group.children].reverse()}).value,result.value);
+  assert.equal(storageGroupKey({...group,children:[group.children[0],group.children[0]]}).error,'MALFORMED');
+  assert.equal(storageGroupKey({...group,children:Array.from({length:STORAGE_LIMITS.groups+1},(_,i)=>child(String(i),'op',1))}).error,'TOO_LARGE');
+  const large = Array.from({length:9},(_,i) => { const c = child(String(i),'op',1); c.documents[0].bytes = new Uint8Array(STORAGE_LIMITS.itemBytes); return c; });
+  assert.equal(storageGroupKey({groupId:'large',children:large}).error,'TOO_LARGE');
+  assert.equal(classifyStorageGroup(result.value,null,false),'new');
+  assert.equal(classifyStorageGroup(result.value,null,true),'conflict');
+  assert.equal(classifyStorageGroup(result.value,result.value,true),'replay');
+  assert.equal(classifyStorageGroup(changedKey,result.value,true),'conflict');
+});

@@ -19,6 +19,8 @@ export type OutboxEntry = { object: ImmutableObject; branchHead: Id; epochId: Id
 /** Revisions are safe nonnegative integers; null means the document must not exist. */
 export type DocumentWrite = DocumentOutput & { expectedRevision: number | null };
 export type LocalCommit = { scopeId: Id; operationId: Id; documents: readonly DocumentWrite[]; commands: readonly SemanticCommand[]; outbound: readonly OutboxEntry[] };
+export type LocalCommitGroup = { groupId: Id; children: readonly LocalCommit[] };
+export type GroupCommitResult = Result<{ outcomes: readonly SavedOutcome[]; replayed: boolean }, { code: StorageError; recovery: 'reload-durable-state' }>;
 export type ImportCommit = { scopeId: Id; operationId: Id; itemId: Id; documents: readonly DocumentWrite[]; effectIds: readonly Id[] };
 export type StorageError = 'CAPACITY' | 'CONFLICT' | 'IO' | 'CORRUPT' | 'UNSUPPORTED_VERSION' | 'MALFORMED' | 'TOO_LARGE';
 export type SavedOutcome = { state: 'saved'; revisions: readonly { documentId: Id; revision: number }[] };
@@ -31,6 +33,8 @@ export interface AtomicStorage {
    * Identical replay returns its original outcome; conflicting reuse or partial pre-existing identity sets write nothing.
    * All writes and revision comparisons occur in one database transaction, including across processes/tabs. */
   commitLocal(commit: LocalCommit): Promise<CommitResult>;
+  /** One local DB transaction for all scopes; caller authorizes each scope before every invocation. */
+  commitLocalGroup(group: LocalCommitGroup): Promise<GroupCommitResult>;
   reopenDocument(scopeId: Id, documentId: Id): Promise<Result<(DocumentOutput & { revision: number }) | null, StorageError>>;
   /** Atomically stage immutable bytes and compare-and-swap the opaque per-scope/source cursor. */
   stageInbox(item: InboxItem): Promise<Result<void, StorageError>>;
@@ -42,7 +46,7 @@ export interface AtomicStorage {
 }
 
 /** Provisional per-operation limits, measured in actual bytes; adapters must reject before any write. */
-export const STORAGE_LIMITS = { documents: 64, commands: 256, outbound: 256, effects: 256, itemBytes: 1024 * 1024, totalBytes: 8 * 1024 * 1024, idBytes: 256 } as const;
+export const STORAGE_LIMITS = { groups: 16, documents: 64, commands: 256, outbound: 256, effects: 256, itemBytes: 1024 * 1024, totalBytes: 8 * 1024 * 1024, idBytes: 256 } as const;
 const storageEncoder = new TextEncoder();
 const storageId = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && storageEncoder.encode(x).length <= STORAGE_LIMITS.idBytes;
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -86,6 +90,32 @@ export function storageOperationKey(input: unknown, kind: 'local' | 'import'): R
   // Fixed object-key order is supplied explicitly by recursively sorting keys, never by caller insertion order.
   const canonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(canonical) : record(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
   return {ok:true,value:JSON.stringify([kind, canonical(input)])};
+}
+/** Validate and compare the ordered complete local group; not a wire encoding. */
+export function storageGroupKey(input: unknown): Result<string, 'MALFORMED' | 'TOO_LARGE'> {
+  if (!record(input) || !exact(input, ['groupId','children']) || !storageId(input.groupId) || !Array.isArray(input.children) || !input.children.length) return {ok:false,error:'MALFORMED'};
+  if (input.children.length > STORAGE_LIMITS.groups) return {ok:false,error:'TOO_LARGE'};
+  const keys: string[] = [], identities = new Set<string>();
+  let documents = 0, commands = 0, outbound = 0, dependencies = 0, total = 0;
+  for (const child of input.children) {
+    const result = storageOperationKey(child, 'local');
+    if (!result.ok) return result;
+    const c = child as LocalCommit;
+    const add = (namespace: string, id: string) => { const key = JSON.stringify([c.scopeId, namespace, id]); if (identities.has(key)) return false; identities.add(key); return true; };
+    if (!add('operation', c.operationId)) return {ok:false,error:'MALFORMED'};
+    for (const d of c.documents) { if (!add('document',d.documentId)) return {ok:false,error:'MALFORMED'}; total += d.bytes.byteLength; }
+    for (const command of c.commands) { if (!add('command',command.commandId) || !add('effect',command.effectId)) return {ok:false,error:'MALFORMED'}; total += command.payload.byteLength; dependencies += command.dependencyEffectIds.length; }
+    for (const entry of c.outbound) { if (!add('object',entry.object.id)) return {ok:false,error:'MALFORMED'}; total += entry.object.bytes.byteLength; }
+    documents += c.documents.length; commands += c.commands.length; outbound += c.outbound.length;
+    keys.push(result.value);
+  }
+  if (documents > STORAGE_LIMITS.documents || commands > STORAGE_LIMITS.commands || outbound > STORAGE_LIMITS.outbound || dependencies > STORAGE_LIMITS.effects || total > STORAGE_LIMITS.totalBytes) return {ok:false,error:'TOO_LARGE'};
+  return {ok:true,value:JSON.stringify([input.groupId, keys])};
+}
+/** Classify persisted identity facts read inside the same transaction; never infer completion from child records. */
+export function classifyStorageGroup(inputKey: string, completedGroupKey: string | null, anyChildIdentityExists: boolean): 'new' | 'replay' | 'conflict' {
+  if (completedGroupKey !== null) return completedGroupKey === inputKey ? 'replay' : 'conflict';
+  return anyChildIdentityExists ? 'conflict' : 'new';
 }
 export function validateStorageReceipt(input: unknown): Result<OutboxReceipt, 'MALFORMED' | 'TOO_LARGE'> {
   if (!record(input) || !exact(input,['scopeId','objectId','receiptId','destination','recipientId','state','bytes']) || !storageId(input.scopeId) || !storageId(input.objectId) || !storageId(input.receiptId) || !storageId(input.recipientId) || !(input.bytes instanceof Uint8Array) || !((input.destination === 'relay' && input.state === 'stored') || (input.destination === 'peer' && (input.state === 'stored' || input.state === 'applied')))) return {ok:false,error:'MALFORMED'};
