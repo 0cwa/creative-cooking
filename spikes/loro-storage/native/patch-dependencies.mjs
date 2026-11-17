@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = scriptDirectory;
+const projectRoot = process.env.LORO_PROJECT_ROOT ?? scriptDirectory;
 const uniffiDirectory = path.join(projectRoot, 'node_modules/uniffi-bindgen-react-native');
 const loroAndroidDirectory = path.join(projectRoot, 'node_modules/loro-react-native/android');
 
@@ -15,7 +15,7 @@ function run(command, args) {
   assert.equal(result.status, 0, `${command} ${args.join(' ')} failed with ${result.status}`);
 }
 
-run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--prefer-offline']);
+if (process.env.LORO_SKIP_NPM_CI !== '1') run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--prefer-offline']);
 
 const uniffiPackage = JSON.parse(await readFile(path.join(uniffiDirectory, 'package.json'), 'utf8'));
 assert.equal(uniffiPackage.version, '0.28.3-5', 'review the TS6 patch before using a new UniFFI version');
