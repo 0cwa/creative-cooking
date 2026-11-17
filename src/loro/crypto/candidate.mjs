@@ -9,14 +9,15 @@ const fields = {
   content: ['version','suiteId','scopeId','documentId','documentGeneration','branchHead','policyHashes','epochId','authorDevice','deviceSequence','predecessorRefs','semanticEffectIds','payloadKind'],
   key: ['version','suiteId','scopeId','branchHead','policyHashes','epochId','recipientDevice','keyPurpose','senderDevice'],
 };
-const lists = new Set(['policyHashes','predecessorRefs','semanticEffectIds']);
+const lists = new Set(['policyHashes','predecessorRefs','semanticEffectIds','disclosurePolicyHashes','sourceEffectIds']);
 const numbers = new Set(['documentGeneration','deviceSequence']);
 const id = x => typeof x === 'string' && x.length > 0 && encoder.encode(x).length <= 256;
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));
 export function validateHeader(kind, h) {
-  const keys = fields[kind];
+  const base = fields[kind];
+  const keys = kind==='content' && h?.version===2 ? [...base,'disclosurePolicyHash','disclosurePolicyHashes','sourceEffectIds'] : base;
   if (!keys || !exact(h, keys)) throw Error('MALFORMED');
-  if (h.version !== 1) throw Error('UNSUPPORTED_VERSION');
+  if (h.version !== 1 && !(kind==='content' && h.version===2)) throw Error('UNSUPPORTED_VERSION');
   if (h.suiteId !== SUITE) throw Error('UNSUPPORTED_SUITE');
   for (const k of keys.slice(2)) {
     const v = h[k];
@@ -26,6 +27,7 @@ export function validateHeader(kind, h) {
       if (!Number.isSafeInteger(v) || v < 0) throw Error('MALFORMED');
     } else if (!id(v)) throw Error('MALFORMED');
   }
+  if(h.version===2 && (!h.disclosurePolicyHashes.length || !h.disclosurePolicyHashes.every((x,i)=>!i||h.disclosurePolicyHashes[i-1]<x) || !h.sourceEffectIds.every((x,i)=>!i||h.sourceEffectIds[i-1]<x)))throw Error('MALFORMED');
   return Object.fromEntries(keys.map(k => [k, lists.has(k) ? [...h[k]] : h[k]]));
 }
 const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');

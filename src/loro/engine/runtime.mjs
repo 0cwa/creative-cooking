@@ -134,6 +134,7 @@ export class OfflineRuntime {
     const applied=required(await this.storage.getInboxApplication(this.scope.scopeId,item.itemId));
     if (applied) return {replayed:true};
     const opened=await this.codec.openContent(item.bytes,signingKeyRefs), h=opened.header, s=this.scope;
+    if(h.version!==1)throw Error('PROVENANCE_HANDLER_REQUIRED');
     if (!this.storage.compromise) throw Error('QUARANTINE_UNAVAILABLE');
     if (await this.storage.compromise.isQuarantined(s.scopeId,h.authorDevice)) throw Error('QUARANTINED');
     if (opened.object.id !== item.itemId || h.scopeId !== s.scopeId || h.documentId !== s.documentId || h.documentGeneration !== s.documentGeneration || h.branchHead !== s.branchHead || h.epochId !== s.epochId || h.suiteId !== s.suiteId || !same(h.policyHashes,s.policyHashes) || !s.acceptedAuthors.includes(h.authorDevice) || h.payloadKind !== 'loro-update-v1' || h.semanticEffectIds.length !== 1) throw new Error('INVALID_AUTHORITY');

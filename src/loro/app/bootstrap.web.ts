@@ -9,6 +9,7 @@ import {candidateCodec} from '../crypto/candidate.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {localProvider} from './local-provider.mjs';
 import {openSequences} from './sequences.web.ts';
+import {disclosureService} from '../disclosure/service.mjs';
 
 const enc=new TextEncoder();
 const aad=enc.encode('creative-cooking/fresh-local-bootstrap/v1');
@@ -70,6 +71,8 @@ async function openLockedWorkspace(name:string,create:boolean) {
    const scopedProvider=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epochId:string,fn:any)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epochId),fn)});
    return new OfflineRuntime({storage:db.storage,codec:candidateCodec(scopedProvider),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider}});
   };
-  return {household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,close:()=>{sequences?.close();db.close();master.close();meta.close()}};
+  const disclosure=disclosureService({storage:db.storage,scope:{kind:'household',id:r.house},rootPin:root.head,provider,deviceId:r.device});
+  const policyPointer=await db.storage.readDisclosureActive(r.house);if(!policyPointer.ok)throw Error(policyPointer.error);if(policyPointer.value)await disclosure.active();
+  return {household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!policyPointer.value,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,close:()=>{sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {sequences?.close();db.close();master.close();meta.close();throw error}
 }

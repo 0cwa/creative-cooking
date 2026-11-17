@@ -27,7 +27,7 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   if(personalChanged)commands=planPersonalAction({doc,before,after:target,actionId});
   else if(pantryChanged)commands=planPantryAction({doc,before:before.pantry,after:target.pantry,actionId,author:workspace.deviceId,at});
   else {const a=new Map(before.recipes.map(x=>[x.id,x])),b=new Map(target.recipes.map(x=>[x.id,x])),changed=[...new Set([...a.keys(),...b.keys()])].filter(id=>!same(a.get(id),b.get(id)));if(changed.length!==1)throw Error('This local preview saves one recipe change at a time.');const id=changed[0];commands=planRecipeAction({doc,before:a.get(id)??null,after:b.get(id)??null,actionId,author:workspace.deviceId,at});}
-  if(commands.length)await executeAction(runtime,workspace.sequences,actionId,commands);
+  if(commands.length)await executeAction(runtime,workspace.sequences,actionId,commands,personalChanged?null:workspace.disclosure);
   committed.current=target;
  },[workspace]);
  const schedule=useCallback((target:PersistedState)=>{const number=++revision.current;pending.current++;setStatus('saving');const next=queue.current.catch(()=>{}).then(()=>save(target));queue.current=next;void next.then(()=>{pending.current--;if(number===revision.current){setStatus('saved');setError(null)}},e=>{pending.current--;if(number===revision.current){setStatus('error');setError(e instanceof Error?e.message:'Could not save local changes')}});return next},[save]);
