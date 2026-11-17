@@ -17,7 +17,7 @@ async function joinedSequences({name,storage,scope,pin,provider,deviceId,operati
   let sequences:Awaited<ReturnType<typeof openSequences>>|undefined;
   try {
    let enrollment=await get();
-   if(!enrollment){if(!prepare||found.value)throw Error('MISSING_ENROLLMENT');enrollment={version:1,stage:'pending',scopeId:scope.id,pin,deviceId,operationId,sequenceName:`joined-${crypto.randomUUID()}`};await put(enrollment)}
+   if(!enrollment){if(!prepare||found.value)throw Error('MISSING_ENROLLMENT');const established=await storage.householdRecipient.hasDevice(scope.id,deviceId);if(!established.ok||established.value)throw Error('MISSING_ENROLLMENT');enrollment={version:1,stage:'pending',scopeId:scope.id,pin,deviceId,operationId,sequenceName:`joined-${crypto.randomUUID()}`};await put(enrollment)}
    if(enrollment.version!==1||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId||!/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName))throw Error('ENROLLMENT_CONFLICT');
    if(prepare){if(enrollment.stage!=='pending'&& !found.value)throw Error('ENROLLMENT_CONFLICT');return null;}
    sequences=await openSequences(enrollment.sequenceName,[scope.id],enrollment.stage==='pending');
