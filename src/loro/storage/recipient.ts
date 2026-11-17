@@ -1,0 +1,41 @@
+import { StorageFailure } from './core.ts';
+import type { TransactionRunner } from './core.ts';
+import type { StorageError, Result } from '../contracts/index.ts';
+
+import { pairingReleaseKey } from '../contracts/pairing.ts';
+import type { RecipientAcceptanceIdentity as RecipientIdentity, RecipientInstall as RecipientSaved } from '../contracts/pairing.ts';
+const k=(...parts:string[])=>JSON.stringify(parts);
+const obj=(x:any)=>x!==null && typeof x==='object' && !Array.isArray(x) && !(x instanceof Uint8Array);
+const shape=(x:any,n:string[])=>obj(x) && Object.keys(x).length===n.length && n.every(a=>Object.hasOwn(x,a));
+const id=(x:any)=>typeof x==='string' && x.length>0 && new TextEncoder().encode(x).length<=256;
+const bytes=(x:any,max=1024*1024)=>x instanceof Uint8Array && x.length>0 && x.length<=max;
+const validIdentity=(x:any):x is RecipientIdentity=>{
+ if(!shape(x,['version','operationId','scope','guardId','direction','purpose','epochId','packetId','packetDigest','transcript','recipientDevice']) || x.version!==1 || !id(x.operationId) || !id(x.guardId) || !id(x.epochId) || !bytes(x.packetDigest,256) || !id(x.recipientDevice)) return false;
+ const t=x.transcript,g={version:1,guardId:x.guardId,scope:x.scope,direction:x.direction,purpose:x.purpose};
+ return !!t && x.scope?.kind===t.scope?.kind && x.scope?.id===t.scope?.id && x.purpose===t.purpose && x.recipientDevice===(x.direction==='initiator-to-responder'?t.responder?.deviceId:t.initiator?.deviceId) && pairingReleaseKey({version:1,operationId:x.operationId,transcript:t,guard:g,expectedAuthorityRevision:0,packet:{id:x.packetId,bytes:x.packetDigest},outbox:{destination:x.recipientDevice,objectId:x.packetId},outcome:{recipientDevice:x.recipientDevice,packetId:x.packetId}}).ok;
+};
+const validSaved=(x:any):x is RecipientSaved=>shape(x,['identity','keyRef','masterKeyId','wrappedLocalKey','acceptanceReceipt']) && validIdentity(x.identity) && id(x.keyRef) && id(x.masterKeyId) && bytes(x.wrappedLocalKey) && bytes(x.acceptanceReceipt);
+const snap=<T>(x:T):T=>structuredClone(x);
+// Ordered fields, not a wire encoding or authentication.
+const canonical=(x:unknown):unknown=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(canonical):obj(x)?Object.fromEntries(Object.keys(x as object).sort().map(k=>[k,canonical((x as any)[k])])):x;
+const stable=(x:unknown)=>JSON.stringify(canonical(x));
+const fail=(e:unknown):StorageError=>e instanceof StorageFailure?e.code:e instanceof Error && (e.name==='QuotaExceededError'||/SQLITE_FULL|database or disk is full/i.test(e.message))?'CAPACITY':'IO';
+const bad=():never=>{throw new StorageFailure('CORRUPT')};
+const conflict=():never=>{throw new StorageFailure('CONFLICT')};
+const ids=(x:RecipientIdentity)=>({op:k('recipient-op',x.scope.kind,x.scope.id,x.operationId), guard:k('recipient-guard',x.guardId),packet:k('recipient-packet',x.scope.kind,x.scope.id,x.packetId),slot:k('recipient-key',x.scope.kind,x.scope.id,x.purpose,x.epochId), receipt:k('recipient-receipt',x.scope.kind,x.scope.id,x.operationId)});
+export class RecipientRecords {
+ private readonly run:TransactionRunner; private readonly fault?: (boundary:string)=>void;
+ constructor(run:TransactionRunner, fault?:(boundary:string)=>void) {this.run=run;this.fault=fault;}
+ private async complete(tx:any, x:RecipientIdentity, old:any) {
+  if(!validSaved(old)) bad(); const i=ids(x); if(stable(old.identity)!==stable(x)) conflict();
+  const slot=await tx.get(i.slot),receipt=await tx.get(i.receipt),guard=await tx.get(i.guard),packet=await tx.get(i.packet);
+  if(!shape(slot,['keyRef','masterKeyId','wrappedLocalKey']) || !id(slot.keyRef) || !id(slot.masterKeyId) || !bytes(slot.wrappedLocalKey) || !bytes(receipt) || stable(slot)!==stable({keyRef:old.keyRef,masterKeyId:old.masterKeyId,wrappedLocalKey:old.wrappedLocalKey}) || stable(receipt)!==stable(old.acceptanceReceipt) || guard!==i.op || packet!==i.op) bad();
+  return snap(old) as RecipientSaved;
+ }
+ /** Call only after the real verifier authenticates the complete identity. */
+ async findRecipient(identity:RecipientIdentity):Promise<Result<{keyRef:string;acceptanceReceipt:Uint8Array}|null,StorageError>> { if(!validIdentity(identity)) return {ok:false,error:'MALFORMED'}; const x=snap(identity); try{return await this.run(false,async tx=>{const i=ids(x), old=await tx.get(i.op); if(old===undefined) {if(await tx.get(i.guard)!==undefined || await tx.get(i.packet)!==undefined) conflict();return {ok:true,value:null};} const v=await this.complete(tx,x,old);return {ok:true,value:{keyRef:v.keyRef,acceptanceReceipt:v.acceptanceReceipt}};});}catch(e){return {ok:false,error:fail(e)}} }
+ async readWrapped(identity:RecipientIdentity,keyRef:string):Promise<Result<{masterKeyId:string;wrappedLocalKey:Uint8Array}|null,StorageError>> {if(!validIdentity(identity)||!id(keyRef))return {ok:false,error:'MALFORMED'};const x=snap(identity);try{return await this.run(false,async tx=>{const old=await tx.get(ids(x).op);if(old===undefined)return {ok:true,value:null};const v=await this.complete(tx,x,old);if(v.keyRef!==keyRef)conflict();return {ok:true,value:{masterKeyId:v.masterKeyId,wrappedLocalKey:v.wrappedLocalKey}};});}catch(e){return {ok:false,error:fail(e)}}}
+ /** Caller checks a durable master and authenticates the receipt before entry. */
+ async installAndReceipt(saved:RecipientSaved):Promise<Result<{keyRef:string;acceptanceReceipt:Uint8Array;replayed:boolean},StorageError>> { if(!validSaved(saved)) return {ok:false,error:'MALFORMED'}; const v=snap(saved), x=v.identity, i=ids(x); try{return await this.run(true,async tx=>{const old=await tx.get(i.op);if(old!==undefined){const prior=await this.complete(tx,x,old);if(stable(prior)!==stable(v)) conflict();return {ok:true,value:{keyRef:prior.keyRef,acceptanceReceipt:prior.acceptanceReceipt,replayed:true}};} for(const key of [i.guard,i.packet,i.slot,i.receipt]) if(await tx.get(key)!==undefined) conflict(); for(const [key,value] of [[i.slot,{keyRef:v.keyRef,masterKeyId:v.masterKeyId,wrappedLocalKey:v.wrappedLocalKey}],[i.receipt,v.acceptanceReceipt],[i.guard,i.op],[i.packet,i.op],[i.op,v]] as const){await tx.put(key,value);this.fault?.('write');}return {ok:true,value:{keyRef:v.keyRef,acceptanceReceipt:snap(v.acceptanceReceipt),replayed:false}};});}catch(e){return {ok:false,error:fail(e)}} }
+
+}

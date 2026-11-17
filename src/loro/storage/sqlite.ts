@@ -1,3 +1,4 @@
+import { RecipientRecords } from './recipient.ts';
 import { denseArray, StorageFailure, TransactionalStorage } from './core.ts';
 import type { TransactionRunner } from './core.ts';
 
@@ -29,5 +30,5 @@ export function openSQLiteStorage(db: SQLiteConnection, fault?: (boundary: strin
     };
     const result = pending.then(execute); pending = result.then(() => {},() => {}); return result;
   };
-  return new TransactionalStorage(run,fault);
+  return Object.assign(new TransactionalStorage(run,fault), {recipient:new RecipientRecords(run,fault)});
 }

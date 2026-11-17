@@ -27,10 +27,17 @@ export interface PairingAtomicStorage {
   /** Caller authenticates ceremony and revalidates authority; storage performs all comparisons and writes atomically. */
   commitPairingRelease(release: PairingRelease): Promise<PairingReleaseResult>;
 }
-/** Only an implementation with a transactional wrapped-key record and durable master key can implement this. */
+/** Structural storage accepts only identities authenticated by an independently configured verifier. */
+export type RecipientAcceptanceIdentity = { version:1; operationId:Id; scope:PairingScope; guardId:Id; direction:'initiator-to-responder'|'responder-to-initiator'; purpose:Id; epochId:Id; packetId:Id; packetDigest:Bytes; transcript:CeremonyTranscript; recipientDevice:Id };
+export type RecipientInstall = { identity:RecipientAcceptanceIdentity; keyRef:Id; masterKeyId:Id; wrappedLocalKey:Bytes; acceptanceReceipt:Bytes };
+export interface RecipientAcceptanceVerifier { verify(input:UntrustedBytes):Promise<Result<Verified<RecipientAcceptanceIdentity>, 'INVALID_PROOF'|'UNAVAILABLE'>> }
 export interface PairingRecipientStorage {
-  installAndReceipt(input: { operationId: Id; scope: PairingScope; guard: CeremonyGuard; transcript: CeremonyTranscript; packetId: Id; wrappedLocalKey: Bytes; masterKeyId: Id; acceptanceReceipt: Bytes }): Promise<Result<{ replayed: boolean }, StorageError | 'UNAVAILABLE'>>;
+ findRecipient(identity:RecipientAcceptanceIdentity):Promise<Result<{keyRef:Id;acceptanceReceipt:Bytes}|null,StorageError>>;
+ readWrapped(identity:RecipientAcceptanceIdentity,keyRef:Id):Promise<Result<{masterKeyId:Id;wrappedLocalKey:Bytes}|null,StorageError>>;
+ installAndReceipt(input:RecipientInstall):Promise<Result<{keyRef:Id;acceptanceReceipt:Bytes;replayed:boolean},StorageError|'UNAVAILABLE'>>;
 }
+/** No production verifier/provider has been selected. Never fall back to structural checks. */
+export const acceptRecipientUnavailable = async ():Promise<Result<never,'UNAVAILABLE'>> => ({ok:false,error:'UNAVAILABLE'});
 export const PAIRING_LIMITS = { idBytes: 256, publicKeyBytes: 4096, signalingItems: 64, itemBytes: 1024 * 1024, totalBytes: 8 * 1024 * 1024 } as const;
 type ValidationError = 'MALFORMED' | 'UNSUPPORTED_VERSION' | 'TOO_LARGE';
 const enc = new TextEncoder();
