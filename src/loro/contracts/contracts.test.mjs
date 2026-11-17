@@ -82,3 +82,23 @@ test('atomic group compares personal and household children and rejects partial 
   assert.equal(classifyStorageGroup(result.value,result.value,true),'replay');
   assert.equal(classifyStorageGroup(changedKey,result.value,true),'conflict');
 });
+
+test('pairing comparison covers complete ceremony, packet and independent guard', async () => {
+  const { pairingReleaseKey, classifyPairingRelease, PAIRING_LIMITS } = await import('./pairing.ts');
+  const { fixturePairingRelease: p } = await import('./fixtures.ts');
+  const k = pairingReleaseKey(p); assert.equal(k.ok,true);
+  assert.equal(pairingReleaseKey(structuredClone(p)).value,k.value);
+  for (const mutate of [x => x.transcript.signaling.reverse(), x => x.packet.bytes[0]++, x => x.guard.guardId += 'x', x => x.transcript.authorizationSnapshot += 'x', x => x.expectedAuthorityRevision++]) {
+    const changed = structuredClone(p); mutate(changed); assert.notEqual(pairingReleaseKey(changed).value,k.value);
+  }
+  assert.equal(classifyPairingRelease(k.value,k.value,true,true),'replay');
+  assert.equal(classifyPairingRelease(k.value,'other',true,true),'conflict');
+  assert.equal(classifyPairingRelease(k.value,null,true,false),'conflict');
+  assert.equal(classifyPairingRelease(k.value,null,false,true),'conflict');
+  assert.equal(classifyPairingRelease(k.value,null,false,false),'new');
+  const bad = structuredClone(p); bad.transcript.responder.nonce = bad.transcript.initiator.nonce; assert.equal(pairingReleaseKey(bad).error,'MALFORMED');
+  const wrong = structuredClone(p); wrong.guard.scope.id = 'other'; assert.equal(pairingReleaseKey(wrong).error,'MALFORMED');
+  const extra = structuredClone(p); extra.transcript.extra = 1; assert.equal(pairingReleaseKey(extra).error,'MALFORMED');
+  const large = structuredClone(p); large.packet.bytes = new Uint8Array(PAIRING_LIMITS.itemBytes+1); assert.equal(pairingReleaseKey(large).error,'TOO_LARGE');
+  const version = structuredClone(p); version.transcript.version = 2; assert.equal(pairingReleaseKey(version).error,'UNSUPPORTED_VERSION');
+});

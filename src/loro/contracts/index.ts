@@ -203,3 +203,5 @@ export function validateGuardianPackage(input: unknown): Result<GuardianPackage,
   if (typeof p.owner !== 'string' || !p.owner || typeof p.encryptedCatalogRef !== 'string' || !p.encryptedCatalogRef || !Number.isSafeInteger(p.packageGeneration) || (p.packageGeneration as number) < 0 || (p.scope !== 'personal' && p.scope !== 'shared') || !ids(p.guardianRoster) || !p.guardianRoster.length || !ids(p.approvalRefs) || !Number.isSafeInteger(p.threshold) || (p.threshold as number) < 1 || (p.threshold as number) > p.guardianRoster.length || (p.scope === 'personal' && p.sharedGrantRef !== null) || (p.scope === 'shared' && (typeof p.sharedGrantRef !== 'string' || !p.sharedGrantRef))) return { ok: false, error: 'MALFORMED' };
   return { ok: true, value: p as GuardianPackage };
 }
+
+export * from "./pairing.ts";
