@@ -38,7 +38,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   if(!['reserved','sealed','ready'].includes(state.stage))throw Error('LOCKED');
   let r;
   if(state.stage==='reserved'){
-   await transaction(db,async()=>{const now=load();if(now.stage!=='reserved')return;const pending=decode(new Uint8Array(now.data));await master.ensure('workspace-master');const wrapped=await master.wrap('workspace-master',enc.encode(JSON.stringify({...pending,stage:'sealed'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['sealed',wrapped]);});state=load();
+   await transaction(db,async()=>{const now=load();if(now.stage!=='reserved')return;if(rows(db,'SELECT key FROM loro_records LIMIT 1').length||rows(db,"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('loro_sequence_counters','loro_sequence_allocations')").length)throw Error('LOCKED');const pending=decode(new Uint8Array(now.data));await master.ensure('workspace-master');const wrapped=await master.wrap('workspace-master',enc.encode(JSON.stringify({...pending,stage:'sealed'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['sealed',wrapped]);});state=load();
   }
   const ready=state.stage==='ready';if(!['sealed','ready'].includes(state.stage))throw Error('LOCKED');
   try{const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(state.data),aad));if(decoded.stage!==state.stage)throw Error('LOCKED');const {stage,...rest}=decoded;r=rest}catch{throw Error('LOCKED')}
