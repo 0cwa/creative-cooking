@@ -17,12 +17,12 @@ const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
 /** Replay every signed event from a locally pinned, explicitly preaccepted genesis. */
 export async function verifyAuthority(state,pin,provider) {
  state=copy(state);
- if (!state || Object.keys(state).sort().join(',')!=='activeHead,events,root,selections,version' || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
+ if (!state || Array.isArray(state) || Object.keys(state).sort().join(',')!=='activeHead,events,root,selections,version' || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
  if (!validParent(state.root) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
  for(const item of state.events) {
-  if (!item || Object.keys(item).sort().join(',')!=='approvals,authorSignature,event') throw Error('MALFORMED');
+  if (!item || Array.isArray(item) || Object.keys(item).sort().join(',')!=='approvals,authorSignature,event') throw Error('MALFORMED');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
   const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
   if(r.status!=='validated' || item.event.kind!=='changePolicy') throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
@@ -31,7 +31,7 @@ export async function verifyAuthority(state,pin,provider) {
  }
  let active=pin;
  for (const [index, selection] of state.selections.entries()) {
-  if (!selection || Object.keys(selection).sort().join(',')!=='deviceId,from,index,signature,to' || selection.index!==index || selection.from!==active || !nodes.has(selection.to)) throw Error('INVALID_SELECTION');
+  if (!selection || Array.isArray(selection) || Object.keys(selection).sort().join(',')!=='deviceId,from,index,signature,to' || selection.index!==index || selection.from!==active || !nodes.has(selection.to)) throw Error('INVALID_SELECTION');
   const signer=nodes.get(active).devices.find(d=>d.deviceId===selection.deviceId && d.active);
   const sig=unhex(selection.signature), payload={root:pin,householdId:state.root.householdId,from:selection.from,to:selection.to,deviceId:selection.deviceId,index};
   if (!signer || !sig || !await provider.verify(signer.signingKeyRef,domain('select-head',payload),sig)) throw Error('INVALID_SELECTION');

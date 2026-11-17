@@ -8,7 +8,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority} from './chain.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority} from './chain.mjs';
 await sodium.ready;
 const hex=b=>Buffer.from(b).toString('hex');
 const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
@@ -22,6 +22,29 @@ const root={householdId:'house',head:'',policyHash:await policyId(provider,p),ge
 root.head=await rootPin(provider,root);
 const event=name=>({version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:'house',parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',proposalId:name,kind:'changePolicy',authorDeviceId:'a',frozenAdultRoster:['a','b'],subject:null,nextPolicy:{kind:'unanimous',fixedCount:null}});
 async function item(name){const e=event(name),eventHash=hex(await provider.hash(domain('event',e)));const approval={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a'};return {event:e,authorSignature:sign('a','event-signature',e),approvals:[{...approval,signature:sign('a','approval-signature',approval)}]}}
+function isolatedStore() {const database=new DatabaseSync(':memory:');return {database,storage:openSQLiteStorage({executeSync:(sql,params=[])=>{const statement=database.prepare(sql);return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])}}})};}
+test('authority state cannot be an array with named record fields',async()=>{
+ const state=Object.assign([],{version:1,root,events:[],selections:[],activeHead:root.head});
+ await assert.rejects(verifyAuthority(state,root.head,provider),/MALFORMED/);
+});
+test('array event wrappers leave the durable authority unchanged',async()=>{
+ const {database,storage}=isolatedStore();
+ try {await initializeAuthority(storage,root,root.head,provider);const before=await storage.readPairingAuthority(scope);
+  await assert.rejects(observeSuccessor(storage,scope,root.head,provider,Object.assign([],await item('array-event'))),/MALFORMED/);
+  assert.deepEqual(await storage.readPairingAuthority(scope),before);
+  assert.equal((await readAuthority(storage,scope,root.head,provider)).activeHead,root.head);
+ } finally {database.close();}
+});
+test('array selection wrappers leave the durable authority unchanged',async()=>{
+ const {database,storage}=isolatedStore();
+ try {await initializeAuthority(storage,root,root.head,provider);const to=await observeSuccessor(storage,scope,root.head,provider,await item('array-selection'));
+  const before=await storage.readPairingAuthority(scope),payload={root:root.head,householdId:'house',from:root.head,to,deviceId:'a',index:0};
+  const selection=Object.assign([],{from:root.head,to,deviceId:'a',index:0,signature:sign('a','select-head',payload)});
+  await assert.rejects(selectHead(storage,scope,root.head,provider,selection),/INVALID_SELECTION/);
+  assert.deepEqual(await storage.readPairingAuthority(scope),before);
+  assert.equal((await readAuthority(storage,scope,root.head,provider)).activeHead,root.head);
+ } finally {database.close();}
+});
 test('durable siblings and signed deliberate selection survive reopen; failed CAS leaves state',async()=>{
  let fail=false; const store=openSQLiteStorage(conn,x=>{if(fail && x==='write')throw Error('fault')});
  await initializeAuthority(store,root,root.head,provider);
