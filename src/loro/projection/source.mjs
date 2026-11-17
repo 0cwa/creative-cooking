@@ -1,6 +1,6 @@
 // Verify the exact durable source and restrict the fresh snapshot to the narrow
 // current recipe-title/purchase projection supported by this candidate runtime.
-import {LoroDoc} from 'loro-crdt';
+import {loadLoroDoc} from '../app/loro-document.mjs';
 import {domain} from '../authority/validator.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
@@ -12,7 +12,7 @@ export async function checkProjectionSource(storage,expectedAuthority,manifest,g
   if(!result.ok || !result.value) throw Error('SOURCE_UNAVAILABLE');
   const source=result.value, digest=await provider.hash(domain('projection-source-snapshot',hex(source.bytes)));
   if(!(digest instanceof Uint8Array) || digest.length!==32 || hex(digest)!==manifest.sourceCheckpointHash) throw Error('SOURCE_MISMATCH');
-  const old=new LoroDoc(), fresh=new LoroDoc(); old.import(source.bytes); fresh.import(snapshot);
+  const LoroDoc=await loadLoroDoc(),old=new LoroDoc(), fresh=new LoroDoc(); old.import(source.bytes); fresh.import(snapshot);
   if(manifest.schemaVersion.startsWith('registry-seed-v1|') || manifest.schemaVersion.startsWith('registry-seed-v2|') || manifest.schemaVersion.startsWith('registry-seed-v3|') || manifest.schemaVersion.startsWith('registry-seed-v4|')) {
    if(JSON.stringify(grant.contentClasses)!==JSON.stringify(['pantry','recipe','shopping']))throw Error('CONTENT_CLASS_MISMATCH');
    if(!sourceRuntime||sourceRuntime.storage!==storage||sourceRuntime.scope?.scopeId!==expectedAuthority.scope.id||sourceRuntime.scope?.documentId!==manifest.sourceDocument||JSON.stringify(canonical(await sourceRuntime.authorize()))!==JSON.stringify(canonical(expectedAuthority)))throw Error('AUTHENTICATED_SOURCE_REQUIRED');
