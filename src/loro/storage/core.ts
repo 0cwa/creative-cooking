@@ -163,6 +163,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
     const scope=p.expectedAuthority.scope.id;
+    const authority=await tx.get(key('pairing-authority','household',scope));
+    if(!authority || authority.scope.kind!=='household' || authority.scope.id!==scope || authority.revision<p.nextAuthority.revision || (authority.revision===p.nextAuthority.revision && JSON.stringify(projectionCanonical(authority))!==JSON.stringify(projectionCanonical(p.nextAuthority)))) return corrupt();
     for(const guard of p.guardIds ?? (p.guardId ? [p.guardId] : [])) if(await tx.get(key('pairing-guard',guard))!==inputKey) return corrupt();
     const catalog=await tx.get(key('local-master-catalog'));
     if (!validMasterCatalog(catalog) || JSON.stringify(projectionCanonical(catalog))!==JSON.stringify(projectionCanonical(p.localKey.catalog))) return corrupt();

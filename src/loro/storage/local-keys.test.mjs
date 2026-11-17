@@ -18,5 +18,15 @@ test('prepared real key and encrypted package publish with authority and fresh L
  assert.equal((await s.publishProjection(input)).ok,true);const reopened=openSQLiteStorage(conn);assert.equal((await reopened.publishProjection(input)).value.replayed,true);
  const received=sodium.crypto_box_seal_open((await reopened.getProjectionPublication('home','publication')).value.packages[0].bytes,recipient.publicKey,recipient.privateKey);
  await reopened.localKeys(m,sodium).use('key-operation',identity,key=>assert.deepEqual(key,received));
- const fresh=new LoroDoc();fresh.import((await reopened.reopenDocument('home','fresh')).value.bytes);assert.equal(fresh.getMap('recipe').get('title'),'soup');conn.db.close();
+ const fresh=new LoroDoc();fresh.import((await reopened.reopenDocument('home','fresh')).value.bytes);assert.equal(fresh.getMap('recipe').get('title'),'soup');
+ const authorityKey=JSON.stringify(['pairing-authority','household','home']),savedAuthority=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(authorityKey).value;
+ const corruptReplay=async()=>{for(const result of [await reopened.getProjectionPublication('home','publication'),await reopened.publishProjection(input)]){assert.equal(result.ok,false);assert.equal(result.error,'CORRUPT')}};
+ conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(authorityKey);await corruptReplay();
+ for(const record of [{...input.nextAuthority,revision:0},{...input.nextAuthority,scope:{kind:'household',id:'other'}},{...input.nextAuthority,authorizationSnapshot:'substituted'},{...input.nextAuthority,authorityState:new Uint8Array([9])}]){
+  conn.db.prepare('INSERT INTO loro_records(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(authorityKey,JSON.stringify(record,(_k,v)=>v instanceof Uint8Array?{__storageBytes:Array.from(v)}:v));await corruptReplay();
+ }
+ conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(savedAuthority,authorityKey);
+ assert.equal((await reopened.compareAndSwapPairingAuthority({expectedRevision:1,record:{...input.nextAuthority,revision:2,acceptedParent:'later',authorizationSnapshot:'later-snapshot',authorityState:new Uint8Array([4])}})).ok,true);
+ assert.equal((await reopened.getProjectionPublication('home','publication')).ok,true);assert.equal((await reopened.publishProjection(input)).value.replayed,true);
+ conn.db.close();
 });
