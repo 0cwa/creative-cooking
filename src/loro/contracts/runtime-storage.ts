@@ -1,6 +1,7 @@
-import type { Bytes, Id, Result, StorageError, LocalCommit, LocalCommitGroup, SavedOutcome } from './index.ts';
+import type { Bytes, Id, Result, StorageError, LocalCommit, LocalCommitGroup, AuthorityPrecondition, SavedOutcome } from './index.ts';
 /** Copied durable data, always unauthenticated. These reads do not provide a transactional snapshot across calls. */
 export interface RuntimeStorageReader {
+  reopenBranchDocument(expectedAuthority: AuthorityPrecondition, documentId: Id): Promise<Result<{documentId: Id; bytes: Bytes; revision: number} | null, StorageError>>;
   getLocalGroup(groupId: Id): Promise<Result<{group: LocalCommitGroup; outcomes: readonly SavedOutcome[]} | null, StorageError>>;
   getLocalOperation(scopeId: Id, operationId: Id): Promise<Result<{commit: LocalCommit; outcome: SavedOutcome} | null, StorageError>>;
   getInboxApplication(scopeId: Id, itemId: Id): Promise<Result<{operationId: Id; outcome: SavedOutcome} | null, StorageError>>;

@@ -41,6 +41,7 @@ const validateRecord = (k: string, v: any) => {
     case 'pairing-authority': valid = validatePairingAuthority(v).ok; break;
     case 'pairing-release': { const parsed = fields(v,['inputKey','release']) ? pairingReleaseKey(v.release) : null; valid = !!parsed && parsed.ok && parsed.value === v.inputKey; break; }
     case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': valid = typeof v === 'string' && v.length > 0; break;
+    case 'document-owner': valid = typeof v==='string' && !!v; break;
     case 'document': valid = fields(v,['bytes','revision']) && v.bytes instanceof Uint8Array && revision(v.revision); break;
     case 'object': valid = fields(v,['bytes','branchHead','epochId']) && v.bytes instanceof Uint8Array && typeof v.branchHead === 'string' && !!v.branchHead && typeof v.epochId === 'string' && !!v.epochId; break;
     case 'inbox': valid = fields(v,['bytes']) && v.bytes instanceof Uint8Array; break;
@@ -166,7 +167,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     for (const d of p.documents) {
       const doc=await tx.get(key('document',scope,d.documentId)), meta=await tx.get(key('projection-document',scope,d.documentId));
       // A document may have advanced after publication; its immutable association remains.
-      if (!doc || !meta || meta.generation!==d.generation || meta.operationId!==p.operationId || (doc.revision===0 && !sameBytes(doc.bytes,d.bytes))) return corrupt();
+      if (!doc || await tx.get(key('document-owner',scope,d.documentId))!==p.nextAuthority.acceptedParent || !meta || meta.generation!==d.generation || meta.operationId!==p.operationId || (doc.revision===0 && !sameBytes(doc.bytes,d.bytes))) return corrupt();
     }
     for (const pkg of p.packages) {
       const bytes=await tx.get(key('projection-package',scope,pkg.id)), out=await tx.get(key('projection-outbox',scope,p.operationId,pkg.id));
@@ -192,13 +193,13 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const authority=await tx.get(key('pairing-authority','household',scope));
       if(!authority || authority.revision!==input.expectedAuthority.record!.revision) conflict();
       if(await tx.get(key('projection-manifest',scope,input.manifest.id))!==undefined) conflict();
-      for(const d of input.documents) if(await tx.get(key('document',scope,d.documentId))!==undefined || await tx.get(key('projection-document',scope,d.documentId))!==undefined) conflict();
+      for(const d of input.documents) if(await tx.get(key('document-owner',scope,d.documentId))!==undefined || await tx.get(key('document',scope,d.documentId))!==undefined || await tx.get(key('projection-document',scope,d.documentId))!==undefined) conflict();
       for(const p of input.packages) if(await tx.get(key('projection-package',scope,p.id))!==undefined || await tx.get(key('projection-outbox',scope,input.operationId,p.id))!==undefined) conflict();
       for(const p of input.pendingEdits) if(!await tx.get(key('local',p.scopeId,p.operationId)) || await tx.get(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId))!==undefined) conflict();
       const installed=await installLocalKey(tx,input.localKey.record,input.localKey.catalog);
       if(JSON.stringify(projectionCanonical(installed.record))!==JSON.stringify(projectionCanonical(input.localKey.record))) conflict();
       await tx.put(key('projection-manifest',scope,input.manifest.id),copy(input.manifest.bytes));
-      for(const d of input.documents) { await tx.put(key('document',scope,d.documentId),{bytes:copy(d.bytes),revision:0}); await tx.put(key('projection-document',scope,d.documentId),{generation:d.generation,operationId:input.operationId}); }
+      for(const d of input.documents) { await tx.put(key('document-owner',scope,d.documentId),input.nextAuthority.acceptedParent); await tx.put(key('document',scope,d.documentId),{bytes:copy(d.bytes),revision:0}); await tx.put(key('projection-document',scope,d.documentId),{generation:d.generation,operationId:input.operationId}); }
       for(const p of input.packages) { await tx.put(key('projection-package',scope,p.id),copy(p.bytes)); await tx.put(key('projection-outbox',scope,input.operationId,p.id),{packageId:p.id,recipientDevice:p.recipientDevice}); }
       for(const p of input.pendingEdits) await tx.put(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId),inputKey);
       await tx.put(key('pairing-authority','household',scope),input.nextAuthority);
@@ -248,14 +249,17 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if (!object || !sameBytes(object.bytes,entry.object.bytes) || object.branchHead !== entry.branchHead || object.epochId !== entry.epochId) conflict();
     }
   }
-  private async documents(tx: Tx, scope: string, docs: LocalCommit['documents']): Promise<SavedOutcome> {
+  private async documents(tx: Tx, scope: string, docs: LocalCommit['documents'], owner: string | null): Promise<SavedOutcome> {
     const revisions: {documentId:string;revision:number}[] = [];
     for (const d of docs) {
       const old = await tx.get(key('document',scope,d.documentId));
+      const oldOwner=await tx.get(key('document-owner',scope,d.documentId));
+      if (owner && old && oldOwner!==owner) throw new StorageFailure('CHECKOUT_REQUIRED');
+      if (owner && !old && oldOwner!==undefined) return corrupt();
       if ((old === undefined ? null : old.revision) !== d.expectedRevision || old?.revision === Number.MAX_SAFE_INTEGER) conflict();
       revisions.push({documentId:d.documentId,revision:old === undefined ? 0 : old.revision + 1});
     }
-    for (let i=0;i<docs.length;i++) await tx.put(key('document',scope,docs[i].documentId), {bytes:copy(docs[i].bytes),revision:revisions[i].revision});
+    for (let i=0;i<docs.length;i++) { if (owner && docs[i].expectedRevision===null) await tx.put(key('document-owner',scope,docs[i].documentId),owner); await tx.put(key('document',scope,docs[i].documentId), {bytes:copy(docs[i].bytes),revision:revisions[i].revision}); }
     return {state:'saved',revisions};
   }
   /** Dependencies are scope-local and must precede their consumer in the transaction. */
@@ -269,7 +273,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   private async local(tx: Tx, c: LocalCommit, inputKey: string) {
     await this.identities(tx,c);
     await this.requireDependencies(tx,c.scopeId,c.commands);
-    const outcome = await this.documents(tx,c.scopeId,c.documents);
+    const outcome = await this.documents(tx,c.scopeId,c.documents,c.expectedAuthority.record?.acceptedParent ?? null);
     for (const command of c.commands) {
       await tx.put(key('command',c.scopeId,command.commandId), inputKey);
       await tx.put(key('effect',c.scopeId,command.effectId), inputKey);
@@ -300,6 +304,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:{outcomes,replayed:false}};
     }); } catch (e) { return fail(mapError(e)); }
   }
+  async reopenBranchDocument(expectedAuthority: LocalCommit['expectedAuthority'], documentId:string):Promise<Result<{documentId:string;bytes:Uint8Array;revision:number}|null,StorageError>> {
+    if (!expectedAuthority || !validPairingScope(expectedAuthority.scope) || !expectedAuthority.record || !validId(documentId)) return {ok:false,error:'MALFORMED'};
+    expectedAuthority=snapshot(expectedAuthority);
+    try { return await this.run(false,async tx=>{ await this.requireAuthority(tx,expectedAuthority); const scope=expectedAuthority.scope.id, doc=await tx.get(key('document',scope,documentId));
+      const owner=await tx.get(key('document-owner',scope,documentId));
+      if (!doc) { if(owner!==undefined) return corrupt(); return {ok:true,value:null}; }
+      if (owner!==expectedAuthority.record!.acceptedParent) throw new StorageFailure('CHECKOUT_REQUIRED');
+      return {ok:true,value:{documentId,bytes:copy(doc.bytes),revision:doc.revision}};
+    }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {
     try { return await this.run(false,async tx => { const d = await tx.get(key('document',scopeId,documentId)); return {ok:true,value:d === undefined ? null : {documentId,bytes:copy(d.bytes),revision:d.revision}}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
@@ -323,7 +337,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
       for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined) conflict();
       await this.requireDependencies(tx,c.scopeId,c.commands);
-      const outcome = await this.documents(tx,c.scopeId,c.documents); this.fault?.('import-documents');
+      const outcome = await this.documents(tx,c.scopeId,c.documents,c.expectedAuthority.record?.acceptedParent ?? null); this.fault?.('import-documents');
       for (const command of c.commands) { await tx.put(key('command',c.scopeId,command.commandId),k.value); await tx.put(key('effect',c.scopeId,command.effectId),k.value); }
       await tx.put(key('applied',c.scopeId,c.itemId),c.operationId);
       await tx.put(op,{inputKey:k.value,outcome}); this.fault?.('import');

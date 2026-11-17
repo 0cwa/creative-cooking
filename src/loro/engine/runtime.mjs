@@ -47,7 +47,8 @@ export class OfflineRuntime {
     return {version:2,scope:record.scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
   }
   async document() {
-    const stored=required(await this.storage.reopenDocument(this.scope.scopeId,this.scope.documentId));
+    const expectedAuthority=await this.authorize();
+    const stored=required(await this.storage.reopenBranchDocument(expectedAuthority,this.scope.documentId));
     const doc=new this.LoroDoc(); if (stored) doc.import(stored.bytes);
     return {doc,revision:stored?.revision ?? null};
   }

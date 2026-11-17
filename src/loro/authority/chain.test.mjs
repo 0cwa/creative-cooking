@@ -52,7 +52,32 @@ test('durable siblings and signed deliberate selection survive reopen; failed CA
  assert.equal((await readAuthority(store,scope,root.head,provider)).activeHead,root.head);
  await selectHead(store,scope,root.head,provider,selection);
  await assert.rejects(runtime.authorize(),/INVALID_AUTHORITY/);
+ const switched=await resolveRuntimeAuthority(store,scope,root.head,provider,'a');
+ const siblingRuntime=makeRuntime({scope:switched.scope});
+ await assert.rejects(siblingRuntime.read(),/CHECKOUT_REQUIRED/);
+ await assert.rejects(siblingRuntime.execute({operationId:'branch-op',command:{kind:'recipe-title',commandId:'branch-c',effectId:'branch-e',value:'branch'},deviceSequence:2}),/CHECKOUT_REQUIRED/);
  view=await readAuthority(openSQLiteStorage(conn),scope,root.head,provider);assert.equal(view.activeHead,first);assert.deepEqual(new Set(view.heads),new Set([first,second]));
  await assert.rejects(readAuthority(store,scope,'wrong',provider),/INVALID_ROOT/);
  db.close();
+});
+test('switching sibling heads cannot read or extend the other branch snapshot',async()=>{
+ const mk=()=>{const db=new DatabaseSync(':memory:');const c={executeSync:(sql,args=[])=>{const st=db.prepare(sql);return {rows:sql.startsWith('SELECT')?st.all(...args):(st.run(...args),[])}}};return {db,store:openSQLiteStorage(c)}};
+ const one=mk(),two=mk(); const clients=[one,two];
+ try {
+  for(const x of clients)await initializeAuthority(x.store,root,root.head,provider);
+  const firstItem=await item('branch-a'),secondItem=await item('branch-b');let first,second;
+  for(const x of clients){first=await observeSuccessor(x.store,scope,root.head,provider,firstItem);second=await observeSuccessor(x.store,scope,root.head,provider,secondItem)}
+  const select=async(x,from,to,index)=>{const p={root:root.head,householdId:'house',from,to,deviceId:'a',index};await selectHead(x.store,scope,root.head,provider,{from,to,deviceId:'a',index,signature:sign('a','select-head',p)})};
+  await select(one,root.head,first,0);await select(two,root.head,second,0);
+  const recipient=sodium.crypto_box_keypair(), crypt=testProvider(sodium,{signing:pair.a,publicSigning:pair.a.publicKey,recipient,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
+  const cp={...crypt,sign:async(w,b)=>sodium.crypto_sign_detached(b,pair.a.privateKey),verify:async(w,b,s)=>sodium.crypto_sign_verify_detached(s,b,pair.a.publicKey)};
+  const runtime=async(x)=>new OfflineRuntime({storage:x.store,codec:candidateCodec(cp),LoroDoc,decodeImportBlobMeta,scope:(await resolveRuntimeAuthority(x.store,scope,root.head,provider,'a')).scope,keyRef:'data',authority:{rootPin:root.head,provider}});
+  await (await runtime(one)).execute({operationId:'a-op',command:{kind:'recipe-title',commandId:'a-c',effectId:'a-e',value:'A secret'},deviceSequence:1});
+  await select(one,first,second,1);const switched=await runtime(one);
+  await assert.rejects(switched.read(),/CHECKOUT_REQUIRED/);await assert.rejects(switched.execute({operationId:'b-op',command:{kind:'recipe-title',commandId:'b-c',effectId:'b-e',value:'B'},deviceSequence:2}),/CHECKOUT_REQUIRED/);
+  const b=await runtime(two);assert.deepEqual((await b.read()).recipe,{});await b.execute({operationId:'b-op',command:{kind:'recipe-title',commandId:'b-c',effectId:'b-e',value:'B'},deviceSequence:2});assert.equal((await b.read()).recipe.title,'B');
+  const bObject=(await two.store.listOutboundObjects('house')).value[0];
+  await assert.rejects(switched.importItem({itemId:bObject.objectId,bytes:bObject.bytes}),/CHECKOUT_REQUIRED/);
+  await select(one,second,first,2);assert.equal((await (await runtime(one)).read()).recipe.title,'A secret');
+ } finally {one.db.close();two.db.close()}
 });
