@@ -68,3 +68,12 @@ export async function preparePersonalAdmission(storage,scope,pin,provider,item){
  const next=state.version===1?{version:2,rootState:state,admissions:[structuredClone(item)]}:{version:2,rootState:state.rootState,admissions:[...state.admissions,structuredClone(item)]};await verifyPersonalHistory(next,scope,pin,provider);
  return {expected:structuredClone(old),next:{scope:structuredClone(scope),revision:old.revision+1,acceptedParent:pin,authorizationSnapshot:await digest(provider,'personal-authority-state',next),authorityState:bytes(next)}};
 }
+
+/** Install independently pinned, signed public personal history into an isolated
+ * trust store. Existing history may only be extended, never replaced or rewound. */
+export async function importPersonalAuthorityHistory(storage,scope,pin,provider,state,expectedOwner,authorDevice){
+ state=structuredClone(state);scope=structuredClone(scope);const selected=await verifyPersonalHistory(state,scope,pin,provider);if(selected.ownerId!==expectedOwner||!selected.devices.some(d=>d.active&&d.deviceId===authorDevice))throw Error('INVALID_AUTHORITY');
+ const current=await storage.readPairingAuthority(scope);if(!current.ok)throw Error(current.error);const old=current.value;
+ if(old){let previous;try{previous=JSON.parse(dec.decode(old.authorityState))}catch{throw Error('MALFORMED')}if(hex(bytes(previous))!==hex(old.authorityState)||old.acceptedParent!==pin||old.authorizationSnapshot!==await digest(provider,'personal-authority-state',previous))throw Error('INVALID_AUTHORITY');await verifyPersonalHistory(previous,scope,pin,provider);if(JSON.stringify(canonical(previous))===JSON.stringify(canonical(state)))return {replayed:true};const oldRoot=previous.version===1?previous:previous.rootState,newRoot=state.version===1?state:state.rootState,oldItems=previous.version===1?[]:previous.admissions,newItems=state.version===1?[]:state.admissions;if(JSON.stringify(canonical(oldRoot))!==JSON.stringify(canonical(newRoot))||newItems.length<=oldItems.length||JSON.stringify(canonical(newItems.slice(0,oldItems.length)))!==JSON.stringify(canonical(oldItems)))throw Error('CONFLICT')}
+ const record={scope,revision:old?old.revision+1:0,acceptedParent:pin,authorizationSnapshot:await digest(provider,'personal-authority-state',state),authorityState:bytes(state)},result=await storage.compareAndSwapPairingAuthority({expectedRevision:old?.revision??null,record});if(!result.ok)throw Error(result.error);return {replayed:false};
+}
