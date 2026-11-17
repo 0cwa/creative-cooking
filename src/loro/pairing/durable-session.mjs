@@ -48,7 +48,7 @@ export function householdSessionContextBytes(c){
  * admission, accepted source delegation, quorum and freshness/guard consumption. */
 export function verifyHouseholdSessionEvidence(s,t,g,oob,messages,c){
  const bytes=householdSessionContextBytes(c);
- if(t.action!=='inviteAdult'||t.scope.kind!=='household'||t.scope.id!==c.householdId||t.acceptedParent!==c.parentHead||t.initiator.deviceId!==c.sponsorDeviceId||t.responder.deviceId!==c.recipientDeviceId||!Array.isArray(t.signaling)||!(t.signaling[0] instanceof Uint8Array)||hex(t.signaling[0])!==hex(bytes))throw Error('INVALID_PROOF');
+ if(t.action!=='inviteAdult'||t.purpose!=='data'||g.purpose!=='data'||t.scope.kind!=='household'||t.scope.id!==c.householdId||t.acceptedParent!==c.parentHead||t.initiator.deviceId!==c.sponsorDeviceId||t.responder.deviceId!==c.recipientDeviceId||!Array.isArray(t.signaling)||!(t.signaling[0] instanceof Uint8Array)||hex(t.signaling[0])!==hex(bytes))throw Error('INVALID_PROOF');
  const proof=verifySessionEvidence(s,t,g,oob,messages);
  return {transcriptHash:proof.transcriptHash,householdId:c.householdId,parentHead:c.parentHead,admissionEventHash:c.admissionEventHash,sponsorAdult:c.sponsorAdult,recipientAdult:c.recipientAdult,sponsorDeviceId:c.sponsorDeviceId,recipientDeviceId:c.recipientDeviceId};
 }

@@ -44,6 +44,7 @@ export async function verifyAuthority(state,pin,provider) {
    if(!accepted) throw Error('INVALID_AGREEMENT');
    await sodium.ready; const ceremonies=decodeEvidence(a.ceremonies),existing=decodeEvidence(a.existingCeremonies),snapshot=ceremonies[0]?.transcript?.authorizationSnapshot;
    const verified=await checkHouseholdCeremonies(sodium,parent,snapshot,a.grant,ceremonies,provider), oldDevices=await checkExistingRecipientCeremonies(sodium,parent,snapshot,a.grant,existing,provider);
+   if([...ceremonies,...existing].some(e=>e.context.sponsorDeviceId!==a.localDeviceId)) throw Error('INVALID_ADMISSION');
    if(subject.devices.some((d,i)=>d.deviceId!==verified[i]?.deviceId || d.signingKeyRef!==verified[i]?.signingKeyRef || d.wrappingKeyRef!==verified[i]?.wrappingKeyRef) || JSON.stringify(oldDevices.map(d=>d.deviceId).sort())!==JSON.stringify(parent.runtime.acceptedRecipients.filter(d=>d!==a.localDeviceId)) || new Set([...verified,...oldDevices].map(d=>d.guardId)).size!==verified.length+oldDevices.length) throw Error('INVALID_ADMISSION');
    if(nodes.has(r.eventHash)) throw Error('DUPLICATE_EVENT');
    if([...nodes.values()].some(n=>n.epochId===subject.newEpochId || n.runtime.documentId===subject.documentId)) throw Error('INVALID_ADMISSION');

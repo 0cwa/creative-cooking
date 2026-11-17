@@ -12,6 +12,7 @@ export async function checkHouseholdCeremonies(sodium,parent,authorizationSnapsh
   const e=evidence[i];
   if(!exact(e,['transcript','guard','oob','messages','context'])) throw Error('INVALID_PROOF');
   const {transcript:t,guard:g,context:c}=e;
+  if(t?.purpose!=='data' || g?.purpose!=='data') throw Error('CONTEXT_MISMATCH');
   const sponsor=parent.devices.find(d=>d.active && d.adultId===c?.sponsorAdult && d.deviceId===c?.sponsorDeviceId);
   if(!sponsor || sponsor.signingKeyRef!==c.sponsorSigningKeyRef || c.householdId!==parent.householdId || c.parentHead!==parent.head || c.admissionEventHash!==grant.admissionEventHash || c.recipientAdult!==grant.recipientAdult || !grant.recipientDevices.includes(c.recipientDeviceId) || seen.has(c.recipientDeviceId) || guards.has(g?.guardId) || t.authorizationSnapshot!==authorizationSnapshot || c.sponsorWrappingKeyRef!==hex(t.initiator.wrappingPublicKey) || c.recipientSigningKeyRef!==hex(t.responder.signingPublicKey) || c.recipientWrappingKeyRef!==hex(t.responder.wrappingPublicKey)) throw Error('CONTEXT_MISMATCH');
   const verified=verifyHouseholdSessionEvidence(sodium,t,g,e.oob,e.messages,c);
