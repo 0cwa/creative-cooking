@@ -1,3 +1,4 @@
+import { SharedChefRequest } from '@/loro/app/SharedChefRequest';
 import { allowsFreshLocalInference } from '@/loro/app/inference-gate.mjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -404,7 +405,7 @@ export default function ChefScreen() {
           </View>
         </View>
 
-        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Messages stay private. External Chef requests are disabled until disclosure review is ready; the downloaded on-device model can run locally.</Text><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
+        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Messages stay private. You can separately review a shared-ingredient request, or use the downloaded on-device model locally.</Text><SharedChefRequest items={app.pantry} providerId={app.settings.providerId} model={app.settings.model} onComplete={(text,proposals)=>app.appendChatMessage(chatMessage('assistant',text,proposals))}/><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
         <View style={styles.contextStrip}>
           <Pressable
             accessibilityRole="button"

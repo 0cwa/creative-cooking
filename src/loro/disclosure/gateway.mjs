@@ -7,7 +7,7 @@ const unhex=s=>typeof s==='string'&&/^[0-9a-f]{128}$/.test(s)?Uint8Array.from(s.
 const valid=x=>typeof x==='string'&&x.length>0&&new TextEncoder().encode(x).length<=256;
 const named=(kind,id)=>`${kind}:${encodeURIComponent(id)}`;
 const head=(kind,id,field)=>named('field-head',JSON.stringify([kind,id,field]));
-function endpointIdentity(value) {let u;try{u=new URL(value)}catch{throw Error('MALFORMED')}if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.hash||u.search||u.href!==value)throw Error('MALFORMED');return value;}
+function endpointIdentity(value) {let u;try{u=new URL(value)}catch{throw Error('MALFORMED')}if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.hash||(u.search&&u.search!=='?alt=sse')||u.href!==value)throw Error('MALFORMED');return value;}
 /** Only actual household pantry fields are selected. There is no free-form
  * payload, private-chat, credentials, recovery or shared-key input. */
 export function disclosureGateway({runtime,service,provider,fetch:fetcher=fetch,randomId}) {
