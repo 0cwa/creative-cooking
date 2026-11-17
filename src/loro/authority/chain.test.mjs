@@ -10,6 +10,8 @@ import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement,checkCurrentAdmission,checkAdmissionProofs} from './chain.mjs';
 await sodium.ready;
+const recipe=(commandId,effectId,title)=>({version:1,kind:'recipe-create',commandId,effectId,dependencyEffectIds:[],data:{recipe:{id:effectId,title,portions:1,ingredients:[],steps:[],stepIds:[]},author:'a',at:'2026-01-01T00:00:00Z'}});
+const title=async(runtime,id)=>(await runtime.document()).doc.getMap(`recipe:${id}`).get('title');
 const hex=b=>Buffer.from(b).toString('hex');
 const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
 const provider={hash:async b=>sodium.crypto_generichash(32,b),verify:async(k,b,s)=>sodium.crypto_sign_verify_detached(s,b,pair[k].publicKey)};
@@ -66,8 +68,8 @@ test('durable siblings and signed deliberate selection survive reopen; failed CA
  const crypto=testProvider(sodium,{signing:pair.a,publicSigning:pair.a.publicKey,recipient,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
  const cp={...crypto,sign:async (who,bytes)=>{if(who!=='a')throw Error('MISSING_KEY');return sodium.crypto_sign_detached(bytes,pair.a.privateKey)},verify:async(who,bytes,sig)=>who==='a' && sodium.crypto_sign_verify_detached(sig,bytes,pair.a.publicKey)};
  const makeRuntime=opts=>new OfflineRuntime({storage:store,codec:candidateCodec(cp),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:'data',authority:{rootPin:root.head,provider},...opts});
- const runtime=makeRuntime({}); await runtime.execute({operationId:'op',command:{kind:'recipe-title',commandId:'c',effectId:'e',value:'soup'},deviceSequence:1});
- assert.equal((await runtime.read()).recipe.title,'soup');
+ const runtime=makeRuntime({}); await runtime.execute({operationId:'op',command:recipe('c','e','soup'),deviceSequence:1});
+ assert.equal(await title(runtime,'e'),'soup');
  const altered=structuredClone(resolved.scope); altered.authorPeers.a='99';
  await assert.rejects(makeRuntime({scope:altered}).authorize(),/INVALID_AUTHORITY/);
  await assert.rejects(makeRuntime({authority:{rootPin:'wrong',provider}}).authorize(),/INVALID_ROOT/);
@@ -91,7 +93,7 @@ test('durable siblings and signed deliberate selection survive reopen; failed CA
  const switched=await resolveRuntimeAuthority(store,scope,root.head,provider,'a');
  const siblingRuntime=makeRuntime({scope:switched.scope});
  await assert.rejects(siblingRuntime.read(),/CHECKOUT_REQUIRED/);
- await assert.rejects(siblingRuntime.execute({operationId:'branch-op',command:{kind:'recipe-title',commandId:'branch-c',effectId:'branch-e',value:'branch'},deviceSequence:2}),/CHECKOUT_REQUIRED/);
+ await assert.rejects(siblingRuntime.execute({operationId:'branch-op',command:recipe('branch-c','branch-e','branch'),deviceSequence:2}),/CHECKOUT_REQUIRED/);
  view=await readAuthority(openSQLiteStorage(conn),scope,root.head,provider);assert.equal(view.activeHead,first);assert.deepEqual(new Set(view.heads),new Set([first,second]));
  await assert.rejects(readAuthority(store,scope,'wrong',provider),/INVALID_ROOT/);
  db.close();
@@ -108,13 +110,13 @@ test('switching sibling heads cannot read or extend the other branch snapshot',a
   const recipient=sodium.crypto_box_keypair(), crypt=testProvider(sodium,{signing:pair.a,publicSigning:pair.a.publicKey,recipient,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
   const cp={...crypt,sign:async(w,b)=>sodium.crypto_sign_detached(b,pair.a.privateKey),verify:async(w,b,s)=>sodium.crypto_sign_verify_detached(s,b,pair.a.publicKey)};
   const runtime=async(x)=>new OfflineRuntime({storage:x.store,codec:candidateCodec(cp),LoroDoc,decodeImportBlobMeta,scope:(await resolveRuntimeAuthority(x.store,scope,root.head,provider,'a')).scope,keyRef:'data',authority:{rootPin:root.head,provider}});
-  await (await runtime(one)).execute({operationId:'a-op',command:{kind:'recipe-title',commandId:'a-c',effectId:'a-e',value:'A secret'},deviceSequence:1});
+  await (await runtime(one)).execute({operationId:'a-op',command:recipe('a-c','a-e','A secret'),deviceSequence:1});
   await select(one,first,second,1);const switched=await runtime(one);
-  await assert.rejects(switched.read(),/CHECKOUT_REQUIRED/);await assert.rejects(switched.execute({operationId:'b-op',command:{kind:'recipe-title',commandId:'b-c',effectId:'b-e',value:'B'},deviceSequence:2}),/CHECKOUT_REQUIRED/);
-  const b=await runtime(two);assert.deepEqual((await b.read()).recipe,{});await b.execute({operationId:'b-op',command:{kind:'recipe-title',commandId:'b-c',effectId:'b-e',value:'B'},deviceSequence:2});assert.equal((await b.read()).recipe.title,'B');
+  await assert.rejects(switched.read(),/CHECKOUT_REQUIRED/);await assert.rejects(switched.execute({operationId:'b-op',command:recipe('b-c','b-e','B'),deviceSequence:2}),/CHECKOUT_REQUIRED/);
+  const b=await runtime(two);assert.equal(await title(b,'b-e'),undefined);await b.execute({operationId:'b-op',command:recipe('b-c','b-e','B'),deviceSequence:2});assert.equal(await title(b,'b-e'),'B');
   const bObject=(await two.store.listOutboundObjects('house')).value[0];
   await assert.rejects(switched.importItem({itemId:bObject.objectId,bytes:bObject.bytes}),/CHECKOUT_REQUIRED/);
-  await select(one,second,first,2);assert.equal((await (await runtime(one)).read()).recipe.title,'A secret');
+  await select(one,second,first,2);assert.equal(await title(await runtime(one),'a-e'),'A secret');
  } finally {one.db.close();two.db.close()}
 });
 

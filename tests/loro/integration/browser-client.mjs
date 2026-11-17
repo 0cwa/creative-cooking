@@ -41,7 +41,7 @@ window.integration={
  async connected(){if(!channel)await wait(pc,'datachannel',()=>!!channel);await wait(channel,'open',()=>channel.readyState==='open');return {max:pc.sctp.maxMessageSize};},
  close(){pc?.close();channel=null;},
  environment(){return {userAgent:navigator.userAgent,origin:location.origin};},
- fault(v){fault=v;},execute:(operationId,command,n)=>runtime.execute({operationId,command,deviceSequence:n}),read:()=>runtime.read(),
+ fault(v){fault=v;},execute:(operationId,command,n)=>runtime.execute({operationId,command,deviceSequence:n}),read:async()=>{const {doc}=await runtime.document();return doc.toJSON();},
  objects:async()=>{let v=await runtime.outboundFor(other);return v.map(o=>({objectId:o.objectId,effect:JSON.parse(new TextDecoder().decode(o.bytes)).header.semanticEffectIds[0]}));},
  async send(id,transferId){const obj=(await runtime.outboundFor(other)).find(x=>x.objectId===id);if(!obj)throw Error('NOT_AUTHORIZED');const frames=await objectFrames({sessionId:'offline-session',streamId:who,transferId,bytes:obj.bytes});await sendFrames(channel,frames,pc.sctp.maxMessageSize);return frames.length;},
  async prepare(id,transferId){const obj=(await runtime.outboundFor(other)).find(x=>x.objectId===id);if(!obj)throw Error('NOT_AUTHORIZED');const frames=await objectFrames({sessionId:'offline-session',streamId:who,transferId,bytes:obj.bytes});prepared.set(transferId,frames);return frames.length;},

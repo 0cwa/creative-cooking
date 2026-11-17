@@ -46,7 +46,7 @@ export async function candidateObjectId(provider, input) {
 }
 // Provider owns private keys and implements reviewed primitive candidates. No private key bytes cross this API.
 export function candidateCodec(provider) {
-  async function seal(kind, header, value, ref) {
+  async function seal(kind, header, value, ref, signingKeyRef) {
     const h = validateHeader(kind, header);
     if (!(value instanceof Uint8Array) || value.length > LIMIT || !id(ref)) throw Error('MALFORMED');
     const aad = domain(kind + '/header',h);
@@ -54,13 +54,13 @@ export function candidateCodec(provider) {
     const encrypted = kind === 'content' ? await provider.encrypt(ref,plaintext,aad) : await provider.wrap(h.recipientDevice,ref,aad);
     if (!(encrypted instanceof Uint8Array) || encrypted.length < 16 || encrypted.length > LIMIT + 256) throw Error('MALFORMED');
     const unsigned = {kind,header:h,encrypted:hex(encrypted)};
-    const signature = await provider.sign(kind === 'content' ? h.authorDevice : h.senderDevice,domain(kind + '/signature',unsigned));
+    const signature = await provider.sign(signingKeyRef ?? (kind === 'content' ? h.authorDevice : h.senderDevice),domain(kind + '/signature',unsigned));
     if (!(signature instanceof Uint8Array) || signature.length !== 64) throw Error('MALFORMED');
     const encoded = bytes({...unsigned,signature:hex(signature)});
     if (encoded.length > ENCODED_LIMIT) throw Error('TOO_LARGE');
     return {id:await candidateObjectId(provider,encoded),bytes:encoded};
   }
-  async function open(kind, input) {
+  async function open(kind, input, signingKeyRefs) {
     if (!(input instanceof Uint8Array)) throw Error('MALFORMED');
     if (input.length > ENCODED_LIMIT) throw Error('TOO_LARGE');
     input = new Uint8Array(input); // Buffer.slice() aliases; copy before any asynchronous boundary.
@@ -73,12 +73,15 @@ export function candidateCodec(provider) {
     // Canonical roundtrip also rejects duplicate JSON keys, whitespace and alternate encodings.
     const canonical = bytes({...unsigned,signature:record.signature});
     if (hex(canonical) !== hex(input)) throw Error('MALFORMED');
-    if (!await provider.verify(kind === 'content' ? h.authorDevice : h.senderDevice,domain(kind + '/signature',unsigned),signature)) throw Error('INVALID_PROOF');
+    const signer=kind === 'content' ? h.authorDevice : h.senderDevice;
+    const signingKeyRef=signingKeyRefs === undefined ? signer : Object.hasOwn(signingKeyRefs,signer) ? signingKeyRefs[signer] : null;
+    if (!id(signingKeyRef)) throw Error('INVALID_AUTHORITY');
+    if (!await provider.verify(signingKeyRef,domain(kind + '/signature',unsigned),signature)) throw Error('INVALID_PROOF');
     const aad = domain(kind + '/header',h);
     const value = kind === 'content' ? await provider.decrypt(h,encrypted,aad) : await provider.unwrap(h,encrypted,aad);
     if (kind === 'content' ? !(value instanceof Uint8Array) : !id(value)) throw Error('INVALID_PROOF');
     if (kind === 'content' && value.length > LIMIT) throw Error('TOO_LARGE');
     return {header:h,value,object:{id:await candidateObjectId(provider,input),bytes:new Uint8Array(input)}};
   }
-  return {sealContent:(h,p,r)=>seal('content',h,p,r), wrapKey:(h,r)=>seal('key',h,new Uint8Array(),r), openContent:b=>open('content',b), openKey:b=>open('key',b)};
+  return {sealContent:(h,p,r,k)=>seal('content',h,p,r,k), wrapKey:(h,r)=>seal('key',h,new Uint8Array(),r), openContent:(b,keys)=>open('content',b,keys), openKey:b=>open('key',b)};
 }

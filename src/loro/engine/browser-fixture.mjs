@@ -27,7 +27,7 @@ await open();
 window.runtimeTest={
  fault:v=>{fault=v;},
  execute:(operationId,command,deviceSequence)=>current.runtime.execute({operationId,command,deviceSequence}),
- read:()=>current.runtime.read(),
+ read:async()=> (await current.runtime.document()).doc.toJSON(),
  outbound:async()=> (await current.runtime.outboundFor('peer')).map(o=>({objectId:o.objectId,bytes:Array.from(o.bytes)})),
  stage:async(o,n)=>current.storage.stageInbox({scopeId:'house',object:{id:o.objectId,bytes:Uint8Array.from(o.bytes)},source:'peer',expectedCursor:n===0?null:String(n-1),cursor:String(n)}),
  recover:async()=> (await current.runtime.recoverInbox()).map(x=>({itemId:x.itemId,error:x.error?.message,replayed:x.result?.replayed})),
