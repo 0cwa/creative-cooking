@@ -3,7 +3,7 @@ import {createSourceVerifier} from './source-proof.mjs';
 // a v2 envelope, then commits document, outbound bytes and provenance together.
 const cookingKinds=new Set(['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','purchase','purchase-correction']);
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
-async function writeContext(runtime,service){const context=await service.authority(),active=must(await runtime.storage.readDisclosureActive(runtime.scope.scopeId));if(active===null)return {context,record:null};return service.active()}
+async function writeContext(runtime,service){const context=await service.authority(),active=must(await runtime.storage.readDisclosureActive(runtime.scope.scopeId));if(active===null)return {context,record:null,expectedActiveHash:null};const saved=await service.validateStored(active,context);return {context,record:saved.policy.checkpoint===context.current.activeHead?saved:null,expectedActiveHash:active}}
 /** Recover only a complete, byte-identical saved action; this never authorizes a new write. */
 export async function recoverCookingBatchWithPolicy({runtime,service,operationId,items}) {
  const previous=must(await runtime.storage.getLocalOperation(runtime.scope.scopeId,operationId));if(!previous)return null;
@@ -13,7 +13,7 @@ export async function recoverCookingBatchWithPolicy({runtime,service,operationId
  return {outcome:previous.outcome,replayed:true};
 }
 export async function commitCookingWithPolicy({runtime,service,input}) {
- input=structuredClone(input);if(!cookingKinds.has(input?.command?.kind))throw Error('INVALID_AUTHORITY');const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId:input.operationId,items:[{command:input.command,deviceSequence:input.deviceSequence}]});if(previous)return previous;const {context,record}=await writeContext(runtime,service);
+ input=structuredClone(input);if(!cookingKinds.has(input?.command?.kind))throw Error('INVALID_AUTHORITY');const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId:input.operationId,items:[{command:input.command,deviceSequence:input.deviceSequence}]});if(previous)return previous;const {context,record,expectedActiveHash}=await writeContext(runtime,service);
  if(runtime.scope.scopeId!==context.resolved.scope.scopeId||runtime.scope.branchHead!==context.resolved.scope.branchHead)throw Error('INVALID_AUTHORITY');
  const sourceEffects=[...input.command.dependencyEffectIds].sort(),policies=new Set(record?[record.policyHash]:[]),verifySource=createSourceVerifier({runtime,service,context,allowIncomplete:true});let incomplete=!record;
  for(const id of sourceEffects){const source=await verifySource(id);incomplete||=!!source.incomplete;for(const h of source.policies)policies.add(h)}
@@ -22,14 +22,14 @@ export async function commitCookingWithPolicy({runtime,service,input}) {
  const header={...opened.header,version:incomplete?3:2,disclosurePolicyHash:record?.policyHash??null,disclosurePolicyHashes:[...policies].sort(),sourceEffectIds:sourceEffects,...(incomplete?{disclosureIncomplete:true}:{})};
  const object=await runtime.codec.sealContent(header,opened.value,runtime.keyRef,context.resolved.signingKeyRefs[runtime.scope.authorDevice]);
  prepared.commit.outbound[0].object=object;
- return must(await runtime.storage.commitLocalWithDisclosurePolicy(prepared.commit,record?.policyHash??null));
+ return must(await runtime.storage.commitLocalWithDisclosurePolicy(prepared.commit,record?.policyHash??null,expectedActiveHash));
 }
 /** Authenticate, validate and import a v2 source-policy envelope atomically. */
 export async function importCookingWithPolicy({runtime,service,item}) {
  item=structuredClone(item);if(!item||typeof item.itemId!=='string'||!(item.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
  const registry=await import('../domain/registry.mjs'),saved=must(await runtime.storage.getDisclosureImport(runtime.scope.scopeId,item.itemId));
  if(saved){const c=saved.commit,command=c.commands[0],source=saved.source,s=runtime.scope;if(source.objectId!==item.itemId||JSON.stringify(Array.from(source.envelope))!==JSON.stringify(Array.from(item.bytes)))throw Error('CONFLICT');let raw;try{raw=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(item.bytes))}catch{throw Error('MALFORMED_UPDATE')}const refs=await service.historicalSigningRefs(raw?.header?.branchHead),opened=await runtime.codec.openContent(item.bytes,refs),h=opened.header;let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value))}catch{throw Error('MALFORMED_UPDATE')}if(opened.object.id!==item.itemId||![2,3].includes(h.version)||h.scopeId!==s.scopeId||h.documentId!==s.documentId||h.documentGeneration!==s.documentGeneration||h.branchHead!==s.branchHead||h.epochId!==s.epochId||h.suiteId!==s.suiteId||c.expectedAuthority?.record?.acceptedParent!==h.branchHead||h.payloadKind!=='loro-update-v1'||(payload?.command?.data?.author!==undefined&&payload.command.data.author!==h.authorDevice)||JSON.stringify(h.policyHashes)!==JSON.stringify(s.policyHashes)||JSON.stringify(h.semanticEffectIds)!==JSON.stringify([command.effectId])||JSON.stringify(h.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort())||JSON.stringify(h.disclosurePolicyHashes)!==JSON.stringify(source.policyHashes)||payload?.version!==1||JSON.stringify(Array.from(registry.bytes(registry.validate(payload.command))))!==JSON.stringify(Array.from(command.payload)))throw Error('CONFLICT');return {outcome:saved.outcome,replayed:true};}
- const {context,record}=await writeContext(runtime,service),auth=await runtime.authorization();
+ const {context,record,expectedActiveHash}=await writeContext(runtime,service),auth=await runtime.authorization();
  if(!runtime.storage.compromise)throw Error('QUARANTINE_UNAVAILABLE');
  const opened=await runtime.codec.openContent(item.bytes,auth.signingKeyRefs),h=opened.header,s=runtime.scope;
  if(await runtime.storage.compromise.isQuarantined(s.scopeId,h.authorDevice))throw Error('QUARANTINED');
@@ -45,15 +45,15 @@ export async function importCookingWithPolicy({runtime,service,item}) {
  const update=Uint8Array.from(payload.update),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!same(meta.predecessors,h.predecessorRefs))throw Error('MALFORMED_UPDATE');
  const {doc,revision}=await runtime.document();let prior;try{prior=doc.forkAt(meta.frontiers)}catch{throw Error('MISSING_DEPENDENCY')};const verifier=prior.forkAt(meta.frontiers),start=verifier.oplogVersion(),checked=verifier.import(update);if(checked.pending?.size)throw Error('MISSING_DEPENDENCY');registry.validateOperations(command,verifier.exportJsonUpdates(start,undefined,false).changes);registry.checkPreconditions(prior,command,{importing:true});const verifySource=createSourceVerifier({runtime,service,context,allowIncomplete:h.version===3});for(const dep of command.dependencyEffectIds){const source=await verifySource(dep);if(source.incomplete&&h.version!==3)throw Error('INCOMPLETE_PROVENANCE')}const imported=doc.import(update);if(imported.pending?.size)throw Error('MISSING_DEPENDENCY');
  const commit={version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority:auth.expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:registry.bytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds};
- return must(await runtime.storage.commitImportWithDisclosurePolicy(commit,h,{objectId:opened.object.id,bytes:new Uint8Array(item.bytes)},record?.policyHash??null));
+ return must(await runtime.storage.commitImportWithDisclosurePolicy(commit,h,{objectId:opened.object.id,bytes:new Uint8Array(item.bytes)},expectedActiveHash));
 }
 /** Ordered actions in one document retain every command's signed source policy
  * ancestry while the final document and all outbound objects commit together. */
 export async function commitCookingBatchWithPolicy({runtime,service,operationId,items}) {
  const {OfflineRuntime}=await import('../engine/runtime.mjs'),registry=await import('../domain/registry.mjs');items=structuredClone(items);
  if(!Array.isArray(items)||!items.length||items.some(i=>!cookingKinds.has(i?.command?.kind)))throw Error('INVALID_AUTHORITY');
- const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId,items});if(previous)return previous;const {context,record}=await writeContext(runtime,service);
+ const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId,items});if(previous)return previous;const {context,record,expectedActiveHash}=await writeContext(runtime,service);
  const staged=new Map(),verifySource=createSourceVerifier({runtime,service,context,allowIncomplete:true}),codec={...runtime.codec,sealContent:async(header,payload,keyRef,signingKeyRef)=>{let decoded;try{decoded=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(payload))}catch{throw Error('MALFORMED_UPDATE')};const command=registry.validate(decoded.command);if(!cookingKinds.has(command.kind)||command.effectId!==header.semanticEffectIds[0])throw Error('INVALID_AUTHORITY');const policies=new Set(record?[record.policyHash]:[]),deps=[...command.dependencyEffectIds].sort();let incomplete=!record;for(const id of deps){const source=staged.get(id)??await verifySource(id);const inherited=source.policyHashes??source.policies;incomplete||=!!source.incomplete;for(const hash of inherited)policies.add(hash)}const values=[...policies].sort();staged.set(command.effectId,{policyHashes:values,incomplete});return runtime.codec.sealContent({...header,version:incomplete?3:2,disclosurePolicyHash:record?.policyHash??null,disclosurePolicyHashes:values,sourceEffectIds:deps,...(incomplete?{disclosureIncomplete:true}:{})},payload,keyRef,signingKeyRef)}};
- const storage=Object.create(runtime.storage);storage.commitLocal=c=>runtime.storage.commitLocalWithDisclosurePolicy(c,record?.policyHash??null);
+ const storage=Object.create(runtime.storage);storage.commitLocal=c=>runtime.storage.commitLocalWithDisclosurePolicy(c,record?.policyHash??null,expectedActiveHash);
  const worker=new OfflineRuntime({storage,codec,LoroDoc:runtime.LoroDoc,decodeImportBlobMeta:runtime.decodeImportBlobMeta,scope:runtime.scope,keyRef:runtime.keyRef,authority:runtime.authority});return worker.executeBatch({operationId,items});
 }
