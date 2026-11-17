@@ -16,6 +16,8 @@ export async function run() {
   const event={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:'house',parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',proposalId:'p',kind:'changePolicy',authorDeviceId:'a1',frozenAdultRoster:['a'],subject:null,nextPolicy:{kind:'unanimous',fixedCount:null}};
   const eventHash=hex(await provider.hash(domain('event',event))), a={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a1'};
   const item={event,authorSignature:sign('event-signature',event),approvals:[{...a,signature:sign('approval-signature',a)}]};
+  const before=await db.storage.readPairingAuthority(scope);let malformed=false;try{await observeSuccessor(db.storage,scope,root.head,provider,{...item,extra:true})}catch(e){malformed=e.message==='MALFORMED'}
+  const after=await db.storage.readPairingAuthority(scope);if(!malformed || before.value.revision!==after.value.revision || !sodium.memcmp(before.value.authorityState,after.value.authorityState))throw Error('malformed observation persisted');
   fail=true; let rejected=false;try {await observeSuccessor(db.storage,scope,root.head,provider,item)} catch {rejected=true} if(!rejected)throw Error('fault did not abort');
   fail=false; if ((await readAuthority(db.storage,scope,root.head,provider)).heads[0]!==root.head)throw Error('failed write persisted');
   await observeSuccessor(db.storage,scope,root.head,provider,item); db.close(); db=await openIndexedDBStorage(name);
