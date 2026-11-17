@@ -64,6 +64,33 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:records};
     }); } catch (e) { return {ok:false,error:mapError(e)}; }
   }
+  async getLocalGroup(groupId: string): Promise<Result<{group: import('../contracts/index.ts').LocalCommitGroup; outcomes: readonly SavedOutcome[]} | null, StorageError>> {
+    if (typeof groupId !== 'string' || !groupId || new TextEncoder().encode(groupId).length>256) return {ok:false,error:'MALFORMED'};
+    try { return await this.run(false,async tx=>{
+      const old=await tx.get(key('group',groupId)); if (!old) return {ok:true,value:null};
+      let refs: unknown;
+      try { const parsed=JSON.parse(old.inputKey); if (!Array.isArray(parsed) || parsed.length!==2 || parsed[0]!==groupId || !denseArray(parsed[1],x=>typeof x==='string') || !parsed[1].length) return corrupt(); refs=parsed[1]; } catch { return corrupt(); }
+      const children: LocalCommit[]=[];
+      for (const ref of refs as string[]) {
+        let c: LocalCommit;
+        try { const p=JSON.parse(ref); if (!Array.isArray(p) || p.length!==2 || p[0]!=='local' || !object(p[1])) return corrupt(); c=p[1];
+          if (!Object.hasOwn(c,'expectedAuthority')) return {ok:false,error:'UNSUPPORTED_VERSION'};
+          for (const d of c.documents) d.bytes=decodeKeyBytes(d.bytes);
+          for (const command of c.commands) command.payload=decodeKeyBytes(command.payload);
+          for (const entry of c.outbound) entry.object.bytes=decodeKeyBytes(entry.object.bytes);
+        } catch(e) { if(e instanceof StorageFailure) throw e; return corrupt(); }
+        const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==ref) return corrupt();
+        const operation=await tx.get(key('local',c.scopeId,c.operationId)); if (!operation || operation.inputKey!==ref) return corrupt();
+        const index=children.length; if (!old.outcomes[index] || JSON.stringify(operation.outcome)!==JSON.stringify(old.outcomes[index])) return corrupt();
+        validateOutcome(operation.outcome,c.documents);
+        try { await this.completedLocal(tx,c,ref); } catch(e) { if(e instanceof StorageFailure && e.code==='CONFLICT') return corrupt(); throw e; }
+        children.push(c);
+      }
+      const group={groupId,children}, groupKey=storageGroupKey(group);
+      if (!groupKey.ok || groupKey.value!==old.inputKey || old.outcomes.length!==children.length) return corrupt();
+      return {ok:true,value:{group:snapshot(group),outcomes:snapshot(old.outcomes)}};
+    }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
   async getLocalOperation(scopeId: string, operationId: string): Promise<Result<{commit: LocalCommit; outcome: SavedOutcome} | null, StorageError>> {
     if (![scopeId,operationId].every(x=>typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256)) return {ok:false,error:'MALFORMED'};
     try { return await this.run(false,async tx => {

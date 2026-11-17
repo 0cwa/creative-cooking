@@ -188,3 +188,28 @@ test('maximum candidate plaintext envelope stages, commits, imports and reopens 
  assert.equal((await s.commitImport(imp)).ok,true); const reopened=openSQLiteStorage(conn); assert.deepEqual((await reopened.listStagedInbox('scope')).value[0].bytes,envelope.bytes); assert.equal((await reopened.getInboxApplication('scope',envelope.id)).value.operationId,'import-large');
  const bound={...inbox,object:{id:'bound',bytes:new Uint8Array(ENCODED_LIMIT)},expectedCursor:'c'}; assert.equal(validateInboxItem(bound).ok,true); const tooLarge={...bound,object:{id:'over',bytes:new Uint8Array(ENCODED_LIMIT+1)}}; assert.equal((await s.stageInbox(tooLarge)).error,'TOO_LARGE'); const invalid=child('scope','too-large','other'); invalid.outbound[0].object=tooLarge.object; assert.equal((await s.commitLocal(invalid)).error.code,'TOO_LARGE'); assert.equal((await s.reopenDocument('scope','other')).value,null); assert.equal((await s.listStagedInbox('scope')).value.length,1); conn.db.close();
 });
+
+test('recover completed group input and reject damaged child associations',async()=>{
+ const conn=connection(),store=openSQLiteStorage(conn),group={groupId:'recover-group',children:[child('personal','one','d1'),child('shared','two','d2')]};
+ assert.equal((await store.getLocalGroup(group.groupId)).value,null);
+ assert.equal((await store.commitLocalGroup(group)).ok,true);
+ const reopened=openSQLiteStorage(conn), recovered=await reopened.getLocalGroup(group.groupId);
+ assert.deepEqual(recovered.value.group,group); assert.equal(recovered.value.outcomes.length,2);
+ assert.equal((await reopened.commitLocalGroup(recovered.value.group)).value.replayed,true);
+ const gkey=JSON.stringify(['group',group.groupId]), saved=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(gkey).value;
+ const record=JSON.parse(saved), parsed=JSON.parse(record.inputKey); parsed[1].reverse(); record.inputKey=JSON.stringify(parsed);
+ conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(record),gkey);
+ assert.equal((await reopened.getLocalGroup(group.groupId)).error,'CORRUPT');
+ conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(saved,gkey);
+ conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['local','personal','one']));
+ assert.equal((await reopened.getLocalGroup(group.groupId)).error,'CORRUPT'); conn.db.close();
+});
+
+test('legacy group lookup explicitly rejects missing authority without deleting records',async()=>{
+ const conn=connection(), store=openSQLiteStorage(conn), group={groupId:'legacy-group',children:[child('scope','op','doc')]};
+ assert.equal((await store.commitLocalGroup(group)).ok,true);
+ const k=JSON.stringify(['group',group.groupId]), original=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(k).value, record=JSON.parse(original), parsed=JSON.parse(record.inputKey), old=JSON.parse(parsed[1][0]); delete old[1].expectedAuthority; parsed[1][0]=JSON.stringify(old); record.inputKey=JSON.stringify(parsed);
+ conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(record),k);
+ assert.equal((await store.getLocalGroup(group.groupId)).error,'UNSUPPORTED_VERSION');
+ assert.ok(conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(k)); conn.db.close();
+});
