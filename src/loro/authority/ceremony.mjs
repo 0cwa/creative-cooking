@@ -20,7 +20,7 @@ export async function checkHouseholdCeremonies(sodium,parent,authorizationSnapsh
   seen.add(c.recipientDeviceId); guards.add(g.guardId);
   devices.push({deviceId:c.recipientDeviceId,signingKeyRef:c.recipientSigningKeyRef,wrappingKeyRef:c.recipientWrappingKeyRef,transcriptHash:verified.transcriptHash,guardId:g.guardId});
  }
- return devices.sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+ return devices.sort((a,b)=>a.deviceId<b.deviceId?-1:a.deviceId>b.deviceId?1:0);
 }
 
 /** First transcript signaling item for an existing device joining a new epoch. */
@@ -44,5 +44,5 @@ export async function checkExistingRecipientCeremonies(sodium,parent,authorizati
   for(const [role,device] of [['initiator',sponsor],['responder',recipient]]) {const offer=e.messages.offers[role], sig=unhex(offer.signature);if(!sig || !await provider.verify(device.signingKeyRef,offerBytes(role,proof.transcriptHash,offer.challenge),sig)) throw Error('INVALID_PROOF')}
   seen.add(recipient.deviceId);guards.add(g.guardId);devices.push({deviceId:recipient.deviceId,wrappingKeyRef:c.recipientWrappingKey,transcriptHash:proof.transcriptHash,guardId:g.guardId});
  }
- return devices.sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+ return devices.sort((a,b)=>a.deviceId<b.deviceId?-1:a.deviceId>b.deviceId?1:0);
 }
