@@ -17,16 +17,24 @@ export function ceremonyBytes(t,g){
 }
 const confirmation=(role,transcript)=>domain('role-confirmation',[role,hex(transcript)]);
 const responseBytes=(role,transcript,ciphertext,token)=>domain('possession-response',[role,hex(transcript),hex(ciphertext),hex(token)]);
+export function challengeBytes(sodium,role,transcript,token){
+ if(!roleNames.includes(role)||!(transcript instanceof Uint8Array)||!bytes(token,32))throw Error('MALFORMED');
+ return domain('wrapping-challenge',[role,hex(digest(sodium,transcript)),hex(token)]);
+}
+export function decodeChallengeToken(sodium,role,transcript,plaintext){
+ let token;
+ try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(plaintext)),h=value?.[2]?.[2];if(typeof h!=='string'||!/^[0-9a-f]{64}$/.test(h))throw Error();token=Uint8Array.from(h.match(/../g),x=>parseInt(x,16));if(!equal(plaintext,challengeBytes(sodium,role,transcript,token)))throw Error();return token}catch{token?.fill(0);throw Error('INVALID_PROOF')}
+}
 export function signConfirmation(sodium,role,transcript,secret){if(!roleNames.includes(role))throw Error('MALFORMED');return sodium.crypto_sign_detached(confirmation(role,transcript),secret)}
 /** Only the intended wrapping private key can open the random challenge. */
-export function answerChallenge(sodium,role,transcript,ciphertext,wrappingPublic,wrappingSecret,signingSecret){if(!roleNames.includes(role)||!bytes(wrappingPublic,32)||!(ciphertext instanceof Uint8Array))throw Error('MALFORMED');let token;try{token=sodium.crypto_box_seal_open(ciphertext,wrappingPublic,wrappingSecret);if(!bytes(token,32))throw Error();return {token:new Uint8Array(token),signature:sodium.crypto_sign_detached(responseBytes(role,transcript,ciphertext,token),signingSecret)}}finally{token?.fill(0)}}
+export function answerChallenge(sodium,role,transcript,ciphertext,wrappingPublic,wrappingSecret,signingSecret){if(!roleNames.includes(role)||!bytes(wrappingPublic,32)||!(ciphertext instanceof Uint8Array))throw Error('MALFORMED');let token,plaintext;try{plaintext=sodium.crypto_box_seal_open(ciphertext,wrappingPublic,wrappingSecret);token=decodeChallengeToken(sodium,role,transcript,plaintext);return {token:new Uint8Array(token),signature:sodium.crypto_sign_detached(responseBytes(role,transcript,ciphertext,token),signingSecret)}}finally{token?.fill(0);plaintext?.fill(0)}}
 /** trustedLocal is supplied by the local UI/key pin store, never decoded from peer messages.
  * Each role's full key record must have been independently confirmed for these exact bytes. */
 export function beginCeremony(sodium,t,g,trustedLocal){
  t=structuredClone(t);g=structuredClone(g);const transcript=ceremonyBytes(t,g),th=digest(sodium,transcript);
  if(!exact(trustedLocal,['confirmedTranscriptHash','pins'])||!bytes(trustedLocal.confirmedTranscriptHash,32)||!equal(trustedLocal.confirmedTranscriptHash,th)||!exact(trustedLocal.pins,roleNames))throw Error('OOB_REQUIRED');
  for(const role of roleNames){const p=trustedLocal.pins[role],r=t[role];if(!exact(p,['deviceId','signingPublicKey','wrappingPublicKey'])||p.deviceId!==r.deviceId||!equal(p.signingPublicKey,r.signingPublicKey)||!equal(p.wrappingPublicKey,r.wrappingPublicKey))throw Error('OOB_REQUIRED')}
- const challenges={},secrets={};for(const role of roleNames){secrets[role]=sodium.randombytes_buf(32);challenges[role]=sodium.crypto_box_seal(secrets[role],t[role].wrappingPublicKey)}let used=false;
+ const challenges={},secrets={};for(const role of roleNames){secrets[role]=sodium.randombytes_buf(32);const plaintext=challengeBytes(sodium,role,transcript,secrets[role]);try{challenges[role]=sodium.crypto_box_seal(plaintext,t[role].wrappingPublicKey)}finally{plaintext.fill(0)}}let used=false;
  return {transcript:new Uint8Array(transcript),challenges:structuredClone(challenges),async verify({confirmations,responses},authority){
   if(used)throw Error('REPLAY');used=true;
   try{if(!exact(confirmations,roleNames)||!exact(responses,roleNames))throw Error('INVALID_PROOF');for(const role of roleNames){const sig=confirmations[role],r=responses[role],pub=t[role].signingPublicKey;if(!bytes(sig,64)||!sodium.crypto_sign_verify_detached(sig,confirmation(role,transcript),pub)||!exact(r,['token','signature'])||!bytes(r.token,32)||!bytes(r.signature,64)||!equal(r.token,secrets[role])||!sodium.crypto_sign_verify_detached(r.signature,responseBytes(role,transcript,challenges[role],r.token),pub))throw Error('INVALID_PROOF')}
