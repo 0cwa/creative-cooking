@@ -13,11 +13,18 @@ import {openSequences} from './sequences.web.ts';
 const enc=new TextEncoder();
 const aad=enc.encode('creative-cooking/fresh-local-bootstrap/v1');
 const request=<T,>(r:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
-const validName=(s:string)=>/^[a-z0-9-]{1,100}$/.test(s);
+const validName=(s:unknown):s is string=>typeof s==='string'&&/^[a-z0-9-]{1,100}$/.test(s);
 // Each explicitly created workspace receives a new random namespace. Reopening
 // never generates replacement identity material for an existing namespace.
 export async function openLocalWorkspace(name:string,create=false) {
- if(!validName(name))throw Error('MALFORMED');
+ if(!validName(name)||typeof create!=='boolean')throw Error('MALFORMED');
+ const locks=globalThis.navigator?.locks;
+ if(!locks||typeof locks.request!=='function')throw Error('LOCK_UNAVAILABLE');
+ return locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode:'exclusive'},()=>openLockedWorkspace(name,create));
+}
+// The reservation is read only after acquiring the namespace lock. A queued
+// opener therefore observes establishment before choosing any creation path.
+async function openLockedWorkspace(name:string,create:boolean) {
  await sodium.ready;await initLoro(new URL('./loro_wasm_bg.wasm?v=1.17.1',import.meta.url));
  const master=await openBrowserMaster(`${name}-master`);
  const db=await openIndexedDBStorage(`${name}-records`);

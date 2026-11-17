@@ -17,3 +17,15 @@ test('fresh preview keeps cooking and private data separate and reports failed s
  await page.getByLabel('Ingredient and details').fill('Unsaved carrot');await page.getByLabel('Add ingredient').click();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Local save failed');await expect(page.getByText('Unsaved carrot',{exact:true})).toBeVisible();
  await page.goto('./');await expect(page.getByText('Golden beet',{exact:true})).toBeVisible();await expect(page.getByText('Unsaved carrot',{exact:true})).toHaveCount(0);expect(external).toEqual([]);
 });
+
+test('creating a fresh preview preserves existing workspace data',async({page})=>{
+ await page.goto('./');await page.getByRole('button',{name:'Open existing workspace',exact:true}).click();
+ await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await page.getByLabel('Ingredient and details').fill('Legacy proof parsnip');await page.getByLabel('Add ingredient').click();
+ await expect(page.getByText('Legacy proof parsnip',{exact:true})).toBeVisible();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await page.getByLabel('Open settings').first().click();await page.getByLabel('Open fresh local preview').click();
+ await page.getByRole('button',{name:'Start fresh local preview'}).click();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await expect(page.getByText('Legacy proof parsnip',{exact:true})).toHaveCount(0);
+ await page.getByLabel('Open settings').first().click();await page.getByLabel('Open existing workspace').click();
+ await expect(page.getByText('Legacy proof parsnip',{exact:true})).toBeVisible();
+});
