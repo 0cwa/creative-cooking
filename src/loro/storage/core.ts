@@ -72,7 +72,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         for (const d of c.documents) d.bytes = decodeKeyBytes(d.bytes); for (const cmd of c.commands) cmd.payload = decodeKeyBytes(cmd.payload); for (const o of c.outbound) o.object.bytes = decodeKeyBytes(o.object.bytes);
       } catch { return corrupt(); }
       const checked=storageOperationKey(c,'local'); if (!checked.ok || checked.value!==old.inputKey || c.scopeId!==scopeId || c.operationId!==operationId) return corrupt();
-      validateOutcome(old.outcome,c.documents); await this.completedLocal(tx,c,old.inputKey); return {ok:true,value:{commit:snapshot(c),outcome:snapshot(old.outcome)}};
+      validateOutcome(old.outcome,c.documents); try { await this.completedLocal(tx,c,old.inputKey); } catch (e) { if (e instanceof StorageFailure && e.code === 'CONFLICT') corrupt(); throw e; } return {ok:true,value:{commit:snapshot(c),outcome:snapshot(old.outcome)}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
   async getInboxApplication(scopeId: string, itemId: string): Promise<Result<{operationId: string; outcome: SavedOutcome} | null, StorageError>> {

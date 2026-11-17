@@ -124,3 +124,15 @@ test('recovery reads exact saved local operation and applied inbox outcome', asy
  const imp={scopeId:'s',operationId:'imp',itemId:'in',documents:[{documentId:'d',bytes:b(5),expectedRevision:0}],effectIds:['e']}; await s.commitImport(imp); assert.equal((await s.getInboxApplication('s','in')).value.operationId,'imp');
  conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['effect','s','e'])); assert.equal((await s.getInboxApplication('s','in')).error,'CORRUPT'); conn.db.close();
 });
+
+test('pairing rejects misrouted packets in either direction without consuming guard', async () => {
+ const {fixturePairingRelease:p}=await import('../contracts/fixtures.ts'); const conn=connection(),s=openSQLiteStorage(conn); const authority={scope:p.transcript.scope,revision:0,acceptedParent:p.transcript.acceptedParent,authorizationSnapshot:p.transcript.authorizationSnapshot,authorityState:b(1)};
+ await s.compareAndSwapPairingAuthority({expectedRevision:null,record:authority});
+ for (const direction of ['initiator-to-responder','responder-to-initiator']) { const recipient=direction==='initiator-to-responder' ? p.transcript.responder.deviceId : p.transcript.initiator.deviceId; const release={...p,expectedAuthorityRevision:0,operationId:direction,guard:{...p.guard,guardId:direction,direction},packet:{...p.packet,id:direction},outbox:{destination:'unrelated',objectId:direction},outcome:{recipientDevice:recipient,packetId:direction}};
+ assert.equal((await s.commitPairingRelease(release)).error.code,'MALFORMED'); assert.equal((await s.findPairingRelease(authority.scope,direction)).value,null); assert.equal((await s.commitPairingRelease({...release,outbox:{...release.outbox,destination:recipient}})).ok,true); }
+ conn.db.close();
+});
+
+test('saved local recovery reports corrupt missing effect', async () => {
+ const conn=connection(),s=openSQLiteStorage(conn); await s.commitLocal(child('s','op','d')); conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['effect','s','op'])); assert.equal((await s.getLocalOperation('s','op')).error,'CORRUPT'); conn.db.close();
+});
