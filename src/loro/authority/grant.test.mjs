@@ -17,7 +17,7 @@ test('real signatures prove distinct parent quorum but never authorize publicati
 });
 test('tampering, newcomer votes, stale context and sparse evidence fail closed',async()=>{
  const signatures=[proof('a1'),proof('b1')];
- for(const change of [{recipientAdult:'x'},{projectionManifestHash:'other'},{parentHead:'stale'},{newEpochId:'old'},{contentClasses:['private']},{recipientDevices:Array(1)}]) assert.notEqual((await check({...unsigned,...change,signatures})).reason,'ADMISSION_EVIDENCE_REQUIRED');
+ for(const change of [{recipientAdult:'x'},{recipientDevices:['a1']},{keyEnvelopeRefs:['one','two']},{projectionManifestHash:'other'},{parentHead:'stale'},{newEpochId:'old'},{contentClasses:['private']},{recipientDevices:Array(1)}]) assert.notEqual((await check({...unsigned,...change,signatures})).reason,'ADMISSION_EVIDENCE_REQUIRED');
  assert.equal((await check({...unsigned,signatures:[proof('new')]})).reason,'INVALID_PROOF');
  assert.equal((await check({...unsigned,signatures:Array(1)})).reason,'INVALID_INPUT');
 });
