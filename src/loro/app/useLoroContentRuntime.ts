@@ -15,9 +15,12 @@ const unavailable=async()=>{throw Error('This action is not available in the fre
 // with an error; they are never written to the old workspace or shown as saved.
 export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<SetStateAction<PersistedState>>,workspace:any):ContentRuntimeSnapshot {
  const [hydrated,setHydrated]=useState(false),[error,setError]=useState<string|null>(null),[status,setStatus]=useState<'saving'|'saved'|'error'>('saving');
+ const unresolved=useRef<(()=>Promise<void>)|null>(null);
  const actionIds=useRef(new Map<string,{id:string,commands:any[]}>()),current=useRef(state),committed=useRef<PersistedState|null>(null),queue=useRef<Promise<void>>(Promise.resolve()),revision=useRef(0),pending=useRef(0);current.current=state;
  useEffect(()=>{let active=true;void (async()=>{try{const {doc}=await workspace.household.document();const cooking=projectCooking(doc);const personal=projectPersonal((await workspace.personal.document()).doc);const {mealContext,activeConversationId,recoveryReminderDismissed: _recoveryReminderDismissed,...settings}=personal.preferences;const selectedConversation=personal.conversations.find((c:any)=>c.id===activeConversationId);const initial={...DEFAULT_STATE,...cooking,settings:{...DEFAULT_STATE.settings,...settings},mealContext:mealContext??DEFAULT_STATE.mealContext,activeConversationId:selectedConversation?.id??null,chatMessages:selectedConversation?.messages??[],chatHistory:personal.conversations.filter((c:any)=>c.id!==selectedConversation?.id)};if(active){committed.current=initial;current.current=initial;setState(initial);setStatus('saved');setHydrated(true)}}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error');setHydrated(true)}}})();return()=>{active=false}},[workspace,setState]);
  const save=useCallback(async(target:PersistedState)=>{
+  // Resolve the exact earlier action before deriving a later target from disk.
+  if(unresolved.current){await unresolved.current();unresolved.current=null;}
   const before=committed.current;if(!before)throw Error('The local workspace has not opened.');
   const shoppingChanged=!same(before.shopping,target.shopping);
   const pantryChanged=!same(before.pantry,target.pantry),recipesChanged=!same(before.recipes,target.recipes);
@@ -31,8 +34,11 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   else if(pantryChanged)commands=planPantryAction({doc,before:before.pantry,after:target.pantry,actionId,author:workspace.deviceId,at});
   else {const a=new Map(before.recipes.map(x=>[x.id,x])),b=new Map(target.recipes.map(x=>[x.id,x])),changed=[...new Set([...a.keys(),...b.keys()])].filter(id=>!same(a.get(id),b.get(id)));if(changed.length!==1)throw Error('This local preview saves one recipe change at a time.');const id=changed[0];commands=planRecipeAction({doc,before:a.get(id)??null,after:b.get(id)??null,actionId,author:workspace.deviceId,at});}
   actionIds.current.set(key,{id:actionId,commands});}
-  if(commands.length)await executeAction(runtime,workspace.sequences,actionId,commands,personalChanged?null:workspace.disclosure);
-  actionIds.current.delete(key);committed.current=target;
+  unresolved.current=async()=>{
+   if(commands.length)await executeAction(runtime,workspace.sequences,actionId,commands,personalChanged?null:workspace.disclosure);
+   actionIds.current.delete(key);committed.current=target;
+  };
+  await unresolved.current();unresolved.current=null;
  },[workspace]);
  const schedule=useCallback((target:PersistedState)=>{const number=++revision.current;pending.current++;setStatus('saving');const next=queue.current.catch(()=>{}).then(()=>save(target));queue.current=next;void next.then(()=>{pending.current--;if(number===revision.current){setStatus('saved');setError(null)}},e=>{pending.current--;if(number===revision.current){setStatus('error');setError(e instanceof Error?e.message:'Could not save local changes')}});return next},[save]);
  useEffect(()=>{if(!hydrated||!committed.current)return;if(same(state,committed.current)&&pending.current===0){setStatus('saved');return}void schedule(state).catch(()=>{});},[state,hydrated,schedule]);
