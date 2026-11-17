@@ -7,6 +7,7 @@ const eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const canonical=v=>Array.isArray(v)?v.map(canonical):v && typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
 export async function checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider,sourceRuntime,policyBundle,disclosureService) {
  try {
+  if([2,3].includes(manifest.version)&&policyBundle?.version!==manifest.version)throw Error('PROJECTION_MISMATCH');
   const result=await storage.reopenBranchDocument(expectedAuthority,manifest.sourceDocument);
   if(!result.ok || !result.value) throw Error('SOURCE_UNAVAILABLE');
   const source=result.value, digest=await provider.hash(domain('projection-source-snapshot',hex(source.bytes)));
