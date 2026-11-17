@@ -1,7 +1,7 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
 import {validateSuccessor, validParent, domain} from './validator.mjs';
-import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest} from './grant.mjs';
+import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import sodium from 'libsodium-wrappers';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
@@ -46,7 +46,7 @@ export async function verifyAuthority(state,pin,provider) {
    const a=item.admission,subject=item.event.subject;
    if(!a || Array.isArray(a) || Object.keys(a).sort().join(',')!=='ceremonies,existingCeremonies,grant,localDeviceId,manifest,operationId' || a.grant?.admissionEventHash!==r.eventHash || a.grant?.recipientAdult!==subject.adultId || a.grant?.newDocumentGeneration!==subject.newGeneration || a.grant?.newEpochId!==subject.newEpochId || a.manifest?.newDocumentId!==subject.documentId || a.manifest?.newGeneration!==subject.newGeneration || JSON.stringify(a.grant?.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId)) || !parent.runtime.acceptedRecipients.includes(a.localDeviceId)) throw Error('INVALID_ADMISSION');
    const grantProof=await checkGrantSignatures(parent,a.grant,provider);
-   if(grantProof.reason!=='ADMISSION_EVIDENCE_REQUIRED' || await digest(provider,'projection-manifest',a.manifest)!==a.grant.projectionManifestHash || JSON.stringify(a.manifest.sourcePolicyHashes)!==JSON.stringify(a.grant.sourcePolicyHashes)) throw Error('INVALID_ADMISSION');
+   if(grantProof.reason!=='ADMISSION_EVIDENCE_REQUIRED' || (a.manifest?.version!==1&&!validPolicySeedManifest(a.manifest)) || await digest(provider,'projection-manifest',a.manifest)!==a.grant.projectionManifestHash || JSON.stringify(a.manifest.sourcePolicyHashes)!==JSON.stringify(a.grant.sourcePolicyHashes)) throw Error('INVALID_ADMISSION');
    let accepted=false;
    for(const agreement of state.agreements ?? []) {if(agreement.parentHead!==parent.head)continue;const v=await checkAdmissionAgreement(parent,agreement,provider);if(v.status==='accepted' && v.delegationHash===a.grant.delegationHash && JSON.stringify(agreement.sourcePolicyHashes)===JSON.stringify(a.grant.sourcePolicyHashes))accepted=true;}
    if(!accepted) throw Error('INVALID_AGREEMENT');
@@ -106,6 +106,7 @@ async function load(storage,scope,pin,provider) {
   const p=saved.value, eventHash=await digest(provider,'event',item.event);
   let published;try{published=JSON.parse(dec.decode(p.nextAuthority.authorityState))}catch{throw Error('INVALID_AUTHORITY')}
   if(p.admissionEventHash!==eventHash || p.nextAuthority.acceptedParent!==eventHash || p.expectedAuthority.record?.acceptedParent!==item.event.parentHead || p.grantHash!==await digest(provider,'current-state-grant',Object.fromEntries(Object.entries(item.admission.grant).filter(([k])=>k!=='signatures'))) || p.manifest.id!==item.admission.grant.projectionManifestHash || hex(p.manifest.bytes)!==hex(bytes(item.admission.manifest)) || !published.events?.some(e=>JSON.stringify(canonical(e))===JSON.stringify(canonical(item)))) throw Error('INVALID_AUTHORITY');
+  if(item.admission.manifest.version===2){const manifest=item.admission.manifest,parent=verified.nodes.get(item.event.parentHead),grant=item.admission.grant;if(!validPolicySeedManifest(manifest)||!p.policySeed||p.policySeed.bundleHash!==manifest.policyBundleHash||p.sourceDocument?.documentId!==manifest.sourceDocument||p.sourceDocument?.revision!==manifest.sourceRevision||p.documents.length!==1||!p.seed||!parent)throw Error('INVALID_AUTHORITY');const association=await checkGrantManifest(parent,grant,manifest,p.documents[0].bytes,provider);if(association.reason!=='SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED')throw Error('INVALID_AUTHORITY');const {LoroDoc}=await import('loro-crdt'),doc=new LoroDoc();doc.import(p.documents[0].bytes);const seed={version:1,seedId:p.seed.seedId,peerId:p.policySeed.bundle.peerId,snapshot:p.documents[0].bytes,identities:p.seed.identities,purchaseIds:Object.keys(doc.getMap('purchases').toJSON()).sort()}, {verifyPolicyProjection}=await import('../disclosure/policy-seed.mjs');await verifyPolicyProjection({provider,pin,state,seed,bundle:p.policySeed.bundle,expectedBundleHash:manifest.policyBundleHash,expectedSourceHead:item.event.parentHead,expectedSourceDocument:manifest.sourceDocument,expectedSourceRevision:manifest.sourceRevision,LoroDoc});}
   if(item.admission.manifest.schemaVersion.startsWith('registry-seed-v1|')){if(JSON.stringify(item.admission.grant.contentClasses)!==JSON.stringify(['pantry','recipe','shopping']))throw Error('INVALID_AUTHORITY');if(!p.seed||p.seed.seedId!==item.admission.manifest.schemaVersion.split('|')[1]||await digest(provider,'projection-snapshot',hex(p.documents[0]?.bytes))!==item.admission.manifest.projectedStateHash)throw Error('INVALID_AUTHORITY');const {verifyCurrentSeed}=await import('../compromise/current-seed.mjs'),{LoroDoc}=await import('loro-crdt'),seedCheck=verifyCurrentSeed({LoroDoc,snapshot:p.documents[0].bytes,seed:p.seed}),parent=verified.nodes.get(item.event.parentHead);if(seedCheck.peers.some(x=>[...Object.values(parent.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)].includes(x)))throw Error('INVALID_AUTHORITY')}
  }
  for(const item of state.events) if(item.rotation) {
@@ -194,7 +195,7 @@ export async function checkCurrentAdmission(storage,scope,pin,provider,item,gran
 
 /** Verify the complete proof bundle at the selected parent. This does not publish
  * or create a successor; those require the atomic guarded publication transaction. */
-export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId,sourceRuntime) {
+export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId,sourceRuntime,policyBundle,disclosureService) {
  if(item?.event?.version!==2 || item.event.kind!=='inviteAdult') throw Error('UNSUPPORTED_TRANSITION');
  const proof=await checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot);
  const {record,state,nodes}=await load(storage,scope,pin,provider);
@@ -210,16 +211,16 @@ export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,ite
  const expectedAuthority={version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
  const subject=item.event.subject;
  if(subject.documentId!==manifest.newDocumentId || subject.newGeneration!==grant.newDocumentGeneration || subject.newEpochId!==grant.newEpochId || JSON.stringify(subject.devices.map(d=>d.deviceId))!==JSON.stringify(grant.recipientDevices) || subject.devices.some((d,i)=>d.deviceId!==devices[i]?.deviceId || d.signingKeyRef!==devices[i]?.signingKeyRef || d.wrappingKeyRef!==devices[i]?.wrappingKeyRef)) throw Error('CONTEXT_MISMATCH');
- const source=await checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider,sourceRuntime);
+ const source=await checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider,sourceRuntime,policyBundle,disclosureService);
  if(source.seed){const seedPeer=manifest.schemaVersion.split('|')[2];if([...Object.values(parent.runtime.authorPeers),...subject.devices.map(d=>d.peerId)].includes(seedPeer))throw Error('INVALID_SEED_PEER')}
- return {status:'pending',reason:'ATOMIC_SUCCESSOR_REQUIRED',admissionEventHash:proof.admissionEventHash,grantHash:proof.grantHash,expectedAuthority,sourceDocument:source.sourceDocument,seed:source.seed,devices,existingDevices};
+ return {status:'pending',reason:'ATOMIC_SUCCESSOR_REQUIRED',admissionEventHash:proof.admissionEventHash,grantHash:proof.grantHash,expectedAuthority,sourceDocument:source.sourceDocument,seed:source.seed,policySeed:source.policySeed,devices,existingDevices};
 }
 
 /** Verify, then commit the fresh projection, key packages, guard consumption and
  * selected successor in one transaction. A saved retry is checked before RNG. */
 export async function publishHouseholdAdmission(input) {
  const {storage,scope,pin,provider,master,operationId,keyOperationId,localDeviceId,signingSecret}=input;
- const {item,grant,manifest,snapshot,ceremonies,existingCeremonies,selection,pendingEdits}=structuredClone({item:input.item,grant:input.grant,manifest:input.manifest,snapshot:input.snapshot,ceremonies:input.ceremonies,existingCeremonies:input.existingCeremonies,selection:input.selection,pendingEdits:input.pendingEdits});
+ const {item,grant,manifest,snapshot,ceremonies,existingCeremonies,selection,pendingEdits,policyBundle}=structuredClone({item:input.item,grant:input.grant,manifest:input.manifest,snapshot:input.snapshot,ceremonies:input.ceremonies,existingCeremonies:input.existingCeremonies,selection:input.selection,pendingEdits:input.pendingEdits,policyBundle:input.policyBundle});
  await sodium.ready;
  const saved=await storage.getProjectionPublication(scope.id,operationId);if(!saved.ok)throw Error(saved.error);
  const packed={...item,admission:{grant,manifest,ceremonies:encodeEvidence(ceremonies),existingCeremonies:encodeEvidence(existingCeremonies),localDeviceId,operationId}};
@@ -227,7 +228,7 @@ export async function publishHouseholdAdmission(input) {
   const p=saved.value;let state;try{state=JSON.parse(dec.decode(p.nextAuthority.authorityState))}catch{throw Error('CORRUPT')}
   const replayed=await verifyAuthority(state,pin,provider);
   const current=(await load(storage,scope,pin,provider)).record;
-  if(!current || current.revision!==p.nextAuthority.revision || current.acceptedParent!==p.nextAuthority.acceptedParent || current.authorizationSnapshot!==p.nextAuthority.authorizationSnapshot || hex(current.authorityState)!==hex(p.nextAuthority.authorityState) || p.admissionEventHash!==await digest(provider,'event',item.event) || p.grantHash!==await digest(provider,'current-state-grant',Object.fromEntries(Object.entries(grant).filter(([k])=>k!=='signatures'))) || JSON.stringify(canonical(state.events.find(e=>e.event?.parentHead===item.event?.parentHead && e.event?.proposalId===item.event?.proposalId)))!==JSON.stringify(canonical(packed)) || JSON.stringify(canonical(state.selections.at(-1)))!==JSON.stringify(canonical(selection)) || hex(p.manifest.bytes)!==hex(bytes(manifest)) || p.manifest.id!==grant.projectionManifestHash || p.documents.length!==1 || p.documents[0].documentId!==manifest.newDocumentId || p.documents[0].generation!==grant.newDocumentGeneration || hex(p.documents[0].bytes)!==hex(snapshot) || p.localKey.record.operationId!==keyOperationId || p.localKey.record.identity.deviceId!==localDeviceId || JSON.stringify(canonical(p.pendingEdits))!==JSON.stringify(canonical(pendingEdits))) throw Error('CONFLICT');
+  if(!current || current.revision!==p.nextAuthority.revision || current.acceptedParent!==p.nextAuthority.acceptedParent || current.authorizationSnapshot!==p.nextAuthority.authorizationSnapshot || hex(current.authorityState)!==hex(p.nextAuthority.authorityState) || p.admissionEventHash!==await digest(provider,'event',item.event) || p.grantHash!==await digest(provider,'current-state-grant',Object.fromEntries(Object.entries(grant).filter(([k])=>k!=='signatures'))) || JSON.stringify(canonical(state.events.find(e=>e.event?.parentHead===item.event?.parentHead && e.event?.proposalId===item.event?.proposalId)))!==JSON.stringify(canonical(packed)) || JSON.stringify(canonical(state.selections.at(-1)))!==JSON.stringify(canonical(selection)) || hex(p.manifest.bytes)!==hex(bytes(manifest)) || p.manifest.id!==grant.projectionManifestHash || p.documents.length!==1 || p.documents[0].documentId!==manifest.newDocumentId || p.documents[0].generation!==grant.newDocumentGeneration || hex(p.documents[0].bytes)!==hex(snapshot) || p.localKey.record.operationId!==keyOperationId || p.localKey.record.identity.deviceId!==localDeviceId || JSON.stringify(canonical(p.pendingEdits))!==JSON.stringify(canonical(pendingEdits)) || (manifest.version===2 && JSON.stringify(canonical(p.policySeed?.bundle))!==JSON.stringify(canonical(policyBundle)))) throw Error('CONFLICT');
   const priorSource=await storage.reopenDocument(scope.id,manifest.sourceDocument);
   if(!priorSource.ok || !priorSource.value || priorSource.value.revision!==p.sourceDocument?.revision || await digest(provider,'projection-source-snapshot',hex(priorSource.value.bytes))!==manifest.sourceCheckpointHash) throw Error('CONFLICT');
   const parent=replayed.nodes.get(item.event.parentHead), prior=p.expectedAuthority.record;
@@ -244,7 +245,7 @@ export async function publishHouseholdAdmission(input) {
   }
   return {replayed:true,publication:p};
  }
- const checked=await checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId,input.sourceRuntime);
+ const checked=await checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId,input.sourceRuntime,policyBundle,input.disclosureService);
  if(selection.from!==item.event.parentHead || selection.to!==checked.admissionEventHash) throw Error('INVALID_SELECTION');
  const {record,state}=await load(storage,scope,pin,provider);
  if(record.revision!==checked.expectedAuthority.record.revision || record.authorizationSnapshot!==checked.expectedAuthority.record.authorizationSnapshot) throw Error('CONFLICT');
@@ -269,7 +270,7 @@ export async function publishHouseholdAdmission(input) {
   return packages;
  });
  const guards=[...checked.devices,...checked.existingDevices].map(d=>d.guardId).sort();
- const publication={version:1,...(checked.seed?{seed:checked.seed}:{}),operationId,guardIds:guards,sourceDocument:checked.sourceDocument,expectedAuthority:checked.expectedAuthority,nextAuthority:{scope,revision:record.revision+1,acceptedParent:state.activeHead,authorizationSnapshot:await snapshotId(provider,state),authorityState:bytes(state)},admissionEventHash:checked.admissionEventHash,grantHash:checked.grantHash,manifest:{id:grant.projectionManifestHash,bytes:bytes(manifest)},epochId:grant.newEpochId,documents:[{documentId:manifest.newDocumentId,generation:grant.newDocumentGeneration,bytes:new Uint8Array(snapshot)}],packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},pendingEdits};
+ const publication={version:1,...(checked.seed?{seed:checked.seed}:{}),...(checked.policySeed?{policySeed:checked.policySeed}:{}),operationId,guardIds:guards,sourceDocument:checked.sourceDocument,expectedAuthority:checked.expectedAuthority,nextAuthority:{scope,revision:record.revision+1,acceptedParent:state.activeHead,authorizationSnapshot:await snapshotId(provider,state),authorityState:bytes(state)},admissionEventHash:checked.admissionEventHash,grantHash:checked.grantHash,manifest:{id:grant.projectionManifestHash,bytes:bytes(manifest)},epochId:grant.newEpochId,documents:[{documentId:manifest.newDocumentId,generation:grant.newDocumentGeneration,bytes:new Uint8Array(snapshot)}],packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},pendingEdits};
  const committed=await storage.publishProjection(publication);if(!committed.ok) throw Error(committed.error);
  const durable=await storage.getProjectionPublication(scope.id,operationId);if(!durable.ok || !durable.value)throw Error(durable.error || 'CORRUPT');
  return {replayed:committed.value.replayed,publication:durable.value};

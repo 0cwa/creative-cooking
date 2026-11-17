@@ -45,3 +45,9 @@ test('manifest binds exact fresh snapshot, source policy and signed grant',async
  assert.equal((await checkGrantManifest(parent,grant,manifest,snapshot,provider)).reason,'SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED');
  for(const [m,b] of [[{...manifest,newDocumentId:'doc'},snapshot],[{...manifest,sourceCheckpointHash:'other'},snapshot],[manifest,new Uint8Array([1,2,4])],[{...manifest,sourcePolicyHashes:['other']},snapshot]]) assert.equal((await checkGrantManifest(parent,grant,m,b,provider)).status,'deny');
 });
+
+test('v2 manifest binds source revision and provenance bundle to the signed grant',async()=>{
+ const {checkGrantManifest}=await import('./grant.mjs'),snapshot=new Uint8Array([1,2,3]),digest=async(p,v)=>Buffer.from(await provider.hash(domain(p,v))).toString('hex');
+ const manifest={version:2,sourceDocument:'doc',sourceCheckpointHash:'checkpoint',sourcePolicyHashes:['policy'],projectedStateHash:await digest('projection-snapshot',Buffer.from(snapshot).toString('hex')),newDocumentId:'fresh',newGeneration:2,schemaVersion:'registry-seed-v2|12345678-1234-1234-1234-123456789abc|99',sourceRevision:7,policyBundleHash:'a'.repeat(64)},grant={...unsigned,projectionManifestHash:await digest('projection-manifest',manifest)};
+ assert.equal((await checkGrantManifest(parent,grant,manifest,snapshot,provider)).reason,'SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED');for(const change of [{sourceRevision:8},{policyBundleHash:'b'.repeat(64)},{schemaVersion:'registry-seed-v1|12345678-1234-1234-1234-123456789abc|99'},{version:1},{unknown:true}])assert.equal((await checkGrantManifest(parent,grant,{...manifest,...change},snapshot,provider)).status,'deny');
+});

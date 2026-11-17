@@ -9,7 +9,7 @@ const hex=b=>Buffer.from(b).toString('hex');
 const provider={hash:async b=>sodium.crypto_generichash(32,b)};
 test('source snapshot and projected operation history are checked against durable live state',async()=>{
  const old=new LoroDoc();old.getMap('recipe').set('title','DELETED_CANARY');old.commit();old.getMap('recipe').set('title','soup');old.getMap('purchases').set('buy','rice');old.getMap('private').set('chat','PRIVATE_CANARY');old.commit();
- const source=old.export({mode:'snapshot'}), storage={reopenBranchDocument:async()=>({ok:true,value:{bytes:source,revision:7}})}, manifest={sourceDocument:'old',sourceCheckpointHash:hex(await provider.hash(domain('projection-source-snapshot',hex(source))))},grant={contentClasses:['recipe','shopping']};
+ const source=old.export({mode:'snapshot'}), storage={reopenBranchDocument:async()=>({ok:true,value:{bytes:source,revision:7}})}, manifest={schemaVersion:'legacy-v1',sourceDocument:'old',sourceCheckpointHash:hex(await provider.hash(domain('projection-source-snapshot',hex(source))))},grant={contentClasses:['recipe','shopping']};
  const fresh=new LoroDoc();fresh.getMap('recipe').set('title','soup');fresh.getMap('purchases').set('buy','rice');
  assert.deepEqual((await checkProjectionSource(storage,{},manifest,grant,fresh.export({mode:'snapshot'}),provider)).sourceDocument,{documentId:'old',revision:7});
  await assert.rejects(checkProjectionSource(storage,{}, {...manifest,sourceCheckpointHash:'wrong'},grant,fresh.export({mode:'snapshot'}),provider),/SOURCE_MISMATCH/);
