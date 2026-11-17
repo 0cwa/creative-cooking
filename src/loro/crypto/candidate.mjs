@@ -1,0 +1,73 @@
+// Experimental candidate only: no C1 suite or production interoperability is approved.
+export const SUITE = 'candidate-ed25519-xchacha20-sealedbox-v1';
+export const LIMIT = 1024 * 1024;
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8', { fatal: true });
+const fields = {
+  content: ['version','suiteId','scopeId','documentId','documentGeneration','branchHead','policyHashes','epochId','authorDevice','deviceSequence','predecessorRefs','semanticEffectIds','payloadKind'],
+  key: ['version','suiteId','scopeId','branchHead','policyHashes','epochId','recipientDevice','keyPurpose','senderDevice'],
+};
+const lists = new Set(['policyHashes','predecessorRefs','semanticEffectIds']);
+const numbers = new Set(['documentGeneration','deviceSequence']);
+const id = x => typeof x === 'string' && x.length > 0 && encoder.encode(x).length <= 256;
+const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));
+export function validateHeader(kind, h) {
+  const keys = fields[kind];
+  if (!keys || !exact(h, keys)) throw Error('MALFORMED');
+  if (h.version !== 1) throw Error('UNSUPPORTED_VERSION');
+  if (h.suiteId !== SUITE) throw Error('UNSUPPORTED_SUITE');
+  for (const k of keys.slice(2)) {
+    const v = h[k];
+    if (lists.has(k)) {
+      if (!Array.isArray(v) || v.length > 64 || !v.every(id) || new Set(v).size !== v.length) throw Error('MALFORMED');
+    } else if (numbers.has(k)) {
+      if (!Number.isSafeInteger(v) || v < 0) throw Error('MALFORMED');
+    } else if (!id(v)) throw Error('MALFORMED');
+  }
+  return Object.fromEntries(keys.map(k => [k, h[k]]));
+}
+const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
+function unhex(s, min, max) {
+  if (typeof s !== 'string' || s.length % 2 || !/^[0-9a-f]*$/.test(s) || s.length < min*2 || s.length > max*2) throw Error('MALFORMED');
+  return Uint8Array.from(s.match(/../g) || [], x => parseInt(x,16));
+}
+const bytes = x => encoder.encode(JSON.stringify(x));
+const domain = (purpose, value) => bytes(['creative-cooking/k2-candidate/v1',purpose,value]);
+// Provider owns private keys and implements reviewed primitive candidates. No private key bytes cross this API.
+export function candidateCodec(provider) {
+  async function seal(kind, header, value, ref) {
+    const h = validateHeader(kind, header);
+    if (!(value instanceof Uint8Array) || value.length > LIMIT || !id(ref)) throw Error('MALFORMED');
+    const aad = domain(kind + '/header',h);
+    const encrypted = kind === 'content' ? await provider.encrypt(ref,value,aad) : await provider.wrap(h.recipientDevice,ref,aad);
+    if (!(encrypted instanceof Uint8Array) || encrypted.length < 16 || encrypted.length > LIMIT + 256) throw Error('MALFORMED');
+    const unsigned = {kind,header:h,encrypted:hex(encrypted)};
+    const signature = await provider.sign(kind === 'content' ? h.authorDevice : h.senderDevice,domain(kind + '/signature',unsigned));
+    if (!(signature instanceof Uint8Array) || signature.length !== 64) throw Error('MALFORMED');
+    const encoded = bytes({...unsigned,signature:hex(signature)});
+    const digest = await provider.hash(domain('object-id',hex(encoded)));
+    if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
+    return {id:hex(digest),bytes:encoded};
+  }
+  async function open(kind, input) {
+    if (!(input instanceof Uint8Array)) throw Error('MALFORMED');
+    if (input.length > 2 * (LIMIT + 1024)) throw Error('TOO_LARGE');
+    let record;
+    try { record = JSON.parse(decoder.decode(input)); } catch { throw Error('MALFORMED'); }
+    if (!exact(record,['kind','header','encrypted','signature']) || record.kind !== kind) throw Error('MALFORMED');
+    const h = validateHeader(kind,record.header);
+    const encrypted = unhex(record.encrypted,16,LIMIT+256), signature = unhex(record.signature,64,64);
+    const unsigned = {kind,header:h,encrypted:record.encrypted};
+    // Canonical roundtrip also rejects duplicate JSON keys, whitespace and alternate encodings.
+    const canonical = bytes({...unsigned,signature:record.signature});
+    if (hex(canonical) !== hex(input)) throw Error('MALFORMED');
+    if (!await provider.verify(kind === 'content' ? h.authorDevice : h.senderDevice,domain(kind + '/signature',unsigned),signature)) throw Error('INVALID_PROOF');
+    const aad = domain(kind + '/header',h);
+    const value = kind === 'content' ? await provider.decrypt(h,encrypted,aad) : await provider.unwrap(h,encrypted,aad);
+    if (kind === 'content' ? !(value instanceof Uint8Array) : !id(value)) throw Error('INVALID_PROOF');
+    const digest = await provider.hash(domain('object-id',hex(input)));
+    if (!(digest instanceof Uint8Array) || digest.length !== 32) throw Error('MALFORMED');
+    return {header:h,value,object:{id:hex(digest),bytes:input.slice()}};
+  }
+  return {sealContent:(h,p,r)=>seal('content',h,p,r), wrapKey:(h,r)=>seal('key',h,new Uint8Array(),r), openContent:b=>open('content',b), openKey:b=>open('key',b)};
+}
