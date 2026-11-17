@@ -1,0 +1,36 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import sodium from 'libsodium-wrappers';
+import {openSQLiteStorage} from '../storage/sqlite.ts';
+import {domain} from './validator.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority} from './chain.mjs';
+await sodium.ready;
+const hex=b=>Buffer.from(b).toString('hex');
+const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
+const provider={hash:async b=>sodium.crypto_generichash(32,b),verify:async(k,b,s)=>sodium.crypto_sign_verify_detached(s,b,pair[k].publicKey)};
+const sign=(k,p,v)=>hex(sodium.crypto_sign_detached(domain(p,v),pair[k].privateKey));
+const db=new DatabaseSync(':memory:');
+const conn={executeSync:(sql,params=[])=>{const s=db.prepare(sql);return {rows:sql.startsWith('SELECT')?s.all(...params):(s.run(...params),[])}}};
+const scope={kind:'household',id:'house'};
+const p={kind:'allMinusOne',fixedCount:null};
+const root={householdId:'house',head:'',policyHash:await policyId(provider,p),generation:1,epochId:'epoch',roster:['a','b'],devices:[{adultId:'a',deviceId:'a',signingKeyRef:'a',active:true},{adultId:'b',deviceId:'b',signingKeyRef:'b',active:true}],policy:p};
+root.head=await rootPin(provider,root);
+const event=name=>({version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:'house',parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',proposalId:name,kind:'changePolicy',authorDeviceId:'a',frozenAdultRoster:['a','b'],subject:null,nextPolicy:{kind:'unanimous',fixedCount:null}});
+async function item(name){const e=event(name),eventHash=hex(await provider.hash(domain('event',e)));const approval={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a'};return {event:e,authorSignature:sign('a','event-signature',e),approvals:[{...approval,signature:sign('a','approval-signature',approval)}]}}
+test('durable siblings and signed deliberate selection survive reopen; failed CAS leaves state',async()=>{
+ let fail=false; const store=openSQLiteStorage(conn,x=>{if(fail && x==='write')throw Error('fault')});
+ await initializeAuthority(store,root,root.head,provider);
+ const first=await observeSuccessor(store,scope,root.head,provider,await item('first'));
+ const second=await observeSuccessor(store,scope,root.head,provider,await item('second'));
+ let view=await readAuthority(openSQLiteStorage(conn),scope,root.head,provider);
+ assert.deepEqual(new Set(view.heads),new Set([first,second])); assert.equal(view.activeHead,root.head);
+ const payload={root:root.head,householdId:'house',from:root.head,to:first,deviceId:'a',index:0};
+ const selection={from:root.head,to:first,deviceId:'a',index:0,signature:sign('a','select-head',payload)};
+ fail=true; await assert.rejects(selectHead(store,scope,root.head,provider,selection)); fail=false;
+ assert.equal((await readAuthority(store,scope,root.head,provider)).activeHead,root.head);
+ await selectHead(store,scope,root.head,provider,selection);
+ view=await readAuthority(openSQLiteStorage(conn),scope,root.head,provider);assert.equal(view.activeHead,first);assert.deepEqual(new Set(view.heads),new Set([first,second]));
+ await assert.rejects(readAuthority(store,scope,'wrong',provider),/INVALID_ROOT/);
+ db.close();
+});
