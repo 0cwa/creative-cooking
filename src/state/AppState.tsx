@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type PropsWithChildren, type Dispatch, type SetStateAction } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversations';
@@ -211,7 +212,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       .map(normalizeIngredientName)
       .filter(Boolean)
       .filter((name) => !existing.has(name.toLocaleLowerCase()))
-      .map((name) => {const item=createPantryItem(name, preference);return storageMode==='fresh-local'?{...item,id:`pantry-${crypto.randomUUID()}`}:item;});
+      .map((name) => {const item=createPantryItem(name, preference);return storageMode==='fresh-local'?{...item,id:`pantry-${randomUUID()}`}:item;});
 
     if (additions.length) commitPantry([...additions, ...current]);
   }, [commitPantry, storageMode]);
@@ -277,7 +278,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
     const now = new Date().toISOString();
     const recipe: Recipe = normalizeRecipes([{
       ...input,
-      id: storageMode === 'fresh-local' ? `recipe-${crypto.randomUUID()}` : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: storageMode === 'fresh-local' ? `recipe-${randomUUID()}` : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: now,
       updatedAt: now
     }])[0];

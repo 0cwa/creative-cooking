@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -7,7 +8,7 @@ import type { ShoppingItem } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
 
 function newId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return `${prefix}-${randomUUID()}`;
 }
 
 function sourceKey(recipeId: string, ingredientId?: string): string | undefined {

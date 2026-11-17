@@ -388,6 +388,10 @@ export default function ChefScreen() {
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
 
+  if (Platform.OS !== 'web' && app.storageMode === 'fresh-local') {
+    return <Screen><Text style={styles.title}>Chef</Text><Text>Chef requests and shared ingredient review are not yet available in this native workspace.</Text></Screen>;
+  }
+
   return (
     <Screen>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
