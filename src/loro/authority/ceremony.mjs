@@ -22,3 +22,27 @@ export async function checkHouseholdCeremonies(sodium,parent,authorizationSnapsh
  }
  return devices.sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
 }
+
+/** First transcript signaling item for an existing device joining a new epoch. */
+export function existingRecipientContextBytes(c) {
+ const fields=['version','householdId','parentHead','admissionEventHash','newEpochId','sponsorDeviceId','recipientDeviceId','recipientWrappingKey'];
+ if(!exact(c,fields) || c.version!==1 || !fields.slice(1).every(k=>typeof c[k]==='string' && c[k].length>0 && new TextEncoder().encode(c[k]).length<=256) || !/^[0-9a-f]{64}$/.test(c.recipientWrappingKey) || c.sponsorDeviceId===c.recipientDeviceId) throw Error('MALFORMED');
+ return new TextEncoder().encode(JSON.stringify(['creative-cooking/existing-recipient/v1',fields.map(k=>c[k])]));
+}
+/** Both transcript participants are resolved against the parent signing-key pins;
+ * their signed acknowledgements attest checking sealed challenge responses. */
+export async function checkExistingRecipientCeremonies(sodium,parent,authorizationSnapshot,grant,evidence,provider) {
+ const {verifySessionEvidence}=await import('../pairing/durable-session.mjs');
+ if(!Array.isArray(evidence) || evidence.length>128) throw Error('INVALID_PROOF');
+ const devices=[],seen=new Set(),guards=new Set();
+ for(let i=0;i<evidence.length;i++) {
+  if(!Object.hasOwn(evidence,i)) throw Error('INVALID_PROOF');
+  const e=evidence[i];if(!exact(e,['transcript','guard','oob','messages','context'])) throw Error('INVALID_PROOF');
+  const {transcript:t,guard:g,context:c}=e, sponsor=parent.devices.find(d=>d.active && d.deviceId===c?.sponsorDeviceId), recipient=parent.devices.find(d=>d.active && d.deviceId===c?.recipientDeviceId);
+  if(!sponsor || !recipient || !parent.runtime.acceptedRecipients.includes(recipient.deviceId) || seen.has(recipient.deviceId) || guards.has(g?.guardId) || c.householdId!==parent.householdId || c.parentHead!==parent.head || c.admissionEventHash!==grant.admissionEventHash || c.newEpochId!==grant.newEpochId || t.scope?.kind!=='household' || t.scope.id!==parent.householdId || t.purpose!=='data' || t.acceptedParent!==parent.head || t.authorizationSnapshot!==authorizationSnapshot || t.initiator.deviceId!==sponsor.deviceId || t.responder.deviceId!==recipient.deviceId || hex(t.responder.wrappingPublicKey)!==c.recipientWrappingKey || !Array.isArray(t.signaling) || !(t.signaling[0] instanceof Uint8Array) || hex(t.signaling[0])!==hex(existingRecipientContextBytes(c))) throw Error('CONTEXT_MISMATCH');
+  const proof=verifySessionEvidence(sodium,t,g,e.oob,e.messages);
+  for(const [role,device] of [['initiator',sponsor],['responder',recipient]]) {const offer=e.messages.offers[role], sig=unhex(offer.signature);if(!sig || !await provider.verify(device.signingKeyRef,offerBytes(role,proof.transcriptHash,offer.challenge),sig)) throw Error('INVALID_PROOF')}
+  seen.add(recipient.deviceId);guards.add(g.guardId);devices.push({deviceId:recipient.deviceId,wrappingKeyRef:c.recipientWrappingKey,transcriptHash:proof.transcriptHash,guardId:g.guardId});
+ }
+ return devices.sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+}

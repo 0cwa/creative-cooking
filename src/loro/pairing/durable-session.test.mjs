@@ -24,3 +24,16 @@ test('household sponsor offer resolves to frozen authority and every recipient h
  await assert.rejects(checkHouseholdCeremonies(sodium,parent,'snapshot',grant,[evidence],{verify:async()=>false}),/INVALID_PROOF/);
  f.dbs.forEach(d=>d.close());
 });
+
+test('existing recipient wraps fresh epoch only after both pinned devices complete challenges',async()=>{
+ const {existingRecipientContextBytes,checkExistingRecipientCeremonies}=await import('../authority/ceremony.mjs');
+ const f=setup(),c={version:1,householdId:'h',parentHead:'parent',admissionEventHash:'admission',newEpochId:'new-epoch',sponsorDeviceId:'initiator',recipientDeviceId:'responder',recipientWrappingKey:hex(f.t.responder.wrappingPublicKey)};
+ f.t.scope={kind:'household',id:'h'};f.g.scope=f.t.scope;f.t.signaling=[existingRecipientContextBytes(c)];f.oob.hash=hex(sodium.crypto_generichash(32,ceremonyBytes(f.t,f.g)));
+ const a=f.open('initiator'),b=f.open('responder'),ao=a.initialize(),bo=b.initialize(),ar=a.respond(bo,0),br=b.respond(ao,0),aa=a.acknowledge(br,1),ba=b.acknowledge(ar,1);a.finish(ba,2);b.finish(aa,2);
+ const evidence={transcript:f.t,guard:f.g,oob:f.oob,messages:a.evidence().messages,context:c},parent={householdId:'h',head:'parent',devices:[{active:true,deviceId:'initiator',signingKeyRef:'a'},{active:true,deviceId:'responder',signingKeyRef:'b'}],runtime:{acceptedRecipients:['initiator','responder']}},grant={admissionEventHash:'admission',newEpochId:'new-epoch'},provider={verify:async(ref,bytes,sig)=>sodium.crypto_sign_verify_detached(sig,bytes,ref==='a'?f.t.initiator.signingPublicKey:f.t.responder.signingPublicKey)};
+ assert.equal((await checkExistingRecipientCeremonies(sodium,parent,'snapshot',grant,[evidence],provider))[0].deviceId,'responder');
+ await assert.rejects(checkExistingRecipientCeremonies(sodium,parent,'snapshot',{...grant,newEpochId:'other'},[evidence],provider),/CONTEXT_MISMATCH/);
+ await assert.rejects(checkExistingRecipientCeremonies(sodium,parent,'snapshot',grant,[evidence,evidence],provider),/CONTEXT_MISMATCH/);
+ await assert.rejects(checkExistingRecipientCeremonies(sodium,parent,'snapshot',grant,[evidence],{verify:async()=>false}),/INVALID_PROOF/);
+ f.dbs.forEach(d=>d.close());
+});
