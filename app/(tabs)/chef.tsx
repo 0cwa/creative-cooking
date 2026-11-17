@@ -108,6 +108,7 @@ export default function ChefScreen() {
   const discardCancelledRef = useRef(false);
   const dictationControllerRef = useRef<DictationController | null>(null);
   const dictationBaseRef = useRef('');
+  const chatMessage = (role:ChatMessage['role'],content:string,proposals?:ChefToolProposal[]) => { const message=makeChatMessage(role,content,proposals);return app.storageMode === 'fresh-local' ? {...message,id:`message-${crypto.randomUUID()}`} : message; };
   const activeProvider = providerMetadata(app.settings.providerId);
   const dictationEngine = app.settings.dictationEngine;
   const dictationSupport = useMemo(() => getOnDeviceDictationSupport(dictationEngine), [dictationEngine]);
@@ -253,7 +254,7 @@ export default function ChefScreen() {
       const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
 
       if (capabilities.location === 'local' && app.settings.allergies.length > 0) {
-        app.appendChatMessage(makeChatMessage(
+        app.appendChatMessage(chatMessage(
           'assistant',
           'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'
         ));
@@ -264,7 +265,7 @@ export default function ChefScreen() {
         ? await getProviderKey(app.settings.providerId)
         : '';
       if (activeProvider.credentialRequired && !apiKey) {
-        app.appendChatMessage(makeChatMessage(
+        app.appendChatMessage(chatMessage(
           'assistant',
           `Connect ${activeProvider.name} or paste an API key in Settings, then I can cook with you.`
         ));
@@ -305,7 +306,7 @@ export default function ChefScreen() {
 
       const responseText = result.text.trim();
       if (responseText || proposedChanges.length) {
-        app.appendChatMessage(makeChatMessage(
+        app.appendChatMessage(chatMessage(
           'assistant',
           responseText || 'I have a suggested change for you.',
           proposedChanges
@@ -318,7 +319,7 @@ export default function ChefScreen() {
 
       if (normalized.kind === 'cancelled') {
         if (!discardCancelledRef.current && partialText) {
-          app.appendChatMessage(makeChatMessage('assistant', partialText));
+          app.appendChatMessage(chatMessage('assistant', partialText));
         }
       } else {
         setRunError({ error: normalized, messages, partialText });
@@ -344,7 +345,7 @@ export default function ChefScreen() {
     if (!text || busy || dictationActive) return;
 
     setInput('');
-    const userMessage = makeChatMessage('user', text);
+    const userMessage = chatMessage('user', text);
     const messages = [...app.chatMessages, userMessage];
     app.appendChatMessage(userMessage);
     if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;

@@ -211,10 +211,10 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       .map(normalizeIngredientName)
       .filter(Boolean)
       .filter((name) => !existing.has(name.toLocaleLowerCase()))
-      .map((name) => createPantryItem(name, preference));
+      .map((name) => {const item=createPantryItem(name, preference);return storageMode==='fresh-local'?{...item,id:`pantry-${crypto.randomUUID()}`}:item;});
 
     if (additions.length) commitPantry([...additions, ...current]);
-  }, [commitPantry]);
+  }, [commitPantry, storageMode]);
 
   const updatePantryByName = useCallback((name: string, newName: string) => {
     const result = updatePantryItemName(pantryRef.current, name, newName);
@@ -277,13 +277,13 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
     const now = new Date().toISOString();
     const recipe: Recipe = normalizeRecipes([{
       ...input,
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: storageMode === 'fresh-local' ? `recipe-${crypto.randomUUID()}` : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: now,
       updatedAt: now
     }])[0];
     updateAppState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, [ensureSharedEditAllowed, updateAppState, validateRecipe]);
+  }, [ensureSharedEditAllowed, updateAppState, validateRecipe, storageMode]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) return;
