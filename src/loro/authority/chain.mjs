@@ -27,13 +27,21 @@ export async function verifyAuthority(state,pin,provider) {
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
  for(const item of state.events) {
-  if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
+  if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
   const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
   if(item.event.kind==='changePolicy') {
-   if(r.status!=='validated' || Object.hasOwn(item,'admission')) throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
+   if(r.status!=='validated' || Object.hasOwn(item,'admission') || Object.hasOwn(item,'rotation')) throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
    if(nodes.has(r.eventHash)) throw Error('DUPLICATE_EVENT');
    nodes.set(r.eventHash,{...copy(parent),head:r.eventHash,policy:copy(item.event.nextPolicy),policyHash:await policyId(provider,item.event.nextPolicy)});
+  } else if(['revokeDevice','recoverDevice'].includes(item.event.kind) && item.event.version===2 && ['ROTATION_DISTRIBUTION_REQUIRED','RECOVERY_DISTRIBUTION_REQUIRED'].includes(r.reason)) {
+   const rotation=item.rotation,sub=item.event.subject;
+   if(!rotation||![ 'authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId','authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId,recoveryProof'].includes(Object.keys(rotation).sort().join(','))||(item.event.kind==='recoverDevice')!==Object.hasOwn(rotation,'recoveryProof')||rotation.grant?.eventHash!==r.eventHash||!parent.runtime.acceptedRecipients.includes(rotation.localDeviceId)||rotation.localDeviceId===sub.deviceId||await digest(provider,'rotation-manifest',rotation.manifest)!==rotation.grant.manifestHash||rotation.manifest?.newDocumentId!==sub.documentId||rotation.manifest?.newGeneration!==sub.newGeneration||rotation.manifest?.newEpochId!==sub.newEpochId)throw Error('INVALID_ROTATION');
+   const {checkRotationEvidence}=await import('../compromise/rotation-proof.mjs');await sodium.ready;
+   await checkRotationEvidence({sodium,parent,authorizationSnapshot:rotation.authorizationSnapshot,item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},grant:rotation.grant,ceremonies:decodeEvidence(rotation.ceremonies),localDeviceId:rotation.localDeviceId,provider});
+   if(item.event.kind==='recoverDevice'){const {verifyRecoveryProof}=await import('../compromise/recovery-proof.mjs');await verifyRecoveryProof({sodium,parent,nodes,event:item.event,proof:rotation.recoveryProof,provider})}
+   if(nodes.has(r.eventHash)||[...nodes.values()].some(n=>n.epochId===sub.newEpochId||n.runtime.documentId===sub.documentId))throw Error('INVALID_ROTATION');
+   const child=copy(parent);child.head=r.eventHash;child.epochId=sub.newEpochId;child.generation=sub.newGeneration;if(item.event.kind==='revokeDevice')child.devices=child.devices.map(d=>d.deviceId===sub.deviceId?{...d,active:false}:d);else child.devices.push({adultId:sub.owner,deviceId:sub.deviceId,signingKeyRef:sub.signingKeyRef,active:true});child.runtime.documentId=sub.documentId;child.runtime.authorPeers=Object.fromEntries(sub.devices.map(d=>[d.deviceId,d.peerId]));child.runtime.acceptedRecipients=sub.devices.map(d=>d.deviceId);if(!validParent(child))throw Error('INVALID_ROTATION');nodes.set(r.eventHash,child);
   } else if(item.event.kind==='inviteAdult' && item.event.version===2 && r.reason==='ADMISSION_AND_PROJECTION_REQUIRED') {
    const a=item.admission,subject=item.event.subject;
    if(!a || Array.isArray(a) || Object.keys(a).sort().join(',')!=='ceremonies,existingCeremonies,grant,localDeviceId,manifest,operationId' || a.grant?.admissionEventHash!==r.eventHash || a.grant?.recipientAdult!==subject.adultId || a.grant?.newDocumentGeneration!==subject.newGeneration || a.grant?.newEpochId!==subject.newEpochId || a.manifest?.newDocumentId!==subject.documentId || a.manifest?.newGeneration!==subject.newGeneration || JSON.stringify(a.grant?.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId)) || !parent.runtime.acceptedRecipients.includes(a.localDeviceId)) throw Error('INVALID_ADMISSION');
@@ -98,6 +106,21 @@ async function load(storage,scope,pin,provider) {
   const p=saved.value, eventHash=await digest(provider,'event',item.event);
   let published;try{published=JSON.parse(dec.decode(p.nextAuthority.authorityState))}catch{throw Error('INVALID_AUTHORITY')}
   if(p.admissionEventHash!==eventHash || p.nextAuthority.acceptedParent!==eventHash || p.expectedAuthority.record?.acceptedParent!==item.event.parentHead || p.grantHash!==await digest(provider,'current-state-grant',Object.fromEntries(Object.entries(item.admission.grant).filter(([k])=>k!=='signatures'))) || p.manifest.id!==item.admission.grant.projectionManifestHash || hex(p.manifest.bytes)!==hex(bytes(item.admission.manifest)) || !published.events?.some(e=>JSON.stringify(canonical(e))===JSON.stringify(canonical(item)))) throw Error('INVALID_AUTHORITY');
+  if(item.admission.manifest.schemaVersion.startsWith('registry-seed-v1|')){if(JSON.stringify(item.admission.grant.contentClasses)!==JSON.stringify(['pantry','recipe','shopping']))throw Error('INVALID_AUTHORITY');if(!p.seed||p.seed.seedId!==item.admission.manifest.schemaVersion.split('|')[1]||await digest(provider,'projection-snapshot',hex(p.documents[0]?.bytes))!==item.admission.manifest.projectedStateHash)throw Error('INVALID_AUTHORITY');const {verifyCurrentSeed}=await import('../compromise/current-seed.mjs'),{LoroDoc}=await import('loro-crdt'),seedCheck=verifyCurrentSeed({LoroDoc,snapshot:p.documents[0].bytes,seed:p.seed}),parent=verified.nodes.get(item.event.parentHead);if(seedCheck.peers.some(x=>[...Object.values(parent.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)].includes(x)))throw Error('INVALID_AUTHORITY')}
+ }
+ for(const item of state.events) if(item.rotation) {
+  const r=item.rotation,saved=await storage.getProjectionPublication(scope.id,r.operationId);if(!saved.ok||!saved.value)throw Error('INVALID_AUTHORITY');
+  const p=saved.value,eventHash=await digest(provider,'event',item.event);let published;try{published=JSON.parse(dec.decode(p.nextAuthority.authorityState))}catch{throw Error('INVALID_AUTHORITY')}if(!published.events?.some(e=>JSON.stringify(canonical(e))===JSON.stringify(canonical(item))))throw Error('INVALID_AUTHORITY');if(p.admissionEventHash!==eventHash||p.expectedAuthority.record?.acceptedParent!==item.event.parentHead||p.expectedAuthority.record?.authorizationSnapshot!==r.authorizationSnapshot||p.nextAuthority.acceptedParent!==eventHash||p.manifest.id!==r.grant.manifestHash||hex(p.manifest.bytes)!==hex(bytes(r.manifest))||p.epochId!==item.event.subject.newEpochId||!p.seed||p.seed.seedId!==r.manifest.seedId||await digest(provider,'projection-seed-identities',p.seed.identities)!==r.manifest.seedIdentitiesHash||await digest(provider,'rotation-draft-snapshot',hex(p.documents[0]?.bytes))!==r.manifest.draftHash)throw Error('INVALID_AUTHORITY');
+  const {verifyCurrentSeed}=await import('../compromise/current-seed.mjs'),{LoroDoc}=await import('loro-crdt'),seedCheck=verifyCurrentSeed({LoroDoc,snapshot:p.documents[0].bytes,seed:p.seed}),priorNode=verified.nodes.get(item.event.parentHead);if(seedCheck.peers.some(x=>[...Object.values(priorNode.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)].includes(x)))throw Error('INVALID_AUTHORITY');
+  const {verifyStoredKeyPackage}=await import('../pairing/key-package.mjs');const proofs=decodeEvidence(r.ceremonies),others=item.event.subject.devices.filter(d=>d.deviceId!==r.localDeviceId);if(p.packages.length!==others.length||proofs.length!==others.length-(item.event.kind==='recoverDevice'?1:0))throw Error('INVALID_AUTHORITY');
+  const grantBase=Object.fromEntries(Object.entries(r.grant).filter(([k])=>k!=='signatures')),grantHash=await digest(provider,'rotation-distribution-grant',grantBase);if(p.grantHash!==grantHash)throw Error('INVALID_AUTHORITY');
+  for(let i=0;i<others.length;i++){
+   const device=others[i],pkg=p.packages.find(x=>x.recipientDevice===device.deviceId&&x.id===r.grant.packageRefs[i]);if(!pkg)throw Error('INVALID_AUTHORITY');
+   let senderSigningKey,senderWrappingKey,recipientSigningKey,transcriptHash;
+   if(item.event.kind==='recoverDevice'&&device.deviceId===item.event.subject.deviceId){const proof=r.recoveryProof;senderSigningKey=proof.senderSigningKey;senderWrappingKey=proof.senderWrappingKey;recipientSigningKey=proof.claim.signingKey;transcriptHash=item.event.subject.claimHash;if(!p.recovery||p.recovery.claimHash!==item.event.subject.claimHash||p.recovery.bindingHash!==item.event.subject.bindingHash||p.recovery.generation!==item.event.subject.bindingGeneration||p.recovery.owner!==item.event.subject.owner||p.recovery.tokenCommitment!==proof.challenge.tokenCommitment||p.recovery.sealed!==proof.challenge.sealed)throw Error('INVALID_AUTHORITY')}
+   else {const e=proofs.find(x=>x.context?.recipientDeviceId===device.deviceId);if(!e)throw Error('INVALID_AUTHORITY');senderSigningKey=hex(e.transcript.initiator.signingPublicKey);senderWrappingKey=hex(e.transcript.initiator.wrappingPublicKey);recipientSigningKey=hex(e.transcript.responder.signingPublicKey);transcriptHash=e.oob.hash}
+   verifyStoredKeyPackage(sodium,pkg.bytes,{version:1,transcriptHash,releaseId:pkg.id,scopeKind:'household',scopeId:scope.id,purpose:'data',epochId:item.event.subject.newEpochId,generation:item.event.subject.newGeneration,senderDevice:r.localDeviceId,senderSigningKey,senderWrappingKey,recipientDevice:device.deviceId,recipientSigningKey,recipientWrappingKey:device.wrappingKeyRef,policyHash:item.event.policyHash,grantHash,projectionId:item.event.subject.documentId,manifestHash:r.grant.manifestHash});
+  }
  }
  return {record,...verified};
 }
@@ -171,7 +194,7 @@ export async function checkCurrentAdmission(storage,scope,pin,provider,item,gran
 
 /** Verify the complete proof bundle at the selected parent. This does not publish
  * or create a successor; those require the atomic guarded publication transaction. */
-export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId) {
+export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId,sourceRuntime) {
  if(item?.event?.version!==2 || item.event.kind!=='inviteAdult') throw Error('UNSUPPORTED_TRANSITION');
  const proof=await checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot);
  const {record,state,nodes}=await load(storage,scope,pin,provider);
@@ -187,8 +210,9 @@ export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,ite
  const expectedAuthority={version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
  const subject=item.event.subject;
  if(subject.documentId!==manifest.newDocumentId || subject.newGeneration!==grant.newDocumentGeneration || subject.newEpochId!==grant.newEpochId || JSON.stringify(subject.devices.map(d=>d.deviceId))!==JSON.stringify(grant.recipientDevices) || subject.devices.some((d,i)=>d.deviceId!==devices[i]?.deviceId || d.signingKeyRef!==devices[i]?.signingKeyRef || d.wrappingKeyRef!==devices[i]?.wrappingKeyRef)) throw Error('CONTEXT_MISMATCH');
- const source=await checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider);
- return {status:'pending',reason:'ATOMIC_SUCCESSOR_REQUIRED',admissionEventHash:proof.admissionEventHash,grantHash:proof.grantHash,expectedAuthority,sourceDocument:source.sourceDocument,devices,existingDevices};
+ const source=await checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider,sourceRuntime);
+ if(source.seed){const seedPeer=manifest.schemaVersion.split('|')[2];if([...Object.values(parent.runtime.authorPeers),...subject.devices.map(d=>d.peerId)].includes(seedPeer))throw Error('INVALID_SEED_PEER')}
+ return {status:'pending',reason:'ATOMIC_SUCCESSOR_REQUIRED',admissionEventHash:proof.admissionEventHash,grantHash:proof.grantHash,expectedAuthority,sourceDocument:source.sourceDocument,seed:source.seed,devices,existingDevices};
 }
 
 /** Verify, then commit the fresh projection, key packages, guard consumption and
@@ -220,7 +244,7 @@ export async function publishHouseholdAdmission(input) {
   }
   return {replayed:true,publication:p};
  }
- const checked=await checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId);
+ const checked=await checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies,existingCeremonies,localDeviceId,input.sourceRuntime);
  if(selection.from!==item.event.parentHead || selection.to!==checked.admissionEventHash) throw Error('INVALID_SELECTION');
  const {record,state}=await load(storage,scope,pin,provider);
  if(record.revision!==checked.expectedAuthority.record.revision || record.authorizationSnapshot!==checked.expectedAuthority.record.authorizationSnapshot) throw Error('CONFLICT');
@@ -245,8 +269,65 @@ export async function publishHouseholdAdmission(input) {
   return packages;
  });
  const guards=[...checked.devices,...checked.existingDevices].map(d=>d.guardId).sort();
- const publication={version:1,operationId,guardIds:guards,sourceDocument:checked.sourceDocument,expectedAuthority:checked.expectedAuthority,nextAuthority:{scope,revision:record.revision+1,acceptedParent:state.activeHead,authorizationSnapshot:await snapshotId(provider,state),authorityState:bytes(state)},admissionEventHash:checked.admissionEventHash,grantHash:checked.grantHash,manifest:{id:grant.projectionManifestHash,bytes:bytes(manifest)},epochId:grant.newEpochId,documents:[{documentId:manifest.newDocumentId,generation:grant.newDocumentGeneration,bytes:new Uint8Array(snapshot)}],packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},pendingEdits};
+ const publication={version:1,...(checked.seed?{seed:checked.seed}:{}),operationId,guardIds:guards,sourceDocument:checked.sourceDocument,expectedAuthority:checked.expectedAuthority,nextAuthority:{scope,revision:record.revision+1,acceptedParent:state.activeHead,authorizationSnapshot:await snapshotId(provider,state),authorityState:bytes(state)},admissionEventHash:checked.admissionEventHash,grantHash:checked.grantHash,manifest:{id:grant.projectionManifestHash,bytes:bytes(manifest)},epochId:grant.newEpochId,documents:[{documentId:manifest.newDocumentId,generation:grant.newDocumentGeneration,bytes:new Uint8Array(snapshot)}],packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},pendingEdits};
  const committed=await storage.publishProjection(publication);if(!committed.ok) throw Error(committed.error);
  const durable=await storage.getProjectionPublication(scope.id,operationId);if(!durable.ok || !durable.value)throw Error(durable.error || 'CORRUPT');
  return {replayed:committed.value.replayed,publication:durable.value};
 }
+
+/** Historical inspection only: resolve a head actually selected in the pinned chain.
+ * This grants no present authority and does not authorize publication. */
+export async function resolveHistoricalAuthority(storage,scope,pin,provider,head) {
+ const {record,state,nodes}=await load(storage,scope,pin,provider);
+ const selected=new Set([pin,...state.selections.map(s=>s.to)]);
+ if(!selected.has(head))throw Error('HISTORICAL_HEAD_NOT_SELECTED');
+ const node=nodes.get(head);if(!node)throw Error('MISSING_PARENT');
+ const devices=node.devices.filter(d=>d.active);
+ return {scope:{scopeId:scope.id,documentId:node.runtime.documentId,documentGeneration:node.generation,branchHead:head,policyHashes:[node.policyHash],epochId:node.epochId,acceptedAuthors:devices.map(d=>d.deviceId).sort(),authorPeers:copy(node.runtime.authorPeers),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'},signingKeyRefs:Object.fromEntries(devices.map(d=>[d.deviceId,d.signingKeyRef])),expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+}
+
+/** Publish a deliberately selected, previously authenticated compromise draft.
+ * The existing projection transaction installs the independent key, packages,
+ * document, authority and ceremony guards together. */
+async function publishHouseholdSuccessor(input,kind) {
+ const {storage,scope,pin,provider,master,operationId,keyOperationId,localDeviceId,signingSecret,reviews,reviewId,runtime}=input;
+ if(!storage?.compromise||reviews!==storage.compromise)throw Error('UNTRUSTED_REVIEW_STORE');
+ const {item,grant,manifest,ceremonies,selection,pendingEdits}=structuredClone({item:input.item,grant:input.grant,manifest:input.manifest,ceremonies:input.ceremonies,selection:input.selection,pendingEdits:input.pendingEdits});
+ await sodium.ready;
+ const saved=await storage.getProjectionPublication(scope.id,operationId);if(!saved.ok)throw Error(saved.error);
+ if(saved.value){const p=saved.value,{record:current,state:durable}=await load(storage,scope,pin,provider),rotation={authorizationSnapshot:p.expectedAuthority.record?.authorizationSnapshot,ceremonies:encodeEvidence(ceremonies),grant,localDeviceId,manifest,operationId,...(kind==='recoverDevice'?{recoveryProof:input.recoveryProof}:{})},packed={...item,rotation},review=await reviews.get(scope.id,reviewId);if(current.revision!==p.nextAuthority.revision||current.acceptedParent!==p.nextAuthority.acceptedParent||current.authorizationSnapshot!==p.nextAuthority.authorizationSnapshot||!durable.events.some(x=>JSON.stringify(canonical(x))===JSON.stringify(canonical(packed)))||JSON.stringify(canonical(durable.selections.at(-1)))!==JSON.stringify(canonical(selection))||p.localKey.record.operationId!==keyOperationId||p.localKey.record.identity.deviceId!==localDeviceId||!review||review.status!=='local-draft'||review.draft.documentId!==p.documents[0]?.documentId||!review.draft.currentSeed||hex(review.draft.currentSeed.snapshot)!==hex(p.documents[0]?.bytes)||JSON.stringify(canonical(p.pendingEdits))!==JSON.stringify(canonical(pendingEdits)))throw Error('CONFLICT');return {replayed:true,publication:p}}
+ const {record,state,nodes}=await load(storage,scope,pin,provider),parent=nodes.get(state.activeHead);
+ if(item?.event?.kind!==kind||item?.event?.parentHead!==state.activeHead||scope.kind!=='household'||runtime.scope.scopeId!==scope.id||!parent)throw Error('CONFLICT');
+ const {checkRotationEvidence}=await import('../compromise/rotation-proof.mjs');
+ const checked=await checkRotationEvidence({sodium,parent,authorizationSnapshot:record.authorizationSnapshot,item,grant,ceremonies,localDeviceId,provider});
+ const signer=parent.devices.find(d=>d.active&&d.deviceId===localDeviceId),challenge=domain('rotation-local-signer',{householdId:scope.id,parentHead:parent.head,operationId});
+ if(!signer||!(signingSecret instanceof Uint8Array)||signingSecret.length!==64||!await provider.verify(signer.signingKeyRef,challenge,sodium.crypto_sign_detached(challenge,signingSecret)))throw Error('INVALID_KEY');
+ const expectedAuthority={version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}},review=await reviews.get(scope.id,reviewId);
+ if(!review||review.status!=='local-draft'||review.context.authorityHead!==record.acceptedParent||review.context.authorityRevision!==record.revision||review.context.authoritySnapshot!==record.authorizationSnapshot||review.context.kind!=='household'||review.draft.held.length||!review.draft.currentSeed||review.draft.documentId!==item.event.subject.documentId||review.draft.publicationBaseDocumentId!==parent.runtime.documentId)throw Error('INVALID_DRAFT');
+ const {verifyReport}=await import('../compromise/report.mjs');if(await verifyReport({runtime,report:review.report,context:review.context,reviewId,manifest:review.manifest})!==review.reportHash)throw Error('INVALID_REPORT');
+ const source=await storage.reopenBranchDocument(expectedAuthority,parent.runtime.documentId);if(!source.ok||!source.value)throw Error('SOURCE_UNAVAILABLE');
+ const seed=review.draft.currentSeed,{projectCurrentSeed}=await import('../compromise/current-seed.mjs'),recomputed=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:review.draft.snapshot,seedId:seed.seedId,peerId:seed.peerId});if(hex(recomputed.snapshot)!==hex(seed.snapshot)||JSON.stringify(canonical(recomputed.identities))!==JSON.stringify(canonical(seed.identities)))throw Error('INVALID_SEED');const draftDoc=new runtime.LoroDoc(),oldDoc=new runtime.LoroDoc();try{draftDoc.import(seed.snapshot);oldDoc.import(source.value.bytes)}catch{throw Error('INVALID_DRAFT')}const oldPeers=new Set([...oldDoc.oplogVersion().toJSON().keys(),...Object.values(parent.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)]);if([...draftDoc.oplogVersion().toJSON().keys()].some(p=>oldPeers.has(p)))throw Error('INVALID_DRAFT_PEERS');
+ const expectedManifest={version:1,scopeId:scope.id,sourceDocumentId:parent.runtime.documentId,sourceRevision:source.value.revision,sourceHash:await digest(provider,'rotation-source-snapshot',hex(source.value.bytes)),reviewId,evidenceDocumentId:review.draft.sourceDocumentId,evidenceGeneration:review.draft.sourceGeneration,reportHash:review.reportHash,selectionHash:await digest(provider,'rotation-selection',review.selection),newDocumentId:item.event.subject.documentId,newGeneration:item.event.subject.newGeneration,newEpochId:item.event.subject.newEpochId,draftHash:await digest(provider,'rotation-draft-snapshot',hex(seed.snapshot)),seedId:seed.seedId,seedIdentitiesHash:await digest(provider,'projection-seed-identities',seed.identities),archiveHash:await digest(provider,'rotation-archive-snapshot',hex(review.draft.snapshot))};
+ if(JSON.stringify(canonical(manifest))!==JSON.stringify(canonical(expectedManifest))||await digest(provider,'rotation-manifest',manifest)!==grant.manifestHash||selection.from!==parent.head||selection.to!==checked.eventHash||!Array.isArray(pendingEdits))throw Error('INVALID_MANIFEST');
+ let recoveryGuard=null;
+ if(kind==='recoverDevice'){
+  const proof=input.recoveryProof,{checkRecoveryReadmission}=await import('../recovery/readmission.mjs');
+  const readmission=await checkRecoveryReadmission({sodium,storage,recoveryRun:input.recoveryRun,scope,pin,provider,claim:proof.claim,continuitySignature:proof.continuitySignature,deviceSignature:proof.deviceSignature,continuityBinding:proof.binding,continuityBindingSignature:proof.bindingSignature,continuityRegistry:input.continuityRegistry,possession:proof.possession,confirmations:proof.confirmations});
+  if(readmission.reason!=='ADMISSION_TRANSITION_REQUIRED'||readmission.bindingHash!==item.event.subject.bindingHash||readmission.bindingGeneration!==item.event.subject.bindingGeneration||readmission.authorityRevision!==record.revision||readmission.authorityHead!==state.activeHead||hex(signingSecret.slice(32))!==proof.senderSigningKey||!(input.wrappingSecret instanceof Uint8Array)||input.wrappingSecret.length!==32||hex(sodium.crypto_scalarmult_base(input.wrappingSecret))!==proof.senderWrappingKey)throw Error('INVALID_RECOVERY_PROOF');
+  recoveryGuard={owner:item.event.subject.owner,generation:readmission.bindingGeneration,bindingHash:readmission.bindingHash,claimHash:item.event.subject.claimHash,tokenCommitment:proof.challenge.tokenCommitment,sealed:proof.challenge.sealed};
+ }
+ const packed={...item,rotation:{authorizationSnapshot:record.authorizationSnapshot,ceremonies:encodeEvidence(ceremonies),grant,localDeviceId,manifest,operationId,...(kind==='recoverDevice'?{recoveryProof:input.recoveryProof}:{})}};
+ state.events.push(packed);state.selections.push(selection);state.activeHead=selection.to;await verifyAuthority(state,pin,provider);
+ const {makeKeyPackage}=await import('../pairing/key-package.mjs'),others=item.event.subject.devices.filter(d=>d.deviceId!==localDeviceId);
+ if(others.length!==ceremonies.length+(kind==='recoverDevice'?1:0))throw Error('CEREMONY_REQUIRED');
+ const identity={version:1,scope,deviceId:localDeviceId,purpose:'data',epochId:item.event.subject.newEpochId};
+ const prepared=await storage.localKeys(master,sodium).prepareForAtomicInstall(keyOperationId,identity,async secret=>others.map((recipient,i)=>{const packageId=grant.packageRefs[i];let transcriptHash,senderSigningKey,senderWrappingKey,recipientSigningKey;
+  if(kind==='recoverDevice'&&recipient.deviceId===item.event.subject.deviceId){transcriptHash=item.event.subject.claimHash;senderSigningKey=input.recoveryProof.senderSigningKey;senderWrappingKey=input.recoveryProof.senderWrappingKey;recipientSigningKey=input.recoveryProof.claim.signingKey}
+  else {const e=ceremonies.find(x=>x.context.recipientDeviceId===recipient.deviceId),proof=checked.devices.find(x=>x.deviceId===recipient.deviceId);if(!e||!proof||!sodium.crypto_sign_verify_detached(sodium.crypto_sign_detached(challenge,signingSecret),challenge,e.transcript.initiator.signingPublicKey))throw Error('INVALID_KEY');transcriptHash=proof.transcriptHash;senderSigningKey=hex(e.transcript.initiator.signingPublicKey);senderWrappingKey=hex(e.transcript.initiator.wrappingPublicKey);recipientSigningKey=hex(e.transcript.responder.signingPublicKey)}
+  if(!packageId)throw Error('INVALID_KEY');const context={version:1,transcriptHash,releaseId:packageId,scopeKind:'household',scopeId:scope.id,purpose:'data',epochId:item.event.subject.newEpochId,generation:item.event.subject.newGeneration,senderDevice:localDeviceId,senderSigningKey,senderWrappingKey,recipientDevice:recipient.deviceId,recipientSigningKey,recipientWrappingKey:recipient.wrappingKeyRef,policyHash:item.event.policyHash,grantHash:checked.grantHash,projectionId:item.event.subject.documentId,manifestHash:grant.manifestHash};return {id:packageId,recipientDevice:recipient.deviceId,bytes:makeKeyPackage(sodium,context,secret,signingSecret)}}));
+ const publication={version:1,seed:{seedId:seed.seedId,identities:seed.identities},...(recoveryGuard?{recovery:recoveryGuard}:{}),...(others.length?{guardIds:checked.devices.map(d=>d.guardId).sort()}:{singleRecipient:true}),operationId,sourceDocument:{documentId:parent.runtime.documentId,revision:source.value.revision},expectedAuthority,nextAuthority:{scope,revision:record.revision+1,acceptedParent:state.activeHead,authorizationSnapshot:await snapshotId(provider,state),authorityState:bytes(state)},admissionEventHash:checked.eventHash,grantHash:checked.grantHash,manifest:{id:grant.manifestHash,bytes:bytes(manifest)},epochId:item.event.subject.newEpochId,documents:[{documentId:item.event.subject.documentId,generation:item.event.subject.newGeneration,bytes:seed.snapshot}],packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},pendingEdits};
+ const committed=await storage.publishProjection(publication);if(!committed.ok)throw Error(committed.error);return {replayed:committed.value.replayed,publication};
+}
+
+export async function publishHouseholdRevocation(input){return publishHouseholdSuccessor(input,'revokeDevice')}
+export async function publishHouseholdRecovery(input){return publishHouseholdSuccessor(input,'recoverDevice')}

@@ -1,3 +1,6 @@
+import { recoveryTransaction } from './recovery-transaction.ts';
+import { ContinuityRegistry } from '../compromise/continuity.mjs';
+import { CompromiseReviews } from '../compromise/review.mjs';
 import { LocalKeys } from './local-keys.ts';
 import { RecipientRecords } from './recipient.ts';
 import { denseArray, StorageFailure, TransactionalStorage } from './core.ts';
@@ -31,5 +34,5 @@ export function openSQLiteStorage(db: SQLiteConnection, fault?: (boundary: strin
     };
     const result = pending.then(execute); pending = result.then(() => {},() => {}); return result;
   };
-  return Object.assign(new TransactionalStorage(run,fault), {recipient:new RecipientRecords(run,fault),localKeys:(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit)});
+  return Object.assign(new TransactionalStorage(run,fault), {recoveryTransaction:recoveryTransaction(run),continuity:new ContinuityRegistry(run,fault),compromise:new CompromiseReviews(run,fault),recipient:new RecipientRecords(run,fault),localKeys:(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit)});
 }

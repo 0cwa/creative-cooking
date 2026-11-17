@@ -5,13 +5,25 @@ import {domain} from '../authority/validator.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const canonical=v=>Array.isArray(v)?v.map(canonical):v && typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
-export async function checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider) {
+export async function checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider,sourceRuntime) {
  try {
   const result=await storage.reopenBranchDocument(expectedAuthority,manifest.sourceDocument);
   if(!result.ok || !result.value) throw Error('SOURCE_UNAVAILABLE');
   const source=result.value, digest=await provider.hash(domain('projection-source-snapshot',hex(source.bytes)));
   if(!(digest instanceof Uint8Array) || digest.length!==32 || hex(digest)!==manifest.sourceCheckpointHash) throw Error('SOURCE_MISMATCH');
   const old=new LoroDoc(), fresh=new LoroDoc(); old.import(source.bytes); fresh.import(snapshot);
+  if(manifest.schemaVersion.startsWith('registry-seed-v1|')) {
+   if(JSON.stringify(grant.contentClasses)!==JSON.stringify(['pantry','recipe','shopping']))throw Error('CONTENT_CLASS_MISMATCH');
+   if(!sourceRuntime||sourceRuntime.storage!==storage||sourceRuntime.scope?.scopeId!==expectedAuthority.scope.id||sourceRuntime.scope?.documentId!==manifest.sourceDocument||JSON.stringify(canonical(await sourceRuntime.authorize()))!==JSON.stringify(canonical(expectedAuthority)))throw Error('AUTHENTICATED_SOURCE_REQUIRED');
+   const {replayAuthenticated}=await import('../domain/replay.mjs'),replayed=await replayAuthenticated({runtime:sourceRuntime,checkpoint:source.bytes});if(replayed.held.length)throw Error('INCOMPLETE_SOURCE');
+   const visible=d=>Object.fromEntries(Object.entries(d.toJSON()).filter(([,v])=>v&&typeof v==='object'&&Object.keys(v).length));if(!eq(canonical(visible(old)),canonical(visible(replayed.doc))))throw Error('SOURCE_MISMATCH');
+
+   const parts=manifest.schemaVersion.split('|');if(parts.length!==3||!/^[0-9a-f-]{36}$/.test(parts[1])||!/^[1-9][0-9]*$/.test(parts[2]))throw Error('PROJECTION_MISMATCH');
+   const markers=old.getMap('domain-effects').toJSON(),seeded=Object.entries(markers).filter(([,m])=>m?.version===3);if(seeded.length){const record=await storage.readProjectionSeed(expectedAuthority,manifest.sourceDocument);if(!record.ok||!record.value)throw Error('UNVERIFIED_SEED');const expected=new Map(record.value.seed.identities.map(x=>[x.effectId,x.commandId]));if(seeded.length!==expected.size||seeded.some(([id,m])=>m.seedId!==record.value.seed.seedId||m.effectId!==id||m.commandId!==expected.get(id)))throw Error('UNVERIFIED_SEED')}
+   const {projectCurrentSeed}=await import('../compromise/current-seed.mjs');const seed=projectCurrentSeed({LoroDoc,source:source.bytes,seedId:parts[1],peerId:parts[2]});if(hex(seed.snapshot)!==hex(snapshot))throw Error('PROJECTION_MISMATCH');
+   return {status:'verified',sourceDocument:{documentId:manifest.sourceDocument,revision:source.revision},seed:{seedId:seed.seedId,identities:seed.identities}};
+  }
+
   if(hex(fresh.export({mode:'snapshot'}))!==hex(snapshot)) throw Error('PROJECTION_MISMATCH');
   const title=old.getMap('recipe').get('title'), purchases=old.getMap('purchases').toJSON();
   if(typeof title!=='string' || !grant.contentClasses.includes('recipe') || !grant.contentClasses.includes('shopping') || !purchases || Array.isArray(purchases) || Object.values(purchases).some(v=>typeof v!=='string')) throw Error('SOURCE_MISMATCH');

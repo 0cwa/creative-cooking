@@ -1,3 +1,6 @@
+import { recoveryTransaction } from './recovery-transaction.ts';
+import { ContinuityRegistry } from '../compromise/continuity.mjs';
+import { CompromiseReviews } from '../compromise/review.mjs';
 import { LocalKeys } from './local-keys.ts';
 import { RecipientRecords } from './recipient.ts';
 import { TransactionalStorage } from './core.ts';
@@ -18,5 +21,6 @@ export async function openIndexedDBStorage(name: string, fault?: (boundary: stri
       await done; return result;
     } catch(e) { try { transaction.abort(); } catch {} await done.catch(() => {}); throw e; }
   };
-  return {storage:new TransactionalStorage(run,fault),recipient:new RecipientRecords(run,fault),localKeys:(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit),close:() => db.close()};
+  const compromise=new CompromiseReviews(run,fault),localKeys=(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit);
+  return {storage:Object.assign(new TransactionalStorage(run,fault),{compromise,localKeys}),recoveryTransaction:recoveryTransaction(run),continuity:new ContinuityRegistry(run,fault),compromise,recipient:new RecipientRecords(run,fault),localKeys,close:() => db.close()};
 }

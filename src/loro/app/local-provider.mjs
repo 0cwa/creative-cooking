@@ -3,7 +3,7 @@
 export function localProvider(sodium,keys,{signing,content}) {
  const fromHex=s=>{if(typeof s!=='string'||!/^[0-9a-f]{64}$/.test(s))throw Error('INVALID_KEY');return sodium.from_hex(s)};
  const signRef=signing.publicKey;
- const withData=(ref,fn)=>{const entry=content[ref];if(!entry)throw Error('MISSING_KEY');return keys.use(entry.operationId,entry.identity,fn)};
+ const withData=(ref,fn)=>{if(typeof content==='function')return content(ref,fn);const entry=content[ref];if(!entry)throw Error('MISSING_KEY');return keys.use(entry.operationId,entry.identity,fn)};
  return {
   hash:async bytes=>sodium.crypto_generichash(32,bytes),
   verify:async (ref,bytes,signature)=>sodium.crypto_sign_verify_detached(signature,bytes,fromHex(ref)),

@@ -1,3 +1,4 @@
+import {readContinuityHead} from './continuity-head.ts';
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
 import type { ProjectionPublication, ProjectionAtomicStorage } from '../contracts/projection.ts';
@@ -31,6 +32,12 @@ const validateRecord = (k: string, v: any) => {
   const namespace = JSON.parse(k)[0];
   let valid = false;
   switch (namespace) {
+    case 'projection-seed-command': case 'projection-seed-effect': valid=typeof v==='string' && !!v; break;
+    case 'projection-seed': valid=fields(v,['seedId','identities']) && typeof v.seedId==='string' && denseArray(v.identities,(x:any)=>fields(x,['commandId','effectId']) && typeof x.commandId==='string' && !!x.commandId && typeof x.effectId==='string' && !!x.effectId); break;
+    case 'continuity-binding': valid=fields(v,['version','binding','bindingSignature','bindingHash']) && v.version===1 && object(v.binding) && typeof v.bindingSignature==='string' && typeof v.bindingHash==='string' && !!v.bindingHash; break;
+    case 'continuity-head': valid=fields(v,['generation','bindingHash']) && revision(v.generation) && typeof v.bindingHash==='string' && !!v.bindingHash; break;
+    case 'recovery-readmission-challenge': valid=fields(v,['claimHash','tokenCommitment','sealed']) && [v.claimHash,v.tokenCommitment,v.sealed].every((x:any)=>typeof x==='string'&&!!x); break;
+    case 'recovery-challenge-consumed': valid=typeof v==='string' && !!v; break;
     case 'local-master-catalog': valid = validMasterCatalog(v) || (fields(v,['version','state','id']) && v.version===1 && v.state==='reserved' && typeof v.id==='string' && !!v.id); break;
     case 'local-key': case 'local-key-operation': valid = validLocalRecord(v); break;
     case 'projection-publication': valid = fields(v,['inputKey','input']) && typeof v.inputKey==='string' && projectionKey(v.input)===v.inputKey; break;
@@ -60,6 +67,9 @@ const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'
 const validId = (x: unknown): x is string => typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256;
 const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
 function projectionKey(x: unknown): string | null {
+ if(object(x)&&Object.hasOwn(x,'seed')){const {seed,...rest}=x;if(!fields(seed,['seedId','identities'])||!validId(seed.seedId)||!denseArray(seed.identities,(i:any)=>fields(i,['commandId','effectId'])&&validId(i.commandId)&&validId(i.effectId))||seed.identities.length>256||new Set(seed.identities.map((i:any)=>i.commandId)).size!==seed.identities.length||new Set(seed.identities.map((i:any)=>i.effectId)).size!==seed.identities.length||projectionKey(rest)===null)return null;return JSON.stringify(projectionCanonical(x));}
+ if(object(x)&&Object.hasOwn(x,'singleRecipient')){const {singleRecipient,...rest}=x;if(singleRecipient!==true||!Array.isArray(rest.packages)||rest.packages.length!==0||Object.hasOwn(rest,'guardId')||Object.hasOwn(rest,'guardIds')||Object.hasOwn(rest,'recovery')||projectionKey({...rest,guardIds:['local-only-placeholder'],packages:[{id:'local-only-placeholder',recipientDevice:'local-only-placeholder',bytes:new Uint8Array([0])}]})===null)return null;return JSON.stringify(projectionCanonical(x));}
+ if(object(x)&&Object.hasOwn(x,'recovery')){const r=x.recovery,{recovery,...rest}=x;if(!fields(r,['owner','generation','bindingHash','claimHash','tokenCommitment','sealed'])||!validId(r.owner)||!revision(r.generation)||![r.bindingHash,r.claimHash,r.tokenCommitment].every(validId)||typeof r.sealed!=='string'||r.sealed.length>16384||!/^[0-9a-f]+$/.test(r.sealed)||projectionKey(rest)===null)return null;return JSON.stringify(projectionCanonical(x));}
  if (!(fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || (fields(x,['version','operationId','guardId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId)) || (fields(x,['version','operationId','guardId','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision)) || (fields(x,['version','operationId','guardIds','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && denseArray(x.guardIds,validId) && x.guardIds.length>0 && x.guardIds.length<=128 && x.guardIds.every((v:string,i:number)=>!i || x.guardIds[i-1]<v) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision))) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
  const a=x.expectedAuthority, n=x.nextAuthority, m=x.manifest;
  if (!fields(x.localKey,['record','catalog']) || !validLocalRecord(x.localKey.record) || !validMasterCatalog(x.localKey.catalog) || x.localKey.record.masterId!==x.localKey.catalog.id || x.localKey.record.identity.purpose!=='data' || x.localKey.record.identity.scope.kind!=='household' || x.localKey.record.identity.scope.id!==a?.scope?.id || x.localKey.record.identity.epochId!==x.epochId) return null;
@@ -165,6 +175,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const scope=p.expectedAuthority.scope.id;
     const authority=await tx.get(key('pairing-authority','household',scope));
     if(!authority || authority.scope.kind!=='household' || authority.scope.id!==scope || authority.revision<p.nextAuthority.revision || (authority.revision===p.nextAuthority.revision && JSON.stringify(projectionCanonical(authority))!==JSON.stringify(projectionCanonical(p.nextAuthority)))) return corrupt();
+    if(p.seed){const documentId=p.documents[0]?.documentId,seed=await tx.get(key('projection-seed',scope,documentId));if(!seed||JSON.stringify(projectionCanonical(seed))!==JSON.stringify(projectionCanonical(p.seed)))return corrupt();for(const x of p.seed.identities)if(await tx.get(key('projection-seed-command',scope,documentId,x.commandId))!==p.seed.seedId||await tx.get(key('projection-seed-effect',scope,documentId,x.effectId))!==p.seed.seedId)return corrupt();}
+    if(p.recovery && await tx.get(key('recovery-challenge-consumed',scope,p.recovery.claimHash))!==inputKey)return corrupt();
     for(const guard of p.guardIds ?? (p.guardId ? [p.guardId] : [])) if(await tx.get(key('pairing-guard',guard))!==inputKey) return corrupt();
     const catalog=await tx.get(key('local-master-catalog'));
     if (!validMasterCatalog(catalog) || JSON.stringify(projectionCanonical(catalog))!==JSON.stringify(projectionCanonical(p.localKey.catalog))) return corrupt();
@@ -198,6 +210,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const scope=input.expectedAuthority.scope.id, op=key('projection-publication',scope,input.operationId), old=await tx.get(op);
       if(old) { if(old.inputKey!==inputKey) conflict(); await this.checkProjection(tx,old.input,inputKey); return {ok:true,value:{replayed:true}}; }
       for(const guard of input.guardIds ?? (input.guardId ? [input.guardId] : [])) if(await tx.get(key('pairing-guard',guard))!==undefined) conflict();
+      if(input.recovery){const r=input.recovery,checked=await readContinuityHead(tx,scope,r.owner);if(checked.ok===false)return corrupt();const head=checked.value?.head,binding=checked.value?.record,challenge=await tx.get(key('recovery-readmission-challenge',scope,r.claimHash));if(!head||head.generation!==r.generation||head.bindingHash!==r.bindingHash||!binding||binding.bindingHash!==r.bindingHash||binding.binding?.owner!==r.owner||binding.binding?.generation!==r.generation||!challenge||challenge.claimHash!==r.claimHash||challenge.tokenCommitment!==r.tokenCommitment||challenge.sealed!==r.sealed||await tx.get(key('recovery-challenge-consumed',scope,r.claimHash))!==undefined)conflict();}
       await this.requireAuthority(tx,input.expectedAuthority);
       const authority=await tx.get(key('pairing-authority','household',scope));
       if(!authority || authority.revision!==input.expectedAuthority.record!.revision) conflict();
@@ -210,13 +223,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       for(const d of input.documents) if(await tx.get(key('document-owner',scope,d.documentId))!==undefined || await tx.get(key('document',scope,d.documentId))!==undefined || await tx.get(key('projection-document',scope,d.documentId))!==undefined) conflict();
       for(const p of input.packages) if(await tx.get(key('projection-package',scope,p.id))!==undefined || await tx.get(key('projection-outbox',scope,input.operationId,p.id))!==undefined) conflict();
       for(const p of input.pendingEdits) { if(!await this.localOperation(tx,p.scopeId,p.operationId)) conflict(); if(await tx.get(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId))!==undefined) conflict(); }
+      if(input.seed){if(input.documents.length!==1||await tx.get(key('projection-seed',scope,input.documents[0].documentId))!==undefined)conflict();for(const x of input.seed.identities)if(await tx.get(key('projection-seed-command',scope,input.documents[0].documentId,x.commandId))!==undefined||await tx.get(key('projection-seed-effect',scope,input.documents[0].documentId,x.effectId))!==undefined)conflict();}
       const installed=await installLocalKey(tx,input.localKey.record,input.localKey.catalog);
       if(JSON.stringify(projectionCanonical(installed.record))!==JSON.stringify(projectionCanonical(input.localKey.record))) conflict();
       await tx.put(key('projection-manifest',scope,input.manifest.id),copy(input.manifest.bytes));
+      if(input.seed){const d=input.documents[0].documentId;await tx.put(key('projection-seed',scope,d),input.seed);for(const x of input.seed.identities){await tx.put(key('projection-seed-command',scope,d,x.commandId),input.seed.seedId);await tx.put(key('projection-seed-effect',scope,d,x.effectId),input.seed.seedId);}}
       for(const d of input.documents) { await tx.put(key('document-owner',scope,d.documentId),input.nextAuthority.acceptedParent); await tx.put(key('document',scope,d.documentId),{bytes:copy(d.bytes),revision:0}); await tx.put(key('projection-document',scope,d.documentId),{generation:d.generation,operationId:input.operationId}); }
       for(const p of input.packages) { await tx.put(key('projection-package',scope,p.id),copy(p.bytes)); await tx.put(key('projection-outbox',scope,input.operationId,p.id),{packageId:p.id,recipientDevice:p.recipientDevice}); }
       for(const p of input.pendingEdits) await tx.put(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId),inputKey);
       for(const guard of input.guardIds ?? (input.guardId ? [input.guardId] : [])) await tx.put(key('pairing-guard',guard),inputKey);
+      if(input.recovery)await tx.put(key('recovery-challenge-consumed',scope,input.recovery.claimHash),inputKey);
       await tx.put(key('pairing-authority','household',scope),input.nextAuthority);
       await tx.put(op,{inputKey,input});
       return {ok:true,value:{replayed:false}};
@@ -264,6 +280,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];
     for (const id of ids) if (await tx.get(id) !== undefined) conflict();
+    for(const x of c.commands)if(await tx.get(key('projection-seed-command',c.scopeId,x.documentId,x.commandId))!==undefined||await tx.get(key('projection-seed-effect',c.scopeId,x.documentId,x.effectId))!==undefined)conflict();
   }
   private async completedLocal(tx: Tx, c: LocalCommit, inputKey: string) {
     for (const command of c.commands) {
@@ -288,10 +305,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     return {state:'saved',revisions};
   }
   /** Dependencies are scope-local and must precede their consumer in the transaction. */
-  private async requireDependencies(tx:Tx,scopeId:string,commands:readonly {effectId:string;dependencyEffectIds:readonly string[]}[]) {
+  private async requireDependencies(tx:Tx,scopeId:string,commands:readonly {documentId:string;effectId:string;dependencyEffectIds:readonly string[]}[]) {
     const prior=new Set<string>();
     for(const command of commands) {
-      for(const dep of command.dependencyEffectIds) if(!prior.has(dep) && await tx.get(key('effect',scopeId,dep))===undefined) conflict();
+      for(const dep of command.dependencyEffectIds) if(!prior.has(dep) && await tx.get(key('effect',scopeId,dep))===undefined && await tx.get(key('projection-seed-effect',scopeId,command.documentId,dep))===undefined) conflict();
       prior.add(command.effectId);
     }
   }
@@ -339,6 +356,15 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:{documentId,bytes:copy(doc.bytes),revision:doc.revision}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
+  /** Structural retained seed lookup; callers must authenticate its historical head. */
+  async readRetainedProjectionSeed(scopeId:string,documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array;head:string}|null,StorageError>> {
+    if(!validId(scopeId)||!validId(documentId))return {ok:false,error:'MALFORMED'};
+    try{const found=await this.run(false,async tx=>{const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const p=await this.getProjectionPublication(scopeId,found.operationId);if(!p.ok||!p.value||p.value.documents.length!==1||p.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(p.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(p.value.documents[0].bytes),head:p.value.nextAuthority.acceptedParent}}}catch(e){return {ok:false,error:mapError(e)}}
+  }
+  async readProjectionSeed(expectedAuthority: LocalCommit['expectedAuthority'],documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array}|null,StorageError>> {
+    if(!validId(documentId))return {ok:false,error:'MALFORMED'};
+    try {const found=await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id,seed=await tx.get(key('projection-seed',scope,documentId)),meta=await tx.get(key('projection-document',scope,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const pub=await this.getProjectionPublication(expectedAuthority.scope.id,found.operationId);if(!pub.ok||!pub.value||pub.value.nextAuthority.acceptedParent!==expectedAuthority.record?.acceptedParent||pub.value.documents.length!==1||pub.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(pub.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(pub.value.documents[0].bytes)}}}catch(e){return {ok:false,error:mapError(e)}}
+  }
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {
     try { return await this.run(false,async tx => { const d = await tx.get(key('document',scopeId,documentId)); return {ok:true,value:d === undefined ? null : {documentId,bytes:copy(d.bytes),revision:d.revision}}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
@@ -360,7 +386,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome || await tx.get(key('applied',c.scopeId,c.itemId)) !== c.operationId || await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined) conflict(); for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== k.value || await tx.get(key('effect',c.scopeId,command.effectId)) !== k.value) conflict(); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
       await this.requireAuthority(tx,c.expectedAuthority);
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
-      for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined) conflict();
+      for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined || await tx.get(key('projection-seed-command',c.scopeId,command.documentId,command.commandId))!==undefined || await tx.get(key('projection-seed-effect',c.scopeId,command.documentId,command.effectId))!==undefined) conflict();
       await this.requireDependencies(tx,c.scopeId,c.commands);
       const outcome = await this.documents(tx,c.scopeId,c.documents,c.expectedAuthority.record?.acceptedParent ?? null); this.fault?.('import-documents');
       for (const command of c.commands) { await tx.put(key('command',c.scopeId,command.commandId),k.value); await tx.put(key('effect',c.scopeId,command.effectId),k.value); }
@@ -374,7 +400,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(true,async tx => {
       const rk = key('receipt',r.scopeId,r.receiptId), old = await tx.get(rk);
       const representation = JSON.stringify([r.objectId,r.destination,r.recipientId,r.state,Array.from(r.bytes)]);
-      if (old !== undefined) { if (old !== representation) conflict(); return {ok:true,value:{replayed:true}}; }
+      if (old !== undefined) { if (old !== representation) conflict(); const state=await tx.get(key('receipt-state',r.scopeId,r.objectId,r.destination,r.recipientId));if((r.state==='applied'&&state!=='applied')||(r.state==='stored'&&state!=='stored'&&state!=='applied'))corrupt();return {ok:true,value:{replayed:true}}; }
       if (await tx.get(key('object',r.scopeId,r.objectId)) === undefined) conflict();
       const stateKey = key('receipt-state',r.scopeId,r.objectId,r.destination,r.recipientId), state = await tx.get(stateKey);
       if (r.state === 'applied' && state !== 'stored' && state !== 'applied') conflict();

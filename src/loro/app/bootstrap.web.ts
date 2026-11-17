@@ -65,8 +65,11 @@ async function openLockedWorkspace(name:string,create:boolean) {
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(db.storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(db.storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
   if(!ready){const completed=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);await new Promise<void>((resolve,reject)=>{const tx=meta.transaction('metadata','readwrite');tx.objectStore('metadata').put(completed,'reservation');tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}})}
-  const house=await resolveRuntimeAuthority(db.storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(db.storage,{kind:'personal',id:r.personal},pin,provider,r.device),codec=candidateCodec(provider);
-  const runtime=(resolved:any,kind:'personal'|'household',rootPin:string,keyRef:string)=>new OfflineRuntime({storage:db.storage,codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef,authority:{kind,rootPin,provider}});
-  return {household:runtime(house,'household',root.head,r.houseEpoch),personal:runtime(personal,'personal',pin,r.personalEpoch),deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,close:()=>{sequences?.close();db.close();master.close();meta.close()}};
+  const house=await resolveRuntimeAuthority(db.storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(db.storage,{kind:'personal',id:r.personal},pin,provider,r.device);
+  const runtime=(resolved:any,kind:'personal'|'household',rootPin:string)=>{
+   const scopedProvider=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epochId:string,fn:any)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epochId),fn)});
+   return new OfflineRuntime({storage:db.storage,codec:candidateCodec(scopedProvider),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider}});
+  };
+  return {household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,close:()=>{sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {sequences?.close();db.close();master.close();meta.close();throw error}
 }

@@ -32,7 +32,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
  try {
   parent = structuredClone(parent); event = structuredClone(event); approvals = structuredClone(approvals);
   if (!validParent(parent)) return deny('INVALID_PARENT');
-  if (!keys(event,eventFields) || ![1,2].includes(event.version) || (event.version===2 && event.kind!=='inviteAdult') || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice'].includes(event.kind)) return deny('INVALID_INPUT');
+  if (!keys(event,eventFields) || ![1,2].includes(event.version) || (event.version===2 && !['inviteAdult','revokeDevice','recoverDevice'].includes(event.kind)) || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice','revokeDevice','recoverDevice'].includes(event.kind)) return deny('INVALID_INPUT');
   if (event.householdId !== parent.householdId || event.parentHead !== parent.head) return pending('PARENT_UNRESOLVED');
   if (event.policyHash !== parent.policyHash || event.generation !== parent.generation || event.epochId !== parent.epochId || JSON.stringify(event.frozenAdultRoster) !== JSON.stringify(parent.roster)) return deny('CONTEXT_MISMATCH');
   const author = parent.devices.find(d=>d.deviceId === event.authorDeviceId && d.active);
@@ -50,6 +50,15 @@ export async function validateSuccessor(parent, event, authorSignature, approval
      peers.add(d.peerId);
     }
    }
+  }
+  if(event.kind==='revokeDevice') {
+   const s=event.subject;if(event.version!==2||!keys(s,['deviceId','documentId','newGeneration','newEpochId','devices'])||!id(s.deviceId)||!parent.devices.some(d=>d.deviceId===s.deviceId&&d.active)||!id(s.documentId)||s.documentId===parent.runtime.documentId||!Number.isSafeInteger(s.newGeneration)||s.newGeneration<=parent.generation||!id(s.newEpochId)||s.newEpochId===parent.epochId||event.nextPolicy!==null||!Array.isArray(s.devices)||!dense(s.devices)||!s.devices.length||s.devices.length>128)return deny('INVALID_INPUT');
+   const active=parent.devices.filter(d=>d.active&&d.deviceId!==s.deviceId).sort((a,b)=>a.deviceId.localeCompare(b.deviceId));if(s.devices.length!==active.length)return deny('INVALID_INPUT');
+   const peers=new Set(Object.values(parent.runtime.authorPeers));for(let i=0;i<active.length;i++){const d=s.devices[i];if(!keys(d,['deviceId','signingKeyRef','wrappingKeyRef','peerId'])||d.deviceId!==active[i].deviceId||d.signingKeyRef!==active[i].signingKeyRef||typeof d.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(d.wrappingKeyRef)||typeof d.peerId!=='string'||!/^(0|[1-9][0-9]*)$/.test(d.peerId)||d.peerId.length>20||BigInt(d.peerId)>18446744073709551615n||peers.has(d.peerId))return deny('INVALID_INPUT');peers.add(d.peerId)}
+  }
+  if(event.kind==='recoverDevice') {
+   const s=event.subject;if(event.version!==2||!keys(s,['owner','deviceId','signingKeyRef','wrappingKeyRef','claimHash','bindingHash','bindingGeneration','documentId','newGeneration','newEpochId','devices'])||!parent.roster.includes(s.owner)||!id(s.deviceId)||parent.devices.some(d=>d.deviceId===s.deviceId)||typeof s.signingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(s.signingKeyRef)||typeof s.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(s.wrappingKeyRef)||![s.claimHash,s.bindingHash,s.documentId,s.newEpochId].every(id)||!Number.isSafeInteger(s.bindingGeneration)||s.bindingGeneration<0||s.documentId===parent.runtime.documentId||!Number.isSafeInteger(s.newGeneration)||s.newGeneration<=parent.generation||s.newEpochId===parent.epochId||event.nextPolicy!==null||!Array.isArray(s.devices)||!dense(s.devices)||s.devices.length>128)return deny('INVALID_INPUT');
+   const expected=[...parent.devices.filter(d=>d.active).map(d=>({deviceId:d.deviceId,signingKeyRef:d.signingKeyRef})),{deviceId:s.deviceId,signingKeyRef:s.signingKeyRef}].sort((a,b)=>a.deviceId.localeCompare(b.deviceId));if(s.devices.length!==expected.length)return deny('INVALID_INPUT');const peers=new Set(Object.values(parent.runtime.authorPeers));for(let i=0;i<expected.length;i++){const d=s.devices[i];if(!keys(d,['deviceId','signingKeyRef','wrappingKeyRef','peerId'])||d.deviceId!==expected[i].deviceId||d.signingKeyRef!==expected[i].signingKeyRef||typeof d.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(d.wrappingKeyRef)||(d.deviceId===s.deviceId&&d.wrappingKeyRef!==s.wrappingKeyRef)||typeof d.peerId!=='string'||!/^(0|[1-9][0-9]*)$/.test(d.peerId)||d.peerId.length>20||BigInt(d.peerId)>18446744073709551615n||peers.has(d.peerId))return deny('INVALID_INPUT');peers.add(d.peerId)}
   }
   if (event.kind === 'changePolicy' && (event.subject !== null || !policy(event.nextPolicy,parent.roster.length))) return deny('INVALID_INPUT');
   if (event.kind === 'pairOwnDevice' && (!keys(event.subject,['adultId','deviceId','signingKeyRef']) || event.subject.adultId !== author.adultId || !id(event.subject.deviceId) || !id(event.subject.signingKeyRef) || parent.devices.some(d=>d.deviceId === event.subject.deviceId) || event.nextPolicy !== null)) return deny('INVALID_INPUT');
@@ -73,6 +82,8 @@ export async function validateSuccessor(parent, event, authorSignature, approval
   if (event.kind === 'pairOwnDevice') return pending('CEREMONY_AND_POSSESSION_REQUIRED');
   const required = threshold(parent.policy,parent.roster.length);
   if (voters.size < required) return {...pending('QUORUM_REQUIRED'),eventHash,approvals:voters.size,required};
+  if(event.kind==='recoverDevice')return {...pending('RECOVERY_DISTRIBUTION_REQUIRED'),eventHash,approvals:voters.size,required};
+  if(event.kind==='revokeDevice')return {...pending('ROTATION_DISTRIBUTION_REQUIRED'),eventHash,approvals:voters.size,required};
   // Invitation also needs independent admission/delegation and fresh generation evidence.
   if (event.kind === 'inviteAdult') return {...pending('ADMISSION_AND_PROJECTION_REQUIRED'),eventHash,approvals:voters.size,required};
   return {status:'validated',eventHash,approvals:voters.size,required};
