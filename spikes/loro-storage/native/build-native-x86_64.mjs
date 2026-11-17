@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = scriptDirectory;
+const projectRoot = process.env.LORO_PROJECT_ROOT ?? scriptDirectory;
 const bindingDirectory = path.join(scriptDirectory, 'native-binding');
 const packageDirectory = path.join(projectRoot, 'node_modules/loro-react-native');
 const target = 'x86_64-linux-android';
@@ -62,7 +62,7 @@ for (const tool of [clang, llvmAr, llvmReadelf]) {
 const rustc = run('rustup', ['which', 'rustc']).stdout.trim();
 const installedTargets = run('rustup', ['target', 'list', '--installed']).stdout.split(/\s+/);
 assert(installedTargets.includes(target), `Rust target ${target} is not installed`);
-const buildDirectory = path.join(scriptDirectory, 'build/android-rust');
+const buildDirectory = process.env.LORO_NATIVE_BUILD_DIR ?? path.join(scriptDirectory, 'build/android-rust');
 const targetDirectory = path.join(buildDirectory, 'target');
 await mkdir(buildDirectory, { recursive: true });
 

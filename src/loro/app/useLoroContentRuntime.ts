@@ -1,3 +1,4 @@
+import {randomUUID} from 'expo-crypto';
 import {useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction} from 'react';
 import {DEFAULT_STATE} from '@/domain/defaults';
 import type {PersistedState} from '@/domain/types';
@@ -28,7 +29,7 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   const personalChanged=['chatMessages','chatHistory','activeConversationId','mealContext','settings'].some(k=>!same(before[k as keyof PersistedState],target[k as keyof PersistedState]));
   if((shoppingChanged&&(recipesChanged||personalChanged))||(!shoppingChanged&&[pantryChanged,recipesChanged,personalChanged].filter(Boolean).length>1))throw Error('This local preview cannot save this combined change yet.');
   if(!shoppingChanged&&!pantryChanged&&!recipesChanged&&!personalChanged)return;
-  const runtime=personalChanged?workspace.personal:workspace.household,key=JSON.stringify(target),saved=actionIds.current.get(key),actionId=saved?.id??crypto.randomUUID(),at=new Date().toISOString();let commands:any[];
+  const runtime=personalChanged?workspace.personal:workspace.household,key=JSON.stringify(target),saved=actionIds.current.get(key),actionId=saved?.id??randomUUID(),at=new Date().toISOString();let commands:any[];
   if(saved)commands=saved.commands;else {const {doc}=await runtime.document();
   if(shoppingChanged)commands=planShoppingAction({doc,before:before.shopping,after:target.shopping,pantryBefore:before.pantry,pantryAfter:target.pantry,actionId,author:workspace.deviceId,at});
   else if(personalChanged)commands=planPersonalAction({doc,before,after:target,actionId});

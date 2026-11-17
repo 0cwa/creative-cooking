@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = scriptDirectory;
+const projectRoot = process.env.LORO_PROJECT_ROOT ?? scriptDirectory;
 const androidDirectory = path.join(projectRoot, 'android');
 const sdkRoot = process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME ?? '/home/x/Android/Sdk';
 const cmakeRoot = process.env.LORO_CMAKE_ROOT ?? '/home/linuxbrew/.linuxbrew/Cellar/cmake/4.5.0';

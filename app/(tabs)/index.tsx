@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -7,6 +7,9 @@ import { SettingsGlyph } from '@/components/SettingsGlyph';
 import { PantryRow } from '@/components/PantryRow';
 import { normalizeIngredientName } from '@/domain/pantry';
 import { useAppState } from '@/state/AppState';
+
+// Android uses the platform list while retaining the same row controls.
+const PantryList = Platform.OS === 'android' ? FlatList : FlashList;
 
 export default function PantryScreen() {
   const router = useRouter();
@@ -48,7 +51,7 @@ export default function PantryScreen() {
       </View>
 
       <View style={styles.listWrap}>
-        <FlashList
+        <PantryList
           data={pantry}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
