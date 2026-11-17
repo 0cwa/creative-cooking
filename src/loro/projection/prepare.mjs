@@ -18,7 +18,7 @@ export async function prepareCurrentCooking({LoroDoc,provider,source,context,rec
  if (!generated || !id(generated.keyRef)) throw Error('INVALID_KEY');
  const packages=[];
  for(const recipient of recipients) {
-  const value=await provider.wrapKey(generated.keyRef,recipient,context);
+  const value=await provider.wrapKey(generated.keyRef,recipient,structuredClone(context));
   if (!(value instanceof Uint8Array) || !value.length) throw Error('INVALID_KEY_PACKAGE');
   packages.push({recipient,bytes:new Uint8Array(value)});
  }
