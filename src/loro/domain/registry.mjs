@@ -1,3 +1,4 @@
+import {isPersonalCommand,validatePersonalCommand,personalOperations,checkPersonalPreconditions} from './personal-codec.mjs';
 // Experimental package D registry. Requires the engine to validate actual imported
 // operation content against operations() before committing any remote update.
 const encoder = new TextEncoder();
@@ -13,6 +14,7 @@ const mutationFields={pantry:['name','preference','createdAt','updatedAt','remov
 const jsonValue=v=>v===null || typeof v==='string' || typeof v==='boolean' || (typeof v==='number' && Number.isFinite(v)) || dense(v,jsonValue) || (v && typeof v==='object' && Object.getPrototypeOf(v)===Object.prototype && Object.values(v).every(jsonValue));
 const validMutation=m=>{if (!exact(m,['collection','id','field','value']) || !Object.hasOwn(mutationFields,m.collection) || !str(m.id) || !mutationFields[m.collection].includes(m.field) || !jsonValue(m.value)) return false; const {field,value}=m; if(field==='removed')return typeof value==='boolean';if(field==='createdAt'||field==='updatedAt')return date(value);if(field==='preference')return Number.isInteger(value)&&value>=1&&value<=5;if(field==='portions')return Number.isSafeInteger(value)&&value>0;if(['name','title'].includes(field))return str(value);if(field==='description')return typeof value==='string';if(field==='notes')return Array.isArray(value)&&value.every(x=>typeof x==='string');if(field==='ingredients'||field==='steps'||field==='stepIds')return Array.isArray(value);return false;};
 export function validate(c) {
+  if (isPersonalCommand(c?.kind)) return validatePersonalCommand(c);
   if (!exact(c,['version','kind','commandId','effectId','dependencyEffectIds','data']) || c.version !== 1 || !str(c.commandId) || !str(c.effectId) || !ids(c.dependencyEffectIds) || c.dependencyEffectIds.includes(c.effectId)) fail();
   const d=c.data;
   switch(c.kind) {
@@ -20,7 +22,7 @@ export function validate(c) {
       if (!exact(d,['recipe','author','at']) || !d.recipe || !str(d.recipe.id) || !str(d.author) || !date(d.at) || !str(d.recipe.title) || !Number.isSafeInteger(d.recipe.portions) || d.recipe.portions<1 || !Array.isArray(d.recipe.ingredients) || !Array.isArray(d.recipe.steps) || !Array.isArray(d.recipe.stepIds) || Object.keys(d.recipe).some(k=>!['id','title','description','portions','ingredients','steps','stepIds','notes','createdAt','updatedAt'].includes(k))) fail();
       break;
     case 'recipe-field':
-      if (!exact(d,['recipeId','field','value','author','at']) || !str(d.recipeId) || !['title','description','portions','notes'].includes(d.field) || !str(d.author) || !date(d.at) || (d.field === 'portions' ? !Number.isSafeInteger(d.value) || d.value < 1 : d.field === 'notes' ? !Array.isArray(d.value) || !dense(d.value,x=>typeof x==='string') : typeof d.value !== 'string' || (d.field === 'title' && !str(d.value)))) fail();
+      if (!exact(d,['recipeId','field','value','author','at']) || !str(d.recipeId) || !['title','description','portions','notes','updatedAt','removed'].includes(d.field) || !str(d.author) || !date(d.at) || (d.field === 'removed' ? typeof d.value!=='boolean' : d.field === 'updatedAt' ? !date(d.value) : d.field === 'portions' ? !Number.isSafeInteger(d.value) || d.value < 1 : d.field === 'notes' ? !Array.isArray(d.value) || !dense(d.value,x=>typeof x==='string') : typeof d.value !== 'string' || (d.field === 'title' && !str(d.value)))) fail();
       break;
     case 'recipe-ingredient-add':
       if (!exact(d,['recipeId','ingredientId','name','amount','needsShopping','position','author','at']) || !str(d.recipeId) || !str(d.ingredientId) || !str(d.name) || typeof d.amount!=='string' || typeof d.needsShopping!=='boolean' || !Number.isSafeInteger(d.position) || d.position<0 || !str(d.author) || !date(d.at)) fail();
@@ -130,6 +132,7 @@ function domainOperations(input) {
   }
 }
 export function operations(input) {const c=validate(input),d=c.data;
+ if(isPersonalCommand(c.kind)) return personalOperations(c);
  const touches=c.kind==='chef-effect'?[...new Set(d.mutations.map(m=>m.collection))].sort():c.kind==='purchase' && d.pantryItems?.length?['pantry']:c.kind.startsWith('pantry-')?['pantry']:c.kind.startsWith('recipe-')?['recipe']:[];
  return [...domainOperations(c),{container:'domain-effects',key:c.effectId,value:{version:2,touches,dependencyEffectIds:c.dependencyEffectIds,command:c}}];}
 
@@ -145,6 +148,7 @@ export function checkPreconditions(doc, command, {importing=false,replaying=fals
   const c=validate(command), d=c.data;
   if(c.kind==='chef-accept' && !importing && !doc.getMap(proposalMapName(d.conversationId,d.proposalId)).get('proposal')) throw new Error('PROPOSAL_NOT_PENDING');
   for(const id of c.dependencyEffectIds) if(!doc.getMap('domain-effects').get(id)) throw new Error('MISSING_DEPENDENCY');
+  if(isPersonalCommand(c.kind)) return checkPersonalPreconditions(doc,c);
   if(!replaying && ['recipe-field','pantry-field','recipe-ingredient-field','recipe-step-field'].includes(c.kind)) {
     const kind=c.kind==='recipe-field'?'recipe':c.kind==='pantry-field'?'pantry':c.kind==='recipe-ingredient-field'?'ingredient':'step';
     const id=kind==='recipe'?d.recipeId:kind==='pantry'?d.itemId:JSON.stringify([d.recipeId,kind==='ingredient'?d.ingredientId:d.stepId]);

@@ -26,8 +26,8 @@ export type ShoppingList = {
   id: string;
   name: string;
   currentCycleId: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: string | null;
+  updatedAt: string | null;
   removedAt?: string;
 };
 
@@ -48,8 +48,8 @@ export type ShoppingItem = {
   purchaseCycleId: string;
   checked: boolean;
   purchasedCycleId?: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: string | null;
+  updatedAt: string | null;
   removedAt?: string;
 };
 

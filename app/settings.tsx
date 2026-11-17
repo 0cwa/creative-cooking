@@ -525,6 +525,11 @@ export default function SettingsScreen() {
 
         <AccountSharingSection />
 
+        {Platform.OS === 'web' ? <Section title="Cooking workspace" subtitle="Your existing workspace and fresh local preview use separate data.">
+          <Text style={styles.help}>The fresh local preview currently saves recipes and pantry only. Changes waiting to save must finish before switching.</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={app.contentWorkspaceName === 'Fresh local workspace' ? 'Open existing workspace' : 'Open fresh local preview'} style={styles.smallButton} onPress={() => { void (async () => { try { if (app.localPersistenceStatus !== 'saved') throw new Error('Finish or retry local saving before switching.'); await app.flushCurrentWorkspace(); if (app.contentWorkspaceName === 'Fresh local workspace') globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy'); else { const name=globalThis.localStorage.getItem('creative-cooking-local-workspace-v1'); if(name)globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);else globalThis.localStorage.removeItem('creative-cooking-storage-choice-v1'); } globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/$/,'')}/`); } catch(e) { Alert.alert('Could not switch workspace',e instanceof Error?e.message:'Unknown error'); } })(); }}><Text style={styles.smallButtonText}>{app.contentWorkspaceName === 'Fresh local workspace' ? 'Open existing workspace' : 'Open fresh local preview'}</Text></Pressable>
+        </Section> : null}
+
         <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>

@@ -1,0 +1,34 @@
+import {useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction} from 'react';
+import {DEFAULT_STATE} from '@/domain/defaults';
+import type {PersistedState} from '@/domain/types';
+import type {ContentRuntimeSnapshot} from '@/content/useContentRuntime';
+import {projectCooking} from '../domain/app-projection.mjs';
+import {planPantryAction} from './pantry-actions.mjs';
+import {planRecipeAction} from './recipe-actions.mjs';
+import {executeAction} from './action.mjs';
+const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+const unavailable=async()=>{throw Error('This action is not available in the fresh local preview. Your existing workspace remains available separately.');};
+// First-cut binding: recipe and pantry edits only. Unsupported changes stay open
+// with an error; they are never written to the old workspace or shown as saved.
+export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<SetStateAction<PersistedState>>,workspace:any):ContentRuntimeSnapshot {
+ const [hydrated,setHydrated]=useState(false),[error,setError]=useState<string|null>(null),[status,setStatus]=useState<'saving'|'saved'|'error'>('saving');
+ const current=useRef(state),committed=useRef<PersistedState|null>(null),queue=useRef<Promise<void>>(Promise.resolve()),revision=useRef(0),pending=useRef(0);current.current=state;
+ useEffect(()=>{let active=true;void (async()=>{try{const {doc}=await workspace.household.document();const cooking=projectCooking(doc);const initial={...DEFAULT_STATE,...cooking};if(active){committed.current=initial;current.current=initial;setState(initial);setStatus('saved');setHydrated(true)}}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error');setHydrated(true)}}})();return()=>{active=false}},[workspace,setState]);
+ const save=useCallback(async(target:PersistedState)=>{
+  const before=committed.current;if(!before)throw Error('The local workspace has not opened.');
+  const unchanged=['shopping','chatMessages','chatHistory','activeConversationId','mealContext','settings'].every(k=>same(before[k as keyof PersistedState],target[k as keyof PersistedState]));
+  if(!unchanged)throw Error('This local preview saves recipes and pantry only. This change remains unsaved.');
+  const pantryChanged=!same(before.pantry,target.pantry),recipesChanged=!same(before.recipes,target.recipes);
+  if(pantryChanged&&recipesChanged)throw Error('This local preview cannot save this combined change.');
+  if(!pantryChanged&&!recipesChanged)return;
+  const {doc}=await workspace.household.document(),actionId=crypto.randomUUID(),at=new Date().toISOString();let commands:any[];
+  if(pantryChanged)commands=planPantryAction({doc,before:before.pantry,after:target.pantry,actionId,author:workspace.deviceId,at});
+  else {const a=new Map(before.recipes.map(x=>[x.id,x])),b=new Map(target.recipes.map(x=>[x.id,x])),changed=[...new Set([...a.keys(),...b.keys()])].filter(id=>!same(a.get(id),b.get(id)));if(changed.length!==1)throw Error('This local preview saves one recipe change at a time.');const id=changed[0];commands=planRecipeAction({doc,before:a.get(id)??null,after:b.get(id)??null,actionId,author:workspace.deviceId,at});}
+  if(commands.length)await executeAction(workspace.household,workspace.sequences,actionId,commands);
+  committed.current=target;
+ },[workspace]);
+ const schedule=useCallback((target:PersistedState)=>{const number=++revision.current;pending.current++;setStatus('saving');const next=queue.current.catch(()=>{}).then(()=>save(target));queue.current=next;void next.then(()=>{pending.current--;if(number===revision.current){setStatus('saved');setError(null)}},e=>{pending.current--;if(number===revision.current){setStatus('error');setError(e instanceof Error?e.message:'Could not save local changes')}});return next},[save]);
+ useEffect(()=>{if(!hydrated||!committed.current)return;if(same(state,committed.current)&&pending.current===0){setStatus('saved');return}void schedule(state).catch(()=>{});},[state,hydrated,schedule]);
+ const retryStorage=useCallback(async()=>{try{await schedule(current.current);return true}catch{return false}},[schedule]);
+ return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current,sharedEditDeniedMessage:'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async()=>{await queue.current},retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError('The local workspace is opening.')};
+}

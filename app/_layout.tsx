@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { Alert } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Button, Platform, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -12,7 +12,7 @@ import { requestPersistentStorageOnce } from '@/storage/persistence';
 import { initializeAccountWorkspace } from '@/account/accountWorkspace';
 
 function StorageFailureAlert() {
-  const { storageError } = useAppState();
+  const { storageError, contentWorkspaceName } = useAppState();
   const shownError = useRef<string | null>(null);
 
   useEffect(() => {
@@ -24,9 +24,9 @@ function StorageFailureAlert() {
     shownError.current = storageError;
     Alert.alert(
       'Local data is not being saved',
-      `${storageError}\n\nYour current changes remain open in this session. Open Settings → Data & Storage to retry or export a backup.`
+      contentWorkspaceName === 'Fresh local workspace' ? `${storageError}\n\nYour current changes remain open in this session and are not saved. This preview does not yet provide an export.` : `${storageError}\n\nYour current changes remain open in this session. Open Settings → Data & Storage to retry or export a backup.`
     );
-  }, [storageError]);
+  }, [storageError, contentWorkspaceName]);
 
   return null;
 }
@@ -79,11 +79,25 @@ function AccountWorkspaceBootstrap() {
 }
 
 export default function RootLayout() {
+  const [choice,setChoice]=useState<'loading'|'choose'|'locked'|'legacy'|'local'>('loading');
+  const [workspace,setWorkspace]=useState<any>(null);
+  const [error,setError]=useState<string|null>(null);
+  useEffect(()=>{let active=true;void (async()=>{
+    if(Platform.OS!=='web'){if(active)setChoice('choose');return;}
+    const mode=globalThis.localStorage.getItem('creative-cooking-storage-choice-v1');
+    if(mode==='legacy'){if(active)setChoice('legacy');return;}
+    if(mode?.startsWith('local:')){try{const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const opened=await openLocalWorkspace(mode.slice(6));if(active){globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',mode.slice(6));setWorkspace(opened);setChoice('local')}else opened.close()}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}return;}
+    if(active)setChoice('choose');
+  })();return()=>{active=false}},[]);
+  const legacy=()=>{if(Platform.OS==='web')globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy');setChoice('legacy')};
+  const fresh=async()=>{setChoice('loading');setError(null);try{const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const name=`cooking-${crypto.randomUUID()}`;const opened=await openLocalWorkspace(name,true);globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',name);globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);setWorkspace(opened);setChoice('local')}catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice('choose')}};
+  if(choice==='loading')return <View><Text>Opening your cooking workspace…</Text></View>;
+  if(choice==='locked')return <SafeAreaProvider><View style={{padding:24,gap:16}}><Text accessibilityRole="header">Could not open the fresh local workspace</Text><Text>{error}</Text><Text>Your workspace has been kept. Retry after resolving the storage error.</Text><Button title="Retry" onPress={()=>globalThis.location.reload()}/></View></SafeAreaProvider>;
+  if(choice==='choose')return <SafeAreaProvider><View style={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Your existing workspace remains available. A fresh local preview starts empty and keeps its data separately. The preview currently saves recipes and pantry; shopping, chats and settings are not yet supported.</Text>{error?<Text>{error}</Text>:null}<Button title="Open existing workspace" onPress={legacy}/>{Platform.OS==='web'?<Button title="Start fresh local preview" onPress={()=>void fresh()}/>:<Text>The fresh local preview is not available on this platform.</Text>}</View></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
-      <AppStateProvider>
-        <BootTasks />
-        <AccountWorkspaceBootstrap />
+      <AppStateProvider key={choice} localWorkspace={workspace}>
+        {choice==='legacy'?<><BootTasks /><AccountWorkspaceBootstrap /></>:null}
         <StorageFailureAlert />
         <StatusBar style="auto" />
         <Stack screenOptions={{ headerShown: false }}>

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type PropsWithChildren } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type PropsWithChildren, type Dispatch, type SetStateAction } from 'react';
 import { RecipeAllergyError, validateRecipeAllergies } from '@/domain/allergyValidation';
 import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversations';
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
@@ -34,6 +34,7 @@ import type {
 } from '@/domain/types';
 import { loadState } from '@/storage/appStorage';
 import { useContentRuntime } from '@/content/useContentRuntime';
+import { useLoroContentRuntime } from '@/loro/app/useLoroContentRuntime';
 import { planChefProposalEffect } from '@/chef/proposalEffect';
 
 function mergeState(saved: Partial<PersistedState> | null): PersistedState {
@@ -155,17 +156,25 @@ type AppStateApi = PersistedState & {
 
 const AppStateContext = createContext<AppStateApi | null>(null);
 
-export function AppStateProvider({ children }: PropsWithChildren) {
-  const [state, setState] = useState<PersistedState>(DEFAULT_STATE);
+export function AppStateProvider({children,localWorkspace}:PropsWithChildren<{localWorkspace?:any}>) {
+  return localWorkspace ? <LocalAppStateProvider workspace={localWorkspace}>{children}</LocalAppStateProvider> : <LegacyAppStateProvider>{children}</LegacyAppStateProvider>;
+}
+function LegacyAppStateProvider({children}:PropsWithChildren) {
+  const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
+  const readLegacy=useCallback(async()=>{const saved=await loadState();return {state:saved?mergeState(saved):null,hadData:saved!==null}},[]);
+  const content=useContentRuntime(state,setState,readLegacy);
+  return <AppStateBody state={state} setState={setState} content={content}>{children}</AppStateBody>;
+}
+function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace:any}>) {
+  const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
+  const content=useLoroContentRuntime(state,setState,workspace);
+  return <AppStateBody state={state} setState={setState} content={content}>{children}</AppStateBody>;
+}
+function AppStateBody({children,state,setState,content}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot}>) {
   const appStateRef = useRef(state);
   const pantryRef = useRef(state.pantry);
   appStateRef.current = state;
   pantryRef.current = state.pantry;
-  const readLegacy = useCallback(async () => {
-    const saved = await loadState();
-    return { state: saved ? mergeState(saved) : null, hadData: saved !== null };
-  }, []);
-  const content = useContentRuntime(state, setState, readLegacy);
   const updateAppState = useCallback((
     update: PersistedState | ((current: PersistedState) => PersistedState)
   ) => {

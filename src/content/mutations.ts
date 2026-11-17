@@ -38,6 +38,11 @@ function recipePayload(recipe: Recipe) {
   };
 }
 
+function knownShoppingTime(value: string | null): string {
+  if (value === null) throw new Error('This shopping record has no known timestamp and cannot be sent to the existing workspace.');
+  return value;
+}
+
 function shoppingItemPayload(item: PersistedState['shopping']['items'][number]) {
   return {
     id: item.id,
@@ -50,8 +55,8 @@ function shoppingItemPayload(item: PersistedState['shopping']['items'][number]) 
     purchaseCycleId: item.purchaseCycleId,
     checked: item.checked,
     purchasedCycleId: item.purchasedCycleId ?? null,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt
+    createdAt: knownShoppingTime(item.createdAt),
+    updatedAt: knownShoppingTime(item.updatedAt)
   };
 }
 
@@ -127,7 +132,7 @@ export function buildContentMutationOperations(
       if (cycle) {
         operations.push({
           opId: '', type: 'shopping.list.create',
-          list: { id, name: list.name, currentCycleId: list.currentCycleId, createdAt: list.createdAt, updatedAt: list.updatedAt },
+          list: { id, name: list.name, currentCycleId: list.currentCycleId, createdAt: knownShoppingTime(list.createdAt), updatedAt: knownShoppingTime(list.updatedAt) },
           cycle: { id: cycle.id, listId: cycle.listId, startedAt: cycle.startedAt }
         });
         startedCycleLists.add(id);
@@ -139,7 +144,7 @@ export function buildContentMutationOperations(
       continue;
     }
     if (prior.name !== list.name) {
-      operations.push({ opId: '', type: 'shopping.list.rename', id, name: list.name, updatedAt: list.updatedAt });
+      operations.push({ opId: '', type: 'shopping.list.rename', id, name: list.name, updatedAt: knownShoppingTime(list.updatedAt) });
     }
     if (prior.currentCycleId !== list.currentCycleId) {
       const cycle = nextCycles.get(list.currentCycleId);

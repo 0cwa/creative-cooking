@@ -1,3 +1,4 @@
+import {assertCommandScope} from '../domain/personal-codec.mjs';
 import {resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {resolvePersonalAuthority} from '../authority/personal.mjs';
 import * as registry from '../domain/registry.mjs';
@@ -52,15 +53,20 @@ export class OfflineRuntime {
     const expectedAuthority=await this.authorize();
     const stored=required(await this.storage.reopenBranchDocument(expectedAuthority,this.scope.documentId));
     const doc=new this.LoroDoc(); if (stored) doc.import(stored.bytes);
+    const markers=doc.getMap('domain-effects').toJSON(),seeded=Object.entries(markers).filter(([,m])=>m?.version===3);
+    const seed=typeof this.storage.readProjectionSeed==='function'?required(await this.storage.readProjectionSeed(expectedAuthority,this.scope.documentId)):null;if(seeded.length&&!seed)throw Error('UNVERIFIED_SEED');if(seed){const originalSeed=new this.LoroDoc();originalSeed.import(seed.snapshot);let retained;try{retained=doc.forkAt(originalSeed.frontiers())}catch{throw Error('UNVERIFIED_SEED')}if(!same(retained.exportJsonUpdates(undefined,undefined,false),originalSeed.exportJsonUpdates(undefined,undefined,false)))throw Error('UNVERIFIED_SEED');const expected=new Map(seed.seed.identities.map(x=>[x.effectId,x.commandId]));if(seeded.length!==expected.size||seeded.some(([id,m])=>m.seedId!==seed.seed.seedId||m.effectId!==id||m.commandId!==expected.get(id)||Object.keys(m).sort().join(',')!=='commandId,effectId,seedId,version'))throw Error('UNVERIFIED_SEED')}
     return {doc,revision:stored?.revision ?? null};
   }
   async read() { const {doc}=await this.document(); return {recipe:doc.getMap('recipe').toJSON(), purchases:doc.getMap('purchases').toJSON()}; }
-  async prepare({operationId, command, deviceSequence}) {
+  async prepare(input) { return this.#prepareOnDocument(input,null); }
+  async #prepareOnDocument({operationId, command, deviceSequence}, staged) {
     command=structuredClone(command);
     command=checkCommand(command);
-    if (command.data.author !== undefined && command.data.author !== this.scope.authorDevice) throw new Error('INVALID_AUTHORITY');
+    assertCommandScope(command.kind,this.authority?.kind ?? 'household');
     const {expectedAuthority,signingKeyRefs}=await this.authorization();
     if (!operationId || !Number.isSafeInteger(deviceSequence) || deviceSequence < 0) throw new Error('MALFORMED');
+    const {doc,revision}=staged ?? await this.document();
+    if(doc.getMap('domain-effects').get(command.effectId)?.version===3)throw Error('ALREADY_RECORDED');
     const previous=required(await this.storage.getLocalOperation(this.scope.scopeId,operationId));
     if (previous) {
       const c=previous.commit.commands[0];
@@ -68,7 +74,7 @@ export class OfflineRuntime {
       if (!oldHeader || oldHeader.deviceSequence !== deviceSequence || oldHeader.authorDevice !== this.scope.authorDevice || oldHeader.scopeId !== this.scope.scopeId || oldHeader.documentId !== this.scope.documentId || oldHeader.documentGeneration !== this.scope.documentGeneration || oldHeader.branchHead !== this.scope.branchHead || oldHeader.epochId !== this.scope.epochId || !same(oldHeader.policyHashes,this.scope.policyHashes) || previous.commit.commands.length !== 1 || c.commandId !== command.commandId || c.effectId !== command.effectId || c.documentId !== this.scope.documentId || c.kind !== command.kind || !same(Array.from(c.payload),Array.from(commandBytes(command)))) throw new Error('CONFLICT');
       return {previous:{outcome:previous.outcome,replayed:true}};
     }
-    const {doc,revision}=await this.document();
+    if (command.data.author !== undefined && command.data.author !== this.scope.authorDevice) throw new Error('INVALID_AUTHORITY');
     doc.setPeerId(this.scope.authorPeers[this.scope.authorDevice]);
     registry.checkPreconditions(doc,command);
     const before=doc.oplogVersion();
@@ -80,6 +86,33 @@ export class OfflineRuntime {
     const payload=encoder.encode(JSON.stringify({version:1,command,update:Array.from(update)}));
     const object=await this.codec.sealContent(header,payload,this.keyRef,signingKeyRefs[this.scope.authorDevice]);
     return {commit:{scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:snapshot,expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:this.scope.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],outbound:[{object,branchHead:this.scope.branchHead,epochId:this.scope.epochId}]}};
+  }
+  /** Atomically commit ordered commands against one authority-bound document. */
+  async executeBatch({operationId,items}) {
+    if(typeof operationId!=='string'||!operationId||!Array.isArray(items)||!items.length) throw Error('MALFORMED');
+    items=structuredClone(items);
+    await this.authorize();
+    const saved=required(await this.storage.getLocalOperation(this.scope.scopeId,operationId));
+    if(saved) {
+      const commit=saved.commit;
+      if(commit.commands.length!==items.length||commit.outbound.length!==items.length||commit.documents.length!==1)throw Error('CONFLICT');
+      for(let i=0;i<items.length;i++) {
+        const item=items[i],cmd=checkCommand(item.command),c=commit.commands[i];assertCommandScope(cmd.kind,this.authority?.kind ?? 'household');
+        let h;try{h=JSON.parse(new TextDecoder().decode(commit.outbound[i].object.bytes)).header}catch{throw Error('CORRUPT')}
+        if(c.documentId!==this.scope.documentId||c.commandId!==cmd.commandId||c.effectId!==cmd.effectId||!same(Array.from(c.payload),Array.from(commandBytes(cmd)))||h.deviceSequence!==item.deviceSequence||h.authorDevice!==this.scope.authorDevice||h.scopeId!==this.scope.scopeId||h.documentId!==this.scope.documentId||h.documentGeneration!==this.scope.documentGeneration||h.branchHead!==this.scope.branchHead||h.epochId!==this.scope.epochId||h.suiteId!==this.scope.suiteId||!same(h.policyHashes,this.scope.policyHashes))throw Error('CONFLICT');
+      }
+      return {outcome:saved.outcome,replayed:true};
+    }
+    let staged=await this.document();const initialRevision=staged.revision,commands=[],outbound=[];let expectedAuthority;
+    for(const item of items) {
+      if(['chef-accept','chef-effect'].includes(item.command?.kind))throw Error('GROUP_REQUIRED');
+      const prepared=await this.#prepareOnDocument({...item,operationId},staged);
+      if(prepared.previous)throw Error('CONFLICT');
+      if(expectedAuthority && !same(expectedAuthority,prepared.commit.expectedAuthority))throw Error('CONFLICT');
+      expectedAuthority=prepared.commit.expectedAuthority;commands.push(...prepared.commit.commands);outbound.push(...prepared.commit.outbound);
+      const next=new this.LoroDoc();next.import(prepared.commit.documents[0].bytes);staged={doc:next,revision:initialRevision};
+    }
+    return required(await this.storage.commitLocal({scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:staged.doc.export({mode:'snapshot'}),expectedRevision:initialRevision}],commands,outbound}));
   }
   async execute(input) {
     if (['chef-accept','chef-effect'].includes(input?.command?.kind)) throw new Error('GROUP_REQUIRED');
@@ -101,10 +134,13 @@ export class OfflineRuntime {
     const applied=required(await this.storage.getInboxApplication(this.scope.scopeId,item.itemId));
     if (applied) return {replayed:true};
     const opened=await this.codec.openContent(item.bytes,signingKeyRefs), h=opened.header, s=this.scope;
+    if (!this.storage.compromise) throw Error('QUARANTINE_UNAVAILABLE');
+    if (await this.storage.compromise.isQuarantined(s.scopeId,h.authorDevice)) throw Error('QUARANTINED');
     if (opened.object.id !== item.itemId || h.scopeId !== s.scopeId || h.documentId !== s.documentId || h.documentGeneration !== s.documentGeneration || h.branchHead !== s.branchHead || h.epochId !== s.epochId || h.suiteId !== s.suiteId || !same(h.policyHashes,s.policyHashes) || !s.acceptedAuthors.includes(h.authorDevice) || h.payloadKind !== 'loro-update-v1' || h.semanticEffectIds.length !== 1) throw new Error('INVALID_AUTHORITY');
     let payload; try { payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value)); } catch { throw new Error('MALFORMED_UPDATE'); }
     if (!payload || Object.keys(payload).sort().join(',') !== 'command,update,version' || payload.version !== 1 || !Array.isArray(payload.update) || !payload.update.every(x=>Number.isInteger(x) && x>=0 && x<=255)) throw new Error('MALFORMED_UPDATE');
     checkCommand(payload.command);
+    assertCommandScope(payload.command.kind,this.authority?.kind ?? 'household');
     if (payload.command.data.author !== undefined && payload.command.data.author !== h.authorDevice) throw new Error('INVALID_AUTHORITY');
     if (payload.command.effectId !== h.semanticEffectIds[0]) throw new Error('MALFORMED_UPDATE');
     const update=Uint8Array.from(payload.update);

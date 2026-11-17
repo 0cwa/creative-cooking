@@ -64,9 +64,15 @@ export default function RecipesScreen() {
   const {
     pantry,
     recipes,
+    contentWorkspaceName,
+    saveRecipe,
     updateRecipe,
     deleteRecipe
   } = useAppState();
+  const [creating,setCreating]=useState(false);
+  const [newTitle,setNewTitle]=useState('');
+  const [newIngredients,setNewIngredients]=useState('');
+  const [newSteps,setNewSteps]=useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
 
@@ -141,6 +147,7 @@ export default function RecipesScreen() {
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
         <View style={styles.headerActions}>
+          {contentWorkspaceName==='Fresh local workspace'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={()=>setCreating(true)} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
           <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
         </View>
@@ -162,6 +169,16 @@ export default function RecipesScreen() {
         ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyEmoji}>📖</Text><Text style={styles.emptyTitle}>No saved recipes yet</Text><Text style={styles.emptyText}>Ask Chef to save one when you find something worth making again.</Text></View>}
         contentContainerStyle={{ paddingBottom: 30 }}
       />
+
+      <Modal visible={creating} animationType="slide" onRequestClose={()=>setCreating(false)}>
+        <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.recipeDetail}>
+          <View style={styles.detailHeader}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new recipe" onPress={()=>setCreating(false)} style={styles.detailAction}><Text style={styles.close}>Cancel</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Save new recipe" style={styles.primaryAction} onPress={()=>{const title=newTitle.trim(),ingredients=parseRecipeIngredientsText(newIngredients,[]),steps=parseRecipeTextList(newSteps);if(!title||!ingredients.length||!steps.length){Alert.alert('Complete your recipe','Add a title, ingredient and cooking step.');return}try{saveRecipe({title,portions:2,ingredients,steps});setCreating(false);setNewTitle('');setNewIngredients('');setNewSteps('')}catch(e){Alert.alert('Could not save recipe',e instanceof Error?e.message:'Unknown error')}}}><Text style={styles.primaryActionText}>Save recipe</Text></Pressable></View>
+          <Text style={styles.editorIntroTitle}>New recipe</Text>
+          <TextInput accessibilityLabel="New recipe title" placeholder="Recipe title" value={newTitle} onChangeText={setNewTitle} style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe ingredients" placeholder="One ingredient per line" value={newIngredients} onChangeText={setNewIngredients} multiline style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe steps" placeholder="One step per line" value={newSteps} onChangeText={setNewSteps} multiline style={styles.editorTitleInput}/>
+        </ScrollView>
+      </Modal>
 
       <Modal visible={Boolean(selected)} animationType="slide" onRequestClose={closeRecipe}>
         {selected && (
@@ -251,6 +268,7 @@ export default function RecipesScreen() {
                 <View style={styles.detailHeader}>
                   <Pressable accessibilityRole="button" accessibilityLabel="Close recipe" onPress={closeRecipe} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
                   <View style={styles.headerActions}>
+          {contentWorkspaceName==='Fresh local workspace'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={()=>setCreating(true)} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
                     <Pressable accessibilityRole="button" accessibilityLabel={`Edit recipe ${selected.title}`} onPress={startEditing} style={styles.detailAction}><Text style={styles.edit}>Edit</Text></Pressable>
                     <Pressable
                       accessibilityRole="button"
