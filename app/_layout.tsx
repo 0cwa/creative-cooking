@@ -12,7 +12,7 @@ import { requestPersistentStorageOnce } from '@/storage/persistence';
 import { initializeAccountWorkspace } from '@/account/accountWorkspace';
 
 function StorageFailureAlert() {
-  const { storageError, contentWorkspaceName } = useAppState();
+  const { storageError, storageMode } = useAppState();
   const shownError = useRef<string | null>(null);
 
   useEffect(() => {
@@ -24,9 +24,9 @@ function StorageFailureAlert() {
     shownError.current = storageError;
     Alert.alert(
       'Local data is not being saved',
-      contentWorkspaceName === 'Fresh local workspace' ? `${storageError}\n\nYour current changes remain open in this session and are not saved. This preview does not yet provide an export.` : `${storageError}\n\nYour current changes remain open in this session. Open Settings → Data & Storage to retry or export a backup.`
+      storageMode === 'fresh-local' ? `${storageError}\n\nYour current changes remain open in this session and are not saved. This preview does not yet provide an export.` : `${storageError}\n\nYour current changes remain open in this session. Open Settings → Data & Storage to retry or export a backup.`
     );
-  }, [storageError, contentWorkspaceName]);
+  }, [storageError, storageMode]);
 
   return null;
 }

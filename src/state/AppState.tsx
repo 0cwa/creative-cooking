@@ -99,6 +99,7 @@ function archiveActiveChat(current: PersistedState): PersistedState['chatHistory
 }
 
 type AppStateApi = PersistedState & {
+  storageMode: 'fresh-local' | 'existing';
   hydrated: boolean;
   storageError: string | null;
   contentWorkspaceId: string;
@@ -163,14 +164,14 @@ function LegacyAppStateProvider({children}:PropsWithChildren) {
   const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
   const readLegacy=useCallback(async()=>{const saved=await loadState();return {state:saved?mergeState(saved):null,hadData:saved!==null}},[]);
   const content=useContentRuntime(state,setState,readLegacy);
-  return <AppStateBody state={state} setState={setState} content={content}>{children}</AppStateBody>;
+  return <AppStateBody state={state} setState={setState} content={content} storageMode="existing">{children}</AppStateBody>;
 }
 function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace:any}>) {
   const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
   const content=useLoroContentRuntime(state,setState,workspace);
-  return <AppStateBody state={state} setState={setState} content={content}>{children}</AppStateBody>;
+  return <AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local">{children}</AppStateBody>;
 }
-function AppStateBody({children,state,setState,content}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot}>) {
+function AppStateBody({children,state,setState,content,storageMode}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing'}>) {
   const appStateRef = useRef(state);
   const pantryRef = useRef(state.pantry);
   appStateRef.current = state;
@@ -517,6 +518,7 @@ function AppStateBody({children,state,setState,content}:PropsWithChildren<{state
   const value = useMemo<AppStateApi>(
     () => ({
       ...state,
+      storageMode,
       hydrated,
       storageError,
       contentWorkspaceId: content.scope.spaceId,
@@ -573,6 +575,7 @@ function AppStateBody({children,state,setState,content}:PropsWithChildren<{state
     }),
     [
       state,
+      storageMode,
       hydrated,
       storageError,
       content,

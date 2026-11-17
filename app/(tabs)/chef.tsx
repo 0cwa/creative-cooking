@@ -233,6 +233,7 @@ export default function ChefScreen() {
   };
 
   const runChef = async (messages: ChatMessage[]) => {
+    if (app.storageMode === 'fresh-local') return;
     setQuestion(null);
     setRunError(null);
     setStreamingText('');
@@ -339,7 +340,7 @@ export default function ChefScreen() {
 
   const send = async (override?: string) => {
     const text = (override ?? input).trim();
-    if (!text || busy || dictationActive) return;
+    if (!text || busy || dictationActive || app.storageMode === 'fresh-local') return;
 
     setInput('');
     const userMessage = makeChatMessage('user', text);
@@ -400,6 +401,7 @@ export default function ChefScreen() {
           </View>
         </View>
 
+        {app.storageMode === 'fresh-local' ? <Text accessibilityRole="alert" style={styles.errorText}>Chef is not available in the fresh local preview yet. Messages and external requests are disabled until personal storage and disclosure review are ready.</Text> : null}
         <View style={styles.contextStrip}>
           <Pressable
             accessibilityRole="button"
@@ -519,7 +521,7 @@ export default function ChefScreen() {
             <TextInput
               accessibilityLabel="Message Chef"
               accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : undefined}
-              editable={!dictationActive}
+              editable={!dictationActive && app.storageMode !== 'fresh-local'}
               value={input}
               onChangeText={setInput}
               placeholder="Type or dictate to Chef…"
@@ -533,7 +535,7 @@ export default function ChefScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={busy ? 'Stop Chef response' : 'Send message'}
-              disabled={!busy && (!input.trim() || dictationActive)}
+              disabled={app.storageMode === 'fresh-local' || (!busy && (!input.trim() || dictationActive))}
               onPress={busy ? stop : () => void send()}
               style={[styles.send, (!busy && (!input.trim() || dictationActive)) && styles.sendDisabled]}
             >

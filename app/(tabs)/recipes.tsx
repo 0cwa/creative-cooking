@@ -64,7 +64,7 @@ export default function RecipesScreen() {
   const {
     pantry,
     recipes,
-    contentWorkspaceName,
+    storageMode,
     saveRecipe,
     updateRecipe,
     deleteRecipe
@@ -147,7 +147,7 @@ export default function RecipesScreen() {
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
         <View style={styles.headerActions}>
-          {contentWorkspaceName==='Fresh local workspace'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={()=>setCreating(true)} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
+          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={()=>setCreating(true)} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
           <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
         </View>
@@ -268,7 +268,7 @@ export default function RecipesScreen() {
                 <View style={styles.detailHeader}>
                   <Pressable accessibilityRole="button" accessibilityLabel="Close recipe" onPress={closeRecipe} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
                   <View style={styles.headerActions}>
-          {contentWorkspaceName==='Fresh local workspace'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={()=>setCreating(true)} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
+          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={()=>setCreating(true)} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
                     <Pressable accessibilityRole="button" accessibilityLabel={`Edit recipe ${selected.title}`} onPress={startEditing} style={styles.detailAction}><Text style={styles.edit}>Edit</Text></Pressable>
                     <Pressable
                       accessibilityRole="button"
