@@ -16,7 +16,10 @@ export async function checkProjectionSource(storage,expectedAuthority,manifest,g
   if(typeof title!=='string' || !grant.contentClasses.includes('recipe') || !grant.contentClasses.includes('shopping') || !purchases || Array.isArray(purchases) || Object.values(purchases).some(v=>typeof v!=='string')) throw Error('SOURCE_MISMATCH');
   const expected={recipe:{title},purchases};
   if(!eq(canonical(fresh.toJSON()),canonical(expected))) throw Error('PROJECTION_MISMATCH');
-  const updates=fresh.exportJsonUpdates(undefined,undefined,false);
+  const updates=fresh.exportJsonUpdates(undefined,undefined,false), sourceUpdates=old.exportJsonUpdates(undefined,undefined,false);
+  const peers=x=>new Set(x.changes.map(c=>String(c.id).split('@')[1]));
+  const oldPeers=peers(sourceUpdates);
+  if([...peers(updates)].some(p=>!p || oldPeers.has(p)) || updates.changes.some(c=>c.msg!==null)) throw Error('PROJECTION_MISMATCH');
   const ops=updates.changes.flatMap(c=>c.ops);
   const expectedOps=[{container:'cid:root-recipe:Map',key:'title',value:title},...Object.entries(purchases).map(([key,value])=>({container:'cid:root-purchases:Map',key,value}))];
   const actual=ops.map(op=>({container:op.container,key:op.content?.key,value:op.content?.value}));
