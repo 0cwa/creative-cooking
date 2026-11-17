@@ -36,6 +36,9 @@ test('durable siblings and signed deliberate selection survive reopen; failed CA
  await assert.rejects(makeRuntime({scope:altered}).authorize(),/INVALID_AUTHORITY/);
  await assert.rejects(makeRuntime({authority:{rootPin:'wrong',provider}}).authorize(),/INVALID_ROOT/);
 
+ const before=await store.readPairingAuthority(scope);
+ await assert.rejects(observeSuccessor(store,scope,root.head,provider,{...await item('malformed'),extra:true}),/MALFORMED/);
+ assert.deepEqual(await store.readPairingAuthority(scope),before);
  const firstItem=await item('first');
  const first=await observeSuccessor(store,scope,root.head,provider,firstItem);
  const reused=await item('second'); reused.approvals=firstItem.approvals;

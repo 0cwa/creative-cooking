@@ -74,7 +74,7 @@ export async function observeSuccessor(storage,scope,pin,provider,item) {
  if(r.status!=='validated')throw Error(r.reason);
  if(item.event.kind!=='changePolicy')throw Error('UNSUPPORTED_TRANSITION');
  if(nodes.has(r.eventHash))throw Error('DUPLICATE_EVENT');
- state.events.push(item); await save(storage,record,state,provider); return r.eventHash;
+ state.events.push(item); await verifyAuthority(state,pin,provider); await save(storage,record,state,provider); return r.eventHash;
 }
 /** Signature is from an active device on the currently selected branch. */
 export async function selectHead(storage,scope,pin,provider,selection) {
