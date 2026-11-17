@@ -1,0 +1,32 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { openSQLiteStorage } from './sqlite.ts';
+
+const b = (...x) => new Uint8Array(x);
+const child = (scope,op,doc,revision=null) => ({scopeId:scope,operationId:op,documents:[{documentId:doc,bytes:b(1),expectedRevision:revision}],commands:[{version:1,commandId:op,effectId:op,documentId:doc,kind:'write',payload:b(2),dependencyEffectIds:[]}],outbound:[{object:{id:op,bytes:b(3)},branchHead:'h',epochId:'e'}]});
+const connection = () => { const db = new DatabaseSync(':memory:'); return {db, executeSync:(sql,params=[]) => { const s=db.prepare(sql); return {rows:sql.startsWith('SELECT') ? s.all(...params) : (s.run(...params),[])}; }}; };
+test('SQLite group rollback, replay, identity conflicts, staging, import and receipts', async () => {
+ const conn=connection(); let fault='child'; const s=openSQLiteStorage(conn, x=>{if(x===fault) throw Error('fault')});
+ const group={groupId:'g',children:[child('personal','a','chef'),child('household','b','effect')]};
+ assert.equal((await s.commitLocalGroup(group)).ok,false);
+ assert.equal((await s.reopenDocument('personal','chef')).value,null);
+ fault='group'; assert.equal((await s.commitLocalGroup(group)).ok,false);
+ assert.equal((await s.reopenDocument('household','effect')).value,null);
+ fault=''; assert.equal((await s.commitLocalGroup(group)).value.replayed,false);
+ assert.equal((await s.commitLocalGroup(group)).value.replayed,true);
+ assert.equal((await s.commitLocalGroup({...group,children:[child('personal','a','chef',0),group.children[1]]})).error.code,'CONFLICT');
+ assert.equal((await s.commitLocalGroup({groupId:'new',children:group.children})).error.code,'CONFLICT');
+ const item={scopeId:'household',object:{id:'incoming',bytes:b(5)},source:'relay',expectedCursor:null,cursor:'opaque'};
+ fault='inbox'; assert.equal((await s.stageInbox(item)).ok,false); fault=''; assert.equal((await s.stageInbox(item)).ok,true);
+ assert.equal((await s.stageInbox({...item,object:{id:'other',bytes:b(6)}})).error,'CONFLICT');
+ const imp={scopeId:'household',operationId:'import',itemId:'incoming',documents:[{documentId:'effect',bytes:b(8),expectedRevision:0}],effectIds:['remote']};
+ fault='import-documents'; assert.equal((await s.commitImport(imp)).ok,false); assert.equal((await s.reopenDocument('household','effect')).value.revision,0);
+ fault=''; assert.equal((await s.commitImport(imp)).value.replayed,false); assert.equal((await s.commitImport(imp)).value.replayed,true);
+ const receipt={scopeId:'household',objectId:'b',receiptId:'r1',destination:'peer',recipientId:'peer',state:'applied',bytes:b(7)};
+ assert.equal((await s.recordReceipt(receipt)).error,'CONFLICT');
+ assert.equal((await s.recordReceipt({...receipt,receiptId:'r0',state:'stored'})).ok,true);
+ assert.equal((await s.recordReceipt(receipt)).ok,true); assert.equal((await s.recordReceipt(receipt)).value.replayed,true);
+ assert.equal((await s.recordReceipt({...receipt,bytes:b(8)})).error,'CONFLICT');
+ conn.db.close();
+});
