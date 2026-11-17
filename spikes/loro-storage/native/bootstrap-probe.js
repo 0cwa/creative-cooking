@@ -1,0 +1,7 @@
+import {open} from '@op-engineering/op-sqlite';
+import {openSQLiteStorage} from './compat-root/storage/sqlite.ts';
+import {nativeMaster} from './native-master';
+import {sodium} from './native-sodium';
+import {provisionNativeCatalog} from './bootstrap-candidate';
+const identities=[{operationId:'bootstrap-data',identity:{version:1,scope:{kind:'personal',id:'bootstrap'},deviceId:'fixture',purpose:'data',epochId:'e1'}},{operationId:'bootstrap-signing',identity:{version:1,scope:{kind:'personal',id:'bootstrap'},deviceId:'fixture',purpose:'device-signing',epochId:'e1'}}];
+export async function bootstrapProbe(){const db=open({name:'bootstrap-proof.sqlite'});try{const storage=openSQLiteStorage(db);const options={storage,master:nativeMaster,sodium,masterId:'bootstrap-fixture',identities};const [a,b]=await Promise.all([provisionNativeCatalog(options),provisionNativeCatalog(options)]);if(a.publicKeys[1].publicKey.length!==32||b.publicKeys[1].publicKey.length!==32)throw Error('bootstrap signing key');if(!a.publicKeys[1].publicKey.every((x,i)=>x===b.publicKeys[1].publicKey[i]))throw Error('bootstrap raced');let length=await a.keys.useIdentity(identities[0].identity,k=>k.length);if(length!==32)throw Error('bootstrap data key');const replay=await provisionNativeCatalog(options);if(!replay.publicKeys.every(x=>x.replayed))throw Error('bootstrap replay');return 'PASS native key catalog concurrent initialization and retry';}finally{db.close()}}

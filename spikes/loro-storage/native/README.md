@@ -23,3 +23,29 @@ S1_SQLITE_PATH=/path/to/task-scratch/s1.sqlite agent-heavy -- npm run test:node
 ```
 
 This host test is not evidence of Hermes or op-sqlite behavior. The device fixture must still be inspected on first launch and after `agent-device open dev.creativecooking.loro.storagefixture --relaunch`; `--relaunch` terminates the app process before launch. Use a separate agent-device session and never clear unrelated data.
+
+## Combined Android compatibility and key-catalog candidate
+
+The combined fixture uses native Loro 1.10.3 and libsodium 1.7.0 against Loro 1.17.1 and libsodium-wrappers 0.7.15. The committed browser packet contains public test keys and is not suitable for real data. `compat-generate.mjs` regenerates the public Loro 1.17.1 input. Before starting Metro, copy the current root implementation into ignored fixture directories:
+
+```sh
+agent-heavy -- node patch-dependencies.mjs
+agent-heavy -- node build-native-x86_64.mjs
+agent-heavy -- node prebuild.mjs
+agent-heavy -- node prepare-domain.mjs
+agent-heavy -- node prepare-root.mjs
+agent-heavy --mem 8G -- node build-android.mjs
+```
+
+Run `agent-disk-check` before a potentially large build and use the project disk budget. Start Metro and install the APK on a newly reserved isolated Android target. Launch and relaunch through that target's bound agent-device command. Read `COMPAT_RESULT`, `S1_RESULT`, `ROOT_STORAGE_RESULT`, `MASTER_RESULT`, `LOCAL_KEYS_RESULT`, `BOOTSTRAP_RESULT`, and `EXCHANGE_RESULT`; a build or launch is not a pass. The root SQLite fixture uses actual `openSQLiteStorage`, tests injected local and import failures and reopens a signed and encrypted Loro update after termination. The remaining older S1 schema is a separate storage probe.
+
+For a fresh cross-runtime exchange, bundle and serve this directory from an isolated browser profile:
+
+```sh
+agent-heavy -- ./node_modules/.bin/esbuild exchange-browser.mjs --bundle --format=esm --outfile=exchange-browser-bundle.js
+agent-heavy --mem 512M -- python3 -m http.server 18767 --bind 127.0.0.1
+```
+
+Open `exchange-browser.html`; evaluate `JSON.stringify(await exchange.generate())` and save that public test packet as `browser-packet.json` before launching the native app. Extract the `native` object from `EXCHANGE_RESULT` and evaluate `await exchange.verify(nativePacket)` in the browser. Both runtimes must reject altered ciphertext, scope, and version, and import the decrypted Loro update. To test native binary exports separately, save the JSON object emitted by `COMPAT_RESULT` and run `agent-heavy -- node compat-check-native.mjs /path/to/result.json`. Browser fixtures do not need personal identities, persistent storage, clipboard or an external service.
+
+The adapter covers the operations exercised by this fixture; this is not proof of every root-used Loro behavior or a version selection. Native 1.10.3 `forkAt` unwraps errors, so the candidate uses the error-returning snapshot-at operation instead. The libsodium bridge accepts only byte sequences that round-trip as UTF-8 associated data. The Android master is an experimental Keystore AES-GCM key, with a file lock for key creation and no exported master bytes; the local-key catalog stores wrapped material. `BOOTSTRAP_RESULT` covers only key-catalog initialization, not a complete workspace bootstrap. The emulator reported software security level 0, not hardware-backed storage. Physical device protection, multi-process stress, backup and key invalidation recovery, iOS, release builds, direct transport and integration into the app remain unverified.
