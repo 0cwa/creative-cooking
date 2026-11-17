@@ -1,5 +1,7 @@
 # Loro household relay implementation plan
 
+The [2026-11-17 interview decisions](LORO-IMPLEMENTATION-DECISIONS.md) consolidate the user's accepted choices and identify changes to these earlier recommendations. Read them first; the consolidated contract awaits final confirmation before implementation.
+
 Status: proposed, 2026-11-15. This is a fresh-data replacement plan, not authorization to implement or deploy it. The PowerSync implementation remains on main and is archived at `origin/archive/powersync-2026-11-15`, commit `069d9abb10dd07bbde1ef13f69ae164f9a7d0143`. The planning root is `docs/loro-relay-plan`. There is no existing-data migration, dual write, or cutover implementation in this scope. Before eventual release, explicitly decide what existing installations see; never silently reset them.
 
 ## Decision and evidence

@@ -1,5 +1,7 @@
 # Bounded policy contracts
 
+The [2026-11-17 interview decisions](LORO-IMPLEMENTATION-DECISIONS.md) record subsequent product choices. In particular, production contracts must distinguish overridable shared-cooking disclosure preferences from blocking rules, and encode delegated newcomer access. The model below predates those choices and does not yet implement them.
+
 Status: design and executable illustration, not production authorization. Profiles are named, versioned assemblies of these records, not a security slider, configuration matrix, or policy language. Privacy and retention are separate dimensions: short retention can undermine offline recovery. Equal adults have equal roles after admission; devices are not adults.
 
 ## Wire shapes
