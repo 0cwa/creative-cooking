@@ -14,5 +14,7 @@ export async function verify(sodium, packet) {
  const payload=JSON.parse(dec.decode(opened.value));if(payload.origin!==packet.origin || !Array.isArray(payload.update) || !payload.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255) || unwrapped.value!=='data') throw Error('bad exchange');
  const mutate=(f)=>{const x=JSON.parse(dec.decode(input));f(x);return enc.encode(JSON.stringify(x));};
  for (const bad of [mutate(x=>x.encrypted=(x.encrypted[0]==='0'?'1':'0')+x.encrypted.slice(1)),mutate(x=>x.header.scopeId='wrong-domain'),mutate(x=>x.header.version=99)]) {let rejected=false;try{await c.openContent(bad)}catch{rejected=true}if(!rejected)throw Error('invalid input accepted');}
- return {content:true,wrapped:true,tamperRejected:true,domainRejected:true,versionRejected:true,update:payload.update};
+ const mutateWrap=(f)=>{const x=JSON.parse(dec.decode(wrap));f(x);return enc.encode(JSON.stringify(x));};
+ for (const bad of [mutateWrap(x=>x.encrypted=(x.encrypted[0]==='0'?'1':'0')+x.encrypted.slice(1)),mutateWrap(x=>x.header.scopeId='wrong-domain'),mutateWrap(x=>x.header.version=99),mutateWrap(x=>x.header.recipientDevice='other')]) {let rejected=false;try{await c.openKey(bad)}catch{rejected=true}if(!rejected)throw Error('invalid key envelope accepted');}
+ return {content:true,wrapped:true,tamperRejected:true,domainRejected:true,versionRejected:true,keyEnvelopeRejected:true,update:payload.update};
 }
