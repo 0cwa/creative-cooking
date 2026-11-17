@@ -87,13 +87,25 @@ export default function RootLayout() {
   const [error,setError]=useState<string|null>(null);
   useEffect(()=>{let active=true;void (async()=>{
     if(Platform.OS!=='web'){if(active)setChoice('choose');return;}
-    const mode=globalThis.localStorage.getItem('creative-cooking-storage-choice-v1');
-    if(mode==='legacy'){if(active)setChoice('legacy');return;}
-    if(mode?.startsWith('local:')){try{const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const opened=await openLocalWorkspace(mode.slice(6));if(active){globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',mode.slice(6));setWorkspace(opened);setChoice(opened.needsDisclosureSetup?'policy':'local')}else opened.close()}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}return;}
-    if(active)setChoice('choose');
+    let opened:any=null,adopted=false;
+    try{
+      const mode=globalThis.localStorage.getItem('creative-cooking-storage-choice-v1');
+      if(mode==='legacy'){if(active)setChoice('legacy');return;}
+      if(mode?.startsWith('local:')){
+        const {openLocalWorkspace}=await import('@/loro/app/bootstrap');
+        opened=await openLocalWorkspace(mode.slice(6));
+        if(active){
+          globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',mode.slice(6));
+          setWorkspace(opened);setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;
+        }
+        return;
+      }
+      if(active)setChoice('choose');
+    }catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
+    finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[]);
-  const legacy=()=>{if(Platform.OS==='web')globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy');setChoice('legacy')};
-  const fresh=async()=>{setChoice('loading');setError(null);try{const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const name=`cooking-${crypto.randomUUID()}`;const opened=await openLocalWorkspace(name,true);globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',name);globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);setWorkspace(opened);setChoice(opened.needsDisclosureSetup?'policy':'local')}catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice('choose')}};
+  const legacy=()=>{try{if(Platform.OS==='web')globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy')}catch{Alert.alert('Workspace choice was not saved','Your existing workspace will open for this session. This browser could not remember your selection.')}setChoice('legacy')};
+  const fresh=async()=>{setChoice('loading');setError(null);let opened:any=null,adopted=false;try{const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const name=`cooking-${crypto.randomUUID()}`;opened=await openLocalWorkspace(name,true);globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',name);globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);setWorkspace(opened);setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true}catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice('choose')}finally{if(opened&&!adopted)opened.close()}};
   if(choice==='loading')return <View><Text>Opening your cooking workspace…</Text></View>;
   if(choice==='locked')return <SafeAreaProvider><LockedWorkspace error={error} onRetry={()=>globalThis.location.reload()} onLegacy={()=>setChoice('legacy')}/></SafeAreaProvider>;
   if(choice==='policy')return <SafeAreaProvider><View style={{padding:24,gap:16}}><Text>Your household policy applies to new cooking changes. Existing items are not automatically approved for external processing.</Text><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></View></SafeAreaProvider>;
