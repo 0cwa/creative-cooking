@@ -172,3 +172,19 @@ test('legacy import records are retained and report unsupported for recovery', a
  put(['inbox','s','i'],{bytes:{__storageBytes:[1]}});put(['applied','s','i'],'old');put(['import','s','old'],{inputKey:JSON.stringify(['import',input]),outcome:{state:'saved',revisions:[{documentId:'d',revision:0}]}});
  assert.equal((await s.getInboxApplication('s','i')).error,'UNSUPPORTED_VERSION'); assert.equal(conn.db.prepare('SELECT count(*) AS n FROM loro_records').get().n,3); conn.db.close();
 });
+
+test('maximum candidate plaintext envelope stages, commits, imports and reopens within object limits', async () => {
+ const sodium=(await import('libsodium-wrappers')).default; await sodium.ready;
+ const {candidateCodec,SUITE,LIMIT,ENCODED_LIMIT}=await import('../crypto/candidate.mjs'); const {testProvider}=await import('../crypto/test-provider.mjs'); const {STORAGE_LIMITS,validateInboxItem}=await import('../contracts/index.ts');
+ assert.equal(STORAGE_LIMITS.objectBytes,ENCODED_LIMIT); assert.equal(STORAGE_LIMITS.totalBytes,8*ENCODED_LIMIT);
+ const signing=sodium.crypto_sign_keypair(),recipient=sodium.crypto_box_keypair(),initialKey=sodium.randombytes_buf(32); const provider=testProvider(sodium,{signing,recipient,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey});
+ const id='\u0001'.repeat(256),refs=Array.from({length:64},(_,i)=>String(i).padStart(3,'0')+'\u0001'.repeat(253));
+ const header={version:1,suiteId:SUITE,scopeId:id,documentId:id,documentGeneration:Number.MAX_SAFE_INTEGER,branchHead:id,policyHashes:refs,epochId:id,authorDevice:'sender',deviceSequence:Number.MAX_SAFE_INTEGER,predecessorRefs:refs,semanticEffectIds:refs,payloadKind:id};
+ const envelope=await candidateCodec(provider).sealContent(header,new Uint8Array(LIMIT),'data'); assert.equal(envelope.bytes.length,2398002); assert.ok(envelope.bytes.length > STORAGE_LIMITS.itemBytes);
+ const conn=connection(),s=openSQLiteStorage(conn),op=child('scope','large','doc'); op.outbound[0].object=envelope;
+ assert.equal((await s.commitLocal(op)).ok,true); assert.deepEqual((await s.listOutboundObjects('scope')).value[0].bytes,envelope.bytes);
+ const inbox={scopeId:'scope',object:envelope,source:'peer',expectedCursor:null,cursor:'c'}; assert.equal((await s.stageInbox(inbox)).ok,true);
+ const imp={version:2,commands:[{version:1,commandId:'large-command',effectId:'remote',documentId:'doc',kind:'write',payload:b(1),dependencyEffectIds:[]}],expectedAuthority:{version:2,scope:{kind:'personal',id:'scope'},record:null},scopeId:'scope',operationId:'import-large',itemId:envelope.id,documents:[{documentId:'doc',bytes:b(8),expectedRevision:0}],effectIds:['remote']};
+ assert.equal((await s.commitImport(imp)).ok,true); const reopened=openSQLiteStorage(conn); assert.deepEqual((await reopened.listStagedInbox('scope')).value[0].bytes,envelope.bytes); assert.equal((await reopened.getInboxApplication('scope',envelope.id)).value.operationId,'import-large');
+ const bound={...inbox,object:{id:'bound',bytes:new Uint8Array(ENCODED_LIMIT)},expectedCursor:'c'}; assert.equal(validateInboxItem(bound).ok,true); const tooLarge={...bound,object:{id:'over',bytes:new Uint8Array(ENCODED_LIMIT+1)}}; assert.equal((await s.stageInbox(tooLarge)).error,'TOO_LARGE'); const invalid=child('scope','too-large','other'); invalid.outbound[0].object=tooLarge.object; assert.equal((await s.commitLocal(invalid)).error.code,'TOO_LARGE'); assert.equal((await s.reopenDocument('scope','other')).value,null); assert.equal((await s.listStagedInbox('scope')).value.length,1); conn.db.close();
+});

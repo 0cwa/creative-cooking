@@ -4,7 +4,7 @@ import type { PairingScope } from './pairing.ts';
 export const CONTRACT_VERSION = 'C0.1' as const;
 export const POLICY_SCHEMA_VERSION = 2 as const;
 export const INITIAL_FRAME_BYTES = 16 * 1024;
-export const REVIEW_LIMITS = { objects: 256, aggregateBytes: 8 * 1024 * 1024, objectBytes: 1024 * 1024, dependencies: 64 } as const;
+export const REVIEW_LIMITS = { objects: 256, aggregateBytes: 8 * (2 * (1024 * 1024 + 256) + 320 * 1024), objectBytes: 2 * (1024 * 1024 + 256) + 320 * 1024, dependencies: 64 } as const;
 export type Id = string;
 export type Bytes = Uint8Array;
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
@@ -49,7 +49,7 @@ export interface AtomicStorage {
 }
 
 /** Provisional per-operation limits, measured in actual bytes; adapters must reject before any write. */
-export const STORAGE_LIMITS = { groups: 16, documents: 64, commands: 256, outbound: 256, effects: 256, itemBytes: 1024 * 1024, totalBytes: 8 * 1024 * 1024, idBytes: 256 } as const;
+export const STORAGE_LIMITS = { groups: 16, documents: 64, commands: 256, outbound: 256, effects: 256, itemBytes: 1024 * 1024, objectBytes: 2 * (1024 * 1024 + 256) + 320 * 1024, totalBytes: 8 * (2 * (1024 * 1024 + 256) + 320 * 1024), idBytes: 256 } as const;
 const storageEncoder = new TextEncoder();
 const storageId = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && storageEncoder.encode(x).length <= STORAGE_LIMITS.idBytes;
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -65,7 +65,7 @@ export function storageOperationKey(input: unknown, kind: 'local' | 'import'): R
     if (!record(a) || !exact(a,['version','scope','record']) || a.version !== 2 || !validPairingScope(a.scope) || a.scope.id !== input.scopeId || !(a.record === null || (record(a.record) && exact(a.record,['revision','acceptedParent','authorizationSnapshot']) && Number.isSafeInteger(a.record.revision) && (a.record.revision as number) >= 0 && storageId(a.record.acceptedParent) && storageId(a.record.authorizationSnapshot)))) return {ok:false,error:'MALFORMED'};
   }
   let total = 0, tooLarge = false;
-  const bytes = (v: unknown): v is Uint8Array => { if (!(v instanceof Uint8Array)) return false; total += v.byteLength; if (v.byteLength > STORAGE_LIMITS.itemBytes || total > STORAGE_LIMITS.totalBytes) tooLarge = true; return true; };
+  const bytes = (v: unknown, limit: number = STORAGE_LIMITS.itemBytes): v is Uint8Array => { if (!(v instanceof Uint8Array)) return false; total += v.byteLength; if (v.byteLength > limit || total > STORAGE_LIMITS.totalBytes) tooLarge = true; return true; };
   const docs = input.documents;
   if (!Array.isArray(docs) || !docs.length) return {ok:false,error:'MALFORMED'};
   if (docs.length > STORAGE_LIMITS.documents) return {ok:false,error:'TOO_LARGE'};
@@ -89,7 +89,7 @@ export function storageOperationKey(input: unknown, kind: 'local' | 'import'): R
     if (input.outbound.length > STORAGE_LIMITS.outbound) return {ok:false,error:'TOO_LARGE'};
     const objectIds: unknown[] = [];
     for (const o of input.outbound) {
-      if (!record(o) || !exact(o,['object','branchHead','epochId']) || !storageId(o.branchHead) || !storageId(o.epochId) || !record(o.object) || !exact(o.object,['id','bytes']) || !storageId(o.object.id) || !bytes(o.object.bytes)) return {ok:false,error:'MALFORMED'};
+      if (!record(o) || !exact(o,['object','branchHead','epochId']) || !storageId(o.branchHead) || !storageId(o.epochId) || !record(o.object) || !exact(o.object,['id','bytes']) || !storageId(o.object.id) || !bytes(o.object.bytes, STORAGE_LIMITS.objectBytes)) return {ok:false,error:'MALFORMED'};
       objectIds.push(o.object.id);
     }
     if (!unique(objectIds)) return {ok:false,error:'MALFORMED'};
@@ -136,7 +136,7 @@ export function validateStorageReceipt(input: unknown): Result<OutboxReceipt, 'M
 /** Cursor values are opaque strings, including empty strings; null means no prior cursor. */
 export function validateInboxItem(input: unknown): Result<InboxItem, 'MALFORMED' | 'TOO_LARGE'> {
   if (!record(input) || !exact(input,['scopeId','object','source','expectedCursor','cursor']) || !storageId(input.scopeId) || !storageId(input.source) || !record(input.object) || !exact(input.object,['id','bytes']) || !storageId(input.object.id) || !(input.object.bytes instanceof Uint8Array) || !(input.expectedCursor === null || typeof input.expectedCursor === 'string') || typeof input.cursor !== 'string') return {ok:false,error:'MALFORMED'};
-  if (input.object.bytes.byteLength > STORAGE_LIMITS.itemBytes || storageEncoder.encode(input.cursor).length > STORAGE_LIMITS.itemBytes || (typeof input.expectedCursor === 'string' && storageEncoder.encode(input.expectedCursor).length > STORAGE_LIMITS.itemBytes)) return {ok:false,error:'TOO_LARGE'};
+  if (input.object.bytes.byteLength > STORAGE_LIMITS.objectBytes || storageEncoder.encode(input.cursor).length > STORAGE_LIMITS.itemBytes || (typeof input.expectedCursor === 'string' && storageEncoder.encode(input.expectedCursor).length > STORAGE_LIMITS.itemBytes)) return {ok:false,error:'TOO_LARGE'};
   return {ok:true,value:input as InboxItem};
 }
 export type ContentHeader = { version: 1; suiteId: string; scopeId: Id; documentId: Id; documentGeneration: number; branchHead: Id; policyHashes: readonly Id[]; epochId: Id; authorDevice: Id; deviceSequence: number; predecessorRefs: readonly Id[]; semanticEffectIds: readonly Id[]; payloadKind: string };

@@ -75,7 +75,7 @@ test('atomic group compares personal and household children and rejects partial 
   assert.notEqual(storageGroupKey({...group,children:[...group.children].reverse()}).value,result.value);
   assert.equal(storageGroupKey({...group,children:[group.children[0],group.children[0]]}).error,'MALFORMED');
   assert.equal(storageGroupKey({...group,children:Array.from({length:STORAGE_LIMITS.groups+1},(_,i)=>child(String(i),'op',1))}).error,'TOO_LARGE');
-  const large = Array.from({length:9},(_,i) => { const c = child(String(i),'op',1); c.documents[0].bytes = new Uint8Array(STORAGE_LIMITS.itemBytes); return c; });
+  const large = Array.from({length:10},(_,i) => { const c = child(String(i),'op',1); c.documents[0].bytes = new Uint8Array(STORAGE_LIMITS.itemBytes); c.outbound[0].object.bytes = new Uint8Array(STORAGE_LIMITS.itemBytes); return c; });
   assert.equal(storageGroupKey({groupId:'large',children:large}).error,'TOO_LARGE');
   assert.equal(classifyStorageGroup(result.value,null,false),'new');
   assert.equal(classifyStorageGroup(result.value,null,true),'conflict');
