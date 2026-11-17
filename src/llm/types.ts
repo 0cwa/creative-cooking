@@ -16,6 +16,8 @@ export type ChefRunResult = {
   question?: UiQuestion;
 };
 
+export type ProviderRequestReview = (request:Readonly<{endpoint:string;model:string;body:string}>,send:()=>Promise<Response>)=>Promise<Response>;
+
 export type LlmProvider = {
   id: string;
   name: string;
@@ -28,5 +30,6 @@ export type LlmProvider = {
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
     onStatus?: (status: string) => void;
+    reviewRequest?: ProviderRequestReview;
   }): Promise<ChefRunResult>;
 };
