@@ -15,5 +15,6 @@ test('source snapshot and projected operation history are checked against durabl
  await assert.rejects(checkProjectionSource(storage,{}, {...manifest,sourceCheckpointHash:'wrong'},grant,fresh.export({mode:'snapshot'}),provider),/SOURCE_MISMATCH/);
  const leaked=new LoroDoc();leaked.getMap('recipe').set('title','DELETED_CANARY');leaked.commit();leaked.getMap('recipe').set('title','soup');leaked.getMap('purchases').set('buy','rice');
  await assert.rejects(checkProjectionSource(storage,{},manifest,grant,leaked.export({mode:'snapshot'}),provider),/PROJECTION_MISMATCH/);
+ await assert.rejects(checkProjectionSource(storage,{},manifest,grant,new Uint8Array([...fresh.export({mode:'snapshot'}),99]),provider),/PROJECTION_MISMATCH|Error/);
  await assert.rejects(checkProjectionSource(storage,{},manifest,{contentClasses:['recipe']},fresh.export({mode:'snapshot'}),provider),/SOURCE_MISMATCH/);
 });

@@ -12,6 +12,7 @@ export async function checkProjectionSource(storage,expectedAuthority,manifest,g
   const source=result.value, digest=await provider.hash(domain('projection-source-snapshot',hex(source.bytes)));
   if(!(digest instanceof Uint8Array) || digest.length!==32 || hex(digest)!==manifest.sourceCheckpointHash) throw Error('SOURCE_MISMATCH');
   const old=new LoroDoc(), fresh=new LoroDoc(); old.import(source.bytes); fresh.import(snapshot);
+  if(hex(fresh.export({mode:'snapshot'}))!==hex(snapshot)) throw Error('PROJECTION_MISMATCH');
   const title=old.getMap('recipe').get('title'), purchases=old.getMap('purchases').toJSON();
   if(typeof title!=='string' || !grant.contentClasses.includes('recipe') || !grant.contentClasses.includes('shopping') || !purchases || Array.isArray(purchases) || Object.values(purchases).some(v=>typeof v!=='string')) throw Error('SOURCE_MISMATCH');
   const expected={recipe:{title},purchases};
