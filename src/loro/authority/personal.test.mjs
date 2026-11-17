@@ -1,0 +1,21 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import sodium from 'libsodium-wrappers';
+import {DatabaseSync} from 'node:sqlite';
+import {openSQLiteStorage} from '../storage/sqlite.ts';
+import {domain} from './validator.mjs';
+import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from './personal.mjs';
+await sodium.ready;
+test('signed pinned personal root limits access to its one owner and active devices',async()=>{
+ const kp=sodium.crypto_sign_keypair(), provider={hash:async b=>sodium.crypto_generichash(32,b),verify:async(k,b,s)=>k==='key' && sodium.crypto_sign_verify_detached(s,b,kp.publicKey)};
+ const root={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',scopeId:'private',ownerId:'alice',signerDeviceId:'phone',devices:[{deviceId:'phone',ownerId:'alice',signingKeyRef:'key',peerId:'7',active:true}],documentId:'personal-doc',generation:2,epochId:'personal-epoch'};
+ const signature=Buffer.from(sodium.crypto_sign_detached(domain('personal-root-signature',root),kp.privateKey)).toString('hex');
+ const pin=await personalRootPin(provider,root), scope={kind:'personal',id:'private'}, db=new DatabaseSync(':memory:'), conn={executeSync:(sql,args=[])=>{const s=db.prepare(sql);return {rows:sql.startsWith('SELECT')?s.all(...args):(s.run(...args),[])}}}, store=openSQLiteStorage(conn);
+ await initializePersonalAuthority(store,scope,pin,provider,{version:1,root,signature});
+ const a=await resolvePersonalAuthority(store,scope,pin,provider,'phone'); assert.equal(a.scope.ownerId,'alice'); assert.equal(a.scope.authorPeers.phone,'7');assert.equal(a.expectedAuthority.record.revision,0);
+ await assert.rejects(resolvePersonalAuthority(store,scope,'wrong',provider,'phone'),/INVALID_AUTHORITY/);
+ await assert.rejects(resolvePersonalAuthority(store,scope,pin,provider,'other'),/UNAUTHORIZED_DEVICE/);
+ await assert.rejects(resolvePersonalAuthority(store,{kind:'household',id:'private'},pin,provider,'phone'),/INVALID_ROOT/);
+ const wrong=structuredClone(root);wrong.devices[0].ownerId='bob'; await assert.rejects(initializePersonalAuthority(store,{kind:'personal',id:'private'},await personalRootPin(provider,wrong),provider,{version:1,root:wrong,signature}),/MALFORMED/);
+ db.close();
+});
