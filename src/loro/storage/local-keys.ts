@@ -4,11 +4,11 @@ export type LocalKeyIdentity={version:1;scope:{kind:'personal'|'household';id:st
 export type LocalKeyRecord={version:1;operationId:string;identity:LocalKeyIdentity;masterId:string;publicKey:Uint8Array|null;wrapped:Uint8Array};
 export type ReadyMasterCatalog={version:1;state:'ready';id:string;check:Uint8Array};
 type Tx={get(k:string):Promise<any>;put(k:string,v:any):Promise<void>;keys():Promise<string[]>};
-type Master={provision(id:string):Promise<void>;wrap(id:string,p:Uint8Array,a:Uint8Array):Promise<Uint8Array>;unwrap(id:string,p:Uint8Array,a:Uint8Array):Promise<Uint8Array>};
+type Master={provision(id:string):Promise<void>;ensure?(id:string):Promise<void>;wrap(id:string,p:Uint8Array,a:Uint8Array):Promise<Uint8Array>;unwrap(id:string,p:Uint8Array,a:Uint8Array):Promise<Uint8Array>};
 const e=new TextEncoder(), key=(...x:string[])=>JSON.stringify(x), ck=key('local-master-catalog');
 const sentinel=e.encode('creative-cooking/local-master-check/v1');
 // Only known unrelated record namespaces may predate master provisioning.
-const unrelated=new Set(['pairing-authority','pairing-release','pairing-guard','pairing-packet','pairing-outbox','document','object','inbox','local','import','group','receipt-state','cursor','command','effect','applied','receipt']);
+const unrelated=new Set(['pairing-authority','pairing-release','pairing-guard','pairing-packet','pairing-outbox','document','document-owner','object','inbox','local','import','group','receipt-state','cursor','command','effect','applied','receipt']);
 function unrelatedRecordKey(k:string){try{const p=JSON.parse(k);return Array.isArray(p)&&p.length>0&&p.every((x:any)=>typeof x==='string')&&unrelated.has(p[0])}catch{return false}}
 const shape=(x:any,n:string[])=>x!==null&&typeof x==='object'&&!Array.isArray(x)&&!(x instanceof Uint8Array)&&Object.keys(x).length===n.length&&n.every(k=>Object.hasOwn(x,k));
 const id=(x:any)=>typeof x==='string'&&x.length>0&&e.encode(x).length<=256;
@@ -31,7 +31,32 @@ export async function installLocalKey(tx:Tx,record:LocalKeyRecord,catalog:ReadyM
 export class LocalKeys {
  private run:TransactionRunner; private master:Master; private sodium:any; private afterCommit?:()=>void;
  constructor(run:TransactionRunner,master:Master,sodium:any,afterCommit?:()=>void){this.run=run;this.master=master;this.sodium=sodium;this.afterCommit=afterCommit;}
- async provision(masterId:string){if(!id(masterId))throw Error('MALFORMED');await this.run(true,async tx=>{if(!(await tx.keys()).every(unrelatedRecordKey))throw Error('LOCKED');await tx.put(ck,{version:1,state:'reserved',id:masterId})});await this.master.provision(masterId);const check=await this.master.wrap(masterId,sentinel,masterContext(masterId));if(!eq(await this.master.unwrap(masterId,check,masterContext(masterId)),sentinel))throw Error('LOCKED');await this.run(true,async tx=>{const old=await tx.get(ck);if(!shape(old,['version','state','id'])||old.version!==1||old.state!=='reserved'||old.id!==masterId)throw Error('LOCKED');await tx.put(ck,{version:1,state:'ready',id:masterId,check})})}
+ async provision(masterId:string){
+  if(!id(masterId))throw Error('MALFORMED');
+  const reserved=(x:any)=>shape(x,['version','state','id'])&&x.version===1&&x.state==='reserved'&&x.id===masterId;
+  const state=await this.run(true,async tx=>{
+   const old=await tx.get(ck);
+   if(validMasterCatalog(old)&&old.id===masterId)return 'ready';
+   if(old!==undefined&&!reserved(old))throw Error('LOCKED');
+   if(!(await tx.keys()).every(k=>k===ck||unrelatedRecordKey(k)))throw Error('LOCKED');
+   if(old!==undefined)return 'reserved';
+   await tx.put(ck,{version:1,state:'reserved',id:masterId});return 'new';
+  });
+  if(state==='ready'){await this.unlock();return;}
+  // Resuming requires a provider operation that preserves an existing master.
+  if(this.master.ensure)await this.master.ensure(masterId);
+  else if(state==='new')await this.master.provision(masterId);
+  else throw Error('LOCKED');
+  const check=await this.master.wrap(masterId,sentinel,masterContext(masterId));
+  if(!eq(await this.master.unwrap(masterId,check,masterContext(masterId)),sentinel))throw Error('LOCKED');
+  await this.run(true,async tx=>{
+   const old=await tx.get(ck);
+   if(validMasterCatalog(old)&&old.id===masterId)return;
+   if(!reserved(old))throw Error('LOCKED');
+   await tx.put(ck,{version:1,state:'ready',id:masterId,check});
+  });
+  await this.unlock();
+ }
  async unlock():Promise<ReadyMasterCatalog>{const c=await this.run(false,tx=>tx.get(ck));if(!validMasterCatalog(c))throw Error('LOCKED');try{if(!eq(await this.master.unwrap(c.id,c.check,masterContext(c.id)),sentinel))throw Error();}catch{throw Error('LOCKED')}return copy(c)}
  private async verify(r:LocalKeyRecord,c:ReadyMasterCatalog){if(!validLocalRecord(r)||r.masterId!==c.id)throw Error('LOCKED');let secret:Uint8Array|undefined;try{secret=await this.master.unwrap(c.id,r.wrapped,context(r.identity));const p=r.identity.purpose;if(p==='device-signing'){if(secret.length!==64)throw Error();const pair=this.sodium.crypto_sign_seed_keypair(secret.slice(0,32));const ok=eq(pair.publicKey,r.publicKey)&&eq(pair.privateKey,secret);pair.privateKey.fill(0);if(!ok)throw Error()}else if(p==='device-wrapping'){if(secret.length!==32||!eq(this.sodium.crypto_scalarmult_base(secret),r.publicKey))throw Error()}else if(secret.length!==32||r.publicKey!==null)throw Error()}catch{throw Error('LOCKED')}finally{secret?.fill(0)}}
  async generate(operationId:string,identity:LocalKeyIdentity){if(!id(operationId)||!validLocalIdentity(identity))throw Error('MALFORMED');identity=copy(identity);const c=await this.unlock();const old=await this.run(false,tx=>findLocalKey(tx,operationId,identity));if(old){await this.verify(old,c);return {publicKey:copy(old.publicKey),replayed:true}}let secret:Uint8Array,publicKey:Uint8Array|null=null;const p=identity.purpose;if(p==='device-signing'||p==='device-wrapping'){const pair=p==='device-signing'?this.sodium.crypto_sign_keypair():this.sodium.crypto_box_keypair();secret=pair.privateKey;publicKey=pair.publicKey}else secret=this.sodium.randombytes_buf(32);try{const wrapped=await this.master.wrap(c.id,secret,context(identity));const record:LocalKeyRecord={version:1,operationId,identity,masterId:c.id,publicKey,wrapped};const result=await this.run(true,async tx=>{const prior=await findLocalKey(tx,operationId,identity);if(prior)return {record:prior,replayed:true};return installLocalKey(tx,record,c)});this.afterCommit?.();await this.verify(result.record,c);return {publicKey:copy(result.record.publicKey),replayed:result.replayed}}finally{secret.fill(0)}}
