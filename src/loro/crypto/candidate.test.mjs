@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync, sign, verify, createHash, randomBytes, createCipheriv, createDecipheriv} from 'node:crypto';
-import {candidateCodec, SUITE, ENCODED_LIMIT} from './candidate.mjs';
+import {candidateCodec, candidateObjectId, SUITE, ENCODED_LIMIT} from './candidate.mjs';
 import {candidatePairing, ceremonyBytes} from '../pairing/candidate.mjs';
 // Test-only provider: Node's AES-GCM exercises the injectable boundary, not the named candidate suite.
 const pair = generateKeyPairSync('ed25519'), key = randomBytes(32);
@@ -27,8 +27,12 @@ test('libsodium candidate transports real symmetric key material',async()=>{
  const wrapped=await sender.wrapKey(kh,'data');
  assert.equal(Buffer.from(wrapped.bytes).includes(Buffer.from(dataKey)),false);
  assert.equal(new TextDecoder().decode(wrapped.bytes).includes(Buffer.from(dataKey).toString('hex')),false);
- assert.equal((await receiver.openKey(wrapped.bytes)).value,'data');
- assert.deepEqual((await receiver.openContent(content.bytes)).value,new Uint8Array([7]));
+ const openedKey=await receiver.openKey(wrapped.bytes), openedContent=await receiver.openContent(content.bytes);
+ assert.equal(openedKey.value,'data');
+ assert.deepEqual(openedContent.value,new Uint8Array([7]));
+ const idProvider=testProvider(sodium,{...publicKeys});
+ assert.equal(await candidateObjectId(idProvider,wrapped.bytes),wrapped.id); assert.equal(openedKey.object.id,wrapped.id);
+ assert.equal(await candidateObjectId(idProvider,content.bytes),content.id); assert.equal(openedContent.object.id,content.id);
  const record=JSON.parse(new TextDecoder().decode(wrapped.bytes));
  for (const [field,value] of Object.entries({scopeId:'other',branchHead:'other',policyHashes:['other'],epochId:'other',recipientDevice:'other',keyPurpose:'other',senderDevice:'other'})) {
   const altered=structuredClone(record); altered.header[field]=value;
@@ -89,4 +93,12 @@ test('candidate size bounds agree for sealing and authenticated opening',async()
  const sig=await provider.sign('sender',new TextEncoder().encode(JSON.stringify(['creative-cooking/k2-candidate/v1','content/signature',unsigned])));
  const oversized=new TextEncoder().encode(JSON.stringify({...unsigned,signature:Buffer.from(sig).toString('hex')}));
  await assert.rejects(codec.openContent(oversized),/TOO_LARGE/);
+});
+
+test('object ID snapshots mutable input before asynchronous hash',async()=>{
+ let release,signal; const gate=new Promise(r=>release=r), ready=new Promise(r=>signal=r);
+ const provider={hash:async b=>{signal(); await gate; return p.hash(b)}};
+ const input=Buffer.from([1,2,3]); const expected=await candidateObjectId(p,input);
+ const pending=candidateObjectId(provider,input); await ready; input[0]=9; release(); assert.equal(await pending,expected);
+ await assert.rejects(candidateObjectId(p,new Uint8Array(ENCODED_LIMIT+1)),/TOO_LARGE/);
 });
