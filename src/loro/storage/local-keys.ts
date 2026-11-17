@@ -65,6 +65,15 @@ export class LocalKeys {
   if(!id(operationId)||!validLocalIdentity(identity)||identity.scope.kind!=='personal'||identity.purpose!=='data'||!bytes(secret,32,32))throw Error('MALFORMED');
   identity=copy(identity);const material=new Uint8Array(secret);try{const catalog=await this.unlock();if(await this.run(false,tx=>findLocalKey(tx,operationId,identity)))throw Error('CONFLICT');const wrapped=await this.master.wrap(catalog.id,material,context(identity));const record:LocalKeyRecord={version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped};if(!validLocalRecord(record))throw Error('LOCKED');return {record:copy(record),catalog:copy(catalog)}}finally{material.fill(0)}
  }
+ /** Prepare an authenticated pairing key; existing material must match exactly. */
+ async preparePairedDataKey(operationId:string,identity:LocalKeyIdentity,secret:Uint8Array):Promise<{record:LocalKeyRecord;catalog:ReadyMasterCatalog}>{
+  if(!id(operationId)||!validLocalIdentity(identity)||identity.scope.kind!=='personal'||identity.purpose!=='data'||!bytes(secret,32,32))throw Error('MALFORMED');
+  identity=copy(identity);const material=new Uint8Array(secret);try{
+   const catalog=await this.unlock(),old=await this.run(false,tx=>findLocalKey(tx,operationId,identity));
+   if(old){await this.verify(old,catalog);await this.use(operationId,identity,key=>{if(!eq(key,material))throw Error('CONFLICT')});return {record:old,catalog};}
+   const wrapped=await this.master.wrap(catalog.id,material,context(identity));return {record:{version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped},catalog};
+  }finally{material.fill(0)}
+ }
  /** Trusted internal preparation: caller must withhold packet outputs until its atomic publication commits. */
  async prepareForAtomicInstall<T>(operationId:string,identity:LocalKeyIdentity,makePackets:(secret:Uint8Array)=>Promise<T>|T):Promise<{record:LocalKeyRecord;catalog:ReadyMasterCatalog;packets:T}>{if(!id(operationId)||!validLocalIdentity(identity)||!['data','recovery'].includes(identity.purpose)||typeof makePackets!=='function')throw Error('MALFORMED');identity=copy(identity);const catalog=await this.unlock();if(await this.run(false,tx=>findLocalKey(tx,operationId,identity)))throw Error('CONFLICT');const secret:Uint8Array=this.sodium.randombytes_buf(32);try{const wrapped=await this.master.wrap(catalog.id,secret,context(identity));const record:LocalKeyRecord={version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped};const packets=await makePackets(secret);return {record:copy(record),catalog:copy(catalog),packets}}finally{secret.fill(0)}}
  /** Resolve only an exact durable identity and verify both catalog indexes before use. */
