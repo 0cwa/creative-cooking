@@ -222,18 +222,22 @@ test('projection publication commits atomically, survives lost acknowledgement a
  const catalog={version:1,state:'ready',id:'master',check:new Uint8Array(32).fill(1)};
  conn.db.prepare('INSERT INTO loro_records(key,value) VALUES(?,?)').run(JSON.stringify(['local-master-catalog']),JSON.stringify({...catalog,check:{__storageBytes:Array.from(catalog.check)}}));
  const localKey={record:{version:1,operationId:'keyop',identity:{version:1,scope,deviceId:'local',purpose:'data',epochId:'new-epoch'},masterId:'master',publicKey:null,wrapped:new Uint8Array(32).fill(2)},catalog};
- const input={version:1,operationId:'pub',expectedAuthority:{version:2,scope,record:{revision:0,acceptedParent:'parent',authorizationSnapshot:'snapshot'}},nextAuthority:{scope,revision:1,acceptedParent:'child',authorizationSnapshot:'next',authorityState:b(2)},admissionEventHash:'admission',grantHash:'grant',manifest:{id:'manifest',bytes:b(3)},epochId:'new-epoch',documents:[{documentId:'fresh',generation:2,bytes:b(4)}],packages:[{id:'package',recipientDevice:'new-device',bytes:b(5)}],localKey,pendingEdits:[{scopeId:'old-scope',operationId:'old-edit'}]};
+ const input={version:1,operationId:'pub',guardId:'guard',expectedAuthority:{version:2,scope,record:{revision:0,acceptedParent:'parent',authorizationSnapshot:'snapshot'}},nextAuthority:{scope,revision:1,acceptedParent:'child',authorizationSnapshot:'next',authorityState:b(2)},admissionEventHash:'admission',grantHash:'grant',manifest:{id:'manifest',bytes:b(3)},epochId:'new-epoch',documents:[{documentId:'fresh',generation:2,bytes:b(4)}],packages:[{id:'package',recipientDevice:'new-device',bytes:b(5)}],localKey,pendingEdits:[{scopeId:'old-scope',operationId:'old-edit'}]};
  const pendingKey=JSON.stringify(['local','old-scope','old-edit']), initial=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(pendingKey).value, bad=JSON.parse(initial);bad.inputKey='bad-json';
  conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(bad),pendingKey);assert.equal((await store.publishProjection(input)).error,'CORRUPT');assert.equal((await store.readPairingAuthority(scope)).value.revision,0);
  conn.db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(initial,pendingKey);
  const effectKey=JSON.stringify(['effect','old-scope','old-edit']), savedEffect=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(effectKey).value;
  conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(effectKey);assert.equal((await store.publishProjection(input)).error,'CORRUPT');
  conn.db.prepare('INSERT INTO loro_records(key,value) VALUES(?,?)').run(effectKey,savedEffect);
- for(let n=1;n<=11;n++){ writes=0; failAt=n; const r=await store.publishProjection(input);assert.equal(r.ok,false,`write ${n}`);assert.equal((await store.readPairingAuthority(scope)).value.revision,0);assert.equal((await store.reopenDocument('h','fresh')).value,null);assert.equal((await store.getProjectionPublication('h','pub')).value,null); }
+ for(let n=1;n<=12;n++){ writes=0; failAt=n; const r=await store.publishProjection(input);assert.equal(r.ok,false,`write ${n}`);assert.equal((await store.readPairingAuthority(scope)).value.revision,0);assert.equal((await store.reopenDocument('h','fresh')).value,null);assert.equal((await store.getProjectionPublication('h','pub')).value,null); }
  failAt=0; writes=0; assert.equal((await store.publishProjection(input)).value.replayed,false);
  const reopened=openSQLiteStorage(conn); assert.deepEqual((await reopened.getProjectionPublication('h','pub')).value,input);
  assert.equal((await reopened.publishProjection(input)).value.replayed,true);
+ const guardKey=JSON.stringify(['pairing-guard','guard']), savedGuard=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(guardKey).value;
+ conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(guardKey); assert.equal((await reopened.publishProjection(input)).error,'CORRUPT');
+ conn.db.prepare('INSERT INTO loro_records(key,value) VALUES(?,?)').run(guardKey,savedGuard);
  assert.equal((await reopened.publishProjection({...input,grantHash:'different'})).error,'CONFLICT');
+ assert.equal((await reopened.publishProjection({...input,operationId:'other'})).error,'CONFLICT');
  assert.equal((await reopened.readPairingAuthority(scope)).value.acceptedParent,'child');
  const catalogKey=JSON.stringify(['local-master-catalog']), savedCatalog=conn.db.prepare('SELECT value FROM loro_records WHERE key=?').get(catalogKey).value;
  conn.db.prepare('DELETE FROM loro_records WHERE key=?').run(catalogKey);

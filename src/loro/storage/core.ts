@@ -60,7 +60,7 @@ const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'
 const validId = (x: unknown): x is string => typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256;
 const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
 function projectionKey(x: unknown): string | null {
- if (!fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
+ if (!(fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || (fields(x,['version','operationId','guardId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId))) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
  const a=x.expectedAuthority, n=x.nextAuthority, m=x.manifest;
  if (!fields(x.localKey,['record','catalog']) || !validLocalRecord(x.localKey.record) || !validMasterCatalog(x.localKey.catalog) || x.localKey.record.masterId!==x.localKey.catalog.id || x.localKey.record.identity.purpose!=='data' || x.localKey.record.identity.scope.kind!=='household' || x.localKey.record.identity.scope.id!==a?.scope?.id || x.localKey.record.identity.epochId!==x.epochId) return null;
  if (!fields(a,['version','scope','record']) || a.version!==2 || !validPairingScope(a.scope) || a.scope.kind!=='household' || !fields(a.record,['revision','acceptedParent','authorizationSnapshot']) || !revision(a.record.revision) || a.record.revision>=Number.MAX_SAFE_INTEGER || ![a.record.acceptedParent,a.record.authorizationSnapshot].every(validId) || !validatePairingAuthority(n).ok || n.scope.kind!==a.scope.kind || n.scope.id!==a.scope.id || n.revision!==a.record.revision+1 || !fields(m,['id','bytes']) || !validId(m.id) || !(m.bytes instanceof Uint8Array) || !m.bytes.length) return null;
@@ -163,6 +163,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
     const scope=p.expectedAuthority.scope.id;
+    if(p.guardId && await tx.get(key('pairing-guard',p.guardId))!==inputKey) return corrupt();
     const catalog=await tx.get(key('local-master-catalog'));
     if (!validMasterCatalog(catalog) || JSON.stringify(projectionCanonical(catalog))!==JSON.stringify(projectionCanonical(p.localKey.catalog))) return corrupt();
     let installed; try {installed=await findLocalKey(tx,p.localKey.record.operationId,p.localKey.record.identity);} catch {return corrupt();}
@@ -194,6 +195,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(true,async tx=>{
       const scope=input.expectedAuthority.scope.id, op=key('projection-publication',scope,input.operationId), old=await tx.get(op);
       if(old) { if(old.inputKey!==inputKey) conflict(); await this.checkProjection(tx,old.input,inputKey); return {ok:true,value:{replayed:true}}; }
+      if(input.guardId && await tx.get(key('pairing-guard',input.guardId))!==undefined) conflict();
       await this.requireAuthority(tx,input.expectedAuthority);
       const authority=await tx.get(key('pairing-authority','household',scope));
       if(!authority || authority.revision!==input.expectedAuthority.record!.revision) conflict();
@@ -207,6 +209,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       for(const d of input.documents) { await tx.put(key('document-owner',scope,d.documentId),input.nextAuthority.acceptedParent); await tx.put(key('document',scope,d.documentId),{bytes:copy(d.bytes),revision:0}); await tx.put(key('projection-document',scope,d.documentId),{generation:d.generation,operationId:input.operationId}); }
       for(const p of input.packages) { await tx.put(key('projection-package',scope,p.id),copy(p.bytes)); await tx.put(key('projection-outbox',scope,input.operationId,p.id),{packageId:p.id,recipientDevice:p.recipientDevice}); }
       for(const p of input.pendingEdits) await tx.put(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId),inputKey);
+      if(input.guardId) await tx.put(key('pairing-guard',input.guardId),inputKey);
       await tx.put(key('pairing-authority','household',scope),input.nextAuthority);
       await tx.put(op,{inputKey,input});
       return {ok:true,value:{replayed:false}};
