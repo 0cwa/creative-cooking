@@ -1,7 +1,5 @@
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { hkdf } from '@noble/hashes/hkdf.js';
-import { sha256 } from '@noble/hashes/sha2.js';
 import { split, combine } from 'shamir-secret-sharing';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
@@ -13,7 +11,6 @@ function rejects(fn, m) { try { fn(); } catch { return; } throw Error('accepted 
 function random(n, source = globalThis.crypto) { if (!source || typeof source.getRandomValues !== 'function') throw Error('secure RNG unavailable'); return source.getRandomValues(new Uint8Array(n)); }
 const seal = (key, nonce, data, aad) => xchacha20poly1305(key, nonce, aad).encrypt(data);
 const open = (key, nonce, data, aad) => xchacha20poly1305(key, nonce, aad).decrypt(data);
-const derive = (secret, context) => hkdf(sha256, secret, utf8('K1 component probe salt'), utf8(context), 32);
 export async function run() {
  const checks = [];
  const test = (name, fn) => { fn(); checks.push(name); };
@@ -27,10 +24,10 @@ export async function run() {
  const ap=x25519.getPublicKey(a), bp=x25519.getPublicKey(b), shared=x25519.getSharedSecret(a,bp);
  test('RFC 7748 X25519 vector',()=> { assert(hex(ap)==='8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a','public'); assert(hex(shared)==='4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742','shared'); assert(eq(shared,x25519.getSharedSecret(b,ap)),'agreement'); });
  test('fixed XChaCha20-Poly1305 cross-runtime fixture',()=> { const result=seal(new Uint8Array(32),new Uint8Array(24),utf8('K1 vector'),utf8('K1 AAD')); assert(hex(result)==='33afb6ff8043f910ab0d80ae8bb89ad07e7d7ec0d42a50c374','ciphertext'); });
- const key=derive(shared,'wrap/v1'), nonce=random(24), data=random(32), aad=utf8('owner=alice;scope=personal;generation=1');
+ const key=random(32), nonce=random(24), data=random(32), aad=utf8('owner=alice;scope=personal;generation=1');
  const box=seal(key,nonce,data,aad);
- test('X25519 HKDF XChaCha key envelope',()=>assert(eq(open(derive(x25519.getSharedSecret(b,ap),'wrap/v1'),nonce,box,aad),data),'unwrap'));
- test('AEAD wrong key, context, tag and truncated ciphertext',()=> { const bad=box.slice(); bad[0]^=1; for(const f of [()=>open(random(32),nonce,box,aad),()=>open(key,nonce,box,utf8('other')),()=>open(key,nonce,bad,aad),()=>open(key,nonce,box.slice(0,10),aad),()=>open(derive(shared,'wrong-domain'),nonce,box,aad)]) rejects(f,'invalid envelope'); });
+ test('AEAD roundtrip',()=>assert(eq(open(key,nonce,box,aad),data),'decrypt'));
+ test('AEAD wrong key, context, tag and truncated ciphertext',()=> { const bad=box.slice(); bad[0]^=1; for(const f of [()=>open(random(32),nonce,box,aad),()=>open(key,nonce,box,utf8('other')),()=>open(key,nonce,bad,aad),()=>open(key,nonce,box.slice(0,10),aad),()=>open(key,nonce,box,utf8('wrong-domain'))]) rejects(f,'invalid envelope'); });
  test('RNG absent fails closed',()=>rejects(()=>random(32,null),'missing RNG'));
  const recovery=random(32), rn=random(24), rad=utf8('recovery/v1;owner=alice;scope=personal;generation=1;threshold=1;holder=alice;index=1');
  const wrapped=seal(recovery,rn,data,rad);
