@@ -1,5 +1,7 @@
 # Cooking ↔ TAlkCo: source comparison and next-round decision
 
+Subsequent Cooking decisions are confirmed in the [2026-11-17 contract](LORO-IMPLEMENTATION-DECISIONS.md) and incorporated into the revised [policy](LORO-POLICY-CONTRACTS.md) and [sync protocol](LORO-SYNC-PROTOCOL.md). Membership/recovery defaults and AI preference-versus-blocking behavior are no longer unanswered product questions. This dated source comparison is retained as historical evidence; TAlkCo sources have not been re-audited for this revision.
+
 **Read-only comparison, 2026-11-15.** Cooking proposal: `docs/loro-relay-plan` at `9843eb8`; PowerSync production archive: `069d9abb10dd07bbde1ef13f69ae164f9a7d0143`. TAlkCo: `/home/x/Dev/TAlkCo` at `e4c34c2`. TAlkCo references below are design claims, not a running product: its architecture/profile documents label themselves DRAFT, say no stack is approved, and present candidates and fixture gates. Cooking's plan is also proposed and explicitly not implementation authorization. “Unchecked” means the cited artifacts don’t establish the claim; it does not imply false.
 
 ## Two-way comparison

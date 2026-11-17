@@ -1,5 +1,7 @@
 # Sync options diagrams
 
+These diagrams and the HTML explorer illustrate the earlier design/model. The [confirmed decisions](LORO-IMPLEMENTATION-DECISIONS.md) and [revised protocol](LORO-SYNC-PROTOCOL.md) add direct/file transport requirements, all-minus-one admission, scoped AI preference overrides and frozen compromise review. Existing visual model parity does not establish those new behaviors.
+
 Evidence legend: **implemented** means source code exists; **model** means an executable illustration; **proposed** means design; **unverified** means evidence is missing. Sources: [comparison](TALKCO-COMPARISON.md), [relay plan](LORO-RELAY-IMPLEMENTATION.md), [contracts](LORO-POLICY-CONTRACTS.md), and [spike](../../spikes/relay-household-poc/README.md). An [interactive explorer](visuals/sync-architecture-explorer.html) (HTML fragment, no network) shows the same relationships with one scenario at a time; `node docs/plans/visuals/check-sync-explorer.mjs` checks it against the spike model.
 
 ## Architecture alternatives

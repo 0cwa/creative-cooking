@@ -1,8 +1,8 @@
 # Loro implementation decisions
 
-Status: interview consolidation, 2026-11-17. The user accepted the recommendations recorded below, including the stated exceptions. This consolidated contract awaits final confirmation before production implementation. It records product requirements; it does not establish runtime feasibility, cryptographic security, or a completed implementation.
+Status: confirmed by the user on 2026-11-17. The user accepted the recommendations recorded below, including the stated exceptions, and confirmed this consolidation with “Yes.” The present authorized follow-up is revising the detailed plan, schemas and executable illustrations; no production replacement or deployment has been performed. This records product requirements, not runtime feasibility, cryptographic security or a completed implementation.
 
-Read this document before the [implementation plan](LORO-RELAY-IMPLEMENTATION.md) and [policy specification](LORO-POLICY-CONTRACTS.md). Where earlier recommendations differ, these decisions are the intended revision. The existing PoC and interactive explorer still illustrate their earlier models; they do not yet implement this complete contract.
+Read this document before the [implementation plan](LORO-RELAY-IMPLEMENTATION.md), [policy specification](LORO-POLICY-CONTRACTS.md) and [sync protocol contracts](LORO-SYNC-PROTOCOL.md). These documents now incorporate the confirmed decisions. The original PoC and interactive explorer still illustrate their earlier models; a separate agreed-contract model covers a bounded subset of the new choices. None implements this complete contract in production.
 
 ## Product and release boundary
 
@@ -70,7 +70,7 @@ Read this document before the [implementation plan](LORO-RELAY-IMPLEMENTATION.md
 - Support an explicit reviewed-payload override for external processing of readable shared cooking content. Record and display disagreement with household preferences; do not label the override as consent from everyone.
 - A household may choose stricter standard-client behavior. The exact configuration must distinguish an overridable preference from a blocking standard-client rule. Neither prevents an authorized reader from copying plaintext through a modified client.
 - The override never authorizes disclosure of another person's private chats, recovery secrets or release of shared keys. Cryptographic access and protected personal scope remain separate from cooperative disclosure preferences.
-- Earlier deny-only disclosure examples remain valid for blocking rules, not universal behavior for every shared cooking preference. The production policy schema and decision model need an explicit distinction before implementation.
+- Earlier deny-only disclosure examples remain valid for blocking rules, not universal behavior for every shared cooking preference. The revised design schema distinguishes both; the new decision illustration tests that distinction. Production enforcement remains to be implemented.
 
 ## Engineering decisions and evidence still required
 
@@ -78,4 +78,4 @@ These are implementation work, not unanswered user preferences: pin supported ru
 
 In particular, current-state-only newcomer access may require fresh documents or projections and independent keys rather than raw historical CRDT transfer. Optional-relay operation requires a real alternate transport, not merely an offline editor. A frozen quarantine batch does not prove completeness, and no protocol can infer the socially correct compromise boundary. These remain explicit engineering obligations and security limits.
 
-Before implementation, obtain confirmation that this consolidation matches the user's accepted choices. Then revise the detailed plan, policy schema and executable cases together, retaining evidence grades and testing the newly approved behavior rather than claiming the older model already covers it.
+Confirmation is complete. The revised plan and schemas retain evidence grades and new executable cases rather than claiming the older model already covers these choices. Production implementation follows the revised acceptance gates; deployment remains a separately authorized action.
