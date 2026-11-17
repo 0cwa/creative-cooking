@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 test('provider and model selection persist and defaults follow the selected provider', async ({ page }) => {
   await page.goto('./settings');

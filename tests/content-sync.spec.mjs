@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { test, expect } from '@playwright/test';
+import { test, expect } from './legacy-fixture.mjs';
 
 const enabled = process.env.CONTENT_SYNC_E2E === '1';
 const baseUrl = process.env.CONTENT_SYNC_BASE_URL ?? 'http://127.0.0.1:8081/creative-cooking/';

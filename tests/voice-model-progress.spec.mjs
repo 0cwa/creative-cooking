@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 test('voice model download shows overall percent and MB progress', async ({ page }) => {
   await page.addInitScript(() => {

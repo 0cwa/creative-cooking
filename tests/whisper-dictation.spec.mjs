@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 test('downloaded Whisper fallback keeps Start/Stop UX and never enables remote model loading', async ({ page }) => {
   await page.addInitScript(() => {

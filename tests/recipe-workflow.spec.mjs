@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 async function readPersistedState(page) {
   const previousUrl = page.url();

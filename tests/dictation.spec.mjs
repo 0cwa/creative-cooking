@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 test('on-device dictation stays active across browser ends until the user presses Stop', async ({ page }) => {
   await page.addInitScript(() => {

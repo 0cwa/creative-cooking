@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 test('Pantry and Recipes survive an offline reload from the exported PWA', async ({ page, context }) => {
   await page.goto('./');

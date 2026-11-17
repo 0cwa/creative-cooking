@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 async function offerInstall(page, outcome = 'accepted') {
   await page.evaluate((choice) => {

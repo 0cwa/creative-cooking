@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './legacy-fixture.mjs';
 import { readFile } from 'node:fs/promises';
 
 test('interrupted local content write stays visibly unsaved and can be retried after reload', async ({ page }) => {

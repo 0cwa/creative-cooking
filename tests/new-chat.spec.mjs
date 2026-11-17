@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './legacy-fixture.mjs';
 
 test('New chat archives the current conversation and previous chats can be reopened', async ({ page }) => {
   const state = {
