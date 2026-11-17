@@ -116,7 +116,7 @@ export async function acceptAdmissionAgreement(storage,scope,pin,provider,agreem
 /** Resolve admission evidence from the current pinned authority, without releasing keys. */
 export async function checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot) {
  item=copy(item); grant=copy(grant); manifest=copy(manifest); snapshot=new Uint8Array(snapshot);
- const {state,nodes}=await load(storage,scope,pin,provider), parent=nodes.get(state.activeHead);
+ const {record,state,nodes}=await load(storage,scope,pin,provider), parent=nodes.get(state.activeHead);
  if(item?.event?.kind!=='inviteAdult' || item.event.parentHead!==state.activeHead) throw Error('CONFLICT');
  const admission=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
  if(admission.reason!=='ADMISSION_AND_PROJECTION_REQUIRED') throw Error(admission.reason || 'INVALID_ADMISSION');
@@ -132,5 +132,19 @@ export async function checkCurrentAdmission(storage,scope,pin,provider,item,gran
  if(!accepted) throw Error('DELEGATION_REQUIRED');
  const association=await checkGrantManifest(parent,grant,manifest,snapshot,provider);
  if(association.reason!=='SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED') throw Error(association.reason || 'INVALID_MANIFEST');
- return {status:'pending',reason:'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED',admissionEventHash:admission.eventHash,grantHash:proof.grantHash};
+ return {status:'pending',reason:'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED',admissionEventHash:admission.eventHash,grantHash:proof.grantHash,authorityRevision:record.revision,authorizationSnapshot:record.authorizationSnapshot};
+}
+
+/** Verify the complete proof bundle at the selected parent. This does not publish
+ * or create a successor; those require the atomic guarded publication transaction. */
+export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies) {
+ const proof=await checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot);
+ const {record,state,nodes}=await load(storage,scope,pin,provider);
+ if(state.activeHead!==item.event.parentHead || record.revision!==proof.authorityRevision || record.authorizationSnapshot!==proof.authorizationSnapshot) throw Error('CONFLICT');
+ const {checkHouseholdCeremonies}=await import('./ceremony.mjs');
+ const devices=await checkHouseholdCeremonies(sodium,nodes.get(state.activeHead),record.authorizationSnapshot,grant,ceremonies,provider);
+ const {checkProjectionSource}=await import('../projection/source.mjs');
+ const expectedAuthority={version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
+ const source=await checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider);
+ return {status:'pending',reason:'ATOMIC_SUCCESSOR_REQUIRED',admissionEventHash:proof.admissionEventHash,grantHash:proof.grantHash,expectedAuthority,sourceDocument:source.sourceDocument,devices};
 }

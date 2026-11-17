@@ -8,7 +8,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement,checkCurrentAdmission} from './chain.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement,checkCurrentAdmission,checkAdmissionProofs} from './chain.mjs';
 await sodium.ready;
 const hex=b=>Buffer.from(b).toString('hex');
 const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
@@ -154,6 +154,7 @@ test('admission requires committed delegation and binds signed grant and manifes
   await acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances});
   const before=await storage.readPairingAuthority(scope);
   assert.equal((await checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,manifest,snapshot)).reason,'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED');
+  await assert.rejects(checkAdmissionProofs(storage,scope,root.head,provider,sodium,invitation,signed,manifest,snapshot,[]),/CEREMONY_REQUIRED/);
   await assert.rejects(checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,{...manifest,newDocumentId:'other'},snapshot),/INVALID_MANIFEST/);
   assert.deepEqual(await storage.readPairingAuthority(scope),before);
  } finally {database.close()}
