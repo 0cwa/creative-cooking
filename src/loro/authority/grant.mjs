@@ -28,3 +28,24 @@ export async function checkGrantSignatures(parent,grant,provider) {
   return {status:'pending',reason:'ADMISSION_EVIDENCE_REQUIRED',grantHash:hex(digest),approvals:voters.size,required};
  } catch { return {status:'deny',reason:'INVALID_PROOF'}; }
 }
+
+// All adults explicitly accept this narrowly scoped delegation at the named
+// parent. It is evidence only after it has been retained in verified authority.
+export async function checkAdmissionAgreement(parent,agreement,provider) {
+ try {
+  parent=structuredClone(parent); agreement=structuredClone(agreement);
+  const af=['version','householdId','parentHead','policyHash','roster','delegation','sourcePolicyHashes','acceptances'];
+  if(!validParent(parent) || !exact(agreement,af) || agreement.version!==1 || agreement.householdId!==parent.householdId || agreement.parentHead!==parent.head || agreement.policyHash!==parent.policyHash || !list(agreement.roster,64) || JSON.stringify(agreement.roster)!==JSON.stringify(parent.roster) || agreement.delegation!=='currentCooking' || !list(agreement.sourcePolicyHashes,64) || JSON.stringify(agreement.sourcePolicyHashes)!==JSON.stringify([parent.policyHash]) || !Array.isArray(agreement.acceptances) || agreement.acceptances.length!==parent.roster.length || !Array.from({length:agreement.acceptances.length},(_,i)=>Object.hasOwn(agreement.acceptances,i)).every(Boolean)) return {status:'deny',reason:'INVALID_INPUT'};
+  const unsigned=Object.fromEntries(af.slice(0,-1).map(k=>[k,agreement[k]])), voters=new Set();
+  for(const a of agreement.acceptances) {
+   if(!exact(a,['adultId','deviceId','signature']) || voters.has(a.adultId)) return {status:'deny',reason:'INVALID_PROOF'};
+   const d=parent.devices.find(d=>d.active && d.adultId===a.adultId && d.deviceId===a.deviceId), s=sig(a.signature);
+   if(!d || !s || !await provider.verify(d.signingKeyRef,domain('admission-agreement-acceptance',{agreement:unsigned,adultId:a.adultId,deviceId:a.deviceId}),s)) return {status:'deny',reason:'INVALID_PROOF'};
+   voters.add(a.adultId);
+  }
+  if(voters.size!==parent.roster.length) return {status:'deny',reason:'INVALID_PROOF'};
+  const digest=await provider.hash(domain('admission-agreement',unsigned));
+  if(!(digest instanceof Uint8Array) || digest.length!==32) return {status:'deny',reason:'INVALID_PROOF'};
+  return {status:'accepted',delegationHash:hex(digest)};
+ } catch {return {status:'deny',reason:'INVALID_PROOF'}}
+}

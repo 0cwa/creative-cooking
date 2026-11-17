@@ -1,6 +1,7 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
 import {validateSuccessor, validParent, domain} from './validator.mjs';
+import {checkAdmissionAgreement} from './grant.mjs';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const unhex=s=>typeof s==='string' && /^[0-9a-f]{128}$/.test(s) ? Uint8Array.from(s.match(/../g),x=>parseInt(x,16)) : null;
@@ -17,7 +18,7 @@ const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
 /** Replay every signed event from a locally pinned, explicitly preaccepted genesis. */
 export async function verifyAuthority(state,pin,provider) {
  state=copy(state);
- if (!state || Array.isArray(state) || Object.keys(state).sort().join(',')!=='activeHead,events,root,selections,version' || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
+ if (!state || Array.isArray(state) || !['activeHead,events,root,selections,version','activeHead,agreements,events,root,selections,version'].includes(Object.keys(state).sort().join(',')) || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
  if (!validParent(state.root) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
@@ -28,6 +29,15 @@ export async function verifyAuthority(state,pin,provider) {
   if(r.status!=='validated' || item.event.kind!=='changePolicy') throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
   if(nodes.has(r.eventHash)) throw Error('DUPLICATE_EVENT');
   nodes.set(r.eventHash,{...copy(parent),head:r.eventHash,policy:copy(item.event.nextPolicy),policyHash:await policyId(provider,item.event.nextPolicy)});
+ }
+ const agreements=state.agreements ?? [];
+ if(!Array.isArray(agreements) || agreements.length>128 || !Array.from({length:agreements.length},(_,i)=>Object.hasOwn(agreements,i)).every(Boolean)) throw Error('MALFORMED');
+ const agreementHashes=new Set();
+ for(const agreement of agreements) {
+  const parent=nodes.get(agreement?.parentHead); if(!parent) throw Error('MISSING_PARENT');
+  const result=await checkAdmissionAgreement(parent,agreement,provider);
+  if(result.status!=='accepted' || agreementHashes.has(result.delegationHash)) throw Error('INVALID_AGREEMENT');
+  agreementHashes.add(result.delegationHash);
  }
  let active=pin;
  for (const [index, selection] of state.selections.entries()) {
@@ -90,4 +100,15 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
  if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
  const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};
  return {scope:runtimeScope,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+}
+
+/** Persist explicit acceptance at the currently selected frozen parent. */
+export async function acceptAdmissionAgreement(storage,scope,pin,provider,agreement) {
+ agreement=copy(agreement); const {record,state,nodes}=await load(storage,scope,pin,provider);
+ if(agreement.parentHead!==state.activeHead) throw Error('CONFLICT');
+ const result=await checkAdmissionAgreement(nodes.get(state.activeHead),agreement,provider);
+ if(result.status!=='accepted') throw Error(result.reason);
+ state.agreements ??= []; state.agreements.push(agreement);
+ await verifyAuthority(state,pin,provider); await save(storage,record,state,provider);
+ return result.delegationHash;
 }

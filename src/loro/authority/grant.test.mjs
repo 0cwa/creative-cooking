@@ -26,3 +26,12 @@ test('unanimous and fixed thresholds use the frozen parent',async()=>{
  assert.equal((await check({...unsigned,signatures},{...parent,policy:{kind:'unanimous',fixedCount:null}})).reason,'QUORUM_REQUIRED');
  assert.equal((await check({...unsigned,signatures:[proof('a1')]},{...parent,policy:{kind:'fixed',fixedCount:1}})).reason,'ADMISSION_EVIDENCE_REQUIRED');
 });
+
+test('agreement requires each frozen adult to accept the exact current-cooking delegation',async()=>{
+ const {checkAdmissionAgreement}=await import('./grant.mjs');
+ const agreement={version:1,householdId:'house',parentHead:'head',policyHash:'policy',roster:['a','b','c'],delegation:'currentCooking',sourcePolicyHashes:['policy']};
+ const acceptance=deviceId=>{const adultId=deviceId[0];return {adultId,deviceId,signature:Buffer.from(sodium.crypto_sign_detached(domain('admission-agreement-acceptance',{agreement,adultId,deviceId}),pairs[deviceId].privateKey)).toString('hex')}};
+ const acceptances=['a1','b1','c1'].map(acceptance);
+ assert.equal((await checkAdmissionAgreement(parent,{...agreement,acceptances},provider)).status,'accepted');
+ for(const bad of [{...agreement,delegation:'none',acceptances},{...agreement,sourcePolicyHashes:['other'],acceptances},{...agreement,acceptances:acceptances.slice(0,2)},{...agreement,acceptances:[acceptances[0],acceptances[0],acceptances[2]]}]) assert.equal((await checkAdmissionAgreement(parent,bad,provider)).status,'deny');
+});

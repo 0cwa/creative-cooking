@@ -8,7 +8,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority} from './chain.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement} from './chain.mjs';
 await sodium.ready;
 const hex=b=>Buffer.from(b).toString('hex');
 const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
@@ -116,4 +116,21 @@ test('switching sibling heads cannot read or extend the other branch snapshot',a
   await assert.rejects(switched.importItem({itemId:bObject.objectId,bytes:bObject.bytes}),/CHECKOUT_REQUIRED/);
   await select(one,second,first,2);assert.equal((await (await runtime(one)).read()).recipe.title,'A secret');
  } finally {one.db.close();two.db.close()}
+});
+
+test('signed delegation persists and replays from the pinned parent; bad acceptance writes nothing',async()=>{
+ const {database,storage}=isolatedStore();
+ try {
+  await initializeAuthority(storage,root,root.head,provider);
+  const agreement={version:1,householdId:'house',parentHead:root.head,policyHash:root.policyHash,roster:['a','b'],delegation:'currentCooking',sourcePolicyHashes:[root.policyHash]};
+  const acceptances=['a','b'].map(deviceId=>({adultId:deviceId,deviceId,signature:sign(deviceId,'admission-agreement-acceptance',{agreement,adultId:deviceId,deviceId})}));
+  const before=await storage.readPairingAuthority(scope);
+  await assert.rejects(acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances:acceptances.slice(0,1)}));
+  assert.deepEqual(await storage.readPairingAuthority(scope),before);
+  const hash=await acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances});
+  assert.match(hash,/^[0-9a-f]{64}$/);
+  const view=await readAuthority(storage,scope,root.head,provider);
+  assert.equal(view.state.agreements.length,1);
+  await assert.rejects(acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances}),/INVALID_AGREEMENT/);
+ } finally {database.close()}
 });
