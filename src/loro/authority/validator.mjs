@@ -32,12 +32,25 @@ export async function validateSuccessor(parent, event, authorSignature, approval
  try {
   parent = structuredClone(parent); event = structuredClone(event); approvals = structuredClone(approvals);
   if (!validParent(parent)) return deny('INVALID_PARENT');
-  if (!keys(event,eventFields) || event.version !== 1 || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice'].includes(event.kind)) return deny('INVALID_INPUT');
+  if (!keys(event,eventFields) || ![1,2].includes(event.version) || (event.version===2 && event.kind!=='inviteAdult') || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice'].includes(event.kind)) return deny('INVALID_INPUT');
   if (event.householdId !== parent.householdId || event.parentHead !== parent.head) return pending('PARENT_UNRESOLVED');
   if (event.policyHash !== parent.policyHash || event.generation !== parent.generation || event.epochId !== parent.epochId || JSON.stringify(event.frozenAdultRoster) !== JSON.stringify(parent.roster)) return deny('CONTEXT_MISMATCH');
   const author = parent.devices.find(d=>d.deviceId === event.authorDeviceId && d.active);
   if (!author) return deny('UNAUTHORIZED_DEVICE');
-  if (event.kind === 'inviteAdult' && (!keys(event.subject,['adultId']) || !id(event.subject.adultId) || parent.roster.includes(event.subject.adultId) || event.nextPolicy !== null)) return deny('INVALID_INPUT');
+  if (event.kind === 'inviteAdult') {
+   const subject=event.subject;
+   if(event.version===1) {
+    if(!keys(subject,['adultId']) || !id(subject.adultId) || parent.roster.includes(subject.adultId) || event.nextPolicy!==null) return deny('INVALID_INPUT');
+   } else {
+    if(!keys(subject,['adultId','devices','documentId','newGeneration','newEpochId']) || !id(subject.adultId) || parent.roster.includes(subject.adultId) || !id(subject.documentId) || subject.documentId===parent.runtime.documentId || !Number.isSafeInteger(subject.newGeneration) || subject.newGeneration<=parent.generation || !id(subject.newEpochId) || subject.newEpochId===parent.epochId || event.nextPolicy!==null || !Array.isArray(subject.devices) || !subject.devices.length || subject.devices.length>128 || !dense(subject.devices)) return deny('INVALID_INPUT');
+    const peers=new Set(Object.values(parent.runtime.authorPeers));
+    for(let i=0;i<subject.devices.length;i++) {
+     const d=subject.devices[i];
+     if(!keys(d,['deviceId','signingKeyRef','wrappingKeyRef','peerId']) || ![d.deviceId,d.signingKeyRef,d.wrappingKeyRef].every(id) || parent.devices.some(p=>p.deviceId===d.deviceId) || (i && subject.devices[i-1].deviceId>=d.deviceId) || typeof d.peerId!=='string' || d.peerId.length>20 || !/^(0|[1-9][0-9]*)$/.test(d.peerId) || BigInt(d.peerId)>18446744073709551615n || peers.has(d.peerId)) return deny('INVALID_INPUT');
+     peers.add(d.peerId);
+    }
+   }
+  }
   if (event.kind === 'changePolicy' && (event.subject !== null || !policy(event.nextPolicy,parent.roster.length))) return deny('INVALID_INPUT');
   if (event.kind === 'pairOwnDevice' && (!keys(event.subject,['adultId','deviceId','signingKeyRef']) || event.subject.adultId !== author.adultId || !id(event.subject.deviceId) || !id(event.subject.signingKeyRef) || parent.devices.some(d=>d.deviceId === event.subject.deviceId) || event.nextPolicy !== null)) return deny('INVALID_INPUT');
   const canonical = Object.fromEntries(eventFields.map(k=>[k,event[k]]));

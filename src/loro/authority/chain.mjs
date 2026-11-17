@@ -138,6 +138,7 @@ export async function checkCurrentAdmission(storage,scope,pin,provider,item,gran
 /** Verify the complete proof bundle at the selected parent. This does not publish
  * or create a successor; those require the atomic guarded publication transaction. */
 export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,item,grant,manifest,snapshot,ceremonies) {
+ if(item?.event?.version!==2 || item.event.kind!=='inviteAdult') throw Error('UNSUPPORTED_TRANSITION');
  const proof=await checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot);
  const {record,state,nodes}=await load(storage,scope,pin,provider);
  if(state.activeHead!==item.event.parentHead || record.revision!==proof.authorityRevision || record.authorizationSnapshot!==proof.authorizationSnapshot) throw Error('CONFLICT');
@@ -145,6 +146,8 @@ export async function checkAdmissionProofs(storage,scope,pin,provider,sodium,ite
  const devices=await checkHouseholdCeremonies(sodium,nodes.get(state.activeHead),record.authorizationSnapshot,grant,ceremonies,provider);
  const {checkProjectionSource}=await import('../projection/source.mjs');
  const expectedAuthority={version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}};
+ const subject=item.event.subject;
+ if(subject.documentId!==manifest.newDocumentId || subject.newGeneration!==grant.newDocumentGeneration || subject.newEpochId!==grant.newEpochId || JSON.stringify(subject.devices.map(d=>d.deviceId))!==JSON.stringify(grant.recipientDevices) || subject.devices.some((d,i)=>d.deviceId!==devices[i]?.deviceId || d.signingKeyRef!==devices[i]?.signingKeyRef || d.wrappingKeyRef!==devices[i]?.wrappingKeyRef)) throw Error('CONTEXT_MISMATCH');
  const source=await checkProjectionSource(storage,expectedAuthority,manifest,grant,snapshot,provider);
  return {status:'pending',reason:'ATOMIC_SUCCESSOR_REQUIRED',admissionEventHash:proof.admissionEventHash,grantHash:proof.grantHash,expectedAuthority,sourceDocument:source.sourceDocument,devices};
 }

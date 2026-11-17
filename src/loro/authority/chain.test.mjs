@@ -154,7 +154,7 @@ test('admission requires committed delegation and binds signed grant and manifes
   await acceptAdmissionAgreement(storage,scope,root.head,provider,{...agreement,acceptances});
   const before=await storage.readPairingAuthority(scope);
   assert.equal((await checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,manifest,snapshot)).reason,'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED');
-  await assert.rejects(checkAdmissionProofs(storage,scope,root.head,provider,sodium,invitation,signed,manifest,snapshot,[]),/CEREMONY_REQUIRED/);
+  await assert.rejects(checkAdmissionProofs(storage,scope,root.head,provider,sodium,invitation,signed,manifest,snapshot,[]),/UNSUPPORTED_TRANSITION/);
   await assert.rejects(checkCurrentAdmission(storage,scope,root.head,provider,invitation,signed,{...manifest,newDocumentId:'other'},snapshot),/INVALID_MANIFEST/);
   assert.deepEqual(await storage.readPairingAuthority(scope),before);
  } finally {database.close()}

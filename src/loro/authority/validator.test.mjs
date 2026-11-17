@@ -47,3 +47,11 @@ test('signature corruption fails closed',async()=>{
  const e=event(); const sig=sign('a1','event-signature',e); const bad=(sig[0]==='0'?'1':'0')+sig.slice(1);
  assert.equal((await validateSuccessor(parent,e,bad,[],provider)).reason,'INVALID_PROOF');
 });
+test('v2 invite signs exact recipient keys, peers and fresh runtime; legacy remains pending',async()=>{
+ const subject={adultId:'d',devices:[{deviceId:'d1',signingKeyRef:'new-sign',wrappingKeyRef:'new-wrap',peerId:'9'}],documentId:'fresh',newGeneration:2,newEpochId:'fresh-epoch'};
+ const e=event({version:2,kind:'inviteAdult',subject,nextPolicy:null});
+ assert.equal((await run(parent,e,[['a','a1'],['b','b1']])).reason,'ADMISSION_AND_PROJECTION_REQUIRED');
+ const hash=hex(await provider.hash(domain('event',e))),approval={version:1,householdId:'house',eventHash:hash,parentHead:'head',policyHash:'policy',generation:1,epochId:'epoch',adultId:'a',deviceId:'a1'};
+ const approvals=[{...approval,signature:sign('a1','approval-signature',approval)}], sig=sign('a1','event-signature',e);
+ for(const change of [{...subject,devices:[{...subject.devices[0],signingKeyRef:'other'}]},{...subject,devices:[{...subject.devices[0],peerId:'1'}]},{...subject,documentId:'cooking'},{...subject,newEpochId:'epoch'}]) assert.notEqual((await validateSuccessor(parent,{...e,subject:change},sig,approvals,provider)).reason,'ADMISSION_AND_PROJECTION_REQUIRED');
+});
