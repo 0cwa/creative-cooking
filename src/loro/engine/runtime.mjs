@@ -1,7 +1,10 @@
+import {resolveRuntimeAuthority} from '../authority/chain.mjs';
 // Minimal offline engine. The caller supplies a LoroDoc constructor and an explicitly
 // preaccepted scope; product pairing and authority management are not implemented here.
+const FIXTURE=Symbol('fixture authority');
 const encoder = new TextEncoder();
-const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v==='object' ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])) : v;
+const same = (a,b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const required = result => { if (!result.ok) throw new Error(typeof result.error === 'string' ? result.error : result.error.code); return result.value; };
 function commandBytes(command) { return encoder.encode(JSON.stringify(command)); }
 function checkCommand(c) {
@@ -18,7 +21,11 @@ function apply(doc, command) {
  * The candidate codec is the actual K2 throwing API, not C0's Result API.
  */
 export class OfflineRuntime {
-  constructor({storage, codec, LoroDoc, decodeImportBlobMeta, scope, keyRef}) {
+  constructor({storage, codec, LoroDoc, decodeImportBlobMeta, scope, keyRef, authority}, fixtureToken) {
+    const fixtureAuthority=fixtureToken===FIXTURE;
+    if ((!authority || typeof authority.rootPin!=='string' || !authority.provider) && fixtureAuthority!==true) throw new Error('INVALID_AUTHORITY_CONFIG');
+    if (authority && fixtureAuthority) throw new Error('INVALID_AUTHORITY_CONFIG');
+    this.authority=authority; this.fixtureAuthority=fixtureAuthority;
     this.storage=storage; this.codec=codec; this.LoroDoc=LoroDoc; this.decodeImportBlobMeta=decodeImportBlobMeta; this.scope=structuredClone(scope); this.keyRef=keyRef;
     const peers=scope.authorPeers && Object.values(scope.authorPeers);
     const validPeer=p=>typeof p==='string' && p.length <= 20 && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p) <= 18446744073709551615n;
@@ -27,6 +34,12 @@ export class OfflineRuntime {
   }
   async authorize() {
     const s=this.scope;
+    if (!this.fixtureAuthority) {
+      const resolved=await resolveRuntimeAuthority(this.storage,{kind:'household',id:s.scopeId},this.authority.rootPin,this.authority.provider,s.authorDevice);
+      const expected={...resolved.scope,authorizationSnapshot:s.authorizationSnapshot};
+      if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
+      return resolved.expectedAuthority;
+    }
     const record=required(await this.storage.readPairingAuthority({kind:'household',id:s.scopeId}));
     if (!record || record.acceptedParent !== s.branchHead || record.authorizationSnapshot !== s.authorizationSnapshot) throw new Error('INVALID_AUTHORITY');
     let state; try { state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState)); } catch { throw new Error('INVALID_AUTHORITY'); }
@@ -119,3 +132,6 @@ export class OfflineRuntime {
     return objects.filter(o => o.branchHead === this.scope.branchHead && o.epochId === this.scope.epochId && !receipts.some(r => r.objectId === o.objectId && r.destination === 'peer' && r.recipientId === recipient && r.state === 'applied'));
   }
 }
+
+/** Explicitly test-only authority fixture; never use for product enrollment. */
+export class FixtureOfflineRuntime extends OfflineRuntime { constructor(options) { super(options,FIXTURE); } }

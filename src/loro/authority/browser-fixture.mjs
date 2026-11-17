@@ -8,7 +8,7 @@ export async function run() {
  const provider={hash:async b=>sodium.crypto_generichash(32,b),verify:async(k,b,s)=>k==='key' && sodium.crypto_sign_verify_detached(s,b,kp.publicKey)};
  const sign=(purpose,v)=>hex(sodium.crypto_sign_detached(domain(purpose,v),kp.privateKey));
  const policy={kind:'allMinusOne',fixedCount:null};
- const root={householdId:'house',head:'',policyHash:await policyId(provider,policy),generation:1,epochId:'epoch',roster:['a'],devices:[{adultId:'a',deviceId:'a1',signingKeyRef:'key',active:true}],policy}; root.head=await rootPin(provider,root);
+ const root={householdId:'house',head:'',policyHash:await policyId(provider,policy),generation:1,epochId:'epoch',roster:['a'],devices:[{adultId:'a',deviceId:'a1',signingKeyRef:'key',active:true}],policy,runtime:{documentId:'cooking',authorPeers:{a1:'1'},acceptedRecipients:['a1']}}; root.head=await rootPin(provider,root);
  const name='authority-'+crypto.randomUUID(), scope={kind:'household',id:'house'}; let fail=false;
  let db=await openIndexedDBStorage(name,x=>{if(fail && x==='write')throw Error('injected')});
  try {

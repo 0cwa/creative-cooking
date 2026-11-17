@@ -8,7 +8,7 @@ import sodium from 'libsodium-wrappers';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {candidateCodec, SUITE} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {OfflineRuntime} from './runtime.mjs';
+import {FixtureOfflineRuntime} from './runtime.mjs';
 
 test('real Loro, SQLite and candidate encryption survive failures, reorder, duplicates and reopen',async()=>{
  await sodium.ready;
@@ -19,16 +19,16 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
  // Isolated preaccepted test identity; this is not product pairing.
  const scope={scopeId:'house',documentId:'cooking',documentGeneration:0,branchHead:'accepted-head',authorizationSnapshot:'authority-v1',policyHashes:['policy'],epochId:'epoch',authorDevice:'sender',acceptedAuthors:['sender','sender-b'],authorPeers:{sender:'1','sender-b':'2'},acceptedRecipients:['peer'],suiteId:SUITE};
  let fault='';
- const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault === b) throw Error('injected');}); return {db,storage,runtime:new OfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorDevice:name==='b.sqlite'?'sender-b':'sender'},keyRef:'data'})};};
+ const open=name=>{const db=new DatabaseSync(join(dir,name)); const conn={executeSync:(sql,params=[])=>{const st=db.prepare(sql); return {rows:sql.startsWith('SELECT')?st.all(...params):(st.run(...params),[])};}}; const storage=openSQLiteStorage(conn,b=>{if(fault === b) throw Error('injected');}); return {db,storage,runtime:new FixtureOfflineRuntime({storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorDevice:name==='b.sqlite'?'sender-b':'sender'},keyRef:'data'})};};
  let a=open('a.sqlite'), b=open('b.sqlite');
  const stage=async (target,object,n)=>assert.equal((await target.storage.stageInbox({scopeId:'house',object:{id:object.objectId,bytes:object.bytes},source:'peer',expectedCursor:n===0?null:String(n-1),cursor:String(n)})).ok,true);
  try {
   const authorityState=new TextEncoder().encode(JSON.stringify({acceptedAuthors:scope.acceptedAuthors,authorPeers:scope.authorPeers,acceptedRecipients:scope.acceptedRecipients,epochId:scope.epochId,policyHashes:scope.policyHashes,documentId:scope.documentId,documentGeneration:scope.documentGeneration}));
   for (const client of [a,b]) assert.equal((await client.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'house'},revision:0,acceptedParent:scope.branchHead,authorizationSnapshot:scope.authorizationSnapshot,authorityState}})).ok,true);
-  assert.throws(()=>new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorPeers:{sender:'01','sender-b':'2'}},keyRef:'data'}),/MALFORMED_SCOPE/);
-  assert.throws(()=>new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorPeers:{sender:'1','sender-b':'1'}},keyRef:'data'}),/MALFORMED_SCOPE/);
+  assert.throws(()=>new FixtureOfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorPeers:{sender:'01','sender-b':'2'}},keyRef:'data'}),/MALFORMED_SCOPE/);
+  assert.throws(()=>new FixtureOfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorPeers:{sender:'1','sender-b':'1'}},keyRef:'data'}),/MALFORMED_SCOPE/);
   await assert.rejects(a.runtime.outboundFor('stranger'),/INVALID_AUTHORITY/);
-  const denied=new OfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorizationSnapshot:'other'},keyRef:'data'});
+  const denied=new FixtureOfflineRuntime({storage:a.storage,codec:codec(),LoroDoc,decodeImportBlobMeta,scope:{...scope,authorizationSnapshot:'other'},keyRef:'data'});
   await assert.rejects(denied.execute({operationId:'denied',command:{commandId:'denied',effectId:'denied',kind:'purchase',value:'x'},deviceSequence:0}),/INVALID_AUTHORITY/);
   await assert.rejects(denied.importItem({itemId:'no-object',bytes:new Uint8Array()}),/INVALID_AUTHORITY/);
   const title={commandId:'cmd-title',effectId:'effect-title',kind:'recipe-title',value:'Soup'};
@@ -63,7 +63,7 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   assert.ok((await b.runtime.recoverInbox()).every(x=>x.result.replayed));
   let resume, started; const paused=new Promise(r=>{started=r;}), gate=new Promise(r=>{resume=r;});
   const real=codec(); const delayed={...real,sealContent:async (...args)=>{const value=await real.sealContent(...args); started(); await gate; return value;}};
-  const runtime=new OfflineRuntime({storage:a.storage,codec:delayed,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+  const runtime=new FixtureOfflineRuntime({storage:a.storage,codec:delayed,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
   const mutable={commandId:'original-id',effectId:'original-effect',kind:'purchase',value:'carrots'};
   const pending=runtime.execute({operationId:'mutation',command:mutable,deviceSequence:5}); await paused;
   Object.assign(mutable,{commandId:'changed-id',effectId:'changed-effect',value:'beans'}); resume(); await pending;
@@ -80,7 +80,7 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   await assert.rejects(b.runtime.importItem({itemId:collision.id,bytes:collision.bytes}),/MALFORMED_UPDATE/); assert.equal((await b.storage.getInboxApplication('house',collision.id)).value,null);
   let releaseBoth, entered=0, bothEntered; const gate2=new Promise(r=>{releaseBoth=r;}), ready2=new Promise(r=>{bothEntered=r;});
   const slowReal=codec(), slow={...slowReal,sealContent:async(...args)=>{const value=await slowReal.sealContent(...args); if(++entered===2) bothEntered(); await gate2; return value;}};
-  const racer=new OfflineRuntime({storage:a.storage,codec:slow,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+  const racer=new FixtureOfflineRuntime({storage:a.storage,codec:slow,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
   const jobs=[1,2].map(i=>({operationId:`race-${i}`,deviceSequence:10+i,command:{commandId:`race-${i}`,effectId:`race-${i}`,kind:'purchase',value:`item-${i}`}}));
   const writes=jobs.map(x=>racer.execute(x)); await ready2; releaseBoth(); const settled=await Promise.allSettled(writes);
   assert.equal(settled.filter(x=>x.status==='fulfilled').length,1); const loser=settled.findIndex(x=>x.status==='rejected'); assert.match(settled[loser].reason.message,/CONFLICT/);

@@ -11,7 +11,14 @@ const policy = (p,n) => keys(p,['kind','fixedCount']) && (p.kind === 'fixed' ? N
 const threshold = (p,n) => p.kind === 'fixed' ? p.fixedCount : p.kind === 'unanimous' ? n : Math.max(1,n-1);
 const deny = reason => ({status:'deny',reason});
 const pending = reason => ({status:'pending',reason});
-export const validParent = parent => !(!keys(parent,['householdId','head','policyHash','generation','epochId','roster','devices','policy']) || ![parent.householdId,parent.head,parent.policyHash,parent.epochId].every(id) || !Number.isSafeInteger(parent.generation) || parent.generation < 0 || !ids(parent.roster) || !policy(parent.policy,parent.roster.length) || !Array.isArray(parent.devices) || parent.devices.length > 128 || !parent.devices.every(d=>keys(d,['deviceId','adultId','signingKeyRef','active']) && id(d.deviceId) && id(d.signingKeyRef) && parent.roster.includes(d.adultId) && typeof d.active === 'boolean') || new Set(parent.devices.map(d=>d.deviceId)).size !== parent.devices.length);
+const validRuntime = (r,devices) => {
+ if (!keys(r,['documentId','authorPeers','acceptedRecipients']) || !id(r.documentId) || !r.authorPeers || typeof r.authorPeers!=='object' || Array.isArray(r.authorPeers) || !Array.isArray(r.acceptedRecipients)) return false;
+ const active=devices.filter(d=>d.active).map(d=>d.deviceId).sort(), peers=Object.keys(r.authorPeers).sort();
+ if (JSON.stringify(active)!==JSON.stringify(peers) || !active.length || active.length>128) return false;
+ const values=Object.values(r.authorPeers), validPeer=p=>typeof p==='string' && p.length<=20 && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p)<=18446744073709551615n;
+ return values.every(validPeer) && new Set(values).size===values.length && r.acceptedRecipients.every(x=>active.includes(x)) && new Set(r.acceptedRecipients).size===r.acceptedRecipients.length && r.acceptedRecipients.every((v,i)=>!i || r.acceptedRecipients[i-1]<v);
+};
+export const validParent = parent => !(!keys(parent,['householdId','head','policyHash','generation','epochId','roster','devices','policy','runtime']) || ![parent.householdId,parent.head,parent.policyHash,parent.epochId].every(id) || !Number.isSafeInteger(parent.generation) || parent.generation < 0 || !ids(parent.roster) || !policy(parent.policy,parent.roster.length) || !Array.isArray(parent.devices) || parent.devices.length > 128 || !parent.devices.every(d=>keys(d,['deviceId','adultId','signingKeyRef','active']) && id(d.deviceId) && id(d.signingKeyRef) && parent.roster.includes(d.adultId) && typeof d.active === 'boolean') || new Set(parent.devices.map(d=>d.deviceId)).size !== parent.devices.length || !validRuntime(parent.runtime,parent.devices));
 const eventFields = ['version','suiteId','householdId','parentHead','policyHash','generation','epochId','proposalId','kind','authorDeviceId','frozenAdultRoster','subject','nextPolicy'];
 const approvalFields = ['version','householdId','eventHash','parentHead','policyHash','generation','epochId','adultId','deviceId','signature'];
 // The caller must authenticate and freeze the parent from the accepted authority record.

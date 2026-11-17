@@ -4,7 +4,11 @@ import {DatabaseSync} from 'node:sqlite';
 import sodium from 'libsodium-wrappers';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {domain} from './validator.mjs';
-import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority} from './chain.mjs';
+import {OfflineRuntime} from '../engine/runtime.mjs';
+import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt';
+import {candidateCodec} from '../crypto/candidate.mjs';
+import {testProvider} from '../crypto/test-provider.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority} from './chain.mjs';
 await sodium.ready;
 const hex=b=>Buffer.from(b).toString('hex');
 const pair=Object.fromEntries(['a','b'].map(k=>[k,sodium.crypto_sign_keypair()]));
@@ -14,13 +18,24 @@ const db=new DatabaseSync(':memory:');
 const conn={executeSync:(sql,params=[])=>{const s=db.prepare(sql);return {rows:sql.startsWith('SELECT')?s.all(...params):(s.run(...params),[])}}};
 const scope={kind:'household',id:'house'};
 const p={kind:'allMinusOne',fixedCount:null};
-const root={householdId:'house',head:'',policyHash:await policyId(provider,p),generation:1,epochId:'epoch',roster:['a','b'],devices:[{adultId:'a',deviceId:'a',signingKeyRef:'a',active:true},{adultId:'b',deviceId:'b',signingKeyRef:'b',active:true}],policy:p};
+const root={householdId:'house',head:'',policyHash:await policyId(provider,p),generation:1,epochId:'epoch',roster:['a','b'],devices:[{adultId:'a',deviceId:'a',signingKeyRef:'a',active:true},{adultId:'b',deviceId:'b',signingKeyRef:'b',active:true}],policy:p,runtime:{documentId:'cooking',authorPeers:{a:'1',b:'2'},acceptedRecipients:['a','b']}};
 root.head=await rootPin(provider,root);
 const event=name=>({version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:'house',parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',proposalId:name,kind:'changePolicy',authorDeviceId:'a',frozenAdultRoster:['a','b'],subject:null,nextPolicy:{kind:'unanimous',fixedCount:null}});
 async function item(name){const e=event(name),eventHash=hex(await provider.hash(domain('event',e)));const approval={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a'};return {event:e,authorSignature:sign('a','event-signature',e),approvals:[{...approval,signature:sign('a','approval-signature',approval)}]}}
 test('durable siblings and signed deliberate selection survive reopen; failed CAS leaves state',async()=>{
  let fail=false; const store=openSQLiteStorage(conn,x=>{if(fail && x==='write')throw Error('fault')});
  await initializeAuthority(store,root,root.head,provider);
+ const resolved=await resolveRuntimeAuthority(store,scope,root.head,provider,'a');
+ const recipient=sodium.crypto_box_keypair();
+ const crypto=testProvider(sodium,{signing:pair.a,publicSigning:pair.a.publicKey,recipient,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
+ const cp={...crypto,sign:async (who,bytes)=>{if(who!=='a')throw Error('MISSING_KEY');return sodium.crypto_sign_detached(bytes,pair.a.privateKey)},verify:async(who,bytes,sig)=>who==='a' && sodium.crypto_sign_verify_detached(sig,bytes,pair.a.publicKey)};
+ const makeRuntime=opts=>new OfflineRuntime({storage:store,codec:candidateCodec(cp),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:'data',authority:{rootPin:root.head,provider},...opts});
+ const runtime=makeRuntime({}); await runtime.execute({operationId:'op',command:{kind:'recipe-title',commandId:'c',effectId:'e',value:'soup'},deviceSequence:1});
+ assert.equal((await runtime.read()).recipe.title,'soup');
+ const altered=structuredClone(resolved.scope); altered.authorPeers.a='99';
+ await assert.rejects(makeRuntime({scope:altered}).authorize(),/INVALID_AUTHORITY/);
+ await assert.rejects(makeRuntime({authority:{rootPin:'wrong',provider}}).authorize(),/INVALID_ROOT/);
+
  const firstItem=await item('first');
  const first=await observeSuccessor(store,scope,root.head,provider,firstItem);
  const reused=await item('second'); reused.approvals=firstItem.approvals;
@@ -33,6 +48,7 @@ test('durable siblings and signed deliberate selection survive reopen; failed CA
  fail=true; await assert.rejects(selectHead(store,scope,root.head,provider,selection)); fail=false;
  assert.equal((await readAuthority(store,scope,root.head,provider)).activeHead,root.head);
  await selectHead(store,scope,root.head,provider,selection);
+ await assert.rejects(runtime.authorize(),/INVALID_AUTHORITY/);
  view=await readAuthority(openSQLiteStorage(conn),scope,root.head,provider);assert.equal(view.activeHead,first);assert.deepEqual(new Set(view.heads),new Set([first,second]));
  await assert.rejects(readAuthority(store,scope,'wrong',provider),/INVALID_ROOT/);
  db.close();

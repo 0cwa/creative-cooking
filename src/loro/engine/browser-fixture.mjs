@@ -4,7 +4,7 @@ import sodium from 'libsodium-wrappers';
 import {openIndexedDBStorage} from '../storage/indexeddb.ts';
 import {candidateCodec, SUITE} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {OfflineRuntime} from './runtime.mjs';
+import {FixtureOfflineRuntime} from './runtime.mjs';
 await sodium.ready;
 const signing=sodium.crypto_sign_seed_keypair(new Uint8Array(32).fill(1));
 const signingB=sodium.crypto_sign_seed_keypair(new Uint8Array(32).fill(4));
@@ -21,7 +21,7 @@ async function open() {
  const record=await current.storage.readPairingAuthority({kind:'household',id:'house'});
  if (!record.ok) throw Error(record.error);
  if (!record.value) { const r=await current.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'house'},revision:0,acceptedParent:'head',authorizationSnapshot:'authority',authorityState:state}}); if(!r.ok) throw Error(r.error); }
- current.runtime=new OfflineRuntime({storage:current.storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+ current.runtime=new FixtureOfflineRuntime({storage:current.storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
 }
 await open();
 window.runtimeTest={

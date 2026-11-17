@@ -83,3 +83,11 @@ export async function selectHead(storage,scope,pin,provider,selection) {
  state.selections.push(selection); state.activeHead=selection.to;
  await verifyAuthority(state,pin,provider); await save(storage,record,state,provider);
 }
+/** Resolve only from a pinned and replayed selected head, never from runtime options. */
+export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorDevice) {
+ const {record,state,nodes}=await load(storage,scope,pin,provider), selected=nodes.get(state.activeHead);
+ const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();
+ if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
+ const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};
+ return {scope:runtimeScope,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+}

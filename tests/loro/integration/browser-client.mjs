@@ -1,7 +1,7 @@
 // Isolated acceptance harness: deterministic public test keys; not product pairing.
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/base64';
 import sodium from 'libsodium-wrappers';
-import {OfflineRuntime} from '../../../src/loro/engine/runtime.mjs';
+import {FixtureOfflineRuntime} from '../../../src/loro/engine/runtime.mjs';
 import {candidateCodec,SUITE} from '../../../src/loro/crypto/candidate.mjs';
 import {testProvider} from '../../../src/loro/crypto/test-provider.mjs';
 import {openIndexedDBStorage} from '../../../src/loro/storage/indexeddb.ts';
@@ -24,7 +24,7 @@ async function open(){
  const state=enc.encode(JSON.stringify({acceptedAuthors:scope.acceptedAuthors,authorPeers:scope.authorPeers,acceptedRecipients:scope.acceptedRecipients,epochId:scope.epochId,policyHashes:scope.policyHashes,documentId:scope.documentId,documentGeneration:scope.documentGeneration}));
  const old=await db.storage.readPairingAuthority({kind:'household',id:'house'});if(!old.ok)throw Error(old.error);
  if(!old.value){const result=await db.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'house'},revision:0,acceptedParent:'head',authorizationSnapshot:'accepted-v1',authorityState:state}});if(!result.ok)throw Error(result.error);}
- runtime=new OfflineRuntime({storage:db.storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+ runtime=new FixtureOfflineRuntime({storage:db.storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
  adapter=inboxAdapter({storage:db.storage,reader:db.storage,verifyObject:async bytes=>{const x=await codec.openContent(bytes);if(x.header.scopeId!=='house'||x.header.authorDevice!==other)throw Error('INVALID_AUTHORITY');return x.object;},receiptProvider,scopeId:'house',source:other,recipientId:who,trustHead:'head'});
  const cursors=await db.storage.listCursors('house');if(!cursors.ok)throw Error(cursors.error);cursor=cursors.value.find(x=>x.source===other)?.cursor??null;
 }
