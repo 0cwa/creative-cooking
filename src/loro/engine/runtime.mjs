@@ -37,8 +37,9 @@ export class OfflineRuntime {
   }
   async read() { const {doc}=await this.document(); return {recipe:doc.getMap('recipe').toJSON(), purchases:doc.getMap('purchases').toJSON()}; }
   async execute({operationId, command, deviceSequence}) {
-    const expectedAuthority=await this.authorize();
+    command=structuredClone(command);
     checkCommand(command);
+    const expectedAuthority=await this.authorize();
     if (!operationId || !Number.isSafeInteger(deviceSequence) || deviceSequence < 0) throw new Error('MALFORMED');
     const previous=required(await this.storage.getLocalOperation(this.scope.scopeId,operationId));
     if (previous) {

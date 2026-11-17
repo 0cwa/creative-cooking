@@ -58,5 +58,16 @@ test('real Loro, SQLite and candidate encryption survive failures, reorder, dupl
   assert.deepEqual(await a.runtime.read(),state); assert.deepEqual(await b.runtime.read(),state);
   assert.equal((await a.runtime.execute({operationId:'title',command:title,deviceSequence:1})).replayed,true);
   assert.ok((await b.runtime.recoverInbox()).every(x=>x.result.replayed));
+  let resume, started; const paused=new Promise(r=>{started=r;}), gate=new Promise(r=>{resume=r;});
+  const real=codec(); const delayed={...real,sealContent:async (...args)=>{const value=await real.sealContent(...args); started(); await gate; return value;}};
+  const runtime=new OfflineRuntime({storage:a.storage,codec:delayed,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+  const mutable={commandId:'original-id',effectId:'original-effect',kind:'purchase',value:'carrots'};
+  const pending=runtime.execute({operationId:'mutation',command:mutable,deviceSequence:5}); await paused;
+  Object.assign(mutable,{commandId:'changed-id',effectId:'changed-effect',value:'beans'}); resume(); await pending;
+  const committed=(await a.storage.getLocalOperation('house','mutation')).value.commit.commands[0];
+  assert.equal(committed.commandId,'original-id'); assert.equal(committed.effectId,'original-effect');
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(committed.payload)),{commandId:'original-id',effectId:'original-effect',kind:'purchase',value:'carrots'});
+  assert.equal((await a.runtime.read()).purchases['original-effect'],'carrots');
+  assert.equal((await a.runtime.execute({operationId:'mutation',command:{commandId:'original-id',effectId:'original-effect',kind:'purchase',value:'carrots'},deviceSequence:5})).replayed,true);
  } finally {a.db.close(); b.db.close(); rmSync(dir,{recursive:true,force:true});}
 });
