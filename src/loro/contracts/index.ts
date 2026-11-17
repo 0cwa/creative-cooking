@@ -92,8 +92,13 @@ export function validateReviewBatch(objects: readonly ImmutableObject[], depende
   }
   return { ok: true, value: undefined };
 }
-export function validateGuardianPackage(p: GuardianPackage): Result<GuardianPackage, BoundaryError> {
+export function validateGuardianPackage(input: unknown): Result<GuardianPackage, BoundaryError> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: 'MALFORMED' };
+  const p = input as Record<string, unknown>;
+  const keys = ['version', 'owner', 'scope', 'packageGeneration', 'guardianRoster', 'threshold', 'encryptedCatalogRef', 'sharedGrantRef', 'approvalRefs'];
+  if (Object.keys(p).length !== keys.length || keys.some(k => !Object.hasOwn(p, k))) return { ok: false, error: 'MALFORMED' };
   if (p.version !== 1) return { ok: false, error: 'UNSUPPORTED_VERSION' };
-  if ((p.scope !== 'personal' && p.scope !== 'shared') || !p.guardianRoster.length || p.guardianRoster.some(id => !id) || new Set(p.guardianRoster).size !== p.guardianRoster.length || !Number.isSafeInteger(p.threshold) || p.threshold < 1 || p.threshold > p.guardianRoster.length || (p.scope === 'personal' && p.sharedGrantRef !== null) || (p.scope === 'shared' && !p.sharedGrantRef)) return { ok: false, error: 'MALFORMED' };
-  return { ok: true, value: p };
+  const ids = (v: unknown): v is string[] => Array.isArray(v) && v.every(id => typeof id === 'string' && id.length > 0) && new Set(v).size === v.length;
+  if (typeof p.owner !== 'string' || !p.owner || typeof p.encryptedCatalogRef !== 'string' || !p.encryptedCatalogRef || !Number.isSafeInteger(p.packageGeneration) || (p.packageGeneration as number) < 0 || (p.scope !== 'personal' && p.scope !== 'shared') || !ids(p.guardianRoster) || !p.guardianRoster.length || !ids(p.approvalRefs) || !Number.isSafeInteger(p.threshold) || (p.threshold as number) < 1 || (p.threshold as number) > p.guardianRoster.length || (p.scope === 'personal' && p.sharedGrantRef !== null) || (p.scope === 'shared' && (typeof p.sharedGrantRef !== 'string' || !p.sharedGrantRef))) return { ok: false, error: 'MALFORMED' };
+  return { ok: true, value: p as GuardianPackage };
 }

@@ -25,3 +25,10 @@ test('guardian thresholds count distinct holders and shared packages need a gran
   assert.equal(validateGuardianPackage({ ...p, threshold: 3 }).error, 'MALFORMED');
   assert.equal(validateGuardianPackage({ ...p, scope: 'shared' }).error, 'MALFORMED');
 });
+
+test('guardian untrusted records reject missing and unknown fields', () => {
+  assert.equal(validateGuardianPackage(null).error, 'MALFORMED');
+  assert.equal(validateGuardianPackage({ version: 1 }).error, 'MALFORMED');
+  const p = { version: 1, owner: 'a', scope: 'personal', packageGeneration: 1, guardianRoster: ['b'], threshold: 1, encryptedCatalogRef: 'c', sharedGrantRef: null, approvalRefs: [], extra: true };
+  assert.equal(validateGuardianPackage(p).error, 'MALFORMED');
+});
