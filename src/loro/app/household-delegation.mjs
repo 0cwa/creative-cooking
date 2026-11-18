@@ -10,5 +10,14 @@ export async function prepareHouseholdDelegation({storage,scope,pin,provider,adu
 /** The authority verifier checks every distinct adult and the selected parent. */
 export async function acceptHouseholdDelegation({storage,scope,pin,provider,agreement,explicit}){
  if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
- return acceptAdmissionAgreementWithOutcome(storage,structuredClone(scope),pin,provider,structuredClone(agreement));
+ const sc=structuredClone(scope),input=structuredClone(agreement);
+ const ordered=entries=>[...entries].sort((a,b)=>a?.adultId<b?.adultId?-1:a?.adultId>b?.adultId?1:0);
+ if(!Array.isArray(input?.acceptances)||input.acceptances.length>64)throw Error('INVALID_INPUT');
+ input.acceptances=ordered(input.acceptances);
+ // New agreements use the same byte order on each device. An exact retry of
+ // an older agreement must still use the order already retained on this device.
+ const {state}=await readAuthority(storage,sc,pin,provider);
+ const normalized=hex(domain('admission-agreement',input));
+ const retained=state.agreements?.find(entry=>entry.parentHead===input.parentHead&&normalized===hex(domain('admission-agreement',{...entry,acceptances:ordered(entry.acceptances)})));
+ return acceptAdmissionAgreementWithOutcome(storage,sc,pin,provider,retained??input);
 }

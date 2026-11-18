@@ -543,12 +543,10 @@ export default function SettingsScreen() {
             {Platform.OS === 'web' && <RecoveryReminder />}
             <HouseholdIdentity />
             <HouseholdInvitation />
-            {Platform.OS === 'web' && <>
-              <HouseholdApproval />
-              <HouseholdDelegation />
-              <HouseholdGrantReview />
-              <HouseholdExistingDevice />
-            </>}
+            <HouseholdApproval />
+            <HouseholdDelegation />
+            <HouseholdGrantReview />
+            <HouseholdExistingDevice />
             <CookingDirect />
             <CookingExchange />
             {Platform.OS === 'web' && <DisclosureControls items={app.pantry} />}
