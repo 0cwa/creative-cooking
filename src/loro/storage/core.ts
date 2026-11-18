@@ -553,14 +553,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     });}catch(e){return fail(mapError(e))}
   }
 
-  async readPersonalPairingFile(next:PairingAuthorityRecord,operationId:string):Promise<Result<Uint8Array,StorageError>> {
-    if(!validatePairingAuthority(next).ok||next.scope.kind!=='personal'||!validId(operationId))return {ok:false,error:'MALFORMED'};
-    next=snapshot(next);
+  async readPersonalPairingFile(next:PairingAuthorityRecord,operationId:string,selection:PersonalPairingPublication['selection']):Promise<Result<Uint8Array,StorageError>> {
+    if(!validatePairingAuthority(next).ok||next.scope.kind!=='personal'||!validId(operationId)||!validId(selection?.deviceId)||
+      (selection.expected!==null&&(!validPersonalSelection(selection.expected)||selection.expected.scopeId!==next.scope.id)))return {ok:false,error:'MALFORMED'};
+    next=snapshot(next);selection=snapshot(selection);
     try{return await this.run(false,async tx=>{
       const {id}=next.scope;
       const authority=await tx.get(key('pairing-authority','personal',id));
       const transition=await tx.get(key('personal-admission-release',id,operationId));
-      if(!sameRecord(authority,next)||transition!==JSON.stringify(projectionCanonical(next)))return conflict();
+      const selected=(await tx.get(key('personal-selection',selection.deviceId)))??null;
+      if(!sameRecord(selected,selection.expected)||!sameRecord(authority,next)||transition!==JSON.stringify(projectionCanonical(next)))return conflict();
       const file=await tx.get(key('personal-pairing-file',id,operationId));
       if(!file)return corrupt();
       return {ok:true,value:snapshot(file)};

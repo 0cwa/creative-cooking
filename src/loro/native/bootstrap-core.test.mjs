@@ -489,6 +489,32 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   const first=workspaces[0].personal.scope;
   await save(workspaces[0],'before-pair','Source city');
   await save(workspaces[1],'original-receiver','Original city');
+  const receiver=workspaces[1].personalPairing,sponsor=workspaces[0].personalPairing;
+  const obsolete=await sponsor.propose(await receiver.request(true),receiver.fingerprint);
+  const recipientStorage=workspaces[1].personal.storage;
+  const readSelection=recipientStorage.readPersonalSelection.bind(recipientStorage);
+  recipientStorage.readPersonalSelection=async (...params)=>{
+   await receiver.request(true);
+   return readSelection(...params);
+  };
+  try{
+   await assert.rejects(()=>receiver.confirm('responder',obsolete.text,sponsor.fingerprint,sponsor.rootPin,obsolete.code),/CONFLICT/);
+   assert.equal(await receiver.resume('responder'),null);
+  }finally{recipientStorage.readPersonalSelection=readSelection;}
+  const candidate=await sponsor.propose(await receiver.request(),receiver.fingerprint);
+  await receiver.confirm('responder',candidate.text,sponsor.fingerprint,sponsor.rootPin,candidate.code);
+  const pairingDb=openDatabase(names[1]+'-pairing'),ceremonyKey='["ceremony"]';
+  const readCeremony=()=>JSON.parse(pairingDb.executeSync('SELECT value FROM loro_records WHERE key=?',[ceremonyKey]).rows[0].value);
+  try{
+   const responderSlot='personal-device-pairing/v1:responder',previous=readCeremony()[responderSlot];
+   await receiver.request(true);
+   // Model an older interrupted writer leaving a confirmation for a replaced request.
+   const staleCeremony={...readCeremony(),[responderSlot]:previous};
+   pairingDb.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(staleCeremony),ceremonyKey]);
+   await assert.rejects(()=>receiver.resume('responder'),/CONFLICT/);
+   assert.deepEqual(readCeremony(),staleCeremony);
+   await receiver.request(true);
+  }finally{pairingDb.close();}
   // The full settings service resumes against real SQLite after re-open.
   const proposal=await progress(0,1);
   await boot(0);await boot(1);
@@ -601,7 +627,19 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   assert.equal(JSON.parse(new TextDecoder().decode((await getAuthority(2)).authorityState)).version,2);
   await assert.rejects(workspaces[1].personalPairing.install(release.file),/UNAUTHORIZED|CONFLICT/);
   assert.equal(await saved(workspaces[2]),'Recipient edit');
-  await workspaces[1].personalPairing.returnToOriginal();
+  const pairedStorage=workspaces[1].personal.storage;
+  const readPairingFile=pairedStorage.readPersonalPairingFile.bind(pairedStorage);
+  let switched;
+  pairedStorage.readPersonalPairingFile=async (...params)=>{
+   await workspaces[1].personalPairing.returnToOriginal();
+   switched=rows(1);
+   return readPairingFile(...params);
+  };
+  try{
+   await assert.rejects(workspaces[1].personalPairing.publish(),/CONFLICT/);
+   assert.ok(switched);
+   assert.deepEqual(rows(1),switched);
+  }finally{pairedStorage.readPersonalPairingFile=readPairingFile;}
   await boot(1);
   assert.equal(workspaces[1].personal.scope.scopeId,original[0]);
   assert.equal(await saved(workspaces[1]),'Original city');

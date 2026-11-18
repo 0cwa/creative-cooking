@@ -60,9 +60,10 @@ export async function openPersonalPairing({sodium:s,storage,sessionStore,keys,tr
   verifyStoredKeyPackage(s,release.packet.bytes,c);
   return c;
  };
- async function release(operationId,localKeys,keyOperation,keyIdentity,peerId,prepareFile){
+ async function release(operationId,localKeys,keyOperation,keyIdentity,peerId,prepareFile,expectedSelection){
   if(role!=='initiator'||keyIdentity.scope.kind!=='personal'||keyIdentity.scope.id!==t.scope.id||
    keyIdentity.deviceId!==t.initiator.deviceId||keyIdentity.purpose!==t.purpose||keyIdentity.epochId!==a.scope.epochId)throw Error('UNAUTHORIZED');
+  const selection={deviceId:t.initiator.deviceId,expected:structuredClone(expectedSelection)};
   const prior=must(await storage.findPairingRelease(t.scope,operationId));
   if(prior){
    const now=must(await storage.readPairingAuthority(t.scope));
@@ -71,7 +72,7 @@ export async function openPersonalPairing({sodium:s,storage,sessionStore,keys,tr
    const change=await transition(item);
    validateRelease(prior,change);
    const saved=must(await storage.commitPersonalAdmissionRelease(prior,change.next));
-   const file=prepareFile?must(await storage.readPersonalPairingFile(change.next,operationId)):undefined;
+   const file=prepareFile?must(await storage.readPersonalPairingFile(change.next,operationId,selection)):undefined;
    return {...saved,admission:item,file,authorizationSnapshot:change.next.authorizationSnapshot};
   }
   const ad={version:1,scopeId:t.scope.id,ownerId,parentSnapshot:t.authorizationSnapshot,sponsorDeviceId:t.initiator.deviceId,
@@ -85,7 +86,7 @@ export async function openPersonalPairing({sodium:s,storage,sessionStore,keys,tr
   const packetId=hex(s.crypto_generichash(32,packet));
   const release={version:1,operationId,transcript:t,guard:g,expectedAuthorityRevision:change.expected.revision,packet:{id:packetId,bytes:packet},
    outbox:{destination:t.responder.deviceId,objectId:packetId},outcome:{recipientDevice:t.responder.deviceId,packetId}};
-  const publication=prepareFile?await prepareFile({release,admission:item},a,change.expected):undefined;
+  const publication=prepareFile?{...await prepareFile({release,admission:item},a,change.expected),selection}:undefined;
   const saved=must(await storage.commitPersonalAdmissionRelease(release,change.next,publication));
   return {...saved,admission:item,file:publication?.file,authorizationSnapshot:change.next.authorizationSnapshot};
  }

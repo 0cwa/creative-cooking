@@ -96,6 +96,11 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   return {text:pairingText(s,proposal),code:code(proposal),rootPin:proposal.context.rootPin,ownerId:proposal.context.ownerId,
    peerDevice:proposal.transcript[remoteRole(role)].deviceId};
  }
+ function matchesRequest(proposal,item){
+  const {context,transcript}=proposal;
+  return item&&context.requestHash===digest(requestBytes(item.request))&&context.peerId===item.request.peerId&&
+   s.to_hex(transcript.responder.nonce)===item.request.nonce;
+ }
  async function inspect(text){
   const proposal=parsePairingText(s,text),c=proposal?.context,t=proposal?.transcript,g=proposal?.guard;
   if(!exact(proposal,['version','context','transcript','guard'])||proposal.version!==1||
@@ -107,14 +112,13 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
    s.to_hex(t.signaling[0])!==s.to_hex(signal(c))||t.responder.deviceId!==deviceId||
    pinFingerprint(bundle(t.responder))!==pinFingerprint(own))throw Error('UNAUTHORIZED');
   const item=await read('request');
-  if(!item||c.requestHash!==digest(requestBytes(item.request))||c.peerId!==item.request.peerId||
-   s.to_hex(t.responder.nonce)!==item.request.nonce)throw Error('UNAUTHORIZED');
-  return proposal;
+  if(!matchesRequest(proposal,item))throw Error('UNAUTHORIZED');
+  return {proposal,item};
  }
  async function confirm(role,text,peerFingerprint,rootPin,transcriptCode){
   if(!roles.includes(role))throw Error('UNAUTHORIZED');
   const old=await read(role);
-  const proposal=role==='initiator'?old?.proposal:await inspect(text);
+  const {proposal,item}=role==='initiator'?{proposal:old?.proposal}:await inspect(text);
   if(!proposal||code(proposal)!==transcriptCode||proposal.context.rootPin!==rootPin||
    pinFingerprint(bundle(proposal.transcript[remoteRole(role)]))!==peerFingerprint||
    (role==='initiator'&&old.peerFingerprint!==peerFingerprint))throw Error('OOB_REQUIRED');
@@ -123,7 +127,12 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
    if(current&&!same(current,original)&&!same(current,{scopeId:proposal.transcript.scope.id,pin:rootPin}))throw Error('ORIGINAL_REQUIRED');
   }
   const saved={proposal,peerFingerprint,confirmed:true};
-  if(!same(old,saved))await write(role,saved,old);
+  if(role==='responder'){
+   await store.transaction(tx=>{
+    if(!same(tx.get(slot(role)),old)||!same(tx.get(slot('request')),item))throw Error('CONFLICT');
+    if(!same(old,saved))tx.put(slot(role),saved);
+   });
+  }else if(!same(old,saved))await write(role,saved,old);
   return progress(role);
  }
  async function withSession(role,use){
@@ -134,8 +143,13 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   const pins=Object.fromEntries(roles.map(role=>[role,bundle(transcript[role])]));
   if(pinFingerprint(pins[role])!==pinFingerprint(own)||pinFingerprint(pins[remoteRole(role)])!==peerFingerprint)throw Error('OOB_REQUIRED');
   const oob={hash:code(proposal),pins};
-  return withKeys(secrets=>use({proposal,context,transcript,guard,oob,secrets,
-   session:durableSession(s,store,secrets,transcript,guard,role,oob)}));
+  return withKeys(async secrets=>{
+   if(role==='responder')await store.transaction(tx=>{
+    if(!same(tx.get(slot(role)),saved)||!matchesRequest(proposal,tx.get(slot('request'))))throw Error('CONFLICT');
+   },{readOnly:true});
+   return use({proposal,context,transcript,guard,oob,secrets,
+    session:durableSession(s,store,secrets,transcript,guard,role,oob)});
+  });
  }
  async function progress(role){
   return withSession(role,async({session})=>{
@@ -179,9 +193,8 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
     const source={documentId,revision:stored?.revision??null,bytes};
     const {frontier,hash}=inspectPersonalCopy(LoroDoc,s,bytes,context.peerId);
     const document={...source,frontier,hash,generation:documentGeneration,epochId};
-    return {expected,source,file:sealPersonalCopy(s,oob.hash,transcript.responder,secrets.signingSecret,{version:1,parent:expected,envelope,document}),
-     selection:{deviceId,expected:selection}};
-   });
+    return {expected,source,file:sealPersonalCopy(s,oob.hash,transcript.responder,secrets.signingSecret,{version:1,parent:expected,envelope,document})};
+   },selection);
    verifyPersonalCopyFile(s,file,oob.hash,transcript.initiator.signingPublicKey);
    return {file,replayed,scopeId:transcript.scope.id,head:transcript.acceptedParent,authorizationSnapshot};
   });
@@ -248,6 +261,6 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   return {scopeId:original.scopeId,head:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot};
  }
  return {deviceId,fingerprint:pinFingerprint(own),rootPin:selected.pin,request,requestInfo,propose,
-  inspect:async text=>proposalView(await inspect(text),'responder'),confirm,accept,resume,publish,install,history,
+  inspect:async text=>proposalView((await inspect(text)).proposal,'responder'),confirm,accept,resume,publish,install,history,
   usingOriginal:selected.scopeId===original.scopeId,returnToOriginal};
 }
