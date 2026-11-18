@@ -4,7 +4,7 @@ import type { PairingAuthorityRecord } from './pairing.ts';
 /** Structural transaction only. Callers must verify admission, source delegation,
  * projection bytes, packages, ceremony, possession, and authority before invoking. */
 export type ProjectionPublication = {
- version:1; policySeed?:{bundle:unknown;bundleHash:Id}; seed?:{seedId:Id;identities:readonly {commandId:Id;effectId:Id}[]}; singleRecipient?:true; recovery?:{owner:Id;generation:number;bindingHash:Id;claimHash:Id;tokenCommitment:Id;sealed:string}; operationId:Id; guardId?:Id; guardIds?:readonly Id[]; sourceDocument?:{documentId:Id;revision:number}; expectedAuthority:AuthorityPrecondition; nextAuthority:PairingAuthorityRecord;
+ version:1; policySeed?:{bundle:unknown;bundleHash:Id}; seed?:{seedId:Id;identities:readonly {commandId:Id;effectId:Id}[]}; singleRecipient?:true; recovery?:{owner:Id;generation:number;bindingHash:Id;claimHash:Id;tokenCommitment:Id;sealed:string}; operationId:Id; guardId?:Id; guardIds?:readonly Id[]; sourceDocument?:{documentId:Id;revision:number|null}; expectedAuthority:AuthorityPrecondition; nextAuthority:PairingAuthorityRecord;
  admissionEventHash:Id; grantHash:Id; manifest:{id:Id;bytes:Bytes}; epochId:Id;
  documents:readonly {documentId:Id;generation:number;bytes:Bytes}[];
  packages:readonly {id:Id;recipientDevice:Id;bytes:Bytes}[];

@@ -1,3 +1,4 @@
+import {householdRevocation} from './household-revocation.mjs';
 import {prepareExistingCeremony,verifyExistingCeremony} from './household-existing-ceremony.mjs';
 import {reviewHouseholdGrant,approveHouseholdGrant,collectHouseholdGrantApproval} from './household-grant-review.mjs';
 import {verifyHouseholdOffer} from './household-offer.mjs';
@@ -16,7 +17,7 @@ import {checkoutPolicyHead} from '../authority/chain.mjs';
 export function householdPairing({
   name, sodium, storage, master, provider, store, scope, pin, deviceId, adultId,
   runtime, service, pins, keys, signing, wrapping, signingKey, wrappingPublicKey,
-  selection, selectedHousehold, LoroDoc, prepareJoinedSequences, finalizeJoinedSequences, randomUUID = () => crypto.randomUUID(), withCurrent = use => use()
+  selection, selectedHousehold, LoroDoc, prepareJoinedSequences, finalizeJoinedSequences, randomUUID = () => crypto.randomUUID(), withCurrent = use => use(), sha256 = undefined
 }) {
   const active = method => (...args) => {
     // Selection can queue behind a concurrent operation. Capture messages
@@ -35,9 +36,11 @@ export function householdPairing({
     ...authority, name, sodium, master, sessionStore:store, deviceId, runtime, service, keys:pins, LoroDoc,
     withSecrets, prepareJoinedSequences, finalizeJoinedSequences
   });
+  const revocation=householdRevocation({...preparation,master,runtime,signingKey,wrappingPublicKey,withSecrets,LoroDoc,sha256});
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
+    revocation:Object.fromEntries(Object.entries(revocation).map(([name,method])=>[name,active(method)])),
     admissionRule: {
       status: active(() => householdAdmissionRule(member)),
       propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation, runtime})),

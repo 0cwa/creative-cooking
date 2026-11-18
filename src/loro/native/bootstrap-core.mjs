@@ -104,7 +104,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:r.adult,
    runtime:household,service:disclosure,pins,keys,signing,wrapping,signingKey:signingRef,
    wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection:selectionControls,selectedHousehold:!!selected,LoroDoc,
-   prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent
+   prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent,sha256
   });
   const cooking=cookingFiles({runtime:household,service:disclosure});
   let direct;

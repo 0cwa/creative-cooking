@@ -4,6 +4,7 @@ import {validateSuccessor, validParent, domain, isPolicyDocumentId} from './vali
 import {policyBranchAncestors,recoverPolicyBaseline} from './policy-baseline.mjs';
 import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
+import {verifyRevocation, revocationPackage, verifyRevocationSeed} from '../compromise/revocation.mjs';
 import sodium from 'libsodium-wrappers';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -43,10 +44,19 @@ export async function verifyAuthority(state,pin,provider) {
    nodes.set(r.eventHash,child);
   } else if(['revokeDevice','recoverDevice'].includes(item.event.kind) && item.event.version===2 && ['ROTATION_DISTRIBUTION_REQUIRED','RECOVERY_DISTRIBUTION_REQUIRED'].includes(r.reason)) {
    const rotation=item.rotation,sub=item.event.subject;
+   const product=rotation?.grant?.version===2;
+   if(product){
+    if(item.event.kind!=='revokeDevice'||Object.keys(rotation).sort().join(',')!=='authorizationSnapshot,grant,localDeviceId,manifest,operationId,recipientBindings'||
+       rotation.localDeviceId!==item.event.authorDeviceId||rotation.operationId!==item.event.proposalId||
+       rotation.authorizationSnapshot!==rotation.manifest?.authorizationSnapshot)throw Error('INVALID_ROTATION');
+    await verifyRevocation({provider,parent,item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},...rotation});
+    seedSchemas.set(r.eventHash,4);
+   } else {
    if(!rotation||![ 'authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId','authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId,recoveryProof'].includes(Object.keys(rotation).sort().join(','))||(item.event.kind==='recoverDevice')!==Object.hasOwn(rotation,'recoveryProof')||rotation.grant?.eventHash!==r.eventHash||!parent.runtime.acceptedRecipients.includes(rotation.localDeviceId)||rotation.localDeviceId===sub.deviceId||await digest(provider,'rotation-manifest',rotation.manifest)!==rotation.grant.manifestHash||rotation.manifest?.newDocumentId!==sub.documentId||rotation.manifest?.newGeneration!==sub.newGeneration||rotation.manifest?.newEpochId!==sub.newEpochId)throw Error('INVALID_ROTATION');
    const {checkRotationEvidence}=await import('../compromise/rotation-proof.mjs');await sodium.ready;
    await checkRotationEvidence({sodium,parent,authorizationSnapshot:rotation.authorizationSnapshot,item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},grant:rotation.grant,ceremonies:decodeEvidence(rotation.ceremonies),localDeviceId:rotation.localDeviceId,provider});
    if(item.event.kind==='recoverDevice'){const {verifyRecoveryProof}=await import('../compromise/recovery-proof.mjs');await verifyRecoveryProof({sodium,parent,nodes,event:item.event,proof:rotation.recoveryProof,provider})}
+   }
    if(nodes.has(r.eventHash)||isPolicyDocumentId(sub.documentId)||[...nodes.values()].some(n=>n.epochId===sub.newEpochId||n.runtime.documentId===sub.documentId))throw Error('INVALID_ROTATION');
    const child=copy(parent);child.head=r.eventHash;child.epochId=sub.newEpochId;child.generation=sub.newGeneration;if(item.event.kind==='revokeDevice')child.devices=child.devices.map(d=>d.deviceId===sub.deviceId?{...d,active:false}:d);else child.devices.push({adultId:sub.owner,deviceId:sub.deviceId,signingKeyRef:sub.signingKeyRef,active:true});child.runtime.documentId=sub.documentId;child.runtime.authorPeers=Object.fromEntries(sub.devices.map(d=>[d.deviceId,d.peerId]));child.runtime.acceptedRecipients=sub.devices.map(d=>d.deviceId);if(!validParent(child))throw Error('INVALID_ROTATION');nodes.set(r.eventHash,child);
   } else if(item.event.kind==='inviteAdult' && item.event.version===2 && r.reason==='ADMISSION_AND_PROJECTION_REQUIRED') {
@@ -108,7 +118,7 @@ async function load(storage,scope,pin,provider) {
  let state; try {state=JSON.parse(dec.decode(record.authorityState));}catch {throw Error('MALFORMED');}
  if (hex(bytes(state))!==hex(record.authorityState) || record.acceptedParent!==state.activeHead || record.authorizationSnapshot!==await snapshotId(provider,state) || state.root?.householdId!==scope.id) throw Error('INVALID_AUTHORITY');
  const verified=await verifyAuthority(state,pin,provider);
- let recipient=null;if(storage.householdRecipient){for(const item of [...state.events].reverse()){if(!item.admission)continue;const hash=await digest(provider,'event',item.event),found=await storage.householdRecipient.findByEvent(scope.id,hash);if(!found.ok)throw Error('INVALID_AUTHORITY');if(found.value){const {verifyRecipientInstallation}=await import('./recipient-load.mjs');await sodium.ready;recipient=await verifyRecipientInstallation({storage,scope,pin,provider,sodium,state,eventHash:hash});break;}}}
+ let recipient=null;if(storage.householdRecipient){for(const item of [...state.events].reverse()){if(!item.admission&&item.rotation?.grant?.version!==2)continue;const hash=await digest(provider,'event',item.event),found=await storage.householdRecipient.findByEvent(scope.id,hash);if(!found.ok)throw Error('INVALID_AUTHORITY');if(found.value){const {verifyRecipientInstallation}=await import('./recipient-load.mjs');await sodium.ready;recipient=await verifyRecipientInstallation({storage,scope,pin,provider,sodium,state,eventHash:hash});break;}}}
  const publicPrefix=item=>recipient&&recipient.parent.events.some(old=>JSON.stringify(canonical(old))===JSON.stringify(canonical(item)));
  for(const item of state.events) if(item.admission) {
   if(recipient&&(item.event.parentHead===recipient.parent.activeHead&&await digest(provider,'event',item.event)===recipient.installation.nextAuthority.acceptedParent||publicPrefix(item)))continue;
@@ -121,9 +131,26 @@ async function load(storage,scope,pin,provider) {
   if(item.admission.manifest.schemaVersion.startsWith('registry-seed-v1|')){if(JSON.stringify(item.admission.grant.contentClasses)!==JSON.stringify(['pantry','recipe','shopping']))throw Error('INVALID_AUTHORITY');if(!p.seed||p.seed.seedId!==item.admission.manifest.schemaVersion.split('|')[1]||await digest(provider,'projection-snapshot',hex(p.documents[0]?.bytes))!==item.admission.manifest.projectedStateHash)throw Error('INVALID_AUTHORITY');const {verifyCurrentSeed}=await import('../compromise/current-seed.mjs'),LoroDoc=await (await import('../app/loro-document.mjs')).loadLoroDoc(),seedCheck=verifyCurrentSeed({LoroDoc,snapshot:p.documents[0].bytes,seed:p.seed}),parent=verified.nodes.get(item.event.parentHead);if(seedCheck.peers.some(x=>[...Object.values(parent.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)].includes(x)))throw Error('INVALID_AUTHORITY')}
  }
  for(const item of state.events) if(item.rotation) {
-  if(publicPrefix(item))continue;
+  if(publicPrefix(item)||recipient&&await digest(provider,'event',item.event)===recipient.installation.nextAuthority.acceptedParent)continue;
   const r=item.rotation,saved=await storage.getProjectionPublication(scope.id,r.operationId);if(!saved.ok||!saved.value)throw Error('INVALID_AUTHORITY');
   const p=saved.value,eventHash=await digest(provider,'event',item.event);let published;try{published=JSON.parse(dec.decode(p.nextAuthority.authorityState))}catch{throw Error('INVALID_AUTHORITY')}if(!published.events?.some(e=>JSON.stringify(canonical(e))===JSON.stringify(canonical(item))))throw Error('INVALID_AUTHORITY');if(p.admissionEventHash!==eventHash||p.expectedAuthority.record?.acceptedParent!==item.event.parentHead||p.expectedAuthority.record?.authorizationSnapshot!==r.authorizationSnapshot||p.nextAuthority.acceptedParent!==eventHash||p.manifest.id!==r.grant.manifestHash||hex(p.manifest.bytes)!==hex(bytes(r.manifest))||p.epochId!==item.event.subject.newEpochId||!p.seed||p.seed.seedId!==r.manifest.seedId||await digest(provider,'projection-seed-identities',p.seed.identities)!==r.manifest.seedIdentitiesHash||await digest(provider,'rotation-draft-snapshot',hex(p.documents[0]?.bytes))!==r.manifest.draftHash)throw Error('INVALID_AUTHORITY');
+  if(r.grant.version===2){
+   const parent=verified.nodes.get(item.event.parentHead),LoroDoc=await (await import('../app/loro-document.mjs')).loadLoroDoc();
+   if(p.documents.length!==1||p.documents[0].documentId!==r.manifest.newDocumentId||p.documents[0].generation!==r.manifest.newGeneration||
+      p.sourceDocument?.documentId!==r.manifest.sourceDocumentId||p.sourceDocument?.revision!==r.manifest.sourceRevision||
+      p.localKey.record.identity.deviceId!==r.localDeviceId||p.packages.length!==r.grant.packageRefs.length||
+      p.grantHash!==await digest(provider,'rotation-distribution-grant',Object.fromEntries(Object.entries(r.grant).filter(([k])=>k!=='signatures'))))throw Error('INVALID_AUTHORITY');
+   await verifyRevocationSeed({provider,LoroDoc,parent,item,manifest:r.manifest,snapshot:p.documents[0].bytes,seed:p.seed});
+   await sodium.ready;
+   const {verifyStoredKeyPackage}=await import('../pairing/key-package.mjs');
+   for(const d of item.event.subject.devices.filter(d=>d.deviceId!==r.localDeviceId)){
+    const {context,guardId}=await revocationPackage({provider,parent,item,recipientDevice:d.deviceId});
+    const pkg=p.packages.find(x=>x.recipientDevice===d.deviceId&&x.id===context.releaseId);
+    if(!pkg||!p.guardIds?.includes(guardId))throw Error('INVALID_AUTHORITY');
+    verifyStoredKeyPackage(sodium,pkg.bytes,context);
+   }
+   continue;
+  }
   const {verifyCurrentSeed}=await import('../compromise/current-seed.mjs'),LoroDoc=await (await import('../app/loro-document.mjs')).loadLoroDoc(),seedCheck=verifyCurrentSeed({LoroDoc,snapshot:p.documents[0].bytes,seed:p.seed}),priorNode=verified.nodes.get(item.event.parentHead);if(seedCheck.peers.some(x=>[...Object.values(priorNode.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)].includes(x)))throw Error('INVALID_AUTHORITY');
   const {verifyStoredKeyPackage}=await import('../pairing/key-package.mjs');const proofs=decodeEvidence(r.ceremonies),others=item.event.subject.devices.filter(d=>d.deviceId!==r.localDeviceId);if(p.packages.length!==others.length||proofs.length!==others.length-(item.event.kind==='recoverDevice'?1:0))throw Error('INVALID_AUTHORITY');
   const grantBase=Object.fromEntries(Object.entries(r.grant).filter(([k])=>k!=='signatures')),grantHash=await digest(provider,'rotation-distribution-grant',grantBase);if(p.grantHash!==grantHash)throw Error('INVALID_AUTHORITY');
@@ -419,3 +446,93 @@ async function publishHouseholdSuccessor(input,kind) {
 
 export async function publishHouseholdRevocation(input){return publishHouseholdSuccessor(input,'revokeDevice')}
 export async function publishHouseholdRecovery(input){return publishHouseholdSuccessor(input,'recoverDevice')}
+
+/** Publish a v4 clean seed and new data key against the exact reviewed source. */
+export async function publishReviewedRevocation({
+ storage,scope,pin,provider,master,deviceId,signingSecret,runtime,item,grant,manifest,recipientBindings,sha256
+}) {
+ ({item,grant,manifest,recipientBindings}=copy({item,grant,manifest,recipientBindings}));
+ const current=await load(storage,scope,pin,provider), {record,state,nodes}=current;
+ const event=item?.event,parent=nodes.get(event?.parentHead);
+ if(!parent||event.authorDeviceId!==deviceId||runtime.scope.scopeId!==scope.id)throw Error('INVALID_AUTHORITY');
+ const checked=await verifyRevocation({provider,parent,item,grant,manifest,recipientBindings});
+ const operationId=event.proposalId, keyOperationId=`revocation-key:${operationId}`;
+ const packed={...item,rotation:{authorizationSnapshot:manifest.authorizationSnapshot,recipientBindings,grant,localDeviceId:deviceId,manifest,operationId}};
+ const replay=async()=>{
+  const saved=await storage.getProjectionPublication(scope.id,operationId);
+  if(!saved.ok)throw Error(saved.error);
+  if(!saved.value)return null;
+  const durable=(await load(storage,scope,pin,provider)).state;
+  if(!durable.events.some(entry=>hex(bytes(entry))===hex(bytes(packed)))||
+     saved.value.admissionEventHash!==checked.eventHash||saved.value.grantHash!==checked.grantHash)throw Error('CONFLICT');
+  return {acceptedHead:checked.eventHash,operationId,replayed:true};
+ };
+ const prior=await replay();
+ if(prior)return prior;
+ const expectedAuthority=await runtime.authorize();
+ if(state.activeHead!==parent.head||record.authorizationSnapshot!==manifest.authorizationSnapshot||
+    expectedAuthority.record.revision!==record.revision)throw Error('STALE_AUTHORITY');
+ const review=await storage.compromise.get(scope.id,manifest.reviewId);
+ const original=review&&await storage.compromise.inspectOriginal(scope.id,manifest.reviewId,sha256);
+ const source=await storage.reopenBranchDocument(expectedAuthority,parent.runtime.documentId);
+ if(!source.ok)throw Error(source.error);
+ const seed=await verifiedRevocationDraft({runtime,provider,item,manifest,review,original,source:source.value,sha256});
+ await sodium.ready;
+ const publisher=event.subject.devices.find(d=>d.deviceId===deviceId);
+ if(!(signingSecret instanceof Uint8Array)||signingSecret.length!==64||hex(signingSecret.subarray(32))!==publisher.signingKeyRef)throw Error('INVALID_KEY');
+ const select={root:pin,householdId:scope.id,from:parent.head,to:checked.eventHash,deviceId,index:state.selections.length};
+ const selection={from:select.from,to:select.to,deviceId,index:select.index,signature:hex(sodium.crypto_sign_detached(domain('select-head',select),signingSecret))};
+ const next={...state,events:[...state.events,packed],selections:[...state.selections,selection],activeHead:checked.eventHash};
+ await verifyAuthority(next,pin,provider);
+ const packages=await Promise.all(event.subject.devices.filter(d=>d.deviceId!==deviceId)
+  .map(d=>revocationPackage({provider,parent,item:packed,recipientDevice:d.deviceId})));
+ const identity={version:1,scope,deviceId,purpose:'data',epochId:event.subject.newEpochId};
+ const {makeKeyPackage}=await import('../pairing/key-package.mjs');
+ try{
+  const prepared=await storage.localKeys(master,sodium).prepareForAtomicInstall(keyOperationId,identity,secret=>
+    packages.map(({context})=>({id:context.releaseId,recipientDevice:context.recipientDevice,bytes:makeKeyPackage(sodium,context,secret,signingSecret)})));
+   const nextAuthority={scope,revision:record.revision+1,acceptedParent:next.activeHead,authorizationSnapshot:await snapshotId(provider,next),authorityState:bytes(next)};
+   const result=await storage.publishProjection({
+    version:1,seed:{seedId:seed.seedId,identities:seed.identities},
+    ...(packages.length ? {guardIds:packages.map(p=>p.guardId).sort()} : {singleRecipient:true}),
+    operationId,sourceDocument:{documentId:parent.runtime.documentId,revision:manifest.sourceRevision},
+    expectedAuthority,nextAuthority,admissionEventHash:checked.eventHash,grantHash:checked.grantHash,
+    manifest:{id:grant.manifestHash,bytes:bytes(manifest)},epochId:identity.epochId,
+    documents:[{documentId:event.subject.documentId,generation:event.subject.newGeneration,bytes:seed.snapshot}],
+    packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},
+    // Old document, outbox and pending inbox rows keep their original owners.
+    pendingEdits:[]
+   },{reviewId:manifest.reviewId,review,source:source.value,original:{checkpoint:original.checkpointBytes,objects:original.objects.map(o=>o.bytes)}});
+   if(!result.ok)throw Error(result.error);
+   return {acceptedHead:checked.eventHash,operationId,replayed:result.value.replayed};
+ }catch(error){
+  if(error.message==='CONFLICT'){
+   const concurrent=await replay();
+   if(concurrent)return concurrent;
+  }
+  throw error;
+ }
+}
+
+export async function verifiedRevocationDraft({runtime,provider,item,manifest,review,original,source,sha256}) {
+ const {verifyReport}=await import('../compromise/report.mjs');
+ const {projectCurrentSeed}=await import('../compromise/current-seed.mjs');
+ const draft=review?.draft, event=item.event;
+ if(!review?.isolated||review.status!=='local-draft'||!review.selection||draft.held.length||
+    draft.documentId!==manifest.newDocumentId||draft.publicationBaseDocumentId!==manifest.sourceDocumentId||
+    review.context.authorityHead!==event.parentHead||review.context.authoritySnapshot!==manifest.authorizationSnapshot||
+    draft.sourceDocumentId!==manifest.evidenceDocumentId||draft.sourceGeneration!==manifest.evidenceGeneration||
+    review.report.payload.head!==event.parentHead||JSON.stringify(review.report.payload.suspectDeviceIds)!==JSON.stringify([event.subject.deviceId])||
+    review.reportHash!==manifest.reportHash||original?.checkpointBytes==null||original.missing.length)throw Error('INVALID_DRAFT');
+ if(await verifyReport({runtime,report:review.report,context:review.context,reviewId:manifest.reviewId,manifest:review.manifest,sha256})!==manifest.reportHash||
+    await digest(provider,'rotation-selection',review.selection)!==manifest.selectionHash||
+    await digest(provider,'rotation-archive-snapshot',hex(draft.snapshot))!==manifest.archiveHash||
+    (source?.revision??null)!==manifest.sourceRevision||
+    await digest(provider,'rotation-source-snapshot',hex(source?.bytes??new Uint8Array()))!==manifest.sourceHash)throw Error('SOURCE_CHANGED');
+ const seed=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:draft.snapshot,seedId:manifest.seedId,peerId:manifest.seedPeerId,schemaVersion:4});
+ const old=new runtime.LoroDoc();
+ if(source)old.import(source.bytes);
+ if(old.oplogVersion().toJSON().has(seed.peerId))throw Error('INVALID_DRAFT_PEERS');
+ await verifyRevocationSeed({provider,LoroDoc:runtime.LoroDoc,parent:{runtime:{authorPeers:runtime.scope.authorPeers}},item,manifest,snapshot:seed.snapshot,seed});
+ return seed;
+}

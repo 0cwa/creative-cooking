@@ -3,10 +3,20 @@ import {readFile} from 'node:fs/promises';
 import sodium from 'libsodium-wrappers';
 import {domain} from '../src/loro/authority/validator.mjs';
 import {ceremonyBytes} from '../src/loro/pairing/candidate-v2.mjs';
-test('three independent devices publish admissions and explicitly open the new household generation',async({browser,baseURL})=>{
- test.setTimeout(180000);const aCtx=await browser.newContext({baseURL,acceptDownloads:true}),bCtx=await browser.newContext({baseURL,acceptDownloads:true}),cCtx=await browser.newContext({baseURL,acceptDownloads:true});const a=await aCtx.newPage(),b=await bCtx.newPage(),c=await cCtx.newPage(),errors=[];a.setDefaultTimeout(12000);b.setDefaultTimeout(12000);for(const p of [a,b,c]){p.on('pageerror',e=>errors.push(String(e)));p.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text())});p.on('requestfailed',r=>console.error('REQUEST',r.url(),r.failure()))}try{
+test('three enrolled devices preserve and explicitly reopen household admissions and revocation',async({browser,baseURL})=>{
+ test.setTimeout(240000);const aCtx=await browser.newContext({baseURL,acceptDownloads:true}),bCtx=await browser.newContext({baseURL,acceptDownloads:true}),cCtx=await browser.newContext({baseURL,acceptDownloads:true});const a=await aCtx.newPage(),b=await bCtx.newPage(),c=await cCtx.newPage(),errors=[];a.setDefaultTimeout(12000);b.setDefaultTimeout(12000);for(const p of [a,b,c]){p.on('pageerror',e=>errors.push(String(e)));p.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text())});p.on('requestfailed',r=>console.error('REQUEST',r.url(),r.failure()))}try{
  const setup=async p=>{await p.goto('./');await p.getByRole('button',{name:'Start fresh local preview'}).click().catch(async e=>{console.error('SETUP PAGE',p.url(),(await p.locator('body').innerText()).slice(0,2500),errors);throw e});await p.getByRole('button',{name:'Review household policy'}).click();await p.getByRole('button',{name:'Accept this household policy'}).click();await expect(p.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally')};
  await setup(a);await setup(b);await setup(c);await addPantry(b,'Original household bay leaf');await addPantry(c,'Newcomer local basil');await c.getByRole('button',{name:'Open settings'}).click();await c.getByRole('button',{name:'Show device identity'}).click();const thirdIdentity=await c.getByLabel('Public device identity',{exact:true}).textContent();await a.getByLabel('Ingredient and details').fill('Invitation proof onion');await a.getByLabel('Add ingredient').click();await expect(a.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await a.goto('./shopping');
+ await a.getByLabel('New shopping list name').fill('Revocation market');
+ await a.getByRole('button',{name:'Create shopping list',exact:true}).click();
+ await a.getByLabel('Shopping item name').fill('Rotation carrots');
+ await a.getByLabel('Shopping quantity').fill('2.5');
+ await a.getByLabel('Shopping unit').fill('kg');
+ await a.getByRole('button',{name:'Add',exact:true}).click();
+ await expect(a.getByText('2.5 kg',{exact:true})).toBeVisible();
+ await expect(a.getByTestId('shopping-local-persistence-status')).toHaveText('Saved on this device only.');
+ await a.goto('./');
  for(const p of [a,b]){await p.getByRole('button',{name:'Open settings'}).click();await p.getByRole('button',{name:'Show device identity'}).click();await p.getByRole('button',{name:'Invite or join a household'}).click()}
  const identity=await b.getByLabel('Public device identity',{exact:true}).textContent();await a.getByLabel('Recipient public identity').fill(identity);await a.getByRole('button',{name:'Prepare current-cooking invitation'}).click();await expect(a.getByLabel('Public invitation message',{exact:true})).toBeVisible();const offer=await a.getByLabel('Public invitation message',{exact:true}).textContent(),code=await a.getByLabel('Invitation verification code').textContent();expect(offer).not.toContain('Invitation proof onion');
  await a.getByRole('button',{name:'Show public household authority'}).click();const authority=await a.getByLabel('Public household authority',{exact:true}).textContent(),root=await a.getByLabel('Household root to compare').textContent(),head=await a.getByLabel('Household head to compare').textContent();await b.getByLabel('Household authority bundle').fill(authority);await b.getByLabel('Confirmed household root').fill(root);await b.getByLabel('Confirmed household head').fill(head);await b.getByRole('button',{name:'Verify and accept public authority'}).click();await expect(b.getByText('Public authority accepted. No access or keys have been granted.')).toBeVisible();await b.getByRole('button',{name:'Join invitation'}).click();await b.getByLabel('Public invitation message input').fill(offer);await b.getByLabel('Confirmed invitation code').fill('0'.repeat(64));await b.getByRole('button',{name:'Start or resume device verification'}).click();await expect(b.locator('[role=alert]').last()).toBeVisible();await b.getByLabel('Confirmed invitation code').fill(code);await b.getByRole('button',{name:'Start or resume device verification'}).click();await a.getByLabel('Confirmed invitation code').fill(code);await a.getByRole('button',{name:'Start or resume device verification'}).click();
@@ -238,9 +248,13 @@ test('three independent devices publish admissions and explicitly open the new h
  await expect(c.getByText('Third device thyme',{exact:true})).toBeVisible();
  await c.getByRole('button',{name:'Open settings'}).click();
  await expect(c.getByLabel('Household document generation')).toHaveText('Household generation 3');
+ await test.step('approve, publish, install and reopen a device revocation through Settings',async()=>{
+  await routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead:published.head});
+ });
  await c.getByRole('button',{name:'Show device identity'}).click();
  await c.getByRole('button',{name:'Return to original local household'}).click();
  await expect(c.getByText('Newcomer local basil',{exact:true})).toBeVisible();
+ const beforeLostCounter=await readRetained(b,scope.id,oldDocument,oldHead);
  await b.evaluate(({scopeId,sequenceName})=>new Promise((resolve,reject)=>{
   const opening=indexedDB.open(`${sequenceName}-sequences`);
   opening.onerror=()=>reject(opening.error);
@@ -253,7 +267,7 @@ test('three independent devices publish admissions and explicitly open the new h
  }),{scopeId:scope.id,sequenceName:oldMember.enrollment.sequenceName});
  await b.reload();
  await expect(b.getByText('MISSING_SEQUENCES',{exact:true})).toBeVisible();
- expect(await readRetained(b,scope.id,oldDocument,oldHead)).toEqual({...nextMember,counter:null});
+ expect(await readRetained(b,scope.id,oldDocument,oldHead)).toEqual({...beforeLostCounter,counter:null});
  expect(errors).toEqual([]);
  }finally{await aCtx.close();await bCtx.close();await cCtx.close()}
 });
@@ -327,4 +341,209 @@ function readRetained(page,scopeId,documentId,branchHead){
   const counter=enrollment?await read(`${enrollment.sequenceName}-sequences`,'sequences',store=>req(store.get(key('counter',scopeId)))):null;
   return {...retained,enrollment:enrollment??null,counter:counter??null};
  },{scopeId,documentId,branchHead});
+}
+
+async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
+ const button=(page,name)=>page.getByRole('button',{name,exact:true});
+ const message=page=>page.getByLabel('Signed revocation message');
+ const open=async page=>{
+  await page.goto('./settings');
+  await button(page,'Manage device revocation').click();
+  await expect(page.getByText(/Selected household branch /)).toBeVisible();
+ };
+ const review=async(page,value)=>{
+  await message(page).fill(value);
+  await button(page,'Review signed revocation').click();
+ };
+ const fault=async(page,namespace,includes)=>page.evaluate(({namespace,includes})=>{
+  const put=IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put=function(value,key){
+   const request=put.call(this,value,key);
+   if(typeof key==='string'&&key.startsWith(`["${namespace}",`)&&key.includes(includes)){
+    IDBObjectStore.prototype.put=put;
+    throw Error('injected rotation transaction failure after scheduling the write');
+   }
+   return request;
+  };
+ },{namespace,includes});
+ const rows=page=>page.evaluate(async scopeId=>{
+  const request=op=>new Promise((resolve,reject)=>{op.onsuccess=()=>resolve(op.result);op.onerror=()=>reject(op.error);});
+  const name=localStorage.getItem('creative-cooking-local-workspace-v1');
+  const db=await request(indexedDB.open(`${name}-records`));
+  try{
+   const store=db.transaction('records').objectStore('records');
+   const keys=(await request(store.getAllKeys())).filter(key=>{
+    const [kind,first,second]=JSON.parse(key);
+    return first===scopeId||second===scopeId||kind.startsWith('local-key')||kind==='pairing-guard';
+   });
+   const values=await Promise.all(keys.map(key=>request(store.get(key))));
+   return Object.fromEntries(keys.map((key,i)=>[key,JSON.parse(JSON.stringify(values[i]))]));
+  }finally{db.close();}
+ },scope.id);
+
+ await button(c,'Exchange encrypted cooking files').click();
+ const lateButton=c.getByRole('button',{name:/Download encrypted update /});
+ await expect(lateButton).toHaveCount(1);
+ const lateName=await lateButton.textContent();
+ const late=await downloadFile(c,lateName);
+ const lateId=lateName.split('Download encrypted update ')[1];
+
+ await a.goto('./settings');
+ await button(a,'Review household devices').click();
+ await button(a,`Review local quarantine for ${thirdId}`).click();
+ await button(a,'Quarantine on this device').click();
+ await expect(a.getByText('Device quarantined on this device.')).toBeVisible();
+ await button(a,'Open household incident reports').click();
+ await button(a,`Prepare report for ${thirdId}`).click();
+ await button(a,'Use verified household projection checkpoint').click();
+ await button(a,'Sign and freeze incident report').click();
+ await expect(a.getByLabel('Frozen incident evidence')).toBeVisible();
+ await button(a,'Save clean draft with 0 selected operations').click();
+ await expect(a.getByLabel('Saved clean draft')).toContainText('Revocation market');
+ await open(a);
+ await open(b);
+ await button(b,'Create signed recipient binding').click();
+ const binding=await b.getByLabel('Signed recipient binding').textContent();
+ const wrong=JSON.parse(binding);
+ wrong.wrappingKey='0'.repeat(64);
+ await a.getByLabel('Remaining device bindings').fill(JSON.stringify(wrong));
+ const prepare=a.getByRole('button',{name:/^Prepare revocation from /});
+ await prepare.click();
+ await expect(a.getByText(/binding is invalid/)).toBeVisible();
+ await a.getByLabel('Remaining device bindings').fill(binding);
+ await prepare.click();
+ await expect(a.getByText('0 of 2 required adult approvals.')).toBeVisible();
+ let proposal=await message(a).inputValue();
+ const parent=JSON.parse(proposal).item.event.parentHead;
+ expect(parent).toBe(publishedHead);
+ await button(a,'Sign approval for this revocation and draft').click();
+ await expect(a.getByText('1 of 2 required adult approvals.')).toBeVisible();
+ await expect(button(a,'Confirm revocation and publish rotation')).toHaveCount(0);
+ await review(b,await message(a).inputValue());
+ await button(b,'Sign approval for this revocation and draft').click();
+ await expect(b.getByText('2 of 2 required adult approvals.')).toBeVisible();
+ proposal=await message(b).inputValue();
+ const parsed=JSON.parse(proposal);
+ const {documentId,newEpochId}=parsed.item.event.subject;
+ expect(parsed.grant.recipients).toContain(existingId);
+ expect(parsed.grant.recipients).not.toContain(thirdId);
+ expect(parsed.grant.packageRefs).toHaveLength(1);
+ const altered=structuredClone(parsed);
+ altered.manifest.reportHash='0'.repeat(64);
+ await review(a,JSON.stringify(altered));
+ await expect(a.getByText('INVALID_GRANT',{exact:true})).toBeVisible();
+ await review(a,proposal);
+ await expect(a.getByText('2 of 2 required adult approvals.')).toBeVisible();
+ const beforeA=await rows(a), beforeB=await rows(b);
+ await fault(a,'projection-publication',parsed.item.event.proposalId);
+ await button(a,'Confirm revocation and publish rotation').click();
+ await expect(a.getByText('Local storage could not complete the change. You can retry.')).toBeVisible();
+ expect(await rows(a)).toEqual(beforeA);
+ await a.reload();
+ await open(a);
+ await review(a,proposal);
+ await button(a,'Confirm revocation and publish rotation').click();
+ await expect(button(a,'Reopen rotated household')).toBeVisible();
+ await expect(a.getByLabel('Household document generation')).toHaveText('Household generation 3');
+ const download=`Download rotation for ${existingId}`;
+ const file=await downloadFile(a,download);
+ expect(file.includes(Buffer.from('Rotation carrots'))).toBe(false);
+ await expect(button(a,`Download rotation for ${thirdId}`)).toHaveCount(0);
+ await button(a,'Reopen rotated household').click();
+ await expect(a.getByText('Invitation proof onion',{exact:true})).toBeVisible();
+ await open(a);
+ expect(await downloadFile(a,download)).toEqual(file);
+ await button(a,`Review retained branch ${parent}`).click();
+ await expect(a.getByLabel('Retained branch cooking')).toContainText('Revocation market');
+ await button(a,`Review archived incident ${parsed.manifest.reviewId}`).click();
+ await expect(a.getByLabel('Archived signed incident')).toContainText('Original checkpoint verified.');
+ const advancedA=await rows(a);
+ const oldRows=Object.entries(beforeA).filter(([key])=>['document','document-owner','object','compromise-review','compromise-frozen-original'].includes(JSON.parse(key)[0]));
+ for(const [key,value] of oldRows)expect(advancedA[key]).toEqual(value);
+ expect(advancedA[JSON.stringify(['document-owner',scope.id,documentId])]).toBe(parsed.grant.eventHash);
+
+ // A retained decision leaves an excluded device on the original branch.
+ await open(c);
+ const beforeC=await rows(c);
+ await review(c,proposal);
+ await button(c,'Keep my branch and retain this decision').click();
+ await expect(c.getByText(/Retained revocation · branch kept separate/)).toBeVisible();
+ await expect(button(c,'Install reviewed encrypted rotation')).toHaveCount(0);
+ expect(await rows(c)).toEqual(beforeC);
+ await c.reload();
+ await open(c);
+ await expect(c.getByText(/Retained revocation · branch kept separate/)).toBeVisible();
+ await expect(c.getByLabel('Household document generation')).toHaveText('Household generation 3');
+ await c.goto('./');
+ await expect(c.getByText('Third device thyme',{exact:true})).toBeVisible();
+ await c.goto('./settings');
+
+ await fault(b,'recipient-admission','receive-revocation:');
+ await uploadFile(b,'Install reviewed encrypted rotation',file);
+ await expect(b.getByText('Local storage could not complete the change. You can retry.')).toBeVisible();
+ expect(await rows(b)).toEqual(beforeB);
+ await b.reload();
+ await open(b);
+ await review(b,proposal);
+ const tampered=Buffer.from(file);
+ tampered[tampered.length-1]^=1;
+ await uploadFile(b,'Install reviewed encrypted rotation',tampered);
+ await expect(b.getByText(/encrypted rotation file is unavailable/)).toBeVisible();
+ expect(await rows(b)).toEqual(beforeB);
+ await uploadFile(b,'Install reviewed encrypted rotation',file);
+ await expect(button(b,'Reopen rotated household')).toBeVisible();
+ await expect(b.getByLabel('Household document generation')).toHaveText('Household generation 3');
+ await button(b,'Reopen rotated household').click();
+ await expect(b.getByText('Invitation proof onion',{exact:true})).toBeVisible();
+ const advancedB=await rows(b);
+ for(const [key,value] of Object.entries(beforeB)){
+  if(['document','document-owner','object','inbox'].includes(JSON.parse(key)[0]))expect(advancedB[key]).toEqual(value);
+ }
+ await open(b);
+ await review(b,proposal);
+ await uploadFile(b,'Install reviewed encrypted rotation',file);
+ await expect(b.getByText('This exact rotation was already saved.')).toBeVisible();
+ expect(await rows(b)).toEqual(advancedB);
+ await button(b,'Exchange encrypted cooking files').click();
+ await uploadFile(b,'Choose encrypted cooking update',late);
+ await expect(b.getByText(/Update not applied:/)).toBeVisible();
+ expect(await rows(b)).toEqual(advancedB);
+ await uploadFile(b,'Hold late update for review',late);
+ await button(b,`Review held update ${lateId}`).click();
+ await expect(b.getByText(/pantry-create .*Third device thyme/)).toBeVisible();
+ await b.reload();
+ await open(b);
+ await button(b,`Review held update ${lateId}`).click();
+ await expect(b.getByText(/pantry-create .*Third device thyme/)).toBeVisible();
+ for(const page of [a,b]){
+  await page.goto('./shopping');
+  await expect(page.getByText('Rotation carrots',{exact:true})).toBeVisible();
+  await expect(page.getByText('2.5 kg',{exact:true})).toBeVisible();
+  await page.goto('./');
+  await expect(page.getByText('Third device thyme',{exact:true})).toHaveCount(0);
+ }
+ await addPantry(b,'Fresh-epoch coriander');
+ await b.goto('./settings');
+ await button(b,'Exchange encrypted cooking files').click();
+ const fresh=b.getByRole('button',{name:/^Download encrypted update /});
+ await expect(fresh).toHaveCount(1);
+ const bytes=await downloadFile(b,await fresh.textContent());
+ expect(JSON.parse(bytes.toString()).header.epochId).toBe(newEpochId);
+ const unchangedC=await rows(c);
+ await button(c,'Exchange encrypted cooking files').click();
+ await uploadFile(c,'Choose encrypted cooking update',bytes);
+ await expect(c.getByText(/Update not applied:/)).toBeVisible();
+ expect(await rows(c)).toEqual(unchangedC);
+ await a.goto('./settings');
+ await button(a,'Exchange encrypted cooking files').click();
+ const imported=a.waitForEvent('load',{timeout:15000});
+ await uploadFile(a,'Choose encrypted cooking update',bytes);
+ await imported.catch(async error=>{
+  console.error('FRESH EPOCH RECEIVE',await a.getByRole('alert').allTextContents());
+  throw error;
+ });
+ await a.goto('./');
+ await expect(a.getByText('Fresh-epoch coriander',{exact:true})).toBeVisible();
+ await b.reload();
+ await expect(b.getByLabel('Household document generation')).toHaveText('Household generation 4');
 }

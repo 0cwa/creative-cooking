@@ -1,4 +1,4 @@
-import {readLocalQuarantine} from '../compromise/review.mjs';
+import {readLocalQuarantine, REVIEW_LIMITS} from '../compromise/review.mjs';
 import {readContinuityHead} from './continuity-head.ts';
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
@@ -10,6 +10,10 @@ import {isPolicyDocumentId} from '../authority/validator.mjs';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
 
 type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; keys(): Promise<string[]> };
+type RotationSourceGuard = {
+  reviewId:string; review:unknown; original:{checkpoint:Uint8Array;objects:Uint8Array[]};
+  source:{documentId:string;bytes:Uint8Array;revision:number}|null;
+};
 type AuthorityExpectation = LocalCommit['expectedAuthority'];
 type BranchDocument = {head:string;documentId:string};
 type BranchRevision = BranchDocument & {revision:number|null};
@@ -45,6 +49,8 @@ const validateRecord = (k: string, v: any) => {
   const namespace = JSON.parse(k)[0];
   let valid = false;
   switch (namespace) {
+    case 'compromise-review': valid=object(v) && v.version===1 && typeof v.reviewId==='string'; break;
+    case 'compromise-frozen-original': valid=fields(v,['checkpoint','objects']) && v.checkpoint instanceof Uint8Array && denseArray(v.objects,entry=>entry instanceof Uint8Array); break;
     case 'compromise-quarantine': valid=typeof v==='boolean'; break;
     case 'disclosure-pending': valid=fields(v,['reason','objectId']) && v.reason==='POLICY_GOVERNANCE_UNPROVEN' && typeof v.objectId==='string' && !!v.objectId; break;
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
@@ -96,7 +102,7 @@ function projectionKey(x: unknown,allowUnboundV2=false): string | null {
  if(object(x)&&Object.hasOwn(x,'singleRecipient')){const {singleRecipient,...rest}=x;if(singleRecipient!==true||!Array.isArray(rest.packages)||rest.packages.length!==0||Object.hasOwn(rest,'guardId')||Object.hasOwn(rest,'guardIds')||Object.hasOwn(rest,'recovery')||projectionKey({...rest,guardIds:['local-only-placeholder'],packages:[{id:'local-only-placeholder',recipientDevice:'local-only-placeholder',bytes:new Uint8Array([0])}]},allowUnboundV2)===null)return null;return JSON.stringify(projectionCanonical(x));}
  if(object(x)&&Object.hasOwn(x,'recovery')){const r=x.recovery,{recovery,...rest}=x;if(!fields(r,['owner','generation','bindingHash','claimHash','tokenCommitment','sealed'])||!validId(r.owner)||!revision(r.generation)||![r.bindingHash,r.claimHash,r.tokenCommitment].every(validId)||typeof r.sealed!=='string'||r.sealed.length>16384||!/^[0-9a-f]+$/.test(r.sealed)||projectionKey(rest,allowUnboundV2)===null)return null;return JSON.stringify(projectionCanonical(x));}
  if(!allowUnboundV2&&object(x)&&object(x.manifest)&&x.manifest.bytes instanceof Uint8Array){try{if([2,3,4].includes(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(x.manifest.bytes))?.version))return null}catch{}}
- if (!(fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || (fields(x,['version','operationId','guardId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId)) || (fields(x,['version','operationId','guardId','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision)) || (fields(x,['version','operationId','guardIds','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && denseArray(x.guardIds,validId) && x.guardIds.length>0 && x.guardIds.length<=128 && x.guardIds.every((v:string,i:number)=>!i || x.guardIds[i-1]<v) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision))) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
+ if (!(fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || (fields(x,['version','operationId','guardId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId)) || (fields(x,['version','operationId','guardId','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision)) || (fields(x,['version','operationId','guardIds','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && denseArray(x.guardIds,validId) && x.guardIds.length>0 && x.guardIds.length<=128 && x.guardIds.every((v:string,i:number)=>!i || x.guardIds[i-1]<v) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && (x.sourceDocument.revision===null || revision(x.sourceDocument.revision)))) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
  const a=x.expectedAuthority, n=x.nextAuthority, m=x.manifest;
  if (!fields(x.localKey,['record','catalog']) || !validLocalRecord(x.localKey.record) || !validMasterCatalog(x.localKey.catalog) || x.localKey.record.masterId!==x.localKey.catalog.id || x.localKey.record.identity.purpose!=='data' || x.localKey.record.identity.scope.kind!=='household' || x.localKey.record.identity.scope.id!==a?.scope?.id || x.localKey.record.identity.epochId!==x.epochId) return null;
  if (!fields(a,['version','scope','record']) || a.version!==2 || !validPairingScope(a.scope) || a.scope.kind!=='household' || !fields(a.record,['revision','acceptedParent','authorizationSnapshot']) || !revision(a.record.revision) || a.record.revision>=Number.MAX_SAFE_INTEGER || ![a.record.acceptedParent,a.record.authorizationSnapshot].every(validId) || !validatePairingAuthority(n).ok || n.scope.kind!==a.scope.kind || n.scope.id!==a.scope.id || n.revision!==a.record.revision+1 || !fields(m,['id','bytes']) || !validId(m.id) || !(m.bytes instanceof Uint8Array) || !m.bytes.length) return null;
@@ -315,8 +321,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   private async requireSealedFilePublication(tx:Tx,expectedAuthority:LocalCommit['expectedAuthority'],operationId:string,recipientDevice:string){await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id,old=await tx.get(key('projection-publication',scope,operationId));if(!old||old.input.expectedAuthority.scope.id!==scope||old.input.operationId!==operationId||old.input.nextAuthority.acceptedParent!==expectedAuthority.record?.acceptedParent||!old.input.packages.some((p:any)=>p.recipientDevice===recipientDevice))conflict();await this.checkProjection(tx,old.input,old.inputKey)}
   async readHouseholdSealedFile(expectedAuthority:LocalCommit['expectedAuthority'],operationId:string,recipientDevice:string){expectedAuthority=snapshot(expectedAuthority);if(!validId(operationId)||!validId(recipientDevice))return fail('MALFORMED');try{return await this.run(false,async tx=>{await this.requireSealedFilePublication(tx,expectedAuthority,operationId,recipientDevice);return {ok:true as const,value:snapshot((await tx.get(key('household-sealed-file',expectedAuthority.scope.id,operationId,recipientDevice)))??null)}})}catch(e){return fail(mapError(e))}}
   async commitHouseholdSealedFile(expectedAuthority:LocalCommit['expectedAuthority'],operationId:string,recipientDevice:string,record:any){expectedAuthority=snapshot(expectedAuthority);record=snapshot(record);if(!validId(operationId)||!validId(recipientDevice)||!fields(record,['version','digest','bytes','signature'])||record.version!==1||typeof record.digest!=='string'||!/^[0-9a-f]{64}$/.test(record.digest)||!(record.bytes instanceof Uint8Array)||record.bytes.length<48||record.bytes.length>16*1024*1024+48||!(record.signature instanceof Uint8Array)||record.signature.length!==64)return fail('MALFORMED');try{return await this.run(true,async tx=>{await this.requireSealedFilePublication(tx,expectedAuthority,operationId,recipientDevice);const slot=key('household-sealed-file',expectedAuthority.scope.id,operationId,recipientDevice),old=await tx.get(slot);if(old!==undefined){if(old.digest!==record.digest)conflict();return {ok:true as const,value:{record:snapshot(old),replayed:true}}}await tx.put(slot,record);return {ok:true as const,value:{record:snapshot(record),replayed:false}}})}catch(e){return fail(mapError(e))}}
-  async publishProjection(input:ProjectionPublication):Promise<Result<{replayed:boolean},StorageError>> {
-    const inputKey=projectionKey(input); if(inputKey===null)return {ok:false,error:'MALFORMED'}; input=snapshot(input);
+  async publishProjection(input:ProjectionPublication, rotation?:RotationSourceGuard):Promise<Result<{replayed:boolean},StorageError>> {
+    const inputKey=projectionKey(input); if(inputKey===null)return {ok:false,error:'MALFORMED'}; input=snapshot(input); rotation=rotation&&snapshot(rotation);
     try { return await this.run(true,async tx=>{
       const scope=input.expectedAuthority.scope.id, op=key('projection-publication',scope,input.operationId), old=await tx.get(op);
       if(old) { if(old.inputKey!==inputKey) conflict(); await this.checkProjection(tx,old.input,inputKey); return {ok:true,value:{replayed:true}}; }
@@ -325,7 +331,19 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await this.requireAuthority(tx,input.expectedAuthority);
       const authority=await tx.get(key('pairing-authority','household',scope));
       if(!authority || authority.revision!==input.expectedAuthority.record!.revision) conflict();
-      if(input.sourceDocument) {
+      if(rotation) {
+        const same=(a:unknown,b:unknown)=>JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
+        const sourceDocument=input.sourceDocument;
+        if(!sourceDocument ||
+           !same(await tx.get(key('compromise-review',scope,rotation.reviewId)),rotation.review) ||
+           !same(await tx.get(key('compromise-frozen-original',scope,rotation.reviewId)),rotation.original)) conflict();
+        if(!sourceDocument) return corrupt();
+        const current=await tx.get(key('document',scope,sourceDocument.documentId));
+        const owner=await tx.get(key('document-owner',scope,sourceDocument.documentId));
+        if(rotation.source ?
+          current?.revision!==rotation.source.revision || owner!==authority.acceptedParent || !sameBytes(current.bytes,rotation.source.bytes) :
+          current!==undefined || owner!==undefined || sourceDocument.revision!==null) conflict();
+      } else if(input.sourceDocument) {
         const source=await tx.get(key('document',scope,input.sourceDocument.documentId));
         const owner=await tx.get(key('document-owner',scope,input.sourceDocument.documentId));
         if(!source || source.revision!==input.sourceDocument.revision || owner!==authority.acceptedParent) conflict();
@@ -650,6 +668,44 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {
     try { return await this.run(false,async tx => { const d = await tx.get(key('document',scopeId,documentId)); return {ok:true,value:d === undefined ? null : {documentId,bytes:copy(d.bytes),revision:d.revision}}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  /** Keep authenticated historical ciphertext outside the cooking import queue. */
+  async holdRevokedEvidence(expected:AuthorityExpectation, object:{id:string;bytes:Uint8Array}):Promise<Result<{replayed:boolean},StorageError>> {
+    if(expected?.scope?.kind!=='household'||!validPairingScope(expected.scope)||!expected.record||!validId(object?.id)||
+       !(object.bytes instanceof Uint8Array)||!object.bytes.length||object.bytes.length>REVIEW_LIMITS.objectBytes)return {ok:false,error:'MALFORMED'};
+    expected=snapshot(expected);object=snapshot(object);
+    try{return await this.run(true,async tx=>{
+      await this.requireAuthority(tx,expected);
+      const scope=expected.scope.id, prefix=key('cursor',scope).slice(0,-1)+',"revoked:',
+        slot=key('cursor',scope,`revoked:${object.id}`), inbox=key('inbox',scope,object.id);
+      const old=await tx.get(inbox), saved=await tx.get(slot);
+      if(old&&!sameBytes(old.bytes,object.bytes))return conflict();
+      if(saved!==undefined){
+        if(saved!==object.id||!old)return corrupt();
+        return {ok:true as const,value:{replayed:true}};
+      }
+      const keys=(await tx.keys()).filter(value=>value.startsWith(prefix));
+      if(keys.length>=REVIEW_LIMITS.objects)return {ok:false as const,error:'CAPACITY' as const};
+      let total=object.bytes.length;
+      for(const entry of keys){
+        const id=await tx.get(entry), prior=await tx.get(key('inbox',scope,id));
+        if(entry!==key('cursor',scope,`revoked:${id}`)||!prior)return corrupt();
+        total+=prior.bytes.length;
+        if(total>REVIEW_LIMITS.bytes)return {ok:false as const,error:'CAPACITY' as const};
+      }
+      if(!old)await tx.put(inbox,{bytes:object.bytes});
+      await tx.put(slot,object.id);
+      return {ok:true as const,value:{replayed:false}};
+    });}catch(e){return {ok:false,error:mapError(e)};}
+  }
+  async readRetainedBranch(expected:AuthorityExpectation,location:BranchDocument):Promise<Result<{bytes:Uint8Array;revision:number}|null,StorageError>> {
+    if(expected?.scope?.kind!=='household'||!validPairingScope(expected.scope)||!expected.record||!validBranchDocument(location))return {ok:false,error:'MALFORMED'};
+    expected=snapshot(expected);location=snapshot(location);
+    try{return await this.run(false,async tx=>{
+      await this.requireAuthority(tx,expected);
+      const document=await this.checkoutDocument(tx,expected.scope.id,location);
+      return {ok:true as const,value:snapshot(document)};
+    });}catch(e){return {ok:false,error:mapError(e)};}
   }
   async stageInbox(item: InboxItem, expectedAuthority?:AuthorityExpectation, authorDevice?:string): Promise<Result<void,StorageError>> {
     const valid = validateInboxItem(item); if (!valid.ok) return valid; item = snapshot(item);

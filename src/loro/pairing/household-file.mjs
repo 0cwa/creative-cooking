@@ -1,29 +1,80 @@
 import {readAuthority,resolveRuntimeAuthority,verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {durableSession} from './durable-session.mjs';
+import {revocationPackage} from '../compromise/revocation.mjs';
 import {admissionPackage} from './household-admission-package.mjs';
 import {verifyStoredKeyPackage} from './key-package.mjs';
 import {installHouseholdRecipient} from './household-recipient-install.mjs';
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true}),MAX=16*1024*1024;
+const hex=bytes=>Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
 const equal=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 const canonical=x=>x instanceof Uint8Array?{__bytes:Array.from(x)}:Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 function revive(x){if(Array.isArray(x))return x.map(revive);if(!x||typeof x!=='object')return x;if(Object.keys(x).length===1&&Array.isArray(x.__bytes)&&x.__bytes.every(v=>Number.isInteger(v)&&v>=0&&v<=255))return Uint8Array.from(x.__bytes);return Object.fromEntries(Object.entries(x).map(([k,v])=>[k,revive(v)]))}
 /** Export only a committed recipient-specific publication, encrypted to the key
  * from the sponsor's own completed independently pinned ceremony. */
-export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessionStore,keys,operationId,recipientDevice,LoroDoc}){
+export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessionStore,keys,operationId,recipientDevice,LoroDoc,kind='admission'}){
  const sc=structuredClone(scope),secret={signingSecret:new Uint8Array(keys.signingSecret),wrappingSecret:new Uint8Array(keys.wrappingSecret)};
- try{const current=await readAuthority(storage,sc,pin,provider),saved=await storage.getProjectionPublication(sc.id,operationId);if(!saved.ok||!saved.value)throw Error('MISSING_PUBLICATION');const p=saved.value;if(current.activeHead!==p.nextAuthority.acceptedParent)throw Error('STALE_AUTHORITY');const item=current.state.events.find(x=>x.admission?.operationId===operationId&&x.event?.kind==='inviteAdult'),admission=item?.admission;if(!item||!admission)throw Error('INVALID_AUTHORITY');const authorized=await resolveRuntimeAuthority(storage,sc,pin,provider,admission.localDeviceId);if(authorized.scope.branchHead!==current.activeHead||authorized.expectedAuthority.record.revision!==current.revision)throw Error('STALE_AUTHORITY');const verified=await verifyAuthority(current.state,pin,provider),parent=verified.nodes.get(item.event.parentHead);
- const {context,proof}=await admissionPackage({sodium,provider,parent,authorizationSnapshot:p.expectedAuthority.record.authorizationSnapshot,item,recipientDevice});
- const local=await durableSession(sodium,sessionStore,secret,proof.transcript,proof.guard,'initiator',proof.oob).evidence();
- if(local.hash!==context.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
- const packets=p.packages.filter(x=>x.recipientDevice===recipientDevice);
- if(packets.length!==1||packets[0].id!==context.releaseId||p.documents.length!==1||!p.seed)throw Error('INVALID_PROOF');
- verifyStoredKeyPackage(sodium,packets[0].bytes,context);
- const manifest=admission.manifest,peerId=manifest.schemaVersion.split('|')[2],doc=new LoroDoc();doc.import(p.documents[0].bytes);const seed={version:1,seedId:p.seed.seedId,peerId,snapshot:new Uint8Array(p.documents[0].bytes),identities:structuredClone(p.seed.identities),purchaseIds:Object.keys(doc.getMap('purchases').toJSON()).sort()},publication={expectedAuthority:p.expectedAuthority,nextAuthority:p.nextAuthority,admissionEventHash:p.admissionEventHash,grantHash:p.grantHash,manifest:p.manifest,epochId:p.epochId,documents:p.documents,packages:packets,seed:p.seed,...(p.policySeed?{policySeed:p.policySeed}:{})},transport={version:1,publication,seed,policyBundle:p.policySeed?.bundle??null},plain=encoder.encode(JSON.stringify(canonical(transport)));try{if(plain.length>MAX)throw Error('TOO_LARGE');const digest=sodium.to_hex(sodium.crypto_generichash(32,plain)),signedBytes=bytes=>domain('household-sealed-file',{scopeId:sc.id,operationId,recipientDevice,digest,cipherHash:sodium.to_hex(sodium.crypto_generichash(32,bytes))}),validate=record=>{if(!record||record.version!==1||record.digest!==digest||!(record.bytes instanceof Uint8Array)||!(record.signature instanceof Uint8Array)||!sodium.crypto_sign_verify_detached(record.signature,signedBytes(record.bytes),proof.transcript.initiator.signingPublicKey))throw Error('CONFLICT');return new Uint8Array(record.bytes)},read=await storage.readHouseholdSealedFile(authorized.expectedAuthority,operationId,recipientDevice);if(!read.ok)throw Error(read.error.code);if(read.value!==null)return validate(read.value);const sealed=sodium.crypto_box_seal(plain,proof.transcript.responder.wrappingPublicKey),record={version:1,digest,bytes:new Uint8Array(sealed),signature:sodium.crypto_sign_detached(signedBytes(sealed),secret.signingSecret)},committed=await storage.commitHouseholdSealedFile(authorized.expectedAuthority,operationId,recipientDevice,record);if(!committed.ok)throw Error(committed.error.code);return validate(committed.value.record)}finally{plain.fill(0)}}finally{secret.signingSecret.fill(0);secret.wrappingSecret.fill(0)}
+ try{
+  const current=await readAuthority(storage,sc,pin,provider),saved=await storage.getProjectionPublication(sc.id,operationId);
+  if(!saved.ok||!saved.value)throw Error('MISSING_PUBLICATION');
+  const p=saved.value;
+  if(current.activeHead!==p.nextAuthority.acceptedParent)throw Error('STALE_AUTHORITY');
+  const rotation=kind==='revocation',item=current.state.events.find(x=>rotation ?
+    x.rotation?.grant?.version===2&&x.rotation.operationId===operationId :
+    x.admission?.operationId===operationId&&x.event?.kind==='inviteAdult');
+  const transition=rotation?item?.rotation:item?.admission;
+  if(!transition)throw Error('INVALID_AUTHORITY');
+  const authorized=await resolveRuntimeAuthority(storage,sc,pin,provider,transition.localDeviceId);
+  if(authorized.scope.branchHead!==current.activeHead||authorized.expectedAuthority.record.revision!==current.revision)throw Error('STALE_AUTHORITY');
+  const verified=await verifyAuthority(current.state,pin,provider),parent=verified.nodes.get(item.event.parentHead);
+  const {context,proof}=rotation?await revocationPackage({provider,parent,item,recipientDevice}):
+    await admissionPackage({sodium,provider,parent,authorizationSnapshot:p.expectedAuthority.record.authorizationSnapshot,item,recipientDevice});
+  const sender=sodium.from_hex(context.senderSigningKey),recipient=sodium.from_hex(context.recipientWrappingKey);
+  if(hex(secret.signingSecret.subarray(32))!==context.senderSigningKey||
+     hex(sodium.crypto_scalarmult_base(secret.wrappingSecret))!==context.senderWrappingKey)throw Error('INVALID_PROOF');
+  if(proof){
+   const local=await durableSession(sodium,sessionStore,secret,proof.transcript,proof.guard,'initiator',proof.oob).evidence();
+   if(local.hash!==context.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
+  }
+  const packets=p.packages.filter(x=>x.recipientDevice===recipientDevice);
+  if(packets.length!==1||packets[0].id!==context.releaseId||p.documents.length!==1||!p.seed)throw Error('INVALID_PROOF');
+  verifyStoredKeyPackage(sodium,packets[0].bytes,context);
+  let transport;
+  if(rotation){
+   transport={version:2,publication:{item,selection:JSON.parse(decoder.decode(p.nextAuthority.authorityState)).selections.at(-1),admissionEventHash:p.admissionEventHash,grantHash:p.grantHash,
+     manifest:p.manifest,document:p.documents[0],packet:packets[0].bytes},seed:p.seed,policyBundle:null};
+  }else{
+   const peerId=transition.manifest.schemaVersion.split('|')[2],doc=new LoroDoc();doc.import(p.documents[0].bytes);
+   const seed={version:1,seedId:p.seed.seedId,peerId,snapshot:new Uint8Array(p.documents[0].bytes),
+     identities:structuredClone(p.seed.identities),purchaseIds:Object.keys(doc.getMap('purchases').toJSON()).sort()};
+   const publication={expectedAuthority:p.expectedAuthority,nextAuthority:p.nextAuthority,admissionEventHash:p.admissionEventHash,
+     grantHash:p.grantHash,manifest:p.manifest,epochId:p.epochId,documents:p.documents,packages:packets,seed:p.seed,...(p.policySeed?{policySeed:p.policySeed}:{})};
+   transport={version:1,publication,seed,policyBundle:p.policySeed?.bundle??null};
+  }
+  const plain=encoder.encode(JSON.stringify(canonical(transport)));
+  try{
+   if(plain.length>MAX)throw Error('TOO_LARGE');
+   const digest=sodium.to_hex(sodium.crypto_generichash(32,plain));
+   const signedBytes=bytes=>domain('household-sealed-file',{scopeId:sc.id,operationId,recipientDevice,digest,cipherHash:sodium.to_hex(sodium.crypto_generichash(32,bytes))});
+   const validate=record=>{
+    if(!record||record.version!==1||record.digest!==digest||!(record.bytes instanceof Uint8Array)||!(record.signature instanceof Uint8Array)||
+       !sodium.crypto_sign_verify_detached(record.signature,signedBytes(record.bytes),sender))throw Error('CONFLICT');
+    return new Uint8Array(record.bytes);
+   };
+   const read=await storage.readHouseholdSealedFile(authorized.expectedAuthority,operationId,recipientDevice);
+   if(!read.ok)throw Error(read.error.code);
+   if(read.value!==null)return validate(read.value);
+   const sealed=sodium.crypto_box_seal(plain,recipient);
+   const record={version:1,digest,bytes:new Uint8Array(sealed),signature:sodium.crypto_sign_detached(signedBytes(sealed),secret.signingSecret)};
+   const committed=await storage.commitHouseholdSealedFile(authorized.expectedAuthority,operationId,recipientDevice,record);
+   if(!committed.ok)throw Error(committed.error.code);
+   return validate(committed.value.record);
+  }finally{plain.fill(0)}
+ }finally{secret.signingSecret.fill(0);secret.wrappingSecret.fill(0)}
 }
 /** Decryption reveals no authority: the full receiver verifier must succeed
  * against the independently accepted local parent and completed session. */
 export async function installHouseholdFile({sodium,bytes,keys,identify,...args}){
  if(!(bytes instanceof Uint8Array)||bytes.length<48||bytes.length>MAX+48)throw Error('MALFORMED');const signingSecret=new Uint8Array(keys.signingSecret),wrappingSecret=new Uint8Array(keys.wrappingSecret),cipher=new Uint8Array(bytes);let plain;
- try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==1)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
+ try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==(args.recipientKind==='revocation'?2:1)||raw.version===2&&raw.policyBundle!==null)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
 }
