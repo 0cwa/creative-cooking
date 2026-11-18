@@ -945,13 +945,15 @@ test('selected recipe shopping copies and current-only admission survive durable
   documents,selection,localDeviceId:a.deviceId,ceremonies,existingCeremonies,keyOperationId:'set-sponsor-key'};
  const attempt=(updates={})=>publishHouseholdDocumentSet({...publicationInput,...updates});
  const beforePublisher=a.rows();
- const wrongWrappedKey=master=>({...master,async wrap(id,key,aad){
-  const changed=new Uint8Array(key);
+ const wrongWrappedKey=(master,inPlace)=>({...master,async wrap(id,key,aad){
+  const changed=inPlace?key:new Uint8Array(key);
   changed[0]^=1;
-  try{return await master.wrap(id,changed,aad);}finally{changed.fill(0);}
+  try{return await master.wrap(id,changed,aad);}finally{if(!inPlace)changed.fill(0);}
  }});
- await assert.rejects(()=>attempt({master:wrongWrappedKey(sponsorMaster)}),/LOCKED/);
- assert.deepEqual(a.rows(),beforePublisher);
+ for(const inPlace of [true,false]){
+  await assert.rejects(()=>attempt({master:wrongWrappedKey(sponsorMaster,inPlace)}),/LOCKED/);
+  assert.deepEqual(a.rows(),beforePublisher);
+ }
  const operationId=event.proposalId;
  const sealOptions={sodium,storage:a.storage,scope,pin:a.root.head,provider:a.provider,keys:sponsorKeys,
   sessionStore:sponsorSession,operationId,LoroDoc,recipientDevice:newcomerContext.recipientDeviceId,kind:'document-set'};
@@ -1016,8 +1018,11 @@ test('selected recipe shopping copies and current-only admission survive durable
  await assert.rejects(()=>install(existingSealed),/INVALID_FILE/);
  await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,recipientKind:'newcomer'}),/INVALID_FILE/);
  assert.deepEqual(freshRows(),beforeNewcomer);
- await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,master:wrongWrappedKey(newcomerMaster)}),/LOCKED/);
- assert.deepEqual(freshRows(),beforeNewcomer);
+ for(const inPlace of [true,false]){
+  await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,
+   master:wrongWrappedKey(newcomerMaster,inPlace)}),/LOCKED/);
+  assert.deepEqual(freshRows(),beforeNewcomer);
+ }
  for(const fault of ['projection-set-keys','projection-set-catalog','projection-set-authority']){
   freshFault=fault;
   await assert.rejects(()=>install(),/IO/);
