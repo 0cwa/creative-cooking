@@ -34,6 +34,7 @@ export async function verifyHouseholdRecipientProof({sodium,storage,scope,pin,pr
  const ownKeys={signingSecret:new Uint8Array(keys.signingSecret),wrappingSecret:new Uint8Array(keys.wrappingSecret)};
  try {
   if(sc?.kind!=='household'||typeof recipientDevice!=='string'||!recipientDevice||!p?.nextAuthority||!p?.expectedAuthority?.record||!Array.isArray(p.documents)||p.documents.length!==1||!Array.isArray(p.packages))throw Error('MALFORMED');
+  if(p.packages.length!==1)throw Error('INVALID_PROOF');
   const parentProof=await verifyPublicParent(storage,sc,pin,provider),raw={value:parentProof.record},old=parentProof.state;
   if(raw.value.authorizationSnapshot!==p.expectedAuthority.record.authorizationSnapshot||raw.value.acceptedParent!==p.expectedAuthority.record.acceptedParent)throw Error('CONFLICT');
   const authority={state:old,activeHead:old.activeHead};
@@ -50,8 +51,8 @@ export async function verifyHouseholdRecipientProof({sodium,storage,scope,pin,pr
   const {kind,context,proof,guardId}=await admissionPackage({sodium,provider,parent,authorizationSnapshot:raw.value.authorizationSnapshot,item:admission,recipientDevice});
   const local=await durableSession(sodium,sessionStore,ownKeys,proof.transcript,proof.guard,'responder',proof.oob).evidence();
   if(local.hash!==context.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
-  const pkg=p.packages.find(x=>x.id===context.releaseId&&x.recipientDevice===recipientDevice);
-  if(!pkg||p.packages.filter(x=>x.id===context.releaseId||x.recipientDevice===recipientDevice).length!==1||p.grantHash!==context.grantHash||p.epochId!==context.epochId)throw Error('INVALID_PROOF');
+  const [pkg]=p.packages;
+  if(pkg?.id!==context.releaseId||pkg.recipientDevice!==recipientDevice||p.grantHash!==context.grantHash||p.epochId!==context.epochId)throw Error('INVALID_PROOF');
   verifyStoredKeyPackage(sodium,pkg.bytes,context);
   return {kind,expectedAuthority:raw.value,nextAuthority:{scope:sc,revision:raw.value.revision+1,acceptedParent:selection.to,authorizationSnapshot:p.nextAuthority.authorizationSnapshot,authorityState:new Uint8Array(p.nextAuthority.authorityState)},context,packet:pkg.bytes,guardId,seed:s,policyBundle:bundle};
  } finally {ownKeys.signingSecret.fill(0);ownKeys.wrappingSecret.fill(0)}

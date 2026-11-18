@@ -26,5 +26,5 @@ export async function verifyRecipientInstallation({storage,scope,pin,provider,so
  if(p.localKey.record.identity.scope.id!==scope.id||p.localKey.record.identity.scope.kind!=='household'||p.localKey.record.identity.purpose!=='data'||p.localKey.record.identity.epochId!==context.epochId||p.guardId!==guardId)throw Error('INVALID_AUTHORITY');
  verifyStoredKeyPackage(sodium,p.packet,context);
  const body={version:1,scopeId:scope.id,operationId:p.operationId,keyOperationId:p.localKey.record.operationId,guardId:p.guardId,recipientDevice:recipient,parentHead:parent.activeHead,acceptedHead:eventHash,documentId:p.documentId,epochId:grant.newEpochId,manifestHash:grant.projectionManifestHash,grantHash:context.grantHash,policyBundleHash:manifest.version===1?null:manifest.policyBundleHash,packetHash:await digest(provider,'household-recipient-packet',Array.from(p.packet))};const key=unhex(context.recipientSigningKey);if(!key||!eq(body,p.receiptBody)||!sodium.crypto_sign_verify_detached(p.receipt,domain('household-recipient-receipt',body),key))throw Error('INVALID_AUTHORITY');
- return {parent,installation:p};
+ return {parent,installation:p,transcriptHash:context.transcriptHash};
 }

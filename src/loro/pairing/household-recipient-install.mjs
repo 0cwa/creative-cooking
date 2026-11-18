@@ -3,6 +3,7 @@
 import {verifyHouseholdRecipientProof} from './household-recipient-proof.mjs';
 import {withOpenedKeyPackage} from './key-package.mjs';
 import {domain} from '../authority/validator.mjs';
+import {resolveRuntimeAuthority} from '../authority/chain.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const unhex=s=>typeof s==='string'&&/^[0-9a-f]{64}$/.test(s)?Uint8Array.from(s.match(/../g),x=>parseInt(x,16)):null;
 const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
@@ -28,6 +29,11 @@ export async function installHouseholdRecipient({sodium,storage,scope,pin,provid
   return await withOpenedKeyPackage(sodium,proof.packet,context,privateKeys.wrappingSecret,async key=>{
    const localKey=await storage.localKeys(master,sodium).preparePairedDataKey(keyOperationId,identity,key);
    const input={version:1,operationId,scopeId:sc.id,guardId:proof.guardId,documentId:context.projectionId,generation:context.generation,expectedAuthority:proof.expectedAuthority,nextAuthority:proof.nextAuthority,manifest:{id:context.manifestHash,bytes:new Uint8Array(p.manifest.bytes)},seed:{seedId:s.seedId,identities:structuredClone(s.identities)},policySeed:bundle?{bundle,bundleHash:p.policySeed.bundleHash}:null,snapshot:new Uint8Array(s.snapshot),packet:new Uint8Array(proof.packet),receiptBody:body,receipt,localKey};
+   if(!prior.value&&proof.kind==='existing'){
+    const {expectedAuthority:{record}}=await resolveRuntimeAuthority(storage,sc,pin,provider,recipientDevice);
+    const expected=proof.expectedAuthority;
+    if(record.revision!==expected.revision||record.acceptedParent!==expected.acceptedParent||record.authorizationSnapshot!==expected.authorizationSnapshot)throw Error('CONFLICT');
+   }
    await prepareEnrollment?.();
    const result=await storage.householdRecipient.install(input);if(!result.ok)throw Error(result.error);return {...result.value,acceptedHead:proof.nextAuthority.acceptedParent,generation:context.generation};
   });

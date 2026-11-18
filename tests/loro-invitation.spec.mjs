@@ -2,6 +2,7 @@ import {test,expect} from './browser-fixture.mjs';
 import {readFile} from 'node:fs/promises';
 import sodium from 'libsodium-wrappers';
 import {domain} from '../src/loro/authority/validator.mjs';
+import {ceremonyBytes} from '../src/loro/pairing/candidate-v2.mjs';
 test('three independent devices publish admissions and explicitly open the new household generation',async({browser,baseURL})=>{
  test.setTimeout(180000);const aCtx=await browser.newContext({baseURL,acceptDownloads:true}),bCtx=await browser.newContext({baseURL,acceptDownloads:true}),cCtx=await browser.newContext({baseURL,acceptDownloads:true});const a=await aCtx.newPage(),b=await bCtx.newPage(),c=await cCtx.newPage(),errors=[];a.setDefaultTimeout(12000);b.setDefaultTimeout(12000);for(const p of [a,b,c]){p.on('pageerror',e=>errors.push(String(e)));p.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text())});p.on('requestfailed',r=>console.error('REQUEST',r.url(),r.failure()))}try{
  const setup=async p=>{await p.goto('./');await p.getByRole('button',{name:'Start fresh local preview'}).click().catch(async e=>{console.error('SETUP PAGE',p.url(),(await p.locator('body').innerText()).slice(0,2500),errors);throw e});await p.getByRole('button',{name:'Review household policy'}).click();await p.getByRole('button',{name:'Accept this household policy'}).click();await expect(p.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally')};
@@ -118,6 +119,17 @@ test('three independent devices publish admissions and explicitly open the new h
  await expect(c.getByText('INVALID_FILE',{exact:true})).toBeVisible();
  await expect(c.getByRole('button',{name:'Open this shared household'})).toHaveCount(0);
 
+ const parentReceiptIndex=JSON.stringify(['recipient-admission-event',scope.id,oldHead]);
+ const savedParentReceiptIndex=await changeWorkspaceRecord(b,parentReceiptIndex);
+ expect(typeof savedParentReceiptIndex).toBe('string');
+ try {
+  await uploadFile(b,existingAction,existingFile);
+  await expect(b.getByText('INVALID_AUTHORITY',{exact:true})).toBeVisible();
+  expect(await readRetained(b,scope.id,oldDocument,oldHead)).toEqual(oldMember);
+ } finally {
+  await changeWorkspaceRecord(b,parentReceiptIndex,savedParentReceiptIndex);
+ }
+
  await b.evaluate(()=>{
   const put=IDBObjectStore.prototype.put;
   IDBObjectStore.prototype.put=function(value,key){
@@ -170,6 +182,16 @@ test('three independent devices publish admissions and explicitly open the new h
  await c.getByRole('button',{name:'Show device identity'}).click();
  await c.getByRole('button',{name:'Invite or join a household'}).click();
  await c.getByRole('button',{name:'Join invitation'}).click();
+ const changedOffer=JSON.parse(laterOffer);
+ changedOffer.ceremony.transcript.responder.nonce.__bytes[0]^=1;
+ const parsedCeremony=JSON.parse(JSON.stringify(changedOffer.ceremony),(_key,value)=>
+  value?.__bytes?Uint8Array.from(value.__bytes):value);
+ const changedCode=sodium.to_hex(sodium.crypto_generichash(32,ceremonyBytes(parsedCeremony.transcript,parsedCeremony.guard)));
+ await c.getByLabel('Public invitation message input').fill(JSON.stringify(changedOffer));
+ await c.getByLabel('Confirmed invitation code').fill(changedCode);
+ await c.getByRole('button',{name:'Start or resume device verification'}).click();
+ await expect(c.getByText('INVALID_AUTHORITY',{exact:true})).toBeVisible();
+ await expect(c.getByRole('button',{name:'Choose encrypted household file'})).toHaveCount(0);
  await c.getByLabel('Public invitation message input').fill(laterOffer);
  await c.getByLabel('Confirmed invitation code').fill(laterCode);
  await c.getByRole('button',{name:'Start or resume device verification'}).click();
@@ -226,6 +248,21 @@ async function uploadFile(page,name,buffer){
  const pending=page.waitForEvent('filechooser');
  await page.getByRole('button',{name,exact:true}).click();
  await (await pending).setFiles({name:'household.bin',mimeType:'application/octet-stream',buffer});
+}
+
+function changeWorkspaceRecord(page,slot,replacement){
+ return page.evaluate(({slot,replacement})=>new Promise((resolve,reject)=>{
+  const name=localStorage.getItem('creative-cooking-local-workspace-v1');
+  const opening=indexedDB.open(`${name}-records`);
+  opening.onerror=()=>reject(opening.error);
+  opening.onsuccess=()=>{
+   const db=opening.result,tx=db.transaction('records','readwrite'),store=tx.objectStore('records');
+   const read=store.get(slot);
+   read.onsuccess=()=>replacement===undefined?store.delete(slot):store.put(replacement,slot);
+   tx.oncomplete=()=>{db.close();resolve(read.result)};
+   tx.onabort=()=>{db.close();reject(tx.error)};
+  };
+ }),{slot,replacement});
 }
 
 function readRetained(page,scopeId,documentId,branchHead){
