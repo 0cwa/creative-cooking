@@ -1,7 +1,7 @@
 import {test,expect} from './browser-fixture.mjs';
 import {unlink} from 'node:fs/promises';
-const archivePath='/var/home/x/agent-scratch/creative-cooking/loro-implementation/app-integration/recovery-browser-fixture.json';
-test('download an encrypted recovery archive and restore it from chooser and locked workspace',async({page})=>{
+test('download an encrypted recovery archive and restore it from chooser and locked workspace',async({page},testInfo)=>{
+ const archivePath=testInfo.outputPath('recovery-browser-fixture.json');
  try {
   await page.goto('./');await page.getByRole('button',{name:'Start fresh local preview'}).click();await page.getByRole('button',{name:'Review household policy'}).click();await page.getByRole('button',{name:'Accept this household policy'}).click();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await page.getByText('Chef',{exact:true}).last().click();await page.getByLabel('Message Chef').fill('Recovery fixture dinner');await page.getByLabel('Save private message').click();await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();await page.getByLabel('Open settings').last().click();await page.getByLabel('City').fill('Fixturetown');await expect(page.getByText('Recovery is not configured',{exact:true})).toBeVisible();await page.getByRole('button',{name:'Set up personal recovery'}).click();await page.getByRole('button',{name:'Create recovery code and archive'}).click();await expect(page.getByRole('link',{name:'Download encrypted archive'})).toBeVisible();const code=await page.getByLabel('Recovery code').inputValue();expect(code.length).toBeGreaterThan(0);const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'Download encrypted archive'}).click()]);await download.saveAs(archivePath);

@@ -7,11 +7,19 @@ Run this checklist after `npm run check` passes and before a release that change
 CI must pass all of the following:
 
 - unit tests for pantry parsing/grouping, Chef prompt compilation, structured tool payload normalization, allergy validation, backup format migration/round-trips, OpenRouter share payload round-trips, and streaming SSE/tool-call assembly;
+- Loro contracts and focused Node tests for local storage, cooking edits, authority, encrypted exchange, disclosure, and recovery through `npm test`
 - TypeScript type checking;
 - production web export with `EXPO_PUBLIC_BASE_URL=/creative-cooking`;
 - exported-PWA smoke verification for the manifest, 192/512 icons, scoped service-worker registration, navigation fallback behavior, and Pantry/Chef/Recipes/Settings static routes;
 - a Chromium E2E that adds pantry state, visits Recipes, switches offline, and reloads both routes through the service worker;
+- Chromium Loro tests for the fresh workspace, household admission and selection, encrypted file exchange, shopping, identity, and recovery through `npm run test:e2e`
 - Gitleaks.
+
+Run just the Loro Node checks with `npm run test:loro`. To run the Loro Chromium checks locally, install Chromium with `npx playwright install chromium`, export with `EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web`, then run `npm run test:e2e -- loro-`. Playwright starts the app export and an isolated admission fixture on loopback. Set `TEST_WEB_PORT` if the app port is already occupied.
+
+Run the bootstrap comparison with a bundle and an isolated browser CDP endpoint. Run the RTC and file integration proofs with their own harness and isolated profiles. [Bootstrap comparison](../tests/loro/bootstrap-proof/README.md) · [RTC and file integration](../tests/loro/integration/README.md)
+
+Some supplemental Node proofs require scratch directories for on-disk reopen and rollback checks. The guardian, recovery, and native bootstrap tests that call for a directory use `GUARDIAN_TEST_DIR`, `RECOVERY_TEST_DIR`, and `NATIVE_PROOF_DIR`, respectively. Native persistence, transport interoperability, permissions, and recovery require hardware verification. [Android and iOS device checks](plans/LORO-RELAY-IMPLEMENTATION.md#phases-and-acceptance-gates)
 
 ## Install and offline smoke
 
