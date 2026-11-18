@@ -15,7 +15,7 @@ const text = async (page, name) => {
   return item.textContent();
 };
 
-async function prepare(page, baseURL, seed) {
+async function prepare(page, baseURL, seed, prepareRecipes) {
   await page.goto(baseURL);
   await button(page, 'Start fresh local preview').click();
   await button(page, 'Review household policy').click();
@@ -25,7 +25,8 @@ async function prepare(page, baseURL, seed) {
     await add(page, 'Direct household seed leek');
     await saved(page);
   }
-  await button(page, 'Open settings').click();
+  if (prepareRecipes) await prepareRecipes();
+  else await button(page, 'Open settings').click();
   await button(page, 'Show device identity').click();
   await button(page, 'Invite or join a household').click();
 }
@@ -57,7 +58,9 @@ async function admit(a, b, baseURL) {
   }
   const download = a.waitForEvent('download');
   await button(a, 'Admit and download encrypted household file').click();
-  const file = await readFile(await (await download).path());
+  const downloaded=await download;
+  const file = await readFile(await downloaded.path());
+  await downloaded.delete();
   const chooser = b.waitForEvent('filechooser');
   await button(b, 'Choose encrypted household file').click();
   await (await chooser).setFiles({name:'household.bin', mimeType:'application/octet-stream', buffer:file});
@@ -134,6 +137,161 @@ async function verifyCooking(page) {
   await saved(page);
   for (const ingredient of ['Direct proof tarragon', 'Direct proof fennel', 'Direct pending rosemary']) await visible(page, ingredient);
 }
+
+async function openRecipe(page,title) {
+  await label(page,`Open recipe ${title}`).click();
+  await expect(page.getByText(title,{exact:true}).last()).toBeVisible();
+}
+
+async function createRecipe(page,title) {
+  await label(page,'Add recipe').click();
+  await label(page,'New recipe title').fill(title);
+  await label(page,'New recipe ingredients').fill('Carrot');
+  await label(page,'New recipe steps').fill('Slice');
+  await label(page,'Save new recipe').click();
+  await openRecipe(page,title);
+  await button(page,'Show recipe edit history').click();
+  await visible(page,'No text edits recorded for this recipe.');
+  await label(page,'Close recipe').click();
+}
+
+async function editRecipe(page,title,after,description) {
+  await openRecipe(page,title);
+  await label(page,`Edit recipe ${title}`).click();
+  await label(page,'Recipe title').fill(after);
+  if(description) await label(page,'Recipe description').fill(description);
+  await label(page,'Save recipe changes').click();
+  await button(page,'Show recipe edit history').click();
+  await expect(page.getByText('Current edit',{exact:true}).first()).toBeVisible();
+  await label(page,'Close recipe').click();
+  await expect(label(page,`Open recipe ${after}`)).toBeVisible();
+}
+
+async function exchange(page) {
+  await page.goto('./settings');
+  await button(page,'Exchange encrypted cooking files').click();
+  await expect(button(page,'Choose encrypted cooking update')).toBeEnabled();
+}
+
+async function encryptedUpdates(page,count) {
+  const updates=page.getByRole('button',{name:/^Download encrypted update /});
+  await expect(updates).toHaveCount(count);
+  const files=[];
+  for(const control of await updates.all()){
+    const download=page.waitForEvent('download');
+    await control.click();
+    const file=await download;
+    files.push(await readFile(await file.path()));
+    await file.delete();
+  }
+  return files.sort((a,b)=>JSON.parse(a).header.deviceSequence-JSON.parse(b).header.deviceSequence);
+}
+
+async function receiveRecipeUpdate(page,buffer,reload) {
+  const chooser=page.waitForEvent('filechooser');
+  await button(page,'Choose encrypted cooking update').click();
+  const loaded=reload ? page.waitForEvent('load') : null;
+  await (await chooser).setFiles({name:'recipe-update.bin',mimeType:'application/octet-stream',buffer});
+  if (loaded) await loaded;
+}
+
+test('admitted browser workspaces exchange offline recipe edits and explicitly restore a competing title', async ({browser,baseURL}) => {
+  test.setTimeout(150_000);
+  const contexts=await Promise.all([0,1].map(()=>browser.newContext({baseURL,acceptDownloads:true})));
+  const [a,b]=await Promise.all(contexts.map(context=>context.newPage()));
+  const errors=[];
+  for (const page of [a,b]) page.on('pageerror',error=>errors.push(error.message));
+  let oldFile;
+  try {
+    await Promise.all([prepare(a,baseURL,false,async()=>{
+      await a.goto('./recipes');
+      await createRecipe(a,'Pre-invitation title canary');
+      await createRecipe(a,'Independent recipe canary');
+      await editRecipe(a,'Pre-invitation title canary','Carrot soup');
+      await exchange(a);
+      [oldFile]=await encryptedUpdates(a,4);
+    }),prepare(b,baseURL,false)]);
+    await admit(a,b,baseURL);
+    const oldScope=JSON.parse(oldFile).header.scopeId;
+    const retained=await a.evaluate(async scopeId=>{
+      const request=q=>new Promise((resolve,reject)=>{q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);});
+      const name=localStorage.getItem('creative-cooking-local-workspace-v1');
+      const db=await request(indexedDB.open(`${name}-records`));
+      try {
+        const keys=await request(db.transaction('records').objectStore('records').getAllKeys());
+        return keys.map(key=>JSON.parse(key)).filter(([kind,scope])=>kind==='projection-pending'&&scope===scopeId).length;
+      } finally { db.close(); }
+    },oldScope);
+    expect(retained).toBe(3);
+    await b.goto('./recipes');
+    await openRecipe(b,'Carrot soup');
+    await button(b,'Show recipe edit history').click();
+    await visible(b,'No text edits recorded for this recipe.');
+    await expect(b.getByText('Pre-invitation title canary',{exact:true})).toHaveCount(0);
+    await exchange(b);
+    await receiveRecipeUpdate(b,oldFile,false);
+    await expect(b.getByRole('alert').filter({hasText:'Update not applied'})).toBeVisible();
+
+    for(const page of [a,b]) await page.goto('./recipes');
+    await Promise.all(contexts.map(context=>context.setOffline(true)));
+    await Promise.all([
+      editRecipe(a,'Carrot soup','Roasted carrot soup'),
+      editRecipe(b,'Carrot soup','Ginger carrot soup','B side independent description'),
+    ]);
+    await expect(label(a,'Open recipe Ginger carrot soup')).toHaveCount(0);
+    await expect(label(b,'Open recipe Roasted carrot soup')).toHaveCount(0);
+    await Promise.all(contexts.map(context=>context.setOffline(false)));
+    await Promise.all([exchange(a),exchange(b)]);
+    const [fromA,fromB]=await Promise.all([encryptedUpdates(a,2),encryptedUpdates(b,3)]);
+    const tampered=Buffer.from(fromA[0]);
+    const parsed=JSON.parse(tampered);
+    parsed.header.documentId='tampered-routing';
+    await receiveRecipeUpdate(b,Buffer.from(JSON.stringify(parsed)),false);
+    await expect(b.getByRole('alert').filter({hasText:'Update not applied'})).toBeVisible();
+    for (const [page,files] of [[a,fromB],[b,fromA]]) {
+      for (const [index,file] of files.entries()) {
+        if (index) await button(page,'Exchange encrypted cooking files').click();
+        await receiveRecipeUpdate(page,file,true);
+      }
+    }
+    await button(b,'Exchange encrypted cooking files').click();
+    await receiveRecipeUpdate(b,fromA[0],false);
+    await visible(b,'This exact update was already applied. No new changes were made.');
+
+    for (const page of [a,b]) await page.goto('./recipes');
+    const winner=await a.getByRole('button',{name:/^Open recipe (Roasted|Ginger) carrot soup$/}).getAttribute('aria-label');
+    expect(winner).toBeTruthy();
+    const winnerTitle=winner.replace('Open recipe ','');
+    const alternative=winnerTitle==='Ginger carrot soup'?'Roasted carrot soup':'Ginger carrot soup';
+    for (const page of [a,b]) {
+      await expect(label(page,'Open recipe Independent recipe canary')).toBeVisible();
+      await openRecipe(page,winnerTitle);
+      await expect(page.getByText('B side independent description',{exact:true}).last()).toBeVisible();
+      await button(page,'Show recipe edit history').click();
+      await visible(page,alternative);
+      await visible(page,'Competing edit');
+    }
+    await button(b,'Restore title edit').click();
+    await expect(b.getByText(alternative,{exact:true}).first()).toBeVisible();
+    await expect(b.getByText('Competing edit',{exact:true})).toHaveCount(0);
+    await exchange(b);
+    const restoreFiles=await encryptedUpdates(b,4);
+    await exchange(a);
+    await receiveRecipeUpdate(a,restoreFiles.at(-1),true);
+    for (const page of [a,b]) {
+      await page.goto('./recipes');
+      await page.reload();
+      await openRecipe(page,alternative);
+      await expect(page.getByText('B side independent description',{exact:true}).last()).toBeVisible();
+      await button(page,'Show recipe edit history').click();
+      await expect(page.getByText('Current edit',{exact:true}).first()).toBeVisible();
+      await expect(page.getByText('Pre-invitation title canary',{exact:true})).toHaveCount(0);
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await Promise.all(contexts.map(context=>context.close()));
+  }
+});
 
 async function openProfiles(browser, baseURL) {
   const endpoints = [process.env.TEST_DIRECT_CDP_A, process.env.TEST_DIRECT_CDP_B];

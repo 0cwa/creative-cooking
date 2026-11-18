@@ -116,6 +116,8 @@ type AppStateApi = PersistedState & {
   localRecipeConflicts: import('@/content/useContentRuntime').LocalRecipeConflict[];
   saveAttemptedRecipeAsCopy(conflictId: string): Recipe;
   keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
+  readRecipeHistory?: import('@/content/useContentRuntime').ContentRuntimeSnapshot['readRecipeHistory'];
+  restoreRecipeEdit?: import('@/content/useContentRuntime').ContentRuntimeSnapshot['restoreRecipeEdit'];
   personalContentConflicts: import('@/content/contentStore').PersonalContentConflict[];
   recoveryArchives: import('@/content/contentStore').ArchivedWorkspace[];
   retryStorage(): Promise<boolean>;
@@ -218,6 +220,27 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
     content.reportEditDenied();
     return false;
   }, [content.canEditShared, content.reportEditDenied]);
+
+  const readRecipeHistory = useCallback(async (recipeId: string) => {
+    await flushCurrentWorkspace();
+    return await content.readRecipeHistory?.(recipeId) ?? [];
+  }, [content.readRecipeHistory, flushCurrentWorkspace]);
+
+  const restoreRecipeEdit = useCallback(async (recipeId: string, entry: import('@/content/useContentRuntime').RecipeHistoryEntry) => {
+    if (!ensureSharedEditAllowed() || !content.restoreRecipeEdit) throw Error('Recipe editing is unavailable.');
+    if (entry.kind === 'recipe-ingredient-field' && entry.field === 'name' && typeof entry.value === 'string') {
+      const validation = validateRecipeAllergies([{name:entry.value}],state.settings.allergies);
+      if (!validation.ok) throw new RecipeAllergyError(validation.matches);
+    }
+    const release = beginWorkspaceTransition();
+    try {
+      await flushCurrentWorkspace();
+      await content.restoreRecipeEdit(recipeId, entry);
+      await refreshSharedCooking();
+    } finally {
+      release();
+    }
+  }, [beginWorkspaceTransition, content.restoreRecipeEdit, ensureSharedEditAllowed, flushCurrentWorkspace, refreshSharedCooking, state.settings.allergies]);
 
   const commitPantry = useCallback((pantry: PersistedState['pantry']) => {
     if (!ensureSharedEditAllowed()) return;
@@ -555,6 +578,8 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       localRecipeConflicts: content.recipeConflicts,
       saveAttemptedRecipeAsCopy,
       keepWorkspaceRecipeVersion,
+      readRecipeHistory: content.readRecipeHistory && readRecipeHistory,
+      restoreRecipeEdit: content.restoreRecipeEdit && restoreRecipeEdit,
       personalContentConflicts: content.personalConflicts,
       recoveryArchives: content.archives,
       retryStorage,
@@ -611,6 +636,8 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       refreshSharedCooking,
       saveAttemptedRecipeAsCopy,
       keepWorkspaceRecipeVersion,
+      readRecipeHistory,
+      restoreRecipeEdit,
       retryStorage,
       addPantryItems,
       updatePantryByName,

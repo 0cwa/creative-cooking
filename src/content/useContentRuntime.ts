@@ -55,6 +55,18 @@ export type LocalPersistenceStatus = 'saving' | 'saved' | 'error';
 
 export type LocalRecipeConflict = Awaited<ReturnType<typeof loadLocalRecipeConflicts>>[number];
 
+export type RecipeHistoryEntry = {
+  effectId: string;
+  context: string;
+  head: string;
+  kind: 'recipe-field' | 'recipe-ingredient-field' | 'recipe-step-field';
+  id?: string;
+  field: string;
+  value: string | string[];
+  at: string;
+  status: 'current' | 'earlier' | 'competing';
+};
+
 export type ContentRuntimeSnapshot = {
   hydrated: boolean;
   storageError: string | null;
@@ -74,6 +86,8 @@ export type ContentRuntimeSnapshot = {
   markLocalStateChange(): number;
   selectWorkspace(spaceId: string): Promise<void>;
   keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
+  readRecipeHistory?(recipeId: string): Promise<RecipeHistoryEntry[]>;
+  restoreRecipeEdit?(recipeId: string, entry: RecipeHistoryEntry): Promise<void>;
   mergeGuestContent(): Promise<void>;
   keepGuestContent(): Promise<void>;
   prepareAccountExit(): Promise<void>;
