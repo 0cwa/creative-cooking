@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {nativeCurrentDescriptions} from '../native/webrtc-descriptions.mjs';
+import {nativeCurrentDescriptions, nativeGatheredLocalSdp} from '../native/webrtc-descriptions.mjs';
+import {cookingDirect} from './cooking-direct.mjs';
 import {comparisonCode, directDomain, hex, readSignal, requireNegotiated, signalHash, signSignal, transcriptHash, verifySignal} from './direct-signal.mjs';
 
 const dataSdp = ['v=0', 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', `a=fingerprint:sha-256 ${Array(32).fill('AA').join(':')}`, 'a=ice-ufrag:fixture', 'a=ice-pwd:fixture', ''].join('\r\n');
@@ -40,4 +41,50 @@ test('Android stable descriptions and injected SHA-256 preserve the browser tran
   assert.throws(() => requireNegotiated({...native,signalingState:'have-remote-offer'}, offer, answer, false, nativeCurrentDescriptions), /NEGOTIATED_SIGNAL_MISMATCH/);
   const changed = {...remote, sdp:remote.sdp.replaceAll('\r\n','\n')};
   assert.throws(() => requireNegotiated({...native,remoteDescription:changed}, offer, answer, false, nativeCurrentDescriptions), /NEGOTIATED_SIGNAL_MISMATCH/);
+});
+
+test('Android answer waits for candidate SDP after the gathering complete event', async t => {
+  const {scopeId, head, initiator, responder} = offerBody;
+  const {promise: gatheringReported, resolve: reportGathering} = Promise.withResolvers();
+  const initialAnswer = dataSdp.replace('ufrag:fixture', 'ufrag:native');
+  const finalAnswer = initialAnswer.replace('m=application 9', 'm=application 46723') +
+    'a=candidate:1 1 udp 2122260223 10.0.2.16 46723 typ host\r\n';
+  let signed = 0;
+  const provider = {verify: async () => true, sign: async () => { signed++; return new Uint8Array(64); }};
+  const connection = Object.assign(new EventTarget(), {
+    signalingState:'stable', iceGatheringState:'new',
+    createDataChannel: () => Object.assign(new EventTarget(), {close() {}}),
+    async setRemoteDescription(description) { this.remoteDescription = description; },
+    async createAnswer() { return {type:'answer',sdp:initialAnswer}; },
+    async setLocalDescription(description) {
+      this.localDescription = description;
+      this.iceGatheringState = 'complete';
+      this.dispatchEvent(new Event('icegatheringstatechange'));
+      reportGathering();
+    },
+    close() { this.signalingState = 'closed'; this.dispatchEvent(new Event('signalingstatechange')); }
+  });
+  const session = cookingDirect({
+    runtime: {
+      scope:{scopeId,branchHead:head,authorDevice:responder.deviceId,acceptedRecipients:[initiator.deviceId]},
+      authorization:async () => ({signingKeyRefs:{[initiator.deviceId]:initiator.signingKey,[responder.deviceId]:responder.signingKey}}),
+      storage:{compromise:{isQuarantined:async () => false}}
+    },
+    provider, assertSelected:async () => {}, withSelected:use => use(),
+    createPeerConnection:() => connection,
+    readCurrentDescriptions:nativeCurrentDescriptions, readGatheredLocalSdp:nativeGatheredLocalSdp
+  }).connect({notify() {}});
+  t.after(() => session.close());
+
+  const response = session.createAnswer(JSON.stringify({...offerBody,signature:'0'.repeat(128)}));
+  void response.catch(() => {});
+  await gatheringReported;
+  await new Promise(setImmediate);
+  assert.equal(signed, 0);
+  connection.localDescription = {type:'answer',sdp:finalAnswer};
+  connection.dispatchEvent(new Event('icecandidate'));
+  const {text,code} = await response;
+  assert.equal(readSignal(text, 'answer').sdp, finalAnswer);
+  assert.ok(code);
+  assert.equal(signed, 1);
 });

@@ -14,13 +14,12 @@ const must = result => { if (!result.ok) throw Error(result.error); return resul
 const sameDevice = (a, b) => a.deviceId === b.deviceId && a.signingKey === b.signingKey;
 
 
-function waitForState(connection, event, ready, failure) {
+function waitForState(connection, events, ready, failure) {
   if (ready()) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const finish = error => {
       clearTimeout(timeout);
-      connection.removeEventListener(event, check);
-      connection.removeEventListener('signalingstatechange', check);
+      for (const event of events) connection.removeEventListener(event, check);
       error ? reject(error) : resolve();
     };
     const check = () => {
@@ -28,15 +27,14 @@ function waitForState(connection, event, ready, failure) {
       else if (ready()) finish();
     };
     const timeout = setTimeout(() => finish(Error(failure)), GATHER_MS);
-    connection.addEventListener(event, check);
-    if (event !== 'signalingstatechange') connection.addEventListener('signalingstatechange', check);
+    for (const event of events) connection.addEventListener(event, check);
     check();
   });
 }
-async function gather(connection, description) {
+async function gather(connection, description, readGatheredLocalSdp) {
   await connection.setLocalDescription(description);
-  await waitForState(connection, 'icegatheringstatechange', () => connection.iceGatheringState === 'complete', 'ICE_GATHERING_TIMEOUT');
-  return connection.localDescription.sdp;
+  await waitForState(connection, ['icegatheringstatechange', 'icecandidate', 'signalingstatechange'],
+    () => connection.iceGatheringState === 'complete' && !!readGatheredLocalSdp(connection), 'ICE_GATHERING_TIMEOUT');
 }
 
 /** Manual signaling for a current, admitted household. Content and receipt
@@ -44,12 +42,14 @@ async function gather(connection, description) {
  * @param {{runtime:any,provider:any,cooking:any,assertSelected:()=>Promise<void>,
  * withSelected:<T>(use:()=>Promise<T>)=>Promise<T>,createPeerConnection?:(config:{iceServers:[]})=>any,
  * readCurrentDescriptions?:(connection:any)=>any[],sha256?:(bytes:Uint8Array)=>Promise<string>,
+ * readGatheredLocalSdp?:(connection:any)=>string|undefined,
  * randomBytes?:(size:number)=>Uint8Array}} options
  */
 export function cookingDirect({
   runtime, provider, cooking, assertSelected, withSelected,
   createPeerConnection = config => new RTCPeerConnection(config),
   readCurrentDescriptions = currentDescriptions,
+  readGatheredLocalSdp = connection => connection.localDescription?.sdp,
   sha256 = digest, randomBytes = size => crypto.getRandomValues(new Uint8Array(size))
 }) {
   const transferId = () => hex(randomBytes(16));
@@ -126,7 +126,7 @@ export function cookingDirect({
     async function completeDescriptions() {
       // The native signaling event and the set-description promise cross
       // the JS bridge separately. Wait for stable before reading final SDP.
-      await waitForState(connection, 'signalingstatechange', () => connection.signalingState === 'stable', 'NEGOTIATED_SIGNAL_MISMATCH');
+      await waitForState(connection, ['signalingstatechange'], () => connection.signalingState === 'stable', 'NEGOTIATED_SIGNAL_MISMATCH');
       requireNegotiated(connection, offer, answer, initiator, readCurrentDescriptions);
       transcript = await transcriptHash(offer, answer, sha256);
       reassembler = new Reassembler(offer.sessionId, maximum(), sha256);
@@ -280,9 +280,10 @@ export function cookingDirect({
       async createOffer(otherId) {
         ({local, peer} = await devicePair(otherId));
         initiator = true;
-        const sdp = await gather(connection, await connection.createOffer());
+        await gather(connection, await connection.createOffer(), readGatheredLocalSdp);
         offer = await withSelected(async () => {
           await devicePair(peer.deviceId);
+          const sdp = readGatheredLocalSdp(connection);
           return signSignal(provider, {version:1, kind:'offer', scopeId, head, sessionId:transferId(), initiator:local, responder:peer, sdp}, local.signingKey);
         });
         return JSON.stringify(offer);
@@ -296,11 +297,13 @@ export function cookingDirect({
         offer = incoming;
         initiator = false;
         await connection.setRemoteDescription({type:'offer', sdp:offer.sdp});
-        const sdp = await gather(connection, await connection.createAnswer());
+        await gather(connection, await connection.createAnswer(), readGatheredLocalSdp);
         const {signature: _offerSignature, ...fields} = offer;
         answer = await withSelected(async () => {
           await devicePair(peer.deviceId);
-          return signSignal(provider, {...fields, kind:'answer', sdp, offerHash:await signalHash(offer, sha256)}, local.signingKey);
+          const offerHash = await signalHash(offer, sha256);
+          const sdp = readGatheredLocalSdp(connection);
+          return signSignal(provider, {...fields, kind:'answer', sdp, offerHash}, local.signingKey);
         });
         return {text:JSON.stringify(answer), code:await (descriptionsReady = completeDescriptions())};
       },
