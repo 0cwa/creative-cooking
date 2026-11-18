@@ -15,6 +15,7 @@ import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
+import {createSourceVerifier} from '../disclosure/source-proof.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
@@ -265,6 +266,21 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.deepEqual(await br.importItem(item),{...applied,replayed:true});
  await assert.rejects(()=>otherB.importItem(item),/INVALID_AUTHORITY/);
 });
+test('incomplete source replay uses the exact retained checkpoint',async t=>{
+ const [peer]=await household(t);
+ await peer.edit('legacy-source',1,{legacy:true});
+ const context=await peer.service.authority();
+ const document=peer.runtime.document.bind(peer.runtime);
+ peer.runtime.document=async()=>{
+  const retained=await document();
+  assert.ok(retained.storedBytes?.length);
+  retained.doc.export=()=>{throw Error('A newly exported snapshot is not the retained checkpoint');};
+  return retained;
+ };
+ const source=await createSourceVerifier({runtime:peer.runtime,service:peer.service,context,allowIncomplete:true})('legacy-source');
+ assert.deepEqual(source,{policies:[],incomplete:true});
+});
+
 async function confirmation(receiver,deviceId) {
   const row = (await receiver.trust.list()).find(item => item.deviceId === deviceId);
   assert.ok(row);
