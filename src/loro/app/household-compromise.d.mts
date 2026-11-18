@@ -16,7 +16,7 @@ type Review = {
   boundary:Boundary;
   checkpointLabel?:string;
   checkpointUnavailable:boolean;
-  rows:(Operation & {boundary:boolean;selectable:boolean;category:'suspect'|'dependent'|'other'|'uncertain';missingDependencies:number})[];
+  rows:(Operation & {boundary:boolean;selectable:boolean;category:'suspect'|'dependent'|'other'|'uncertain'|'outside';missingDependencies:number})[];
   missing:{objectId:string}[];
   count:number;
   unsupported:boolean;

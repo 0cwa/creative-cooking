@@ -15,7 +15,8 @@ const category = {
   suspect:'Authored by the reported device',
   dependent:'Depends on work by the reported device',
   other:'No such dependency found in this batch',
-  uncertain:'Conflicting effect identity in this batch'
+  uncertain:'Conflicting effect identity in this batch',
+  outside:'The operation falls outside the signed policy checkout boundary.'
 };
 
 const errors:Record<string,string> = {
@@ -212,7 +213,7 @@ export function HouseholdCompromise() {
               onPress={()=>setRetained(ids=>ids.includes(row.effectId)?ids.filter(id=>id!==row.effectId):[...ids,row.effectId])}>
               <Text>{retained.includes(row.effectId)?'Selected to retain':'Retain in clean draft'}</Text>
             </Pressable>}
-          {review.canSave&&!row.selectable&&<Text>This effect identity also appears elsewhere in the evidence.</Text>}
+          {review.canSave&&!row.selectable&&row.category!=='outside'&&<Text>This effect identity also appears elsewhere in the evidence.</Text>}
         </View>)}
         {review.missing.map((item:{objectId:string})=><Text key={item.objectId}>Frozen original unavailable · {item.objectId}</Text>)}
         {review.canSave&&

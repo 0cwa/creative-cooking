@@ -461,8 +461,12 @@ test('two adults retain competing rules and open isolated cooking branches expli
     await button(first,'Sign and freeze incident report').click();
     await expect(first.getByText('Verified household projection checkpoint',{exact:true})).toBeVisible();
     await expect(first.getByRole('checkbox',{name:`Retain operation ${siblingId}`,exact:true})).toHaveCount(0);
-    for(const id of [inheritedId,outsideId])await first.getByRole('checkbox',{name:`Retain operation ${id}`,exact:true}).click();
-    await button(first,'Save clean draft with 2 selected operations').click();
+    const evidence=first.getByLabel('Frozen incident evidence',{exact:true});
+    await expect(evidence.getByText('The operation falls outside the signed policy checkout boundary.',{exact:true})).toBeVisible();
+    await expect(evidence.getByText(`operation ${outsideId}`,{exact:false})).toBeVisible();
+    await expect(first.getByRole('checkbox',{name:`Retain operation ${outsideId}`,exact:true})).toHaveCount(0);
+    await first.getByRole('checkbox',{name:`Retain operation ${inheritedId}`,exact:true}).click();
+    await button(first,'Save clean draft with 1 selected operations').click();
     const draft=first.getByLabel('Saved clean draft',{exact:true});
     await expect(draft.getByText(/^Pantry · (?=.*Policy proof ginger)(?=.*Signed frontier thyme)/)).toBeVisible();
     await expect(draft.getByText('Shopping lists · Seeded market',{exact:true})).toBeVisible();

@@ -20,6 +20,7 @@ import {acceptInitialPolicy, prepareInitialPolicy} from '../disclosure/setup.mjs
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
 import {cookingFiles} from './cooking-file.mjs';
 import {evidenceSha256, manifestDigest, reportMessage} from '../compromise/report.mjs';
+import {householdCompromise} from './household-compromise.mjs';
 
 await sodium.ready;
 
@@ -171,8 +172,9 @@ test('checkout verifies inherited source envelopes only inside the signed causal
     const deviceId = 'sender', adultId = 'adult', scope = {kind:'household', id:'household'};
     const policy = {kind:'unanimous', fixedCount:null};
     const root = {householdId:scope.id, head:'', policyHash:await policyId(provider,policy), generation:1, epochId:'epoch',
-      policy, roster:[adultId], devices:[{adultId,deviceId,active:true,signingKeyRef:deviceId}],
-      runtime:{documentId:'doc',authorPeers:{[deviceId]:'1'},acceptedRecipients:[deviceId]}};
+      policy, roster:[adultId], devices:[{adultId,deviceId,active:true,signingKeyRef:deviceId},
+        {adultId,deviceId:'peer',active:true,signingKeyRef:'peer'}],
+      runtime:{documentId:'doc',authorPeers:{[deviceId]:'1',peer:'2'},acceptedRecipients:['peer',deviceId].sort()}};
     const pin = root.head = await rootPin(provider, root);
     await initializeAuthority(storage, root, pin, provider);
     const member = {storage, scope, pin, provider, deviceId, adultId};
@@ -237,14 +239,21 @@ test('checkout verifies inherited source envelopes only inside the signed causal
     const reportContext = {kind:scope.kind,scopeId:scope.id,authorityHead:authority.record.acceptedParent,
       authorityRevision:authority.record.revision,authoritySnapshot:authority.record.authorizationSnapshot,checkpointHash};
     const payload = {version:1,reportId,reviewId:reportId,scopeId:scope.id,scopeKind:scope.kind,head:branch.scope.branchHead,
-      reporterDevice:deviceId,suspectDeviceIds:[],checkpointHash,manifestHash:await manifestDigest(manifest),
-      boundary:{kind:'checkpoint',ref:checkpointHash}};
+      reporterDevice:deviceId,suspectDeviceIds:['peer'],checkpointHash,manifestHash:await manifestDigest(manifest),
+      boundary:{kind:'operation',ref:originals.find(entry=>
+        JSON.parse(new TextDecoder().decode(entry.bytes)).header.semanticEffectIds[0]==='inside').objectId}};
     const report = {payload,signature:sodium.to_hex(await provider.sign(deviceId,reportMessage(payload)))};
-    const {review} = await reviews.freeze({reviewId:reportId,context:reportContext,report,runtime:branch,objects:evidence,
+    await reviews.freeze({reviewId:reportId,context:reportContext,report,runtime:branch,objects:evidence,
       checkpointBytes:checkpoint,isolated:true,requireStored:false});
-    const draft = await reviews.finalizeHistorical({runtime:branch,reviews,scopeId:scope.id,reviewId:reportId,
-      objects:evidence,checkpoint,expected:review,expectedDocumentRevision:(await branch.document()).revision,
-      selectedEffectIds:['legacy','inside']});
+    const reports = householdCompromise({runtime:branch,withCurrent:use=>use(0)});
+    const opened = await reports.open();
+    const view = await reports.inspect(opened.confirmation,reportId);
+    assert.equal(view.canSave,true);
+    assert.equal(view.rows.find(row=>row.objectId===payload.boundary.ref).selectable,true);
+    const outside = view.rows.find(row=>row.objectId===laterDuplicate.id);
+    assert.equal(outside.category,'outside');
+    assert.equal(outside.selectable,false);
+    const {draft} = await reports.saveCleanDraft(view,['legacy','inside']);
     assert.deepEqual(draft.included.map(entry=>entry.effectId),['legacy','inside']);
     assert.deepEqual(draft.held.map(({objectId,reason})=>[objectId,reason]).sort(),
       [[originals.find(entry=>Buffer.from(entry.bytes).equals(outsideEnvelope)).objectId,'OUTSIDE_POLICY_FRONTIER'],

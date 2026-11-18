@@ -2,7 +2,7 @@ import {authenticateEvidence} from '../compromise/authenticated-evidence.mjs';
 import {evidenceSha256,manifestDigest,reportMessage,verifyReport} from '../compromise/report.mjs';
 import {decodeReportFile,encodeReportFile} from '../compromise/report-file.mjs';
 import {REVIEW_LIMITS} from '../compromise/review.mjs';
-import {finalizeHistoricalDraft,householdReportLineage} from '../compromise/historical.mjs';
+import {finalizeHistoricalDraft,householdReportLineage,outsidePolicyFrontier} from '../compromise/historical.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 
 const decoder = new TextDecoder('utf-8',{fatal:true});
@@ -13,19 +13,20 @@ const sameAuthority = (a,b) => a?.revision===b.revision && a?.acceptedParent===b
 const reportIdValid = id => typeof id==='string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id);
 const publicOperation = ({objectId,authorDevice,command,sourceHead}) => ({objectId,authorDevice,effectId:command.effectId,kind:command.kind,sourceHead});
 
-function classify(entries,suspects,knownCheckpointEffects,boundary) {
+function classify(entries,suspects,knownCheckpointEffects,boundary,outside=new Set()) {
+  const eligible = entries.filter(entry=>!outside.has(entry.objectId));
   const effects = new Map(), overlaps = new Set();
-  for(const entry of entries) {
+  for(const entry of eligible) {
     const id = entry.command.effectId;
     if(effects.has(id)||knownCheckpointEffects.has(id)) overlaps.add(id);
     effects.set(id,entry);
   }
-  const suspect = new Set(entries.filter(e=>suspects.includes(e.authorDevice)).map(e=>e.command.effectId));
+  const suspect = new Set(eligible.filter(e=>suspects.includes(e.authorDevice)).map(e=>e.command.effectId));
   const dependent = new Set();
   let changed;
   do {
     changed=false;
-    for(const {command} of entries) {
+    for(const {command} of eligible) {
       if(suspect.has(command.effectId)||dependent.has(command.effectId))continue;
       if(command.dependencyEffectIds.some(id=>!overlaps.has(id)&&(suspect.has(id)||dependent.has(id)))) {
         dependent.add(command.effectId);
@@ -35,11 +36,12 @@ function classify(entries,suspects,knownCheckpointEffects,boundary) {
   } while(changed);
   return entries.map(entry=>{
     const {command,objectId,authorDevice} = entry;
+    const beyondFrontier = outside.has(objectId);
     return {
       ...publicOperation(entry),boundary:boundary.kind==='operation' && boundary.ref===objectId,
-      selectable:!overlaps.has(command.effectId),
-      category:suspects.includes(authorDevice)?'suspect':overlaps.has(command.effectId)?'uncertain':dependent.has(command.effectId)?'dependent':'other',
-      missingDependencies:command.dependencyEffectIds.filter(id=>overlaps.has(id)||!effects.has(id)&&!knownCheckpointEffects.has(id)).length
+      selectable:!beyondFrontier&&!overlaps.has(command.effectId),
+      category:beyondFrontier?'outside':suspects.includes(authorDevice)?'suspect':overlaps.has(command.effectId)?'uncertain':dependent.has(command.effectId)?'dependent':'other',
+      missingDependencies:beyondFrontier?0:command.dependencyEffectIds.filter(id=>overlaps.has(id)||!effects.has(id)&&!knownCheckpointEffects.has(id)).length
     };
   });
 }
@@ -64,7 +66,7 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
     const seed = must(await runtime.storage.readProjectionSeed(authority.expectedAuthority,scope.documentId));
     if(seed) {
       if(seed.snapshot.length+envelopeBytes>REVIEW_LIMITS.bytes)throw Error('TOO_LARGE');
-      return {bytes:seed.snapshot,label:'Verified household projection checkpoint',effects:new Set(seed.seed.identities.map(row=>row.effectId))};
+      return {bytes:seed.snapshot,label:'Verified household projection checkpoint',effects:new Set(seed.seed.identities.map(row=>row.effectId)),seed};
     }
     if(path[0].authority.scope.branchHead===runtime.authority.rootPin) {
       return {bytes:new Uint8Array(),label:'Pinned household starting checkpoint',effects:new Set()};
@@ -138,14 +140,19 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
       }
     }
     const {boundary,suspectDeviceIds,reporterDevice} = report.payload;
-    const pathSeed = path.length>1 && (!checkpoint || !checkpoint.bytes.length) ?
-      must(await runtime.storage.readProjectionSeed(authority.expectedAuthority,scope.documentId)) : null;
+    const pathSeed = path.length>1 ?
+      checkpoint?.seed ?? must(await runtime.storage.readProjectionSeed(authority.expectedAuthority,scope.documentId)) : null;
+    let outside = new Set();
+    if(path.length>1&&!checkpointUnavailable){
+      const total = saved.measuredBytes + (checkpoint.seed||!pathSeed?0:pathSeed.snapshot.length);
+      if(total<=REVIEW_LIMITS.bytes)outside=await outsidePolicyFrontier(runtime,path,entries,pathSeed);
+    }
     const unsupported = legacyLineage || (!!checkpoint && !checkpoint.bytes.length && path.length===1 &&
       path[0].authority.scope.branchHead!==runtime.authority.rootPin);
     const checkpointEffects = pathSeed ? new Set(pathSeed.seed.identities.map(row=>row.effectId)) : checkpoint?.effects;
     const canSave = saved.status==='frozen'&&!checkpointUnavailable&&!missing.length&&!unsupported;
     const view = {reviewId,reporterDevice,suspectDeviceIds,boundary,checkpointLabel:checkpoint?.label,checkpointUnavailable,canSave,
-      rows:classify(entries,suspectDeviceIds,checkpointUnavailable?new Set():checkpointEffects??new Set(),boundary)
+      rows:classify(entries,suspectDeviceIds,checkpointUnavailable?new Set():checkpointEffects??new Set(),boundary,outside)
         .map(row=>legacyLineage?{...row,selectable:false}:row),
       missing,count:manifest.length,unsupported,legacyLineage,draft:draftView(saved.draft)};
     if(canSave) {

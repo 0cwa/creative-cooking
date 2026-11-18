@@ -88,6 +88,40 @@ function appendStage(source,objects,inherited,seedIds,held) {
  return entries;
 }
 
+async function replayPolicyBoundaries(runtime,policy,objects,seedSnapshot,seedIds,held) {
+ let source=new runtime.LoroDoc();
+ const entries=[];
+ if(seedSnapshot)source.import(seedSnapshot);
+ const seedVersion=source.oplogVersion().toJSON();
+ for(const edge of policy.slice(0,-1)){
+  const stageHeld=[];
+  const stage=objects.filter(e=>e.sourceHead===edge.authority.scope.branchHead);
+  const eligible=withinPolicyFrontier(source,stage,edge.upperBound,stageHeld);
+  entries.push(...appendStage(source,eligible,entries,seedIds,stageHeld));
+  // Verify the signed history against frozen authenticated operations.
+  source=await verifyPolicyBaseline(source,runtime.LoroDoc,edge.upperBound,runtime.authority.provider);
+  const frontier=source.oplogVersion().toJSON();
+  if(entries.some(e=>(frontier.get(e.meta.peer)??0)<e.endCounter)||
+     [...seedVersion].some(([peer,end])=>(frontier.get(peer)??0)<end))throw Error('POLICY_BASELINE_UNAVAILABLE');
+  held.push(...stageHeld);
+ }
+ return {source,entries};
+}
+
+export async function outsidePolicyFrontier(runtime,policy,objects,seed) {
+ const origin=policy[0].authority;
+ if(!seed&&origin.scope.branchHead!==runtime.authority.rootPin)return new Set();
+ const seedIds=new Map();
+ if(seed){
+  verifyCurrentSeed({LoroDoc:runtime.LoroDoc,snapshot:seed.snapshot,seed:seed.seed,schemaVersion:origin.seedSchemaVersion});
+  for(const {effectId,commandId} of seed.seed.identities)seedIds.set(effectId,commandId);
+ }
+ const held=[];
+ try {await replayPolicyBoundaries(runtime,policy,objects,seed?.snapshot,seedIds,held);}
+ catch(error){if(error.message!=='POLICY_BASELINE_UNAVAILABLE')throw error;}
+ return new Set(held.filter(e=>e.reason==='OUTSIDE_POLICY_FRONTIER').map(e=>e.objectId));
+}
+
 async function historicalSource({runtime,review,objects,checkpoint,total,current,sha256}) {
  const scope={kind:review.context.kind,id:review.context.scopeId};
  const head=review.report.payload.head;
@@ -141,21 +175,9 @@ async function historicalSource({runtime,review,objects,checkpoint,total,current
    for(const {effectId,commandId} of retainedSeed.seed.identities)seedIds.set(effectId,commandId);
   }
  }
- let source=new runtime.LoroDoc(),entries=[];
- if(retainedSeed)source.import(retainedSeed.snapshot);
- for(const edge of scoped?policy:[{authority:{scope:location},upperBound:null}]){
-  let stage=all.filter(e=>e.sourceHead===edge.authority.scope.branchHead);
-  if(edge.upperBound)stage=withinPolicyFrontier(source,stage,edge.upperBound,held);
-  entries.push(...appendStage(source,stage,entries,seedIds,held));
-  if(!edge.upperBound)continue;
-
-  // Recompute the signed history from frozen authenticated operations. A
-  // matching live counter alone cannot distinguish a sibling branch's edit.
-  source=await verifyPolicyBaseline(source,runtime.LoroDoc,edge.upperBound,runtime.authority.provider);
-  const frontier=source.oplogVersion().toJSON();
-  if(entries.some(e=>(frontier.get(e.meta.peer)??0)<e.endCounter)||
-     seedDoc&&[...seedDoc.oplogVersion().toJSON()].some(([peer,end])=>(frontier.get(peer)??0)<end))throw Error('POLICY_BASELINE_UNAVAILABLE');
- }
+ const {source,entries}=await replayPolicyBoundaries(runtime,scoped?policy:[],all,retainedSeed?.snapshot,seedIds,held);
+ const stage=all.filter(e=>e.sourceHead===location.branchHead);
+ entries.push(...appendStage(source,stage,entries,seedIds,held));
  return {held,cache,retainedSeed,seedDoc,seedIds,source,entries,location};
 }
 
