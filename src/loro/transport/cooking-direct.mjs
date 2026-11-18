@@ -65,7 +65,7 @@ export function cookingDirect({
     return {local, peer};
   }
 
-  function connect({notify, importUpdate}) {
+  function connect({notify, prepareImport}) {
     const connection = createPeerConnection({iceServers:[]});
     const channel = connection.createDataChannel('creative-cooking-v1', {negotiated:true, id:0, ordered:true});
     channel.binaryType = 'arraybuffer';
@@ -114,9 +114,11 @@ export function cookingDirect({
       if (!confirmed || confirmationSent || confirmationSending || channel.readyState !== 'open') return;
       confirmationSending = true;
       try {
-        await authorize();
-        const signed = await provider.sign(local.signingKey, directDomain('confirm', confirmation(localId)));
-        await control('confirm', {signature:hex(signed)});
+        await withSelected(async () => {
+          await authorize();
+          const signed = await provider.sign(local.signingKey, directDomain('confirm', confirmation(localId)));
+          await control('confirm', {signature:hex(signed)});
+        });
         confirmationSent = true;
         checkReady();
       } finally { confirmationSending = false; }
@@ -139,33 +141,52 @@ export function cookingDirect({
 
     async function receiveObject(object) {
       if (++receivedObjects > MAX_OBJECTS || !objectId(object.streamId)) throw Error('DIRECT_LIMIT');
-      await authorize();
       const id = object.streamId, adapter = inbox(id);
-      const cursor = must(await runtime.storage.listCursors(scopeId)).find(row => row.source === `direct:${id}`)?.cursor ?? null;
-      try {
-        const stored = await adapter.stage({transferId:id, bytes:object.bytes, expectedCursor:cursor, cursor:id});
+      const staged = await withSelected(async () => {
         await authorize();
-        await sendReceipt(stored);
-      } catch (error) {
-        if (!['IO', 'CONFLICT', 'QUOTA'].includes(error.message)) throw error;
-        await control('retry', {objectId:id});
-        return;
-      }
-      try { await importUpdate({itemId:id, bytes:object.bytes}, authorize); }
-      catch { /* Authenticated ciphertext is retained for a retry. */ }
-      await authorize();
-      const applied = must(await runtime.storage.getInboxApplication(scopeId, id));
-      if (applied) {
-        await sendReceipt(await adapter.applied(id, id));
-        retainedHere.delete(id);
-        appliedHere.add(id);
-      } else {
-        retainedHere.add(id);
-        await control('retained', {objectId:id});
-      }
-      state.receivedApplied = appliedHere.size;
-      state.receivedRetained = retainedHere.size;
-      publish();
+        const cursor = must(await runtime.storage.listCursors(scopeId)).find(row => row.source === `direct:${id}`)?.cursor ?? null;
+        try {
+          const stored = await adapter.stage({transferId:id, bytes:object.bytes, expectedCursor:cursor, cursor:id});
+          await authorize();
+          await sendReceipt(stored);
+          return true;
+        } catch (error) {
+          if (!['IO', 'CONFLICT', 'QUOTA'].includes(error.message)) throw error;
+          await control('retry', {objectId:id});
+          return false;
+        }
+      });
+      if (!staged) return;
+
+      // The UI drains local saves outside this lock, since native local saves
+      // acquire it themselves. On failure the staged ciphertext can be retried.
+      let preparation;
+      try { preparation = await prepareImport(); }
+      catch { /* Pending local work kept its priority. */ }
+      try {
+        const applied = await withSelected(async () => {
+          await authorize();
+          if (preparation) {
+            try { await cooking.applyStaged({itemId:id, bytes:object.bytes}); }
+            catch { /* Authenticated ciphertext is retained for a retry. */ }
+          }
+          await authorize();
+          const applied = must(await runtime.storage.getInboxApplication(scopeId, id));
+          if (applied) {
+            await sendReceipt(await adapter.applied(id, id));
+            retainedHere.delete(id);
+            appliedHere.add(id);
+          } else {
+            retainedHere.add(id);
+            await control('retained', {objectId:id});
+          }
+          state.receivedApplied = appliedHere.size;
+          state.receivedRetained = retainedHere.size;
+          publish();
+          return applied;
+        });
+        if (applied && preparation) await preparation.refresh();
+      } finally { preparation?.release(); }
     }
 
     async function receive(raw) {
@@ -177,16 +198,18 @@ export function cookingDirect({
         const bytes = signature(message.signature);
         await descriptionsReady;
         if (!transcript || !exact(message, ['version','sessionId','kind','signature']) || !bytes) throw Error('INVALID_CONFIRMATION');
-        await authorize();
-        if (!await provider.verify(peer.signingKey, directDomain('confirm', confirmation(peer.deviceId)), bytes)) throw Error('INVALID_CONFIRMATION');
-        peerConfirmed = true;
-        checkReady();
+        await withSelected(async () => {
+          await authorize();
+          if (!await provider.verify(peer.signingKey, directDomain('confirm', confirmation(peer.deviceId)), bytes)) throw Error('INVALID_CONFIRMATION');
+          peerConfirmed = true;
+          checkReady();
+        });
         return;
       }
       if (!ready) throw Error('DIRECT_CONFIRMATION_REQUIRED');
       if (message.kind === 'objectChunk') {
         const object = await reassembler.accept(raw);
-        if (object) await withSelected(() => receiveObject(object));
+        if (object) await receiveObject(object);
         return;
       }
       if (['retry', 'retained'].includes(message.kind)) {
@@ -258,7 +281,10 @@ export function cookingDirect({
         ({local, peer} = await devicePair(otherId));
         initiator = true;
         const sdp = await gather(connection, await connection.createOffer());
-        offer = await signSignal(provider, {version:1, kind:'offer', scopeId, head, sessionId:transferId(), initiator:local, responder:peer, sdp}, local.signingKey);
+        offer = await withSelected(async () => {
+          await devicePair(peer.deviceId);
+          return signSignal(provider, {version:1, kind:'offer', scopeId, head, sessionId:transferId(), initiator:local, responder:peer, sdp}, local.signingKey);
+        });
         return JSON.stringify(offer);
       },
       async createAnswer(text) {
@@ -272,7 +298,10 @@ export function cookingDirect({
         await connection.setRemoteDescription({type:'offer', sdp:offer.sdp});
         const sdp = await gather(connection, await connection.createAnswer());
         const {signature: _offerSignature, ...fields} = offer;
-        answer = await signSignal(provider, {...fields, kind:'answer', sdp, offerHash:await signalHash(offer, sha256)}, local.signingKey);
+        answer = await withSelected(async () => {
+          await devicePair(peer.deviceId);
+          return signSignal(provider, {...fields, kind:'answer', sdp, offerHash:await signalHash(offer, sha256)}, local.signingKey);
+        });
         return {text:JSON.stringify(answer), code:await (descriptionsReady = completeDescriptions())};
       },
       async acceptAnswer(text) {
@@ -303,7 +332,10 @@ export function cookingDirect({
         try {
           await authorize();
           if (sentObjects >= MAX_OBJECTS) throw Error('DIRECT_LIMIT');
-          const {objects, more} = await cooking.directBatch(peer.deviceId, Math.min(BATCH_SIZE, MAX_OBJECTS - sentObjects), attempts);
+          const {objects, more} = await withSelected(async () => {
+            await authorize();
+            return cooking.directBatch(peer.deviceId, Math.min(BATCH_SIZE, MAX_OBJECTS - sentObjects), attempts);
+          });
           let retry = 0;
           for (const {objectId:id, bytes} of objects) {
             touch();

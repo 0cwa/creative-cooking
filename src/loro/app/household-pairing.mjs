@@ -14,8 +14,9 @@ import {reviewHouseholdInvite,approveHouseholdInvite,collectHouseholdInviteAppro
 export function householdPairing({
   name, sodium, storage, master, provider, store, scope, pin, deviceId, adultId,
   runtime, service, pins, keys, signing, wrapping, signingKey, wrappingPublicKey,
-  selection, selectedHousehold, LoroDoc, prepareJoinedSequences, finalizeJoinedSequences, randomUUID = () => crypto.randomUUID()
+  selection, selectedHousehold, LoroDoc, prepareJoinedSequences, finalizeJoinedSequences, randomUUID = () => crypto.randomUUID(), withCurrent = use => use()
 }) {
+  const active = method => (...args) => withCurrent(() => method(...args));
   const authority = {storage, scope, pin, provider};
   const member = {...authority, adultId, deviceId};
   const cooking = {...member, runtime, service};
@@ -30,40 +31,48 @@ export function householdPairing({
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
-    transfer:{...transfer, install:async input => {
-      const result = await transfer.install(input);
-      for (const listener of [...installed]) {
-        try { void Promise.resolve(listener()).catch(() => {}); }
-        catch { /* A failed notification cannot undo an installed household. */ }
+    transfer:{
+      publish:active(transfer.publish),
+      seal:active(transfer.seal),
+      async install(input) {
+        const result = await withCurrent(() => transfer.install(input));
+        for (const listener of [...installed]) {
+          try { void Promise.resolve(listener()).catch(() => {}); }
+          catch { /* A failed notification cannot undo an installed household. */ }
+        }
+        return result;
       }
-      return result;
-    }},
+    },
     onInstalled(listener) {
       installed.add(listener);
       return () => installed.delete(listener);
     },
-    prepareExistingCeremony: input => prepareExistingCeremony({...input, ...preparation, wrappingPublicKey}),
-    verifyExistingCeremony: input => verifyExistingCeremony({...input, ...member, sodium, wrappingPublicKey}),
-    reviewGrant: input => reviewHouseholdGrant({...input, ...cooking}),
-    approveGrant: input => approveHouseholdGrant({...input, ...cooking}),
-    collectGrant: input => collectHouseholdGrantApproval({...input, ...cooking}),
-    collectInvite: input => collectHouseholdInviteApproval({...input, ...member}),
-    reviewInvite: item => reviewHouseholdInvite({...member, item}),
-    approveInvite: input => approveHouseholdInvite({...input, ...member}),
-    exportParent: () => exportHouseholdParent(authority),
-    async acceptParent(input) {
+    prepareExistingCeremony: active(input => prepareExistingCeremony({...input, ...preparation, wrappingPublicKey})),
+    verifyExistingCeremony: active(input => verifyExistingCeremony({...input, ...member, sodium, wrappingPublicKey})),
+    reviewGrant: active(input => reviewHouseholdGrant({...input, ...cooking})),
+    approveGrant: active(input => approveHouseholdGrant({...input, ...cooking})),
+    collectGrant: active(input => collectHouseholdGrantApproval({...input, ...cooking})),
+    collectInvite: active(input => collectHouseholdInviteApproval({...input, ...member})),
+    reviewInvite: active(item => reviewHouseholdInvite({...member, item})),
+    approveInvite: active(input => approveHouseholdInvite({...input, ...member})),
+    exportParent: active(() => exportHouseholdParent(authority)),
+    acceptParent: active(async input => {
       const args = structuredClone(input);
       const result = await acceptHouseholdParent({...args, storage, provider});
       await pins.save({version:1, scope:args.bundle.scope, pin:args.confirmedRootPin, head:args.confirmedSelectedHead});
       return result;
-    },
-    acceptedParents: () => pins.list(),
-    prepareDelegation: input => prepareHouseholdDelegation({...input, ...member}),
-    acceptDelegation: input => acceptHouseholdDelegation({...input, ...authority}),
-    prepareInvite: input => prepareHouseholdInvite({...input, ...preparation}),
-    prepareGrant: input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID}),
-    prepareCeremony: input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey}),
-    verifyOffer: input => verifyHouseholdOffer({...input, storage, pins, provider, sodium, identity}),
-    session: input => householdSession({...input, sodium, store, keys, signing, wrapping})
+    }),
+    acceptedParents: active(() => pins.list()),
+    prepareDelegation: active(input => prepareHouseholdDelegation({...input, ...member})),
+    acceptDelegation: active(input => acceptHouseholdDelegation({...input, ...authority})),
+    prepareInvite: active(input => prepareHouseholdInvite({...input, ...preparation})),
+    prepareGrant: active(input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID})),
+    prepareCeremony: active(input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey})),
+    verifyOffer: active(input => verifyHouseholdOffer({...input, storage, pins, provider, sodium, identity})),
+    session(input) {
+      const session = householdSession({...input, sodium, store, keys, signing, wrapping});
+      return Object.fromEntries(Object.entries(session).map(([key, method]) => [key, active(method)]));
+    }
+
   };
 }

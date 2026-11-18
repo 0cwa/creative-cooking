@@ -39,7 +39,10 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   else {const a=new Map(before.recipes.map(x=>[x.id,x])),b=new Map(target.recipes.map(x=>[x.id,x])),changed=[...new Set([...a.keys(),...b.keys()])].filter(id=>!same(a.get(id),b.get(id)));if(changed.length!==1)throw Error('This local preview saves one recipe change at a time.');const id=changed[0];commands=planRecipeAction({doc,before:a.get(id)??null,after:b.get(id)??null,actionId,author:workspace.deviceId,at});}
   actionIds.current.set(key,{id:actionId,commands});}
   unresolved.current=async()=>{
-   if(commands.length)await executeAction(runtime,workspace.sequences,actionId,commands,personalChanged?null:workspace.disclosure);
+   if(commands.length){
+    if(!personalChanged&&workspace.executeHouseholdAction)await workspace.executeHouseholdAction(actionId,commands);
+    else await executeAction(runtime,workspace.sequences,actionId,commands,personalChanged?null:workspace.disclosure);
+   }
    actionIds.current.delete(key);committed.current=target;
   };
   await unresolved.current();unresolved.current=null;

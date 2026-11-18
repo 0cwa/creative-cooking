@@ -8,6 +8,7 @@ import {localProvider} from '../app/local-provider.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {householdPairing as bindHouseholdPairing} from '../app/household-pairing.mjs';
 import {bootstrapDisclosurePolicy} from '../app/bootstrap-policy.mjs';
+import {executeAction,subscribeActions} from '../app/action.mjs';
 import {cookingFiles} from '../app/cooking-file.mjs';
 import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
@@ -62,7 +63,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   }
   const ready=state.stage==='ready';if(!['sealed','ready'].includes(state.stage))throw Error('LOCKED');
   try{const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(state.data),aad));if(decoded.stage!==state.stage)throw Error('LOCKED');const {stage,...rest}=decoded;r=rest}catch{throw Error('LOCKED')}
-  sequences=openNativeSequences(db,[r.house,r.personal],!ready);
+  sequences=await scheduleSQLite(db,()=>openNativeSequences(db,[r.house,r.personal],!ready));
   const keys=storage.localKeys(master,sodium);if(ready)await keys.unlock();else await keys.provision('workspace-master');
   const identity=(kind,scopeId,purpose,epochId)=>({version:1,scope:{kind,id:scopeId},deviceId:r.device,purpose,epochId});
   const signing={operationId:'device-signing',identity:identity('personal',r.personal,'device-signing',r.personalEpoch)},wrapping={operationId:'device-wrapping',identity:identity('personal',r.personal,'device-wrapping',r.personalEpoch)},houseKey={operationId:'household-data',identity:identity('household',r.house,'data',r.houseEpoch)},personalKey={operationId:'personal-data',identity:identity('personal',r.personal,'data',r.personalEpoch)};
@@ -90,30 +91,47 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head;
   const household=runtime(selected?.resolved??originalHouse,'household',activePin);
   const disclosure=disclosureService({storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device});
-  const policyStatus=await bootstrapDisclosurePolicy(storage,activeScope.id,disclosure);
+  const selectedId=selected?.scope.id??null;
+  const withCurrent=use=>selection.withCurrent(selectedId,use);
+  const active=fn=>(...args)=>withCurrent(()=>fn(...args));
+  const activeMethods=methods=>Object.fromEntries(Object.entries(methods).map(([name,fn])=>[name,active(fn)]));
+  const policyStatus=await withCurrent(()=>bootstrapDisclosurePolicy(storage,activeScope.id,disclosure));
+  const selectionControls={available:selection.available,select:selection.select,clear:selection.clear};
   const householdPairing=bindHouseholdPairing({
    name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:r.adult,
    runtime:household,service:disclosure,pins,keys,signing,wrapping,signingKey:signingRef,
-   wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection,selectedHousehold:!!selected,LoroDoc,
-   prepareJoinedSequences,finalizeJoinedSequences,randomUUID
+   wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection:selectionControls,selectedHousehold:!!selected,LoroDoc,
+   prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent
   });
   const cooking=cookingFiles({runtime:household,service:disclosure});
-  const selectedId=selected?.scope.id??null;
   let direct;
   try {
    direct=await openDirect?.({
     runtime:household,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),
-    withSelected:use=>selection.withCurrent(selectedId,use)
+    withSelected:withCurrent
    });
   } catch { /* Direct transfer is optional. Offline storage and file exchange stay available. */ }
   if(!ready)await transaction(db,async()=>{const now=load();if(!now||!['sealed','ready'].includes(now.stage))throw Error('LOCKED');const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(now.data),aad));if(decoded.stage!==now.stage)throw Error('LOCKED');const {stage,...current}=decoded;if(JSON.stringify(current)!==JSON.stringify(r))throw Error('LOCKED');if(now.stage==='sealed'){const complete=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['ready',complete])}});
   const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
   return {
-   household,personal:runtime(personal,'personal',pin),householdPairing,cookingFiles:cooking,direct,
-   disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&policyStatus.needsSetup,
+   household:{
+    scope:structuredClone(household.scope),
+    document:active(()=>household.document()),
+    listOutboundObjects:active(()=>storage.listOutboundObjects(activeScope.id)),
+    subscribe:listener=>subscribeActions(household,listener)
+   },
+   personal:runtime(personal,'personal',pin),householdPairing,cookingFiles:activeMethods(cooking),direct,
+   executeHouseholdAction(id,commands){
+    const input=structuredClone(commands);
+    return withCurrent(()=>executeAction(household,joinedSequences??sequences,id,input,disclosure));
+   },
+   disclosure:activeMethods(disclosure),disclosureProvider:activeMethods(provider),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
-   sequences:selected?{reserve:(scopeId,operationId)=>(scopeId===activeScope.id?joinedSequences:sequences).reserve(scopeId,operationId)}:sequences,
+   sequences:{reserve:(scopeId,operationId)=>{
+    if(scopeId!==r.personal)throw Error('INVALID_AUTHORITY');
+    return sequences.reserve(scopeId,operationId);
+   }},
    close:()=>{joinedSequences?.close();pairing.close();sequences.close();db.close();master.close()}
   };
  }catch(e){joinedSequences?.close();pairing?.close();sequences?.close();db.close();master?.close();throw e}

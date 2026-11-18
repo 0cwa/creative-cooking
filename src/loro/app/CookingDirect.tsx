@@ -79,25 +79,23 @@ export function CookingDirect() {
     void fn().catch(error => setNotice(messages[error?.message] ?? 'This direct exchange step could not finish. You can try again or use encrypted cooking files.'))
       .finally(() => setBusy(false));
   }
+  function withVisibleSelection(use:()=>Promise<void>) {
+    if (Platform.OS !== 'web') return use();
+    const {selection,selectedHousehold} = workspace.householdPairing;
+    return selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, use);
+  }
   function newSession() {
     const session = workspace.direct.connect({notify:(next:Status)=>{
       if (active.current === session) setStatus(next);
-    }, importUpdate:async (item:{itemId:string; bytes:Uint8Array}, authorize:()=>Promise<void>)=>{
+    }, prepareImport:async () => {
       const current = latestApp.current;
       const release = current.beginWorkspaceTransition();
-      try {
-        await current.flushCurrentWorkspace();
-        await authorize();
-        const result = await workspace.cookingFiles.applyStaged(item);
-        if (result.status !== 'pending') {
-          try {
-            await current.refreshSharedCooking?.();
-          } catch {
-            // The workspace exposes the refresh error. Import already committed.
-          }
-        }
-        return result;
-      } finally { release(); }
+      try { await current.flushCurrentWorkspace(); }
+      catch (error) { release(); throw error; }
+      return {release, refresh:async () => {
+        try { await withVisibleSelection(async () => { await current.refreshSharedCooking?.(); }); }
+        catch { /* The workspace exposes the refresh error. Import already committed. */ }
+      }};
     }});
     active.current = session;
     return session;
@@ -138,8 +136,7 @@ export function CookingDirect() {
     setNotice(text);
   }
   async function retryRefresh() {
-    const {selection,selectedHousehold} = workspace.householdPairing;
-    await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, async () => {
+    await withVisibleSelection(async () => {
       const current = latestApp.current;
       const release = current.beginWorkspaceTransition();
       try {

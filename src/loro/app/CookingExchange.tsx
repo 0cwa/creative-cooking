@@ -30,7 +30,7 @@ export function CookingExchange() {
   }
   async function applyUpdate(apply:()=>Promise<{status:string}>) {
     const {selection,selectedHousehold} = workspace.householdPairing;
-    await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, async () => {
+    const update = async () => {
       const release = app.beginWorkspaceTransition();
       try {
         if (app.localPersistenceStatus === 'error') throw Error('Retry local saving before receiving an update');
@@ -52,7 +52,9 @@ export function CookingExchange() {
         }
         await refresh();
       } finally { release(); }
-    });
+    };
+    if (web) await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, update);
+    else await update(); // Native file operations hold their own selection lock after local saves drain.
   }
   async function choose() {
     const bytes = await chooseExchangeFile({accept:['application/octet-stream','application/x-binary'],minBytes:1,maxBytes:MAX_OBJECT});

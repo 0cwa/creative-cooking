@@ -3,6 +3,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {D
 import {prepareInitialPolicy,acceptInitialPolicy} from '../disclosure/setup.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {domain} from '../authority/validator.mjs';
+import {cookingDirect} from '../transport/cooking-direct.mjs';
 import {householdReceiverIds} from '../app/household-transfer.mjs';
 await sodium.ready;const dir=process.env.NATIVE_PROOF_DIR;if(!dir)throw Error('NATIVE_PROOF_DIR required');
 const masters=new Map();const keyname=(n,id)=>`${n}/${id}`;
@@ -41,21 +42,62 @@ async function acceptPolicy(workspace) {
  });
 }
 async function addPantry(workspace, id) {
- await executeAction(workspace.household, workspace.sequences, id, [{
+ await workspace.executeHouseholdAction(id, [{
   version:1,kind:'pantry-create',commandId:id,effectId:id,dependencyEffectIds:[],
   data:{itemId:id,name:id,preference:3,at:'2026-11-18T00:00:00Z',author:workspace.deviceId}
- }], workspace.disclosure);
+ }]);
 }
 const pantry = async workspace => projectCooking((await workspace.household.document()).doc).pantry.map(item => item.name).sort();
 
-test('fresh native workspaces use the signed invitation and recover interrupted selection enrollment', async () => {
+function directPair() {
+ const channels = [new EventTarget(), new EventTarget()];
+ const sdp = type => [
+  'v=0', 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+  `a=fingerprint:sha-256 ${Array(32).fill('AA').join(':')}`,
+  `a=ice-ufrag:${type}`, 'a=ice-pwd:fixture', ''
+ ].join('\r\n');
+ return channels.map((channel,index) => {
+  Object.assign(channel, {
+   readyState:'open', bufferedAmount:0,
+   send(bytes) {
+    const wire = Uint8Array.from(bytes).buffer;
+    channels[1-index].dispatchEvent(new MessageEvent('message',{data:wire}));
+   },
+   close() { this.readyState='closed'; }
+  });
+  return options => cookingDirect({...options,createPeerConnection:() => Object.assign(new EventTarget(), {
+   signalingState:'stable',iceGatheringState:'complete',
+   createDataChannel:() => channel, close() {},
+   createOffer:() => ({type:'offer',sdp:sdp('offer')}),
+   createAnswer:() => ({type:'answer',sdp:sdp('answer')}),
+   setLocalDescription(value) { this.localDescription=this.currentLocalDescription=value; },
+   setRemoteDescription(value) { this.currentRemoteDescription=value; }
+  })});
+ });
+}
+
+test('fresh native workspaces use signed admission, durable selection and guarded direct imports', {timeout:25_000}, async () => {
  const organizerName = 'native-invitation-organizer', recipientName = 'native-invitation-recipient';
- let organizer, recipient, failEnrollment = false;
+ let organizer, recipient, failEnrollment = false, afterReservation, beforeSelectionDecode, nativeDirect;
+ const pairingPath = join(dir,`${recipientName}-pairing.sqlite`);
+ const recipientPath = join(dir,`${recipientName}.sqlite`);
  const openRecipient = create => openNativeWorkspaceWith({
-  ...args(recipientName,create),
+  ...args(recipientName,create),openDirect:nativeDirect,
   openDatabase(name) {
    if (failEnrollment && name.startsWith(`${recipientName}-receive-`)) throw Error('COUNTER_OPEN_FAILED');
-   return openDatabase(name);
+   const db = openDatabase(name);
+   return {...db,executeSync(sql, params) {
+    const result = db.executeSync(sql,params);
+    if (sql.startsWith('INSERT INTO loro_sequence_allocations')) afterReservation?.();
+    return result;
+   }};
+  },
+  openMaster(name) {
+   const master = openMaster(name);
+   return {...master, async unwrap(id, bytes, aad) {
+    if (new TextDecoder().decode(aad) === 'creative-cooking/selected-household/v1') await beforeSelectionDecode?.();
+    return master.unwrap(id,bytes,aad);
+   }};
   }
  });
  try {
@@ -108,7 +150,7 @@ test('fresh native workspaces use the signed invitation and recover interrupted 
   failEnrollment = true;
   await assert.rejects(recipient.householdPairing.transfer.install({scope,bytes}),/COUNTER_OPEN_FAILED/);
   await assert.rejects(recipient.householdPairing.selection.select(scope),/INCOMPLETE_ENROLLMENT/);
-  assert.equal(await recipient.householdPairing.selection.openSelected(),null);
+  assert.deepEqual(scopeOf(recipient),originalScope);
 
   recipient.close();
   failEnrollment = false;
@@ -121,16 +163,49 @@ test('fresh native workspaces use the signed invitation and recover interrupted 
   assert.equal(notified,true);
   assert.equal(await recipient.householdPairing.selection.available(scope),true);
   await recipient.householdPairing.selection.select(scope);
-  await assert.rejects(recipient.householdPairing.selection.assertCurrent(null),/HOUSEHOLD_SELECTION_CHANGED/);
+  await assert.rejects(addPantry(recipient,'stale-original-write'),/HOUSEHOLD_SELECTION_CHANGED/);
+  await assert.rejects(recipient.cookingFiles.list(),/HOUSEHOLD_SELECTION_CHANGED/);
+  await assert.rejects(recipient.householdPairing.exportParent(),/HOUSEHOLD_SELECTION_CHANGED/);
+  assert.throws(()=>recipient.sequences.reserve(originalScope.id,'unguarded-reservation'),/INVALID_AUTHORITY/);
   recipient.close();
   organizer.close();
+  const [organizerDirect,recipientDirect] = directPair();
+  nativeDirect = recipientDirect;
   recipient = await openRecipient(false);
-  organizer = await openNativeWorkspaceWith(args(organizerName,false));
+  organizer = await openNativeWorkspaceWith({...args(organizerName,false),openDirect:organizerDirect});
   assert.equal(recipient.household.scope.branchHead,organizer.household.scope.branchHead);
   assert.deepEqual(await pantry(recipient),['seed-leek']);
   assert.equal(recipient.needsDisclosureSetup,false);
 
   await Promise.all([addPantry(organizer,'offline-fennel'),addPantry(recipient,'offline-mint')]);
+  const aReady = Promise.withResolvers(), bReady = Promise.withResolvers();
+  let pendingSave = true;
+  const initiatorConnection = organizer.direct.connect({notify:status=>{if(status.ready)aReady.resolve();}});
+  const responderConnection = recipient.direct.connect({
+   notify:status=>{if(status.ready)bReady.resolve();},
+   async prepareImport() {
+    if (pendingSave) throw Error('SAVING');
+    await recipient.household.document(); // Acquires the same native selection lock.
+    return {release(){},refresh:()=>recipient.household.document()};
+   }
+  });
+  try {
+   const directOffer = await initiatorConnection.createOffer(recipient.deviceId);
+   const directAnswer = await responderConnection.createAnswer(directOffer);
+   assert.equal(await initiatorConnection.acceptAnswer(directAnswer.text),directAnswer.code);
+   await initiatorConnection.confirm(directAnswer.code);
+   await responderConnection.confirm(directAnswer.code);
+   await Promise.all([aReady.promise,bReady.promise]);
+   assert.equal((await initiatorConnection.send()).retry,1);
+   assert.equal((await recipient.cookingFiles.pending()).length,1);
+   pendingSave = false;
+   assert.equal((await initiatorConnection.send()).retry,0);
+   assert.equal((await recipient.cookingFiles.pending()).length,0);
+  } finally {
+   initiatorConnection.close();
+   responderConnection.close();
+   nativeDirect = undefined;
+  }
   for (const [sender,receiver] of [[organizer,recipient],[recipient,organizer]]) {
    const [{objectId}] = await sender.cookingFiles.list();
    await receiver.cookingFiles.receive(await sender.cookingFiles.download(objectId));
@@ -138,24 +213,98 @@ test('fresh native workspaces use the signed invitation and recover interrupted 
   assert.deepEqual(await pantry(recipient),['offline-fennel','offline-mint','seed-leek']);
   assert.deepEqual(await pantry(organizer),await pantry(recipient));
   const deviceId = recipient.deviceId;
-  await recipient.householdPairing.selection.clear();
+  const joined = houseCounterName(recipientName,scope,deviceId);
+
+  // A concurrent switch cannot overtake an action after its sequence allocation.
+  let clearing;
+  afterReservation = () => {
+   afterReservation = undefined;
+   clearing = recipient.householdPairing.selection.clear().then(() => {
+    const db = new DatabaseSync(recipientPath);
+    try {
+     return !!db.prepare('SELECT value FROM loro_records WHERE key=?').get(
+      JSON.stringify(['local',scope.id,'finish-before-switch']));
+    } finally { db.close(); }
+   });
+  };
+  await addPantry(recipient,'finish-before-switch');
+  assert.equal(await clearing,true);
+  await assert.rejects(addPantry(recipient,'stale-joined-write'),/HOUSEHOLD_SELECTION_CHANGED/);
   recipient.close();
   recipient = await openRecipient(false);
   assert.deepEqual(scopeOf(recipient),originalScope);
   assert.deepEqual(await pantry(recipient),[]);
   assert.equal(recipient.deviceId,deviceId);
-  await recipient.householdPairing.selection.select(scope);
-  recipient.close();
-  recipient = await openRecipient(false);
-  assert.deepEqual(await pantry(recipient),await pantry(organizer));
+  const original = recipient.householdPairing.selection;
+  await original.select(scope);
+
+  // Opening the selection must finish authenticating it before a switch clears it.
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  beforeSelectionDecode = async () => { entered.resolve(); await release.promise; };
+  const opening = openRecipient(false).then(
+   workspace => workspace.close(),
+   error => assert.match(error.message,/HOUSEHOLD_SELECTION_CHANGED/)
+  );
+  await entered.promise;
+  let cleared = false;
+  const switchBack = original.clear().then(() => { cleared = true; });
+  try {
+   await new Promise(resolve => setImmediate(resolve));
+   assert.equal(cleared,false);
+  } finally { release.resolve(); beforeSelectionDecode = undefined; }
+  await opening;
+  await switchBack;
+  await original.select(scope);
   recipient.close();
   recipient = null;
 
-  const joined = houseCounterName(recipientName,scope,deviceId);
-  const counter = new DatabaseSync(join(dir,`${joined}.sqlite`));
-  counter.exec('DROP TABLE loro_sequence_counters');
-  counter.close();
+  // Losing only the companion database must keep the workspace locked on reopen.
+  const oldPairing = new DatabaseSync(pairingPath);
+  const pairRows = oldPairing.prepare('SELECT key,value FROM loro_records').all();
+  oldPairing.close();
+  rmSync(pairingPath);
+  await assert.rejects(openRecipient(false),/CONFIRMATION_REQUIRED/);
+  await returnToOriginalNativeWorkspaceWith(args(recipientName,false));
+  recipient = await openRecipient(false);
+  assert.deepEqual(scopeOf(recipient),originalScope);
+  assert.deepEqual(await pantry(recipient),[]);
+  assert.equal(recipient.deviceId,deviceId);
+  recipient.close();
+  recipient = null;
+
+  const restored = new DatabaseSync(pairingPath);
+  const put = restored.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
+  for (const row of pairRows) put.run(row.key,row.value);
+  const main = new DatabaseSync(recipientPath);
+  const enrollmentKey = JSON.stringify(['native-household-enrollment',scope.id]);
+  const {value} = main.prepare('SELECT value FROM loro_records WHERE key=?').get(enrollmentKey);
+  assert.equal(JSON.parse(value).stage,'active');
+  put.run(JSON.stringify(['enrollment',scope.id]),JSON.stringify({...JSON.parse(value),stage:'pending'}));
+  main.prepare('DELETE FROM loro_records WHERE key IN (?,?,?)').run(
+   enrollmentKey,'["native-household-selection"]','["native-household-selection-required"]');
+  main.close();
+  restored.close();
+  await assert.rejects(openRecipient(false),/LEGACY_HOUSEHOLD_SELECTION/);
+  await returnToOriginalNativeWorkspaceWith(args(recipientName,false));
+  recipient = await openRecipient(false);
+  await recipient.householdPairing.selection.select(scope);
+  recipient.close();
+  recipient = await openRecipient(false);
+  assert.deepEqual(await pantry(recipient),['finish-before-switch','offline-fennel','offline-mint','seed-leek']);
+  recipient.close();
+  recipient = null;
+
+  // Restoring the old pending pairing row must not allow a used counter to restart.
+  const counterPath = join(dir,`${joined}.sqlite`);
+  rmSync(counterPath);
   await assert.rejects(openRecipient(false),/MISSING_SEQUENCES/);
+  await returnToOriginalNativeWorkspaceWith(args(recipientName,false));
+  recipient = await openRecipient(false);
+  await assert.rejects(recipient.householdPairing.transfer.install({scope,bytes}),/MISSING_SEQUENCES/);
+  const counter = new DatabaseSync(counterPath);
+  assert.deepEqual(counter.prepare("SELECT name FROM sqlite_master WHERE type='table'").all(),[]);
+  counter.close();
+
  } finally {
   organizer?.close();
   recipient?.close();
