@@ -633,11 +633,32 @@ const recoverSend=async(page,message,action)=>{
  await recoveryInput(page).fill(typeof message==='string'?message:JSON.stringify(message));
  await recoveryButton(page,action).click();
 };
+const personalRevision=page=>page.evaluate(async()=>{
+ const req=request=>new Promise((resolve,reject)=>{
+  request.onsuccess=()=>resolve(request.result);
+  request.onerror=()=>reject(request.error);
+ });
+ const name=localStorage.getItem('creative-cooking-local-workspace-v1');
+ const db=await req(indexedDB.open(`${name}-records`));
+ try{
+  const store=db.transaction('records','readonly').objectStore('records');
+  const keys=await req(store.getAllKeys());
+  const slot=keys.find(key=>key.startsWith('["pairing-authority","personal",'));
+  const record=await req(store.get(slot)),state=JSON.parse(new TextDecoder().decode(record.authorityState));
+  const root=state.root??state.rootState.root;
+  return (await req(store.get(JSON.stringify(['document',root.scopeId,root.documentId]))))?.revision??-1;
+ }finally{db.close()}
+});
 async function registerRecovery(a,b,c){
  await c.goto('./chef');
  await c.getByLabel('Message Chef').fill('Private continuity dinner');
+ const before=await personalRevision(c);
  await c.getByLabel('Save private message').click();
+ await expect(c.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
+ await expect.poll(()=>personalRevision(c),{timeout:15_000}).toBeGreaterThan(before);
  await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();
+ await c.reload();
+ await expect(c.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
  await c.goto('./settings');
  await recoveryButton(c,'Set up household recovery continuity').click();
  for(const page of [a,b]){
@@ -685,6 +706,8 @@ async function routedReadmission(a,b,lost,context,setup,scope,kits){
   await fresh.getByLabel('Recovery code',{exact:true}).fill(code);
   await fresh.getByLabel('Choose encrypted archive file').setInputFiles({name:'personal.json',mimeType:'application/json',buffer:bytes});
   await recoveryButton(fresh,'Restore personal archive').click();
+  await expect(fresh.getByRole('heading',{name:'Recovered personal archive'})).toBeVisible({timeout:15_000})
+   .catch(async error=>{console.error('ARCHIVE RESTORE',await fresh.getByRole('alert').allTextContents());throw error;});
   await expect(fresh.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
   await expect(fresh.getByText(/Recoverable personal keys: 1. Available encrypted updates on this device: 0./)).toBeVisible();
  };
@@ -750,7 +773,8 @@ async function routedReadmission(a,b,lost,context,setup,scope,kits){
  await expect(a.getByText('RECIPIENT_BINDINGS_REQUIRED',{exact:true})).toBeVisible();
  await a.getByLabel('Other current device bindings').fill(memberBinding);
  await recoverSend(a,response,'Prepare readmission decision');
- await expect(a.getByText(/0 of 2 required adults/)).toBeVisible();
+ await expect(a.getByText(/0 of 2 required adults/)).toBeVisible({timeout:15_000})
+  .catch(async error=>{console.error('READMISSION PREPARATION',await a.getByRole('alert').allTextContents());throw error;});
  await expect(recoveryButton(a,'Publish readmission and rotate household key')).toBeDisabled();
  await recoveryButton(a,'Approve this readmission').click();
  await expect(a.getByText(/1 of 2 required adults/)).toBeVisible();

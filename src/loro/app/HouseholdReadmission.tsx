@@ -164,7 +164,7 @@ export function HouseholdReadmission(){
       multiline maxLength={limit} editable={!busy}/>
     {button('Prepare readmission decision',async()=>{
      setDecision(null);await app.flushCurrentWorkspace();
-     reviewed(await service.prepare({response:parse(incoming),bindings:bindings.split('\n').filter(line=>line.trim()).map(parse),explicit:true}));
+     reviewed(await service.prepare({response:parse(incoming),bindings:bindings.split('\n').filter(line=>line.trim()).map(line=>parse(line)),explicit:true}));
     },!incoming)}
     {button('Review readmission for approval',async()=>{
      setDecision(null);const proposal=parse(incoming);reviewed({proposal,...await service.review(proposal)});
