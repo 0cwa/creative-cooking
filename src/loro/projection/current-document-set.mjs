@@ -111,6 +111,7 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
     catalog:{sourceRevision:source.catalog.revision,sourceHash:source.catalog.hash,targetRevision:0,removed:[]},entries:[]};
   const documents=[];
   const omittedRecipeIds=new Set();
+  const childRecipeIngredients=new Map();
   // Bind omitted children to the source without disclosing their recipe IDs.
   for(const [index,captured] of sources.slice(1).entries()){
     const recipeId=captured.runtime.recipeId;
@@ -118,7 +119,15 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
     if(recipe.get('removed')===true||recipe.get('removedAt')){
       omittedRecipeIds.add(recipeId);
       manifest.catalog.removed.push(await selectedSourceHash(provider,'removed-recipe-source-v1',source.children[index]));
+      continue;
     }
+    const ingredients=new Set();
+    const indexed=captured.doc.getMap(`recipe-ingredient-index:${encodeURIComponent(recipeId)}`).toJSON();
+    for(const ingredientId of Object.keys(indexed)){
+      const ingredient=captured.doc.getMap(`recipe-ingredient:${encodeURIComponent(JSON.stringify([recipeId,ingredientId]))}`);
+      if(ingredient.get('removed')!==true&&!ingredient.get('removedAt'))ingredients.add(ingredientId);
+    }
+    childRecipeIngredients.set(recipeId,ingredients);
   }
   let projectedBytes=0;
   for (const [index,captured] of sources.entries()) {
@@ -132,7 +141,7 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
       seed:projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:new runtime.LoroDoc().export({mode:'snapshot'}),
         seedId,peerId,schemaVersion:4}),bundle:null,bundleHash:null,
     } : await preparePolicyProjection({runtime:captured.runtime,service,provider,seedId,peerId,version:4,selectedSource:captured,
-      omittedRecipeIds:recipeId===null?omittedRecipeIds:undefined});
+      ...(recipeId===null?{omittedRecipeIds,childRecipeIngredients}:{})});
     projectedBytes+=seed.snapshot.length;
     if (projectedBytes>MAX_SELECTED_SET_BYTES) throw Error('TOO_LARGE');
     const documentId=recipeId===null ? target.documentId : await recipeDocumentId(target,pin,provider,recipeId);

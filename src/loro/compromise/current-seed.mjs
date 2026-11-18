@@ -19,7 +19,8 @@ const scalarMaps=[
  ['shopping-list:',{name:nonemptyText,currentCycleId:nonemptyText}],
 ];
 /** Input must be an authenticated local draft. Reject unknown schema rather than copying it. */
-export function projectCurrentSeed({LoroDoc,source,seedId,peerId,includeLocalMapping=false,schemaVersion=1,omittedRecipeIds=[]}){
+export function projectCurrentSeed({LoroDoc,source,seedId,peerId,includeLocalMapping=false,schemaVersion=1,
+ omittedRecipeIds=[],childRecipeIngredients=new Map()}){
  if(typeof LoroDoc!=='function'||!(source instanceof Uint8Array)||source.length>1024*1024||!validId(seedId)||!/^([1-9][0-9]*)$/.test(peerId)||BigInt(peerId)>18446744073709551615n)throw Error('INVALID_SEED');
  if(![1,4].includes(schemaVersion))throw Error('UNSUPPORTED_VERSION');const old=new LoroDoc();old.import(source);if(old.oplogVersion().toJSON().has(peerId))throw Error('INVALID_SEED_PEER');const state=old.toJSON(),markers=old.getMap('domain-effects').toJSON(),ops=[],required=new Map(),purchaseIds=new Set(),live=new Set();
  const marker=(oldEffect,preserve=false)=>{if(!validId(oldEffect)||!markers[oldEffect])throw Error('MISSING_SEED_IDENTITY');let m=required.get(oldEffect);if(!m){const original=markers[oldEffect];const originalCommand=original.version===2&&original.command?.effectId===oldEffect?original.command.commandId:original.version===3&&original.effectId===oldEffect?original.commandId:null;if(!validId(originalCommand))throw Error('UNSUPPORTED_SEED_SOURCE');m={oldEffect,commandId:preserve?originalCommand:null,preserve};required.set(oldEffect,m)}else if(preserve){m.preserve=true;m.commandId=markers[oldEffect].version===2?markers[oldEffect].command.commandId:markers[oldEffect].commandId}return oldEffect};
@@ -54,8 +55,13 @@ export function projectCurrentSeed({LoroDoc,source,seedId,peerId,includeLocalMap
    live.add(JSON.stringify(['shopping-item',v.itemId]));
    const fields=pick(extra,['name','checked','recipeId','ingredientId','displayQuantity','displayUnit','updatedAt']);
    if(fields.checked?.cycleId!==cycle)delete fields.checked;
-   if(validId(fields.recipeId)&&(omitted.has(fields.recipeId)||own(recipeIndex,fields.recipeId)&&!live.has(JSON.stringify(['recipe',fields.recipeId])))){
+   const {recipeId,ingredientId}=fields;
+   const localRecipe=own(recipeIndex,recipeId),childIngredients=childRecipeIngredients.get(recipeId);
+   if(validId(recipeId)&&(omitted.has(recipeId)||localRecipe&&!live.has(JSON.stringify(['recipe',recipeId])))){
     delete fields.recipeId;
+    delete fields.ingredientId;
+   }else if(nonemptyText(ingredientId)&&(childIngredients&&!childIngredients.has(ingredientId)||
+     localRecipe&&!live.has(JSON.stringify(['ingredient',JSON.stringify([recipeId,ingredientId])])))){
     delete fields.ingredientId;
    }
    projectedShoppingFields.set(v.itemId,fields);
@@ -87,7 +93,19 @@ export function verifyCurrentSeed({LoroDoc,snapshot,seed,schemaVersion=1,require
  if(typeof LoroDoc!=='function'||!(snapshot instanceof Uint8Array)||snapshot.length>1024*1024||!seed||!validId(seed.seedId)||!Array.isArray(seed.identities)||seed.identities.length>256)throw Error('INVALID_SEED');
  const doc=new LoroDoc();const imported=doc.import(snapshot);if(requireComplete&&imported.pending?.size)throw Error('INVALID_SEED');const state=doc.toJSON(),changes=doc.exportJsonUpdates(undefined,undefined,false).changes,seen=new Set(),peers=new Set(),eq=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
  const identities=new Map(),commandIds=new Set();for(const x of seed.identities){if(!isObject(x)||Object.keys(x).sort().join(',')!=='commandId,effectId'||!validId(x.commandId)||!validId(x.effectId)||identities.has(x.effectId)||commandIds.has(x.commandId))throw Error('INVALID_SEED');identities.set(x.effectId,x.commandId);commandIds.add(x.commandId)}
- const cycleIds=new Set();for(const [name,v] of Object.entries(state))if(name.startsWith('shopping-list:')){if(!isObject(v)||Object.keys(v).some(k=>!['name','currentCycleId'].includes(k))||!validId(v.currentCycleId))throw Error('INVALID_SEED');cycleIds.add(v.currentCycleId)}
+ const cycleIds=new Set(),cycleOwners=new Map();
+ for(const [name,list] of Object.entries(state))if(name.startsWith('shopping-list:')){
+  if(!isObject(list)||Object.keys(list).some(k=>!['name','currentCycleId'].includes(k))||!validId(list.currentCycleId))throw Error('INVALID_SEED');
+  const cycleId=list.currentCycleId;
+  if(schemaVersion===4){
+   let listId;
+   try { listId=decodeURIComponent(name.slice('shopping-list:'.length)); }
+   catch { throw Error('INVALID_SEED'); }
+   if(!nonemptyText(listId)||cycleOwners.has(cycleId)||state['shopping-cycles']?.[cycleId]?.listId!==listId)throw Error('INVALID_SEED');
+   cycleOwners.set(cycleId,listId);
+  }
+  cycleIds.add(cycleId);
+ }
  for(const [name,map] of Object.entries(state)){
   if(!isObject(map))throw Error('INVALID_SEED');let fields=null;
   if(name.startsWith('recipe:'))fields=['title','description','portions','notes','createdAt','updatedAt'];else if(name.startsWith('recipe-ingredient:'))fields=['name','amount','needsShopping','position'];else if(name.startsWith('recipe-step:'))fields=['text','position'];else if(name.startsWith('pantry:'))fields=['name','preference','createdAt','updatedAt'];else if(name.startsWith('shopping-list:'))fields=['name','currentCycleId'];else if(name.startsWith('shopping-item:'))fields=['value'];else if(schemaVersion===4&&name.startsWith('shopping-item-fields:'))fields=['name','checked','recipeId','ingredientId','displayQuantity','displayUnit','updatedAt'];else if(name.startsWith('field-head:'))fields=['effect'];else if(!['recipe-index','pantry-index','shopping-cycles','shopping-item-versions','purchases','domain-effects'].includes(name)&&!name.startsWith('recipe-ingredient-index:')&&!name.startsWith('recipe-step-index:'))throw Error('INVALID_SEED');
@@ -119,11 +137,12 @@ export function verifyCurrentSeed({LoroDoc,snapshot,seed,schemaVersion=1,require
    if(name==='shopping-cycles'&&Object.values(map).some(c=>!nonemptyText(c.listId)||!date(c.startedAt)))throw Error('INVALID_SEED');
    if(name.startsWith('shopping-item:')){
     const {effectId,...data}=map.value;
+    if(cycleOwners.get(data.cycleId)!==data.listId)throw Error('INVALID_SEED');
     try { validate({version:1,kind:'shopping-item-put',commandId:'seed-validation',effectId,dependencyEffectIds:[],data}); }
     catch { throw Error('INVALID_SEED'); }
    }
    // Current purchase records retain IDs without the command's pantry payload.
-   if(name==='purchases'&&Object.values(map).some(p=>!nonemptyText(p.listId)||!ids(p.itemIds)||!p.itemIds.length||
+   if(name==='purchases'&&Object.values(map).some(p=>cycleOwners.get(p.purchaseCycleId)!==p.listId||!ids(p.itemIds)||!p.itemIds.length||
       !ids(p.pantryItemIds)||!date(p.purchasedAt)||!nonemptyText(p.author)))throw Error('INVALID_SEED');
   }
   if(name==='domain-effects'&&(Object.keys(map).length!==identities.size||Object.entries(map).some(([id,m])=>!isObject(m)||Object.keys(m).sort().join(',')!=='commandId,effectId,seedId,version'||m.version!==3||m.seedId!==seed.seedId||m.effectId!==id||m.commandId!==identities.get(id))))throw Error('INVALID_SEED');

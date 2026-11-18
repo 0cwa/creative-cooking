@@ -8,6 +8,7 @@ test('v4 seed rejects invalid values even with one insert per field', () => {
   const recipe = {id:'r',title:'Stew',portions:2,notes:['Serve warm'],ingredients:[{id:'i',name:'Carrot'}],steps:['Chop'],stepIds:['s']};
   apply(source, cmd('recipe-create','recipe',{recipe,author:'a',at}));
   apply(source, cmd('shopping-list-create','list',{listId:'l',cycleId:'cycle',name:'Market',at}));
+  apply(source, cmd('shopping-list-create','list2',{listId:'other',cycleId:'other-cycle',name:'Grocer',at}));
   apply(source, cmd('shopping-item-put','item',{listId:'l',cycleId:'cycle',itemId:'item',name:'Carrot',checked:true,at},['list']));
   const pantryId = 'shopping-purchase:buy:item';
   apply(source, cmd('purchase','buy',{
@@ -43,6 +44,14 @@ test('v4 seed rejects invalid values even with one insert per field', () => {
     }],
     ['purchase pantry IDs', s => { s.purchases.buy.pantryItemIds = [hidden]; }],
     ['purchase author', s => { s.purchases.buy.author = hidden; }],
+    ['duplicate cycle owner', s => { s['shopping-list:other'].currentCycleId = 'cycle'; delete s['shopping-cycles']['other-cycle']; }],
+    ['missing current cycle', s => { delete s['shopping-cycles']['other-cycle']; }],
+    ['cycle on another list', s => { s['shopping-cycles'].cycle.listId = 'other'; }],
+    ['item on another list', s => {
+      s['shopping-item:item'].value.listId = 'other';
+      s['shopping-item-versions'][item.effectId].listId = 'other';
+    }],
+    ['purchase on another list', s => { s.purchases.buy.listId = 'other'; }],
   ];
   for (const [label, change] of malformed) {
     const changed = structuredClone(state);

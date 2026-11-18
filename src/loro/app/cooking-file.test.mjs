@@ -739,8 +739,19 @@ test('selected recipe shopping copies and current-only admission survive durable
  await edit(a,sibling,'first-sibling-title',{id:'sibling',title:'SUPERSEDED_SIBLING_TITLE'});
  await edit(a,sibling,'replace-sibling-title',{id:'sibling',title:'New sibling title'});
  const beforeIngredient=projectCooking((await ar.document()).doc).recipes[0];
+ const removedCopy={...copied,id:'retained-ingredient-copy',recipeId,ingredientId:'removed-copied-ingredient',
+  name:'Turnip',displayQuantity:'3 cups'};
  await edit(a,ar,'ingredient-canary',{id:recipeId,
-  ingredients:[...beforeIngredient.ingredients,{id:'removed-ingredient',name:'HIDDEN_INGREDIENT_TEXT'}]});
+  ingredients:[...beforeIngredient.ingredients,{id:'removed-ingredient',name:'HIDDEN_INGREDIENT_TEXT'},
+   {id:removedCopy.ingredientId,name:removedCopy.name,amount:removedCopy.displayQuantity}]});
+ const catalogBeforeIngredientRemoval=await openSelectedRecipeCatalog(a.runtime);
+ const cookingBeforeIngredientRemoval=projectCooking(catalogBeforeIngredientRemoval.parent.doc);
+ await save(a,a.runtime,'copy-before-ingredient-removal',planShoppingAction({
+  doc:catalogBeforeIngredientRemoval.parent.doc,recipeCatalog:catalogBeforeIngredientRemoval,
+  before:cookingBeforeIngredientRemoval.shopping,
+  after:{...cookingBeforeIngredientRemoval.shopping,items:[...cookingBeforeIngredientRemoval.shopping.items,removedCopy]},
+  pantryBefore:cookingBeforeIngredientRemoval.pantry,pantryAfter:cookingBeforeIngredientRemoval.pantry,
+  actionId:'copy-before-ingredient-removal',author:a.deviceId,at}));
  await edit(a,ar,'remove-ingredient-canary',{id:recipeId,ingredients:beforeIngredient.ingredients});
  const agreement={version:1,householdId:scope.id,parentHead:a.root.head,policyHash:a.root.policyHash,
   roster:a.root.roster,delegation:'currentCooking',sourcePolicyHashes:[a.root.policyHash]};
@@ -808,7 +819,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   const doc=new LoroDoc();
   assert.ok(!doc.import(document.seed.snapshot).pending?.size);
   const ops=JSON.stringify(doc.exportJsonUpdates(undefined,undefined,false));
-  for(const canary of ['HIDDEN_INGREDIENT_TEXT','removed-ingredient',omittedRecipeId,omittedIngredientId,
+  for(const canary of ['HIDDEN_INGREDIENT_TEXT','removed-ingredient',omittedRecipeId,omittedIngredientId,removedCopy.ingredientId,
    'SUPERSEDED_SIBLING_TITLE','UNRELATED_PRIVATE_CANARY','recipe-intentions','recipeSource']){
    assert.equal(ops.includes(canary),false,canary);
   }
@@ -818,7 +829,7 @@ test('selected recipe shopping copies and current-only admission survive durable
  const sourceItems=(await shopping(a.runtime)).items;
  const projectedItems=projectCooking(fresh[0]).shopping.items;
  assert.deepEqual(links(projectedItems),links(sourceItems.map(item=>item.id===detachedCopy.id?
-  {...item,recipeId:undefined,ingredientId:undefined}:item)));
+  {...item,recipeId:undefined,ingredientId:undefined}:item.id===removedCopy.id?{...item,ingredientId:undefined}:item)));
  const detached=projectedItems.find(item=>item.id===detachedCopy.id);
  assert.equal(detached.name,detachedCopy.name);
  assert.equal(detached.displayQuantity,detachedCopy.displayQuantity);
@@ -828,6 +839,13 @@ test('selected recipe shopping copies and current-only admission survive durable
  }
  const detachedEffect=fresh[0].getMap('shopping-item:'+detachedCopy.id).get('value').effectId;
  assert.ok(documents[0].policyBundle.entries.find(entry=>entry.effectId===detachedEffect).policyHashes.includes(accepted.policyHash));
+ const recipeOnly=projectedItems.find(item=>item.id===removedCopy.id);
+ assert.equal(recipeOnly.recipeId,recipeId);
+ assert.equal(recipeOnly.name,removedCopy.name);
+ assert.equal(recipeOnly.displayQuantity,removedCopy.displayQuantity);
+ assert.equal(fresh[0].getMap('field-head:'+encodeURIComponent(JSON.stringify(['shopping-item',removedCopy.id,'ingredientId']))).get('effect'),undefined);
+ const copyEffect=fresh[0].getMap('shopping-item:'+removedCopy.id).get('value').effectId;
+ assert.ok(documents[0].policyBundle.entries.find(entry=>entry.effectId===copyEffect).policyHashes.includes(accepted.policyHash));
  assert.equal(projectCooking(fresh[1]).recipes[0].title,'New child title');
  assert.equal(projectCooking(fresh[2]).recipes[0].title,'New sibling title');
  const copiedEffect=fresh[0].getMap('shopping-item:selected-item').get('value').effectId;
