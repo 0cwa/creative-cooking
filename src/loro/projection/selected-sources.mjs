@@ -81,7 +81,7 @@ export async function verifySelectedSourceSet({storage,scope,pin,provider,signed
   const signature = Uint8Array.from(signed.signature.match(/../g),pair => parseInt(pair,16));
   const message = domain('selected-household-sources-v1',{manifest:signed.manifest,deviceId:signed.deviceId});
   if (!author || !await provider.verify(author.signingKeyRef,message,signature)) throw Error('INVALID_SOURCE_SIGNATURE');
-  return {manifest:signed.manifest,record,state,selected};
+  return {manifest:signed.manifest,record,state,nodes,selected};
 }
 
 const visible = doc => Object.fromEntries(Object.entries(doc.toJSON()).filter(([,value]) => Object.keys(value).length));
@@ -105,12 +105,13 @@ export async function observeSelectedSourceSet(runtime) {
     {documentId:binding.sourceDocumentId,revision:parent.revision,bytes:parent.storedBytes},entries};
   await authenticateSource(runtime,parent.storedBytes,parent.doc);
   const manifestChildren = [];
-  const sources = [{runtime,revision:parent.revision,bytes:parent.storedBytes}];
+  const sources = [{runtime,revision:parent.revision,bytes:parent.storedBytes,doc:parent.doc}];
   entries.sort((left,right) => left.recipeId < right.recipeId ? -1 : 1);
   for (const entry of entries) {
     const childRuntime = await runtime.forRecipe(entry.recipeId);
-    await authenticateSource(childRuntime,entry.bytes,children.get(entry.recipeId).doc);
-    sources.push({runtime:childRuntime,revision:entry.revision,bytes:entry.bytes});
+    const {doc}=children.get(entry.recipeId);
+    await authenticateSource(childRuntime,entry.bytes,doc);
+    sources.push({runtime:childRuntime,revision:entry.revision,bytes:entry.bytes,doc});
     manifestChildren.push({recipeId:entry.recipeId,documentId:entry.documentId,revision:entry.revision,
       checkpointHash:await sourceSnapshotHash(provider,entry.bytes),creationEffectId:entry.effectId,
       creationObjectId:entry.objectId,creationParentRevision:entry.sourceRevision});

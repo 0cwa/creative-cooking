@@ -12,7 +12,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
-import {initializeAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {acceptAdmissionAgreement,initializeAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -34,7 +34,8 @@ import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {replayAuthenticated} from '../domain/replay.mjs';
 import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
-import {observeSelectedSourceSet,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
+import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
+import {prepareCurrentDocumentSet,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
 test('retained updates distinguish policy evidence and other retry reasons',async()=>{
  const ok=value=>({ok:true,value});
  const header=(branchHead,epochId='epoch')=>new TextEncoder().encode(JSON.stringify({header:{branchHead,epochId,authorDevice:'peer'}}));
@@ -677,6 +678,112 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
   record:{...head,revision:head.revision+1,acceptedParent:'different-head'}});
  assert.equal(staleSingleDocument.error,'UNSUPPORTED_VERSION');
  assert.deepEqual(must(await a.storage.readPairingAuthority(scope)),head);
+
+ const {doc:thirdDoc}=await inserted.document();
+ await save(a,inserted,'remove-entire-child',planRecipeAction({doc:thirdDoc,before:projectCooking(thirdDoc).recipes[0],
+  after:null,actionId:'remove-entire-child',author:a.deviceId,at}));
+ await edit(a,sibling,'first-sibling-title',{id:'sibling',title:'SUPERSEDED_SIBLING_TITLE'});
+ await edit(a,sibling,'replace-sibling-title',{id:'sibling',title:'New sibling title'});
+ const beforeIngredient=projectCooking((await ar.document()).doc).recipes[0];
+ await edit(a,ar,'ingredient-canary',{id:recipeId,
+  ingredients:[...beforeIngredient.ingredients,{id:'removed-ingredient',name:'HIDDEN_INGREDIENT_TEXT'}]});
+ await edit(a,ar,'remove-ingredient-canary',{id:recipeId,ingredients:beforeIngredient.ingredients});
+ const agreement={version:1,householdId:scope.id,parentHead:a.root.head,policyHash:a.root.policyHash,
+  roster:a.root.roster,delegation:'currentCooking',sourcePolicyHashes:[a.root.policyHash]};
+ const signer={adultId:'adult',deviceId:a.deviceId};
+ const signAdmission=async(kind,value)=>sodium.to_hex(await a.provider.sign(a.root.devices[0].signingKeyRef,domain(kind,value)));
+ const signedAgreement={...agreement,acceptances:[{...signer,
+  signature:await signAdmission('admission-agreement-acceptance',{agreement,...signer})}]};
+ const delegationHash=await acceptAdmissionAgreement(a.storage,scope,a.root.head,a.provider,signedAgreement);
+ await acceptAdmissionAgreement(b.storage,scope,b.root.head,b.provider,signedAgreement);
+ const newcomerSign=sodium.crypto_sign_keypair(),newcomerWrap=sodium.crypto_box_keypair();
+ t.after(()=>{newcomerSign.privateKey.fill(0);newcomerWrap.privateKey.fill(0);});
+ const event={version:2,suiteId:a.runtime.scope.suiteId,householdId:scope.id,parentHead:a.root.head,
+  policyHash:a.root.policyHash,generation:a.root.generation,epochId:a.root.epochId,proposalId:'invite-set',
+  kind:'inviteAdult',authorDeviceId:a.deviceId,frozenAdultRoster:a.root.roster,
+  subject:{adultId:'newcomer',devices:[{deviceId:'newcomer-device',peerId:'3',
+    signingKeyRef:sodium.to_hex(newcomerSign.publicKey),wrappingKeyRef:sodium.to_hex(newcomerWrap.publicKey)}],
+    documentId:'fresh-cooking',newGeneration:2,newEpochId:'fresh-epoch'},nextPolicy:null};
+ const eventHash=await selectedSourceHash(a.provider,'event',event);
+ const approval={version:1,householdId:scope.id,eventHash,parentHead:a.root.head,policyHash:a.root.policyHash,
+  generation:a.root.generation,epochId:a.root.epochId,...signer};
+ const admissionItem={event,authorSignature:await signAdmission('event-signature',event),
+  approvals:[{...approval,signature:await signAdmission('approval-signature',approval)}]};
+ const seedAllocations=new Map();
+ const allocateSeed=documentId=>{
+  if(!seedAllocations.has(documentId)){
+   const index=seedAllocations.size+1;
+   seedAllocations.set(documentId,{seedId:`11111111-1111-4111-8111-${String(index).padStart(12,'0')}`,peerId:String(900+index)});
+  }
+  return seedAllocations.get(documentId);
+ };
+ const prepare=()=>prepareCurrentDocumentSet({runtime:a.runtime,service:a.service,item:admissionItem,allocateSeed});
+ const prepared=await prepare();
+ const grantFor=async manifest=>{
+  const unsigned={version:1,householdId:scope.id,parentHead:a.root.head,admissionEventHash:eventHash,
+   sourcePolicyHashes:[a.root.policyHash],delegationHash,recipientAdult:'newcomer',recipientDevices:['newcomer-device'],
+   contentClasses:['pantry','recipe','shopping'],projectionManifestHash:await selectedSourceHash(a.provider,'projection-manifest',manifest),
+   newDocumentGeneration:2,newEpochId:'fresh-epoch',keyEnvelopeRefs:['projected-set-package']};
+  return {...unsigned,signatures:[{...signer,signature:await signAdmission('current-state-grant-signature',{grant:unsigned,...signer})}]};
+ };
+ const {manifest,documents}=prepared,grant=await grantFor(manifest);
+ assert.equal(prepared.manifestHash,grant.projectionManifestHash);
+ assert.equal(manifest.catalog.sourceRevision,3);
+ assert.equal(manifest.catalog.targetRevision,2);
+ assert.equal(manifest.catalog.removed.length,1);
+ assert.deepEqual(manifest.entries.map(entry=>entry.recipeId),[null,recipeId,'sibling']);
+ assert.deepEqual(manifest.entries.map(entry=>entry.sourceDocumentId),[a.runtime.scope.documentId,ar.scope.documentId,sibling.scope.documentId]);
+ assert.equal(documents[0].documentId,event.subject.documentId);
+ const verifyOptions={storage:b.storage,scope,pin:b.root.head,provider:b.provider,item:admissionItem,grant,manifest,documents,LoroDoc};
+ const recipientRows=b.rows();
+ assert.equal((await verifyCurrentDocumentSet(verifyOptions)).eventHash,eventHash);
+ assert.deepEqual((await prepare()).documents,documents);
+ const checkSource=(draft=prepared)=>verifyCurrentDocumentSetSource({runtime:a.runtime,service:a.service,item:admissionItem,
+  manifest:draft.manifest,documents:draft.documents});
+ assert.deepEqual(await checkSource(),prepared.source);
+ const omitted=structuredClone(prepared);
+ omitted.manifest.catalog.targetRevision--;
+ omitted.manifest.catalog.removed.push('f'.repeat(64));
+ omitted.manifest.catalog.removed.sort();
+ omitted.manifest.entries.pop();
+ omitted.documents.pop();
+ await assert.rejects(()=>checkSource(omitted),/SOURCE_CHANGED/);
+ b.reopen();a.reopen();
+ assert.deepEqual((await verifyCurrentDocumentSet(verifyOptions)).manifest,manifest);
+ const fresh=documents.map(document=>{
+  const doc=new LoroDoc();
+  assert.ok(!doc.import(document.seed.snapshot).pending?.size);
+  const ops=JSON.stringify(doc.exportJsonUpdates(undefined,undefined,false));
+  for(const canary of ['HIDDEN_INGREDIENT_TEXT','removed-ingredient','Third carrot',
+   'SUPERSEDED_SIBLING_TITLE','recipe-intentions','recipeSource']){
+   assert.equal(ops.includes(canary),false,canary);
+  }
+  return doc;
+ });
+ const links=items=>items.map(({id,recipeId,ingredientId,displayQuantity})=>({id,recipeId,ingredientId,displayQuantity}));
+ assert.deepEqual(links(projectCooking(fresh[0]).shopping.items),links((await shopping(a.runtime)).items));
+ assert.equal(projectCooking(fresh[1]).recipes[0].title,'New child title');
+ assert.equal(projectCooking(fresh[2]).recipes[0].title,'New sibling title');
+ const copiedEffect=fresh[0].getMap('shopping-item:selected-item').get('value').effectId;
+ assert.ok(documents[0].policyBundle.entries.find(entry=>entry.effectId===copiedEffect).policyHashes.includes(accepted.policyHash));
+ const stolen=structuredClone(documents);
+ stolen[1].seed.snapshot=(await ar.document()).storedBytes;
+ const sealedOldHistory=structuredClone(manifest);
+ sealedOldHistory.entries[1].snapshotHash=await selectedSourceHash(a.provider,'projection-snapshot',
+  sodium.to_hex(stolen[1].seed.snapshot));
+ await assert.rejects(async()=>verifyCurrentDocumentSet({...verifyOptions,manifest:sealedOldHistory,
+  grant:await grantFor(sealedOldHistory),documents:stolen}),/INVALID_SEED/);
+ for(const badDocuments of [documents.slice(1),[...documents,documents[1]],[documents[0],documents[2],documents[2]],
+  [documents[0],{...documents[1],policyBundle:documents[2].policyBundle},documents[2]]]){
+  await assert.rejects(()=>verifyCurrentDocumentSet({...verifyOptions,documents:badDocuments}),/INVALID_DOCUMENT_SET|INVALID_PROOF/);
+ }
+ for(const forgedManifest of [{...manifest,rootPin:'0'.repeat(64)},
+  {...manifest,catalog:{...manifest.catalog,removed:[]}},
+  {...manifest,authorizationSnapshot:'0'.repeat(64)}]){
+  await assert.rejects(async()=>verifyCurrentDocumentSet({...verifyOptions,manifest:forgedManifest,
+   grant:await grantFor(forgedManifest)}),/INVALID_DOCUMENT_SET/);
+ }
+ assert.deepEqual(b.rows(),recipientRows);
 
 });
 
