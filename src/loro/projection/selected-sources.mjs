@@ -5,8 +5,6 @@ import {MAX_SELECTED_CHILDREN} from '../contracts/runtime-storage.ts';
 import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {replayAuthenticated} from '../domain/replay.mjs';
 
-const MAX_SOURCE_BYTES = 1024 * 1024;
-const MAX_SET_BYTES = 8 * 1024 * 1024;
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value,field));
 const id = value => typeof value === 'string' && value.length > 0 && new TextEncoder().encode(value).length <= 256;
@@ -97,9 +95,6 @@ async function authenticateSource(runtime,bytes,doc) {
 export async function observeSelectedSourceSet(runtime) {
   const catalog = await openSelectedRecipeCatalog(runtime,undefined,MAX_SELECTED_CHILDREN);
   const {binding,expectedAuthority,parent,entries,catalogRevision,children} = catalog;
-  const raw = [parent.storedBytes,...entries.map(entry => entry.bytes)];
-  if (raw.some(bytes => bytes && bytes.length > MAX_SOURCE_BYTES) ||
-    raw.reduce((sum,bytes) => sum + (bytes?.length ?? 0),0) > MAX_SET_BYTES) throw Error('TOO_LARGE');
   const {provider,rootPin} = runtime.authority;
   const guard = {binding,expectedAuthority,catalogRevision,root:parent.storedBytes === null ? null :
     {documentId:binding.sourceDocumentId,revision:parent.revision,bytes:parent.storedBytes},entries};

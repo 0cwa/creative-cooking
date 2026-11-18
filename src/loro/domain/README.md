@@ -34,6 +34,24 @@ There is no cross-document global clock that establishes which other remote
 edits the author knew about. The shopping copy retains its own editable
 display fields and immutable recipe and ingredient links.
 
+### Current-only document-set admission
+
+The explicit v5 path in `pairing/household-document-set.mjs` uses the
+existing signed admission, quorum grant and per-device ceremonies. A source
+observation binds the pinned head, original root, epoch, generation and
+durable revisions of the root, catalog and children. Publication compares the
+whole source again inside the write transaction. A removed recipe contributes
+an opaque source commitment and receives no target document. The fresh root
+keeps live shopping links and their policy provenance.
+
+The publisher and each receiver atomically write the authority record, exact
+catalog and snapshots, policy sidecars, and independently generated data keys
+for the root and each child. The receiver opens only its signed packages and
+stores a signed receipt for their exact order and content. The explicit
+`document-set` route in `pairing/household-file.mjs` uses encrypted file
+version 3. Its retry checks the complete retained set and reuses the sealed
+bytes. The v1 through v4 projection manifests retain their original meanings.
+
 ### Remaining activation work
 
 - Bind the complete document set and its selected revisions to signed authority
@@ -41,10 +59,11 @@ display fields and immutable recipe and ingredient links.
   web and native boot and the content hook's recipe create, list, edit,
   history, restore and shopping entry points together. The file route for
   selected children and linked copies is currently opt-in.
-- Extend invitation, joined installation and same-adult device release to
-  verify and install the whole set atomically with all key audiences. Prepare
-  current-state redaction evidence per child. Preserve earlier signed
-  household content and recipe histories for eligible recipients.
+- Route invitation draft signing and review, transfer controls and joined
+  enrollment to the explicit v5 path. Enable content opens and edits only
+  after the runtime can load the installed catalog, per-document keys and
+  projection provenance. Extend same-adult release to copy the complete set
+  and the histories available to that adult.
 - Extend rotation, revocation, compromise review and recovery to bind source
   and target document sets and their selected revisions. Retain pending inbox
   originals, earlier generations and competing effects for review or semantic

@@ -53,6 +53,7 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   if(!item)return null;
   const {operationId}=item.admission,result=await storage.getProjectionPublication(ownScope.id,operationId);
   if(!result.ok||!result.value)throw Error('MISSING_PUBLICATION');
+  if(result.value.documentSet)throw Error('UNSUPPORTED_VERSION');
   return {operationId,generation:item.event.subject.newGeneration,recipients:result.value.packages.map(({recipientDevice})=>({recipientDevice,joining:item.admission.grant.recipientDevices.includes(recipientDevice)}))};
  }
  function checkedBytes(bytes){

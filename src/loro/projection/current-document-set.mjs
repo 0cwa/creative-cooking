@@ -2,7 +2,7 @@ import {checkAdmissionAgreement,checkGrantSignatures} from '../authority/grant.m
 import {isPolicyDocumentId,validateSuccessor} from '../authority/validator.mjs';
 import {authorityBytes} from '../authority/chain.mjs';
 import {verifyCurrentSeed,projectCurrentSeed} from '../compromise/current-seed.mjs';
-import {MAX_SELECTED_CHILDREN} from '../contracts/runtime-storage.ts';
+import {MAX_SELECTED_CHILDREN,MAX_SELECTED_SET_BYTES,MAX_SELECTED_SOURCE_BYTES} from '../contracts/runtime-storage.ts';
 import {preparePolicyProjection,verifyPolicyProjection} from '../disclosure/policy-seed.mjs';
 import {isRecipeDocumentId,recipeDocumentId} from '../domain/recipe-document.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
@@ -10,8 +10,6 @@ import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} fro
 
 const version = 5;
 const contentClasses = ['pantry','recipe','shopping'];
-const limit = 8 * 1024 * 1024;
-const documentLimit = 1024 * 1024;
 const exact = (value,fields) => !!value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).length === fields.length && fields.every(field=>Object.hasOwn(value,field));
 const validId = value => typeof value === 'string' && value.length > 0 && new TextEncoder().encode(value).length <= 256;
@@ -133,7 +131,7 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
         seedId,peerId,schemaVersion:4}),bundle:null,bundleHash:null,
     } : await preparePolicyProjection({runtime:captured.runtime,service,provider,seedId,peerId,version:4,selectedSource:captured});
     projectedBytes+=seed.snapshot.length;
-    if (projectedBytes>limit) throw Error('TOO_LARGE');
+    if (projectedBytes>MAX_SELECTED_SET_BYTES) throw Error('TOO_LARGE');
     const documentId=recipeId===null ? target.documentId : await recipeDocumentId(target,pin,provider,recipeId);
     manifest.entries.push({recipeId,sourceDocumentId:captured.runtime.scope.documentId,sourceRevision:captured.revision,
       sourceHash:index===0?source.root.checkpointHash:source.children[index-1].checkpointHash,documentId,seedId,peerId,
@@ -191,14 +189,14 @@ async function verifyDocuments({manifest,documents,provider,pin,state,LoroDoc}) 
       !exact(document.seed,['version','seedId','peerId','snapshot','identities','purchaseIds']) ||
       document.seed.version!==1 || document.seed.seedId!==entry.seedId || document.seed.peerId!==entry.peerId ||
       !(document.seed.snapshot instanceof Uint8Array) || !document.seed.snapshot.length ||
-      document.seed.snapshot.length>documentLimit) throw Error('INVALID_DOCUMENT_SET');
+      document.seed.snapshot.length>MAX_SELECTED_SOURCE_BYTES) throw Error('INVALID_DOCUMENT_SET');
     bytes+=document.seed.snapshot.length;
-    if (bytes>limit) throw Error('TOO_LARGE');
+    if (bytes>MAX_SELECTED_SET_BYTES) throw Error('TOO_LARGE');
     const {seed,policyBundle}=document;
     if (await selectedSourceHash(provider,'projection-snapshot',hex(seed.snapshot))!==entry.snapshotHash) {
       throw Error('INVALID_DOCUMENT_SET');
     }
-    const checked=verifyCurrentSeed({LoroDoc,snapshot:seed.snapshot,seed,schemaVersion:4});
+    const checked=verifyCurrentSeed({LoroDoc,snapshot:seed.snapshot,seed,schemaVersion:4,requireComplete:true});
     if (checked.peers.some(peer=>peer!==seed.peerId)) throw Error('INVALID_SEED');
     checkSeedIdentities(seed,checked.state,effects,commands);
     if (entry.recipeId!==null) checkChildState(checked.state,entry.recipeId);

@@ -12,7 +12,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
-import {acceptAdmissionAgreement,initializeAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -36,6 +36,11 @@ import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
 import {prepareCurrentDocumentSet,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
+import {householdDocumentSetRelease,publishHouseholdDocumentSet,readInstalledHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
+import {encodeHouseholdDocumentSetFile,installHouseholdFile,sealHouseholdFile} from '../pairing/household-file.mjs';
+import {durableSession,householdSessionContextBytes} from '../pairing/durable-session.mjs';
+import {ceremonyBytes} from '../pairing/candidate-v2.mjs';
+import {existingRecipientContextBytes} from '../authority/ceremony.mjs';
 test('retained updates distinguish policy evidence and other retry reasons',async()=>{
  const ok=value=>({ok:true,value});
  const header=(branchHead,epochId='epoch')=>new TextEncoder().encode(JSON.stringify({header:{branchHead,epochId,authorDevice:'peer'}}));
@@ -85,10 +90,11 @@ async function household(t,{onDisk=false}={}) {
     let db = new DatabaseSync(path);
     connections.add(db);
     let fault;
-    const storage = openSQLiteStorage({executeSync(sql,params = []) {
+    const connection={executeSync(sql,params = []) {
       const statement = db.prepare(sql);
       return {rows:sql.startsWith('SELECT') ? statement.all(...params) : (statement.run(...params),[])};
-    }}, boundary => {if (boundary === fault) throw Error('injected failure');});
+    }};
+    const storage=openSQLiteStorage(connection,boundary=>{if(boundary===fault)throw Error('injected failure');});
     const deviceId = `device-${index}`;
     await initializeAuthority(storage,root,root.head,provider);
     const resolved = await resolveRuntimeAuthority(storage,scope,root.head,provider,deviceId);
@@ -98,7 +104,7 @@ async function household(t,{onDisk=false}={}) {
     const cooking = cookingFiles({runtime,service});
     const trust = householdLocalTrust({runtime,withCurrent:use => use(0)});
     return {
-      deviceId,storage,runtime,trust,cooking,service,root,provider,
+      deviceId,storage,runtime,trust,cooking,service,root,provider,connection,signingTestKey:signing[index],
       faultAt: boundary => {fault=boundary;},
       rows:() => db.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),
       replaceRow:(key,value)=>db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,key),
@@ -133,6 +139,36 @@ async function household(t,{onDisk=false}={}) {
       }
     };
   }));
+}
+
+function testMaster(){
+ let key;
+ return {
+  async provision(){key=await crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);},
+  async wrap(_id,bytes,additionalData){
+   const iv=crypto.getRandomValues(new Uint8Array(12));
+   const result=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData},key,bytes);
+   return new Uint8Array([...iv,...new Uint8Array(result)]);
+  },
+  async unwrap(_id,bytes,additionalData){
+   return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.slice(0,12),additionalData},key,bytes.slice(12)));
+  },
+ };
+}
+
+function fixtureSessionStore(connection){
+ connection.executeSync('CREATE TABLE IF NOT EXISTS pairing_sessions (key TEXT PRIMARY KEY,value TEXT)');
+ return {transaction(use){
+  connection.executeSync('BEGIN IMMEDIATE');
+  try{
+   const result=use({
+    get:key=>{const row=connection.executeSync('SELECT value FROM pairing_sessions WHERE key=?',[key]).rows[0];return row&&JSON.parse(row.value);},
+    put:(key,value)=>connection.executeSync('INSERT OR REPLACE INTO pairing_sessions VALUES (?,?)',[key,JSON.stringify(value)]),
+   });
+   connection.executeSync('COMMIT');
+   return result;
+  }catch(error){connection.executeSync('ROLLBACK');throw error;}
+ }};
 }
 
 test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{
@@ -395,8 +431,11 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.equal(staleCatalog.error?.code,'CONFLICT');
  assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.get('r').documentId,br.scope.documentId);
 });
-test('selected recipe shopping copies authenticate causal fields and commit across durable peers',async t=>{
+test('selected recipe shopping copies and current-only admission survive durable peers',async t=>{
  const [a,b]=await household(t,{onDisk:true});
+ const sponsorMaster=testMaster(),existingMaster=testMaster();
+ await a.storage.localKeys(sponsorMaster,sodium).provision('sponsor-master');
+ await b.storage.localKeys(existingMaster,sodium).provision('existing-master');
  const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeCatalogVersion:1});
  const at='2026-01-01T00:00:00Z',recipeId='selected',ingredientId='carrot';
  const [ar,br,sibling]=await Promise.all([a.runtime.forRecipe(recipeId),b.runtime.forRecipe(recipeId),a.runtime.forRecipe('sibling')]);
@@ -679,6 +718,10 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
  assert.equal(staleSingleDocument.error,'UNSUPPORTED_VERSION');
  assert.deepEqual(must(await a.storage.readPairingAuthority(scope)),head);
 
+ const unrelatedPrivate={version:1,kind:'chef-proposal-create',commandId:'private-canary',effectId:'private-canary',
+  dependencyEffectIds:[],data:{conversationId:'private',proposalId:'private',toolName:'draft',
+   arguments:'UNRELATED_PRIVATE_CANARY',status:'pending',createdAt:at}};
+ await a.runtime.execute({operationId:'private-canary',deviceSequence:++sequence,command:unrelatedPrivate});
  const {doc:thirdDoc}=await inserted.document();
  await save(a,inserted,'remove-entire-child',planRecipeAction({doc:thirdDoc,before:projectCooking(thirdDoc).recipes[0],
   after:null,actionId:'remove-entire-child',author:a.deviceId,at}));
@@ -755,7 +798,7 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
   assert.ok(!doc.import(document.seed.snapshot).pending?.size);
   const ops=JSON.stringify(doc.exportJsonUpdates(undefined,undefined,false));
   for(const canary of ['HIDDEN_INGREDIENT_TEXT','removed-ingredient','Third carrot',
-   'SUPERSEDED_SIBLING_TITLE','recipe-intentions','recipeSource']){
+   'SUPERSEDED_SIBLING_TITLE','UNRELATED_PRIVATE_CANARY','recipe-intentions','recipeSource']){
    assert.equal(ops.includes(canary),false,canary);
   }
   return doc;
@@ -784,6 +827,178 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
    grant:await grantFor(forgedManifest)}),/INVALID_DOCUMENT_SET/);
  }
  assert.deepEqual(b.rows(),recipientRows);
+
+ const freshDatabase=mkdtempSync(join(tmpdir(),'recipe-set-newcomer-'));
+ let freshDb=new DatabaseSync(join(freshDatabase,'peer.sqlite'));
+ t.after(()=>{freshDb.close();rmSync(freshDatabase,{recursive:true});});
+ let freshFault;
+ const freshConnection={executeSync(sql,params=[]){
+  const statement=freshDb.prepare(sql);
+  return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+ }};
+ const freshStorage=openSQLiteStorage(freshConnection,boundary=>{if(boundary===freshFault)throw Error('injected');});
+ const freshRows=()=>freshDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+ const reopenFresh=()=>{freshDb.close();freshDb=new DatabaseSync(join(freshDatabase,'peer.sqlite'));};
+ const record=must(await a.storage.readPairingAuthority(scope));
+ must(await freshStorage.retainPublicHouseholdParent({...record,revision:0}));
+ const newcomerMaster=testMaster();
+ await freshStorage.localKeys(newcomerMaster,sodium).provision('newcomer-master');
+ const oldIdentity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:a.root.epochId};
+ await a.storage.localKeys(sponsorMaster,sodium).generate('legacy-epoch-key',oldIdentity);
+ const sponsorWrap=sodium.crypto_box_keypair(),existingWrap=sodium.crypto_box_keypair();
+ t.after(()=>{sponsorWrap.privateKey.fill(0);existingWrap.privateKey.fill(0);});
+ const sponsorKeys={signingSecret:a.signingTestKey.privateKey,wrappingSecret:sponsorWrap.privateKey};
+ const newcomerKeys={signingSecret:newcomerSign.privateKey,wrappingSecret:newcomerWrap.privateKey};
+ const existingKeys={signingSecret:b.signingTestKey.privateKey,wrappingSecret:existingWrap.privateKey};
+ const sponsorSession=fixtureSessionStore(a.connection),newcomerSession=fixtureSessionStore(freshConnection),
+  existingSession=fixtureSessionStore(b.connection);
+ const newcomerContext={version:1,householdId:scope.id,parentHead:record.acceptedParent,admissionEventHash:eventHash,
+  sponsorAdult:'adult',recipientAdult:'newcomer',sponsorDeviceId:a.deviceId,sponsorSigningKeyRef:a.root.devices[0].signingKeyRef,
+  sponsorWrappingKeyRef:sodium.to_hex(sponsorWrap.publicKey),recipientDeviceId:event.subject.devices[0].deviceId,
+  recipientSigningKeyRef:sodium.to_hex(newcomerSign.publicKey),recipientWrappingKeyRef:sodium.to_hex(newcomerWrap.publicKey)};
+ const existingContext={version:1,householdId:scope.id,parentHead:record.acceptedParent,admissionEventHash:eventHash,
+  newEpochId:event.subject.newEpochId,sponsorDeviceId:a.deviceId,recipientDeviceId:b.deviceId,
+  recipientWrappingKey:sodium.to_hex(existingWrap.publicKey)};
+ function completedPair(context,action,signingPublicKey,wrappingPublicKey,use,recipientKeys,signal){
+  const transcript={version:1,sessionId:`set-${action}`,action,scope,purpose:'data',acceptedParent:record.acceptedParent,
+   authorizationSnapshot:record.authorizationSnapshot,signaling:[signal(context)],
+   initiator:{role:'initiator',deviceId:a.deviceId,signingPublicKey:a.signingTestKey.publicKey,
+    wrappingPublicKey:sponsorWrap.publicKey,nonce:sodium.randombytes_buf(32)},
+   responder:{role:'responder',deviceId:context.recipientDeviceId,signingPublicKey,
+    wrappingPublicKey,nonce:sodium.randombytes_buf(32)}};
+  const guard={version:1,guardId:`set-guard-${action}`,scope,direction:'initiator-to-responder',purpose:'data'};
+  const oob={hash:sodium.to_hex(sodium.crypto_generichash(32,ceremonyBytes(transcript,guard))),
+   pins:Object.fromEntries(['initiator','responder'].map(role=>[role,{deviceId:transcript[role].deviceId,
+    signingKey:sodium.to_hex(transcript[role].signingPublicKey),wrappingKey:sodium.to_hex(transcript[role].wrappingPublicKey)}]))};
+  const sponsor=durableSession(sodium,sponsorSession,sponsorKeys,transcript,guard,'initiator',oob);
+  const recipient=durableSession(sodium,use,recipientKeys,transcript,guard,'responder',oob);
+  const first=sponsor.initialize(),second=recipient.initialize();
+  const left=sponsor.respond(second,0),right=recipient.respond(first,0);
+  const leftAck=sponsor.acknowledge(right,1),rightAck=recipient.acknowledge(left,1);
+  sponsor.finish(rightAck,2);recipient.finish(leftAck,2);
+  return {transcript,guard,context,oob,messages:sponsor.evidence().messages};
+ }
+ const ceremonies=[completedPair(newcomerContext,'inviteAdult',newcomerSign.publicKey,newcomerWrap.publicKey,
+  newcomerSession,newcomerKeys,householdSessionContextBytes)];
+ const existingCeremonies=[completedPair(existingContext,'pairOwnDevice',b.signingTestKey.publicKey,existingWrap.publicKey,
+  existingSession,existingKeys,existingRecipientContextBytes)];
+ const selectionBody={from:record.acceptedParent,to:eventHash,deviceId:a.deviceId,index:0};
+ const selection={...selectionBody,signature:await signAdmission('select-head',{root:a.root.head,householdId:scope.id,...selectionBody})};
+ const publicationInput={sodium,storage:a.storage,scope,pin:a.root.head,provider:a.provider,keys:sponsorKeys,
+  sessionStore:sponsorSession,master:sponsorMaster,runtime:a.runtime,service:a.service,item:admissionItem,grant,manifest,
+  documents,selection,localDeviceId:a.deviceId,ceremonies,existingCeremonies,keyOperationId:'set-sponsor-key'};
+ const attempt=(updates={})=>publishHouseholdDocumentSet({...publicationInput,...updates});
+ const beforePublisher=a.rows();
+ const operationId=event.proposalId;
+ const sealOptions={sodium,storage:a.storage,scope,pin:a.root.head,provider:a.provider,keys:sponsorKeys,
+  sessionStore:sponsorSession,operationId,LoroDoc,recipientDevice:newcomerContext.recipientDeviceId,kind:'document-set'};
+ await assert.rejects(()=>sealHouseholdFile(sealOptions),/MISSING_PUBLICATION/);
+ for(const fault of ['projection-set-keys','projection-set-catalog','projection-set-authority']){
+  a.faultAt(fault);
+  await assert.rejects(()=>attempt(),/IO/);
+  a.reopen();
+  assert.deepEqual(a.rows(),beforePublisher);
+ }
+ a.faultAt(null);
+ // Each change lands after cryptographic checks and before the durable CAS.
+ const commitSet=a.storage.publishProjection.bind(a.storage);
+ let acceptedDraft=prepared,finalInput={};
+ for(const mutate of [
+  ()=>a.edit('transaction-root-race',++sequence),
+  ()=>edit(a,ar,'transaction-child-race',{id:recipeId,description:'Concurrent description'}),
+  async()=>edit(a,await a.runtime.forRecipe('racing-child'),'racing-child',recipe('racing-child','Concurrent recipe')),
+ ]){
+  a.storage.publishProjection=async(...args)=>{
+   a.storage.publishProjection=commitSet;
+   await mutate();
+   return commitSet(...args);
+  };
+  await assert.rejects(()=>attempt(finalInput),/CONFLICT/);
+  assert.equal(must(await a.storage.getProjectionPublication(scope.id,operationId)),null);
+  assert.equal(must(await a.storage.reopenDocument(scope.id,event.subject.documentId)),null);
+  acceptedDraft=await prepare();
+  finalInput={grant:await grantFor(acceptedDraft.manifest),manifest:acceptedDraft.manifest,documents:acceptedDraft.documents};
+ }
+ assert.deepEqual(await attempt(finalInput),{replayed:false,operationId,head:eventHash});
+ a.reopen();
+ assert.deepEqual(await attempt(finalInput),{replayed:true,operationId,head:eventHash});
+ const sealed=await sealHouseholdFile(sealOptions);
+ const existingSealed=await sealHouseholdFile({...sealOptions,recipientDevice:b.deviceId});
+ assert.deepEqual(await sealHouseholdFile(sealOptions),sealed);
+ await assert.rejects(()=>sealHouseholdFile({...sealOptions,kind:'admission'}),/UNSUPPORTED_VERSION/);
+ const release=await householdDocumentSetRelease(sealOptions);
+ const newcomerOptions={sodium,storage:freshStorage,scope,pin:a.root.head,provider:a.provider,keys:newcomerKeys,
+  sessionStore:newcomerSession,master:newcomerMaster,keyOperationId:'set-newcomer-key',confirmedParent:record.acceptedParent,
+  recipientDevice:newcomerContext.recipientDeviceId,recipientKind:'document-set',LoroDoc};
+ const install=(bytes=sealed)=>installHouseholdFile({...newcomerOptions,bytes});
+ const beforeNewcomer=freshRows();
+ const bad=structuredClone(release);
+ [bad.packets[1],bad.packets[2]]=[bad.packets[2],bad.packets[1]];
+ const forgedBytes=encodeHouseholdDocumentSetFile(bad);
+ const forgedFile=sodium.crypto_box_seal(forgedBytes,newcomerWrap.publicKey);
+ forgedBytes.fill(0);
+ await assert.rejects(()=>install(forgedFile),/INVALID_KEY_PACKAGE/);
+ await assert.rejects(()=>install(existingSealed),/INVALID_FILE/);
+ await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,recipientKind:'newcomer'}),/INVALID_FILE/);
+ assert.deepEqual(freshRows(),beforeNewcomer);
+ for(const fault of ['projection-set-keys','projection-set-catalog','projection-set-authority']){
+  freshFault=fault;
+  await assert.rejects(()=>install(),/IO/);
+  reopenFresh();
+  assert.deepEqual(freshRows(),beforeNewcomer);
+ }
+ freshFault=null;
+ assert.deepEqual(await install(),{replayed:false,head:eventHash});
+ reopenFresh();
+ assert.deepEqual(await install(),{replayed:true,head:eventHash});
+ const sponsorSelected=await readInstalledHouseholdDocumentSet(sealOptions);
+ const newcomerSelected=await readInstalledHouseholdDocumentSet({...newcomerOptions,operationId});
+ assert.deepEqual(newcomerSelected.documents,sponsorSelected.documents);
+ assert.equal((await readAuthority(freshStorage,scope,a.root.head,a.provider)).activeHead,eventHash);
+ assert.equal(newcomerSelected.publication.documentSet.catalog.length,3);
+ const catalogSlot=JSON.stringify(['projection-document-set',scope.id,eventHash]);
+ const installedCatalog=freshRows().find(row=>row.key===catalogSlot).value;
+ freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({
+  ...JSON.parse(installedCatalog),catalog:[],
+ }),catalogSlot);
+ reopenFresh();
+ await assert.rejects(()=>install(),/CORRUPT/);
+ freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(installedCatalog,catalogSlot);
+ const childSlot=JSON.stringify(['document',scope.id,newcomerSelected.documents[1].documentId]);
+ const installedChild=freshRows().find(row=>row.key===childSlot).value;
+ freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({
+  ...JSON.parse(installedChild),revision:1,
+ }),childSlot);
+ reopenFresh();
+ await assert.rejects(()=>install(),/CORRUPT/);
+ freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(installedChild,childSlot);
+ assert.deepEqual(await install(),{replayed:true,head:eventHash});
+
+ assert.equal(must(await freshStorage.reopenDocument(scope.id,ar.scope.documentId)),null);
+ assert.equal(must(await freshStorage.reopenDocument(scope.id,a.runtime.scope.documentId)),null);
+ assert.ok(must(await a.storage.reopenDocument(scope.id,ar.scope.documentId)));
+ assert.ok(must(await a.storage.getLocalOperation(scope.id,'remove-entire-child')));
+ assert.ok(sponsorSelected.publication.pendingEdits.some(operation=>operation.operationId==='remove-entire-child'));
+ assert.ok(!freshRows().some(({key})=>{const slot=JSON.parse(key);return slot[0]==='local-key'&&slot[5]===a.root.epochId;}));
+ await assert.rejects(()=>resolveRuntimeAuthority(freshStorage,scope,a.root.head,a.provider,newcomerContext.recipientDeviceId),
+  /UNSUPPORTED_VERSION/);
+ const sponsorKeysSaved=[sponsorSelected.publication.localKey.record,...sponsorSelected.publication.documentSet.childKeys];
+ const newcomerKeysSaved=[newcomerSelected.publication.localKey.record,...newcomerSelected.publication.documentSet.childKeys];
+ const distinctKeys=new Set();
+ for(const [index,saved] of sponsorKeysSaved.entries()){
+  await a.storage.localKeys(sponsorMaster,sodium).useIdentity(saved.identity,key=>
+   freshStorage.localKeys(newcomerMaster,sodium).useIdentity(newcomerKeysSaved[index].identity,received=>{
+    assert.deepEqual(received,key);
+    distinctKeys.add(sodium.to_hex(sodium.crypto_generichash(32,key)));
+   }));
+ }
+ assert.equal(distinctKeys.size,acceptedDraft.documents.length);
+ const existingOptions={...newcomerOptions,storage:b.storage,keys:existingKeys,recipientDevice:b.deviceId,
+  sessionStore:existingSession,master:existingMaster,keyOperationId:'set-existing-key',bytes:existingSealed};
+ assert.deepEqual(await installHouseholdFile(existingOptions),{replayed:false,head:eventHash});
+ b.reopen();
+ assert.deepEqual(await installHouseholdFile(existingOptions),{replayed:true,head:eventHash});
+ assert.ok(must(await b.storage.reopenDocument(scope.id,br.scope.documentId)));
 
 });
 

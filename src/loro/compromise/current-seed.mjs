@@ -28,10 +28,10 @@ export function projectCurrentSeed({LoroDoc,source,seedId,peerId,includeLocalMap
  const snapshot=doc.export({mode:'snapshot'});if(snapshot.length>1024*1024)throw Error('TOO_LARGE');return {version:1,seedId,peerId,snapshot,identities:reserved,purchaseIds:[...purchaseIds].sort(),...(includeLocalMapping?{localMapping:sorted.map(m=>({oldEffectId:m.oldEffect,effectId:ids.get(m.oldEffect)}))}:{})};
 }
 /** Verify a stored seed has exactly one insert per visible field and no hidden history. */
-export function verifyCurrentSeed({LoroDoc,snapshot,seed,schemaVersion=1}){
+export function verifyCurrentSeed({LoroDoc,snapshot,seed,schemaVersion=1,requireComplete=false}){
  if(![1,4].includes(schemaVersion))throw Error('UNSUPPORTED_VERSION');
  if(typeof LoroDoc!=='function'||!(snapshot instanceof Uint8Array)||snapshot.length>1024*1024||!seed||!validId(seed.seedId)||!Array.isArray(seed.identities)||seed.identities.length>256)throw Error('INVALID_SEED');
- const doc=new LoroDoc();doc.import(snapshot);const state=doc.toJSON(),changes=doc.exportJsonUpdates(undefined,undefined,false).changes,seen=new Set(),peers=new Set(),eq=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
+ const doc=new LoroDoc();const imported=doc.import(snapshot);if(requireComplete&&imported.pending?.size)throw Error('INVALID_SEED');const state=doc.toJSON(),changes=doc.exportJsonUpdates(undefined,undefined,false).changes,seen=new Set(),peers=new Set(),eq=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
  const identities=new Map(),commandIds=new Set();for(const x of seed.identities){if(!isObject(x)||Object.keys(x).sort().join(',')!=='commandId,effectId'||!validId(x.commandId)||!validId(x.effectId)||identities.has(x.effectId)||commandIds.has(x.commandId))throw Error('INVALID_SEED');identities.set(x.effectId,x.commandId);commandIds.add(x.commandId)}
  const cycleIds=new Set();for(const [name,v] of Object.entries(state))if(name.startsWith('shopping-list:')){if(!isObject(v)||Object.keys(v).some(k=>!['name','currentCycleId'].includes(k))||!validId(v.currentCycleId))throw Error('INVALID_SEED');cycleIds.add(v.currentCycleId)}
  for(const [name,map] of Object.entries(state)){

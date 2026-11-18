@@ -87,6 +87,17 @@ Admission agreement acceptance explicitly delegates current-cooking-state disclo
 
 Normal Loro snapshots contain operation history as well as current state, as described in [Loro's encoding documentation](https://loro.dev/docs/tutorial/encoding). **Never issue old household epoch keys or original document histories as a current-state-only invitation.** Project validated live domain fields into fresh Loro documents with new IDs/generations and independent keys. All accepting existing clients join that generation for future work; retain old encrypted documents only for the old audience. A newcomer cannot decrypt the private source archive. Opaque provenance hashes do not grant archive access; even provenance metadata needs an audience check.
 
+The opt-in current-cooking admission path uses projection manifest v5 and
+encrypted file version 3. The existing quorum grant commits the selected
+source set and maps each live recipe to a document scoped to the successor.
+Publisher storage checks the recorded authority and every source and catalog
+revision at commit. Recipients verify the signed grant, projection bytes,
+policy sidecars and their own per-document key packages before installing
+the exact set. Older single-document releases and transitions fail closed
+when the local selected workspace has recipe children. Normal app routing
+still requires a catalog-aware runtime, checkout, same-adult release,
+rotation and recovery.
+
 Queue offline edits from the old generation for semantic rebase or explicit review. Do not directly import the old operation history into the fresh generation. Preserve original intent when rebasing cannot be safe. This applies to pending Chef effects and purchase identities too: retain domain idempotency without leaking excluded historical payloads. The exact projection must be tested with canary secrets in deleted text, undo records, pending imports and serialized containers. Manifest labels alone prove nothing about bytes.
 
 ## Suspected compromise and frozen review

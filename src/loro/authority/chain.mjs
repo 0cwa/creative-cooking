@@ -110,11 +110,19 @@ export async function verifyAuthority(state,pin,provider) {
    const a=item.admission,subject=item.event.subject;
    if(!a || Array.isArray(a) || Object.keys(a).sort().join(',')!=='ceremonies,existingCeremonies,grant,localDeviceId,manifest,operationId' || a.grant?.admissionEventHash!==r.eventHash || a.grant?.recipientAdult!==subject.adultId || a.grant?.newDocumentGeneration!==subject.newGeneration || a.grant?.newEpochId!==subject.newEpochId || a.manifest?.newDocumentId!==subject.documentId || a.manifest?.newGeneration!==subject.newGeneration || JSON.stringify(a.grant?.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId)) || !parent.runtime.acceptedRecipients.includes(a.localDeviceId)) throw Error('INVALID_ADMISSION');
    const grantProof=await checkGrantSignatures(parent,a.grant,provider);
-   if(grantProof.reason!=='ADMISSION_EVIDENCE_REQUIRED' || (a.manifest?.version!==1&&!validPolicySeedManifest(a.manifest)) || await digest(provider,'projection-manifest',a.manifest)!==a.grant.projectionManifestHash || JSON.stringify(a.manifest.sourcePolicyHashes)!==JSON.stringify(a.grant.sourcePolicyHashes)) throw Error('INVALID_ADMISSION');
+   const documentSet=a.manifest?.version===5;
+   if(documentSet){
+    const {checkCurrentDocumentSetManifest}=await import('../projection/current-document-set.mjs');
+    await checkCurrentDocumentSetManifest({pin,parent,item,eventHash:r.eventHash,manifest:a.manifest,provider});
+   }
+   if(grantProof.reason!=='ADMISSION_EVIDENCE_REQUIRED' || (!documentSet&&a.manifest?.version!==1&&!validPolicySeedManifest(a.manifest)) || await digest(provider,'projection-manifest',a.manifest)!==a.grant.projectionManifestHash || (documentSet
+     ? JSON.stringify(a.grant.contentClasses)!==JSON.stringify(['pantry','recipe','shopping'])
+     : JSON.stringify(a.manifest.sourcePolicyHashes)!==JSON.stringify(a.grant.sourcePolicyHashes))) throw Error('INVALID_ADMISSION');
    let accepted=false;
    for(const agreement of state.agreements ?? []) {if(agreement.parentHead!==parent.head)continue;const v=await checkAdmissionAgreement(parent,agreement,provider);if(v.status==='accepted' && v.delegationHash===a.grant.delegationHash && JSON.stringify(agreement.sourcePolicyHashes)===JSON.stringify(a.grant.sourcePolicyHashes))accepted=true;}
    if(!accepted) throw Error('INVALID_AGREEMENT');
    await sodium.ready; const ceremonies=decodeEvidence(a.ceremonies),existing=decodeEvidence(a.existingCeremonies),snapshot=ceremonies[0]?.transcript?.authorizationSnapshot;
+   if(documentSet&&snapshot!==a.manifest.authorizationSnapshot)throw Error('INVALID_ADMISSION');
    const verified=await checkHouseholdCeremonies(sodium,parent,snapshot,a.grant,ceremonies,provider), oldDevices=await checkExistingRecipientCeremonies(sodium,parent,snapshot,a.grant,existing,provider);
    if([...ceremonies,...existing].some(e=>e.context.sponsorDeviceId!==a.localDeviceId)) throw Error('INVALID_ADMISSION');
    if(subject.devices.some((d,i)=>d.deviceId!==verified[i]?.deviceId || d.signingKeyRef!==verified[i]?.signingKeyRef || d.wrappingKeyRef!==verified[i]?.wrappingKeyRef) || JSON.stringify(oldDevices.map(d=>d.deviceId).sort())!==JSON.stringify(parent.runtime.acceptedRecipients.filter(d=>d!==a.localDeviceId)) || new Set([...verified,...oldDevices].map(d=>d.guardId)).size!==verified.length+oldDevices.length) throw Error('INVALID_ADMISSION');
@@ -125,7 +133,7 @@ export async function verifyAuthority(state,pin,provider) {
    child.runtime.documentId=subject.documentId;for(const d of subject.devices) child.runtime.authorPeers[d.deviceId]=d.peerId;
    child.runtime.acceptedRecipients=[...parent.runtime.acceptedRecipients,...subject.devices.map(d=>d.deviceId)].sort();
    if(!validParent(child)) throw Error('INVALID_ADMISSION');nodes.set(r.eventHash,child);
-   if(a.manifest.version===4)seedSchemas.set(r.eventHash,4);
+   if(documentSet||a.manifest.version===4)seedSchemas.set(r.eventHash,4);
   } else throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
   const wrappingKeys=new Set((item.event.subject?.devices??[]).map(d=>d.wrappingKeyRef));
   const known=new Map(wrappingByHead.get(parent.head));
@@ -189,10 +197,20 @@ async function load(storage,scope,pin,provider) {
  if (hex(bytes(state))!==hex(record.authorityState) || record.acceptedParent!==state.activeHead || record.authorizationSnapshot!==await snapshotId(provider,state) || state.root?.householdId!==scope.id) throw Error('INVALID_AUTHORITY');
  const verified=await verifyAuthority(state,pin,provider);
  let recipient=null;if(storage.householdRecipient){for(const item of [...state.events].reverse()){if(!item.admission&&!item.ownDevice&&item.rotation?.grant?.version!==2)continue;const hash=await digest(provider,'event',item.event),found=await storage.householdRecipient.findByEvent(scope.id,hash);if(!found.ok)throw Error('INVALID_AUTHORITY');if(found.value){const {verifyRecipientInstallation}=await import('./recipient-load.mjs');await sodium.ready;recipient=await verifyRecipientInstallation({storage,scope,pin,provider,sodium,state,eventHash:hash});break;}}}
- const publicPrefix=item=>recipient&&recipient.parent.events.some(old=>JSON.stringify(canonical(old))===JSON.stringify(canonical(item)));
+ const setEvent=[...state.events].reverse().find(item=>item.admission?.manifest.version===5);
+ let setParent=null;
+ if(setEvent){
+  const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
+  const checked=await readInstalledHouseholdDocumentSet({sodium,storage,scope,pin,provider,operationId:setEvent.admission.operationId});
+  const retained=checked.state.events.at(-1);
+  if(JSON.stringify(canonical(retained))!==JSON.stringify(canonical(setEvent)))throw Error('INVALID_AUTHORITY');
+  if(checked.mode==='recipient')setParent=checked.parentState;
+ }
+ const publicPrefix=item=>(recipient?.parent.events.some(old=>JSON.stringify(canonical(old))===JSON.stringify(canonical(item)))||
+   setParent?.events.some(old=>JSON.stringify(canonical(old))===JSON.stringify(canonical(item))));
  for(const item of state.events) if(item.ownDevice){
   const eventHash=await digest(provider,'event',item.event);
-  if(recipient&&(recipient.installation.nextAuthority.acceptedParent===eventHash||publicPrefix(item)))continue;
+  if(publicPrefix(item)||recipient?.installation.nextAuthority.acceptedParent===eventHash)continue;
   const saved=await storage.readHouseholdOwnDeviceRelease(scope,item.event.proposalId,false);
   if(!saved.ok||!saved.value||saved.value.next.acceptedParent!==eventHash||
      saved.value.documentId!==item.event.subject.documentId||saved.value.guardId!==item.ownDevice.guard.guardId||
@@ -206,7 +224,14 @@ async function load(storage,scope,pin,provider) {
   } catch {throw Error('INVALID_AUTHORITY');}
  }
  for(const item of state.events) if(item.admission) {
-  if(recipient&&(item.event.parentHead===recipient.parent.activeHead&&await digest(provider,'event',item.event)===recipient.installation.nextAuthority.acceptedParent||publicPrefix(item)))continue;
+  if(item===setEvent||publicPrefix(item)||recipient&&item.event.parentHead===recipient.parent.activeHead&&
+     await digest(provider,'event',item.event)===recipient.installation.nextAuthority.acceptedParent)continue;
+  if(item.admission.manifest.version===5){
+   const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
+   const checked=await readInstalledHouseholdDocumentSet({sodium,storage,scope,pin,provider,operationId:item.admission.operationId});
+   if(JSON.stringify(canonical(checked.state.events.at(-1)))!==JSON.stringify(canonical(item)))throw Error('INVALID_AUTHORITY');
+   continue;
+  }
   const saved=await storage.getProjectionPublication(scope.id,item.admission.operationId);
   if(!saved.ok || !saved.value) throw Error('INVALID_AUTHORITY');
   const p=saved.value, eventHash=await digest(provider,'event',item.event);
@@ -323,6 +348,9 @@ export async function checkoutPolicyHead({storage,scope,pin,provider,LoroDoc,adu
 /** Resolve only from a pinned and replayed selected head, never from runtime options. */
 export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorDevice) {
  const {record,state,nodes}=await load(storage,scope,pin,provider), selected=nodes.get(state.activeHead);
+ if(state.events.some(item=>item.admission?.manifest.version===5&&item.admission.grant.admissionEventHash===state.activeHead)){
+  throw Error('UNSUPPORTED_VERSION');
+ }
  const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();
  if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
  const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};

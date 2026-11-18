@@ -10,6 +10,8 @@ export type RecipeCatalogBinding = {
   epochId: Id;
 };
 export const MAX_SELECTED_CHILDREN = 15;
+export const MAX_SELECTED_SOURCE_BYTES = 1024 * 1024;
+export const MAX_SELECTED_SET_BYTES = 8 * 1024 * 1024;
 
 export type SelectedSourceDocument = {documentId:Id;revision:number;bytes:Bytes};
 export type SelectedRecipeSource = SelectedSourceDocument & {

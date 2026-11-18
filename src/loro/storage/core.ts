@@ -4,8 +4,8 @@ import {readContinuityHead} from './continuity-head.ts';
 import type {LocalKeyRecord,ReadyMasterCatalog} from './local-keys.ts';
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
-import type { ProjectionPublication, ProjectionAtomicStorage } from '../contracts/projection.ts';
-import {MAX_SELECTED_CHILDREN} from '../contracts/runtime-storage.ts';
+import type { ProjectionPublication, ProjectionAtomicStorage, ProjectionDocumentSet } from '../contracts/projection.ts';
+import {MAX_SELECTED_CHILDREN, MAX_SELECTED_SET_BYTES, MAX_SELECTED_SOURCE_BYTES} from '../contracts/runtime-storage.ts';
 import type { RecipeCatalogBinding, RecipePublication, RuntimeStorageReader, SelectedHouseholdSources, SelectedRecipeSource, ShoppingRecipeSourceReceipt } from '../contracts/runtime-storage.ts';
 import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
@@ -150,6 +150,9 @@ const validateRecord = (k: string, v: any) => {
     case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': case 'personal-admission-release': valid = typeof v === 'string' && v.length > 0; break;
     case 'document-owner': valid = typeof v==='string' && !!v; break;
     case 'document': valid = fields(v,['bytes','revision']) && v.bytes instanceof Uint8Array && revision(v.revision); break;
+    case 'projection-document-set': valid=fields(v,['manifestId','operationId','catalog']) &&
+      validId(v.manifestId) && validId(v.operationId) && denseArray(v.catalog,entry=>fields(entry,['recipeId','documentId']) &&
+        validId(entry.recipeId) && isRecipeDocumentId(entry.documentId)); break;
     case 'recipe-catalog': valid = fields(v,['binding','recipeId','sourceRevision','documentId','effectId','objectId']) &&
       validRecipeCatalogBinding(v.binding) && [v.recipeId,v.documentId,v.effectId,v.objectId].every(validId) &&
       (v.sourceRevision===null || revision(v.sourceRevision)); break;
@@ -176,13 +179,82 @@ function validRecipeCatalogBinding(binding:unknown):binding is RecipeCatalogBind
 const validBranchDocument = (x: unknown): x is BranchDocument => fields(x,['head','documentId']) && validId(x.head) && validId(x.documentId);
 const validBranchRevision = (x: unknown): x is BranchRevision => fields(x,['head','documentId','revision']) && validId(x.head) && validId(x.documentId) && (x.revision===null || revision(x.revision));
 const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
-function projectionKey(x: unknown,allowUnboundV2=false): string | null {
+function projectionSetValid(x:Record<string,any>,set:unknown):set is ProjectionDocumentSet {
+ if (!fields(set,['version','mode','recipientSignature','catalog','seeds','childKeys']) || set.version!==1 ||
+     !['publisher','recipient'].includes(set.mode) || !Array.isArray(x.documents) || !Array.isArray(x.guardIds) ||
+     (set.mode==='recipient'
+       ? x.guardIds.length!==1 || x.pendingEdits?.length!==0 ||
+         !(set.recipientSignature instanceof Uint8Array) || set.recipientSignature.length!==64
+       : set.recipientSignature!==null) ||
+     !denseArray(set.catalog,entry=>fields(entry,['recipeId','documentId']) && validId(entry.recipeId) &&
+       isRecipeDocumentId(entry.documentId)) || set.catalog.length!==x.documents.length-1 ||
+     !denseArray(set.seeds,entry=>fields(entry,['documentId','seed','policySeed']) && validId(entry.documentId) &&
+       fields(entry.seed,['seedId','identities']) && validId(entry.seed.seedId) &&
+       denseArray(entry.seed.identities,identity=>fields(identity,['effectId','commandId']) && validId(identity.effectId) &&
+         validId(identity.commandId)) && entry.seed.identities.length<=256 &&
+       (entry.policySeed===null || fields(entry.policySeed,['bundle','bundleHash']) && object(entry.policySeed.bundle) &&
+         validId(entry.policySeed.bundleHash) && denseArray(entry.policySeed.bundle.policies,
+           record=>fields(record,['policy','policyHash','approvals']) && validId(record.policyHash) &&
+             object(record.policy) && Array.isArray(record.approvals)) &&
+         entry.policySeed.bundle.policies.length<=64)) || set.seeds.length!==x.documents.length ||
+     !denseArray(set.childKeys,validLocalRecord) || set.childKeys.length!==set.catalog.length ||
+     !fields(x.manifest,['id','bytes']) || !(x.manifest.bytes instanceof Uint8Array) || x.manifest.bytes.length>64*1024) return false;
+ let manifest;
+ try {manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(x.manifest.bytes))} catch {return false;}
+ if (manifest?.version!==5 || manifest.admissionEventHash!==x.admissionEventHash ||
+     manifest.newEpochId!==x.epochId || manifest.parentHead!==x.expectedAuthority?.record?.acceptedParent ||
+     manifest.authorizationSnapshot!==x.expectedAuthority?.record?.authorizationSnapshot ||
+     x.nextAuthority?.acceptedParent!==x.admissionEventHash || manifest.catalog?.targetRevision!==set.catalog.length ||
+     !Array.isArray(manifest.entries) || manifest.entries.length!==set.seeds.length) return false;
+ const epochSlots=new Set([x.epochId]), ops=new Set([x.localKey?.record?.operationId]);
+ const seeds=new Set(), effects=new Set(), commands=new Set();
+ for (const [index,entry] of set.seeds.entries()) {
+   const doc=x.documents[index],declared=manifest.entries[index];
+   if (!doc || doc.documentId!==entry.documentId || doc.generation!==manifest.newGeneration ||
+       declared?.documentId!==entry.documentId || declared.seedId!==entry.seed.seedId ||
+       declared.policyBundleHash!==(entry.policySeed?.bundleHash??null) || seeds.has(entry.seed.seedId)) return false;
+   seeds.add(entry.seed.seedId);
+   for (const identity of entry.seed.identities) {
+     if (effects.has(identity.effectId)||commands.has(identity.commandId)) return false;
+     effects.add(identity.effectId);commands.add(identity.commandId);
+   }
+   if (index===0) {
+     if (declared.recipeId!==null || doc.documentId!==manifest.newDocumentId) return false;
+     continue;
+   }
+   const row=set.catalog[index-1], local=set.childKeys[index-1];
+   const root=x.localKey?.record, identity=local.identity;
+   if (row.documentId!==doc.documentId || row.recipeId!==declared.recipeId ||
+       (index>1 && set.catalog[index-2].recipeId>=row.recipeId) || !root ||
+       local.masterId!==root.masterId || !sameRecord(identity.scope,root.identity.scope) ||
+       identity.deviceId!==root.identity.deviceId || identity.purpose!=='data' ||
+       epochSlots.has(identity.epochId) || ops.has(local.operationId)) return false;
+   epochSlots.add(identity.epochId);ops.add(local.operationId);
+ }
+ return true;
+}
+function projectionKey(x: unknown,allowUnboundV2=false,allowSet=false): string | null {
+ if(object(x)&&Object.hasOwn(x,'documentSet')){
+   const {documentSet,...rest}=x;
+   if (!projectionSetValid(rest,documentSet) || ['seed','policySeed','singleRecipient','recovery','sourceDocument'].some(name=>Object.hasOwn(rest,name))) return null;
+   const {guardIds}=rest;
+   if (!denseArray(guardIds,validId) || !guardIds.length || guardIds.length>128 ||
+       guardIds.some((value:string,index:number)=>index>0&&guardIds[index-1]>=value) ||
+       projectionKey(rest,false,true)===null) return null;
+   const encoded=JSON.stringify(projectionCanonical(x));
+   return new TextEncoder().encode(encoded).length<=16*1024*1024?encoded:null;
+ }
+ if(!allowSet&&object(x)&&object(x.manifest)&&x.manifest.bytes instanceof Uint8Array){
+   try{if(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(x.manifest.bytes))?.version===5)return null}catch{}
+ }
  if(object(x)&&Object.hasOwn(x,'policySeed')){const {policySeed,...rest}=x;if(!fields(policySeed,['bundle','bundleHash'])||!object(policySeed.bundle)||!validId(policySeed.bundleHash)||!rest.seed||!rest.sourceDocument||!rest.manifest||!(rest.manifest.bytes instanceof Uint8Array))return null;let m:any;try{m=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(rest.manifest.bytes))}catch{return null}const b:any=policySeed.bundle;if(!fields(b,['version','scopeId','sourceHead','sourceDocumentId','sourceRevision','seedId','peerId','snapshotHash','entries','policies'])||![2,3,4].includes(b.version)||m.version!==b.version||m.policyBundleHash!==policySeed.bundleHash||m.sourceRevision!==b.sourceRevision||m.sourceDocument!==b.sourceDocumentId||b.sourceDocumentId!==rest.sourceDocument.documentId||b.sourceRevision!==rest.sourceDocument.revision||b.sourceHead!==rest.expectedAuthority?.record?.acceptedParent||b.scopeId!==rest.expectedAuthority?.scope?.id||b.seedId!==rest.seed.seedId||m.schemaVersion!==`registry-seed-v${b.version}|${b.seedId}|${b.peerId}`||!validId(b.snapshotHash)||!denseArray(b.entries,(e:any)=>(b.version===2?fields(e,['effectId','policyHashes']):fields(e,['effectId','policyHashes','incomplete'])&&typeof e.incomplete==='boolean')&&validId(e.effectId)&&denseArray(e.policyHashes,validId)&&(e.policyHashes.length>0||b.version>=3&&e.incomplete===true)&&e.policyHashes.length<=64&&e.policyHashes.every((h:string,i:number)=>!i||e.policyHashes[i-1]<h))||b.entries.length>256||!denseArray(b.policies,(p:any)=>fields(p,['policy','policyHash','approvals'])&&object(p.policy)&&validId(p.policyHash)&&Array.isArray(p.approvals))||b.policies.length>64||!Array.isArray(rest.seed.identities)||JSON.stringify(b.entries.map((e:any)=>e.effectId))!==JSON.stringify(rest.seed.identities.map((e:any)=>e.effectId).sort())||projectionKey(rest,true)===null)return null;const encoded=JSON.stringify(projectionCanonical(x));return new TextEncoder().encode(encoded).length<=2500000?encoded:null;}
  if(object(x)&&Object.hasOwn(x,'seed')){const {seed,...rest}=x;if(!fields(seed,['seedId','identities'])||!validId(seed.seedId)||!denseArray(seed.identities,(i:any)=>fields(i,['commandId','effectId'])&&validId(i.commandId)&&validId(i.effectId))||seed.identities.length>256||new Set(seed.identities.map((i:any)=>i.commandId)).size!==seed.identities.length||new Set(seed.identities.map((i:any)=>i.effectId)).size!==seed.identities.length||projectionKey(rest,allowUnboundV2)===null)return null;return JSON.stringify(projectionCanonical(x));}
  if(object(x)&&Object.hasOwn(x,'singleRecipient')){const {singleRecipient,...rest}=x;if(singleRecipient!==true||!Array.isArray(rest.packages)||rest.packages.length!==0||Object.hasOwn(rest,'guardId')||Object.hasOwn(rest,'guardIds')||Object.hasOwn(rest,'recovery')||projectionKey({...rest,guardIds:['local-only-placeholder'],packages:[{id:'local-only-placeholder',recipientDevice:'local-only-placeholder',bytes:new Uint8Array([0])}]},allowUnboundV2)===null)return null;return JSON.stringify(projectionCanonical(x));}
  if(object(x)&&Object.hasOwn(x,'recovery')){const r=x.recovery,{recovery,...rest}=x;if(!fields(r,['owner','generation','bindingHash','claimHash','tokenCommitment','sealed'])||!validId(r.owner)||!revision(r.generation)||![r.bindingHash,r.claimHash,r.tokenCommitment].every(validId)||typeof r.sealed!=='string'||r.sealed.length>16384||!/^[0-9a-f]+$/.test(r.sealed)||projectionKey(rest,allowUnboundV2)===null)return null;return JSON.stringify(projectionCanonical(x));}
  if(!allowUnboundV2&&object(x)&&object(x.manifest)&&x.manifest.bytes instanceof Uint8Array){try{if([2,3,4].includes(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(x.manifest.bytes))?.version))return null}catch{}}
- if (!(fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || (fields(x,['version','operationId','guardId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId)) || (fields(x,['version','operationId','guardId','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision)) || (fields(x,['version','operationId','guardIds','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && denseArray(x.guardIds,validId) && x.guardIds.length>0 && x.guardIds.length<=128 && x.guardIds.every((v:string,i:number)=>!i || x.guardIds[i-1]<v) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && (x.sourceDocument.revision===null || revision(x.sourceDocument.revision)))) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
+ const setFields=['version','operationId','guardIds','expectedAuthority','nextAuthority','admissionEventHash',
+   'grantHash','manifest','epochId','documents','packages','localKey','pendingEdits'];
+ if (!(allowSet&&fields(x,setFields) || fields(x,['version','operationId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) || (fields(x,['version','operationId','guardId','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId)) || (fields(x,['version','operationId','guardId','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && validId(x.guardId) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && revision(x.sourceDocument.revision)) || (fields(x,['version','operationId','guardIds','sourceDocument','expectedAuthority','nextAuthority','admissionEventHash','grantHash','manifest','epochId','documents','packages','localKey','pendingEdits']) && denseArray(x.guardIds,validId) && x.guardIds.length>0 && x.guardIds.length<=128 && x.guardIds.every((v:string,i:number)=>!i || x.guardIds[i-1]<v) && fields(x.sourceDocument,['documentId','revision']) && validId(x.sourceDocument.documentId) && (x.sourceDocument.revision===null || revision(x.sourceDocument.revision)))) || x.version!==1 || ![x.operationId,x.admissionEventHash,x.grantHash,x.epochId].every(validId)) return null;
  const a=x.expectedAuthority, n=x.nextAuthority, m=x.manifest;
  if (!fields(x.localKey,['record','catalog']) || !validLocalRecord(x.localKey.record) || !validMasterCatalog(x.localKey.catalog) || x.localKey.record.masterId!==x.localKey.catalog.id || x.localKey.record.identity.purpose!=='data' || x.localKey.record.identity.scope.kind!=='household' || x.localKey.record.identity.scope.id!==a?.scope?.id || x.localKey.record.identity.epochId!==x.epochId) return null;
  if (!fields(a,['version','scope','record']) || a.version!==2 || !validPairingScope(a.scope) || a.scope.kind!=='household' || !fields(a.record,['revision','acceptedParent','authorizationSnapshot']) || !revision(a.record.revision) || a.record.revision>=Number.MAX_SAFE_INTEGER || ![a.record.acceptedParent,a.record.authorizationSnapshot].every(validId) || !validatePairingAuthority(n).ok || n.scope.kind!==a.scope.kind || n.scope.id!==a.scope.id || n.revision!==a.record.revision+1 || !fields(m,['id','bytes']) || !validId(m.id) || !(m.bytes instanceof Uint8Array) || !m.bytes.length) return null;
@@ -425,6 +497,38 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const scope=p.expectedAuthority.scope.id;
     const authority=await tx.get(key('pairing-authority','household',scope));
     if(!authority || authority.scope.kind!=='household' || authority.scope.id!==scope || authority.revision<p.nextAuthority.revision || (authority.revision===p.nextAuthority.revision && JSON.stringify(projectionCanonical(authority))!==JSON.stringify(projectionCanonical(p.nextAuthority)))) return corrupt();
+    if(p.documentSet){
+      if(projectionKey(p)!==inputKey) return corrupt();
+      const set=p.documentSet,head=p.nextAuthority.acceptedParent;
+      const selectedIds=new Set(set.catalog.map(entry=>entry.documentId));
+      const catalogPrefix=key('recipe-catalog',scope,head).slice(0,-1)+',';
+      const ownerPrefix=key('document-owner',scope).slice(0,-1)+',';
+      for(const slot of await tx.keys()){
+        if(slot.startsWith(catalogPrefix)) return corrupt();
+        if(!slot.startsWith(ownerPrefix)) continue;
+        const documentId=JSON.parse(slot)[2];
+        if(isRecipeDocumentId(documentId)&&!selectedIds.has(documentId)&&await tx.get(slot)===head) return corrupt();
+      }
+      if(!sameRecord(await tx.get(key('projection-document-set',scope,p.nextAuthority.acceptedParent)),
+        {manifestId:p.manifest.id,operationId:p.operationId,catalog:set.catalog})) return corrupt();
+      for(const entry of set.seeds){
+        if(!sameRecord(await tx.get(key('projection-seed',scope,entry.documentId)),entry.seed) ||
+           !sameRecord((await tx.get(key('projection-policy-seed',scope,entry.documentId)))??null,entry.policySeed)) return corrupt();
+        for(const identity of entry.seed.identities){
+          if(await tx.get(key('projection-seed-command',scope,entry.documentId,identity.commandId))!==entry.seed.seedId ||
+             await tx.get(key('projection-seed-effect',scope,entry.documentId,identity.effectId))!==entry.seed.seedId) return corrupt();
+        }
+      }
+      for(const entry of set.seeds){
+        for(const policy of (entry.policySeed?.bundle as any)?.policies??[]){
+          if(!sameRecord(await tx.get(key('disclosure-policy-archive',scope,policy.policyHash)),policy)) return corrupt();
+        }
+      }
+      for(const record of set.childKeys){
+        try{if(!sameRecord(await findLocalKey(tx,record.operationId,record.identity),record)) return corrupt();}
+        catch{return corrupt();}
+      }
+    }
     if(p.policySeed){const sidecar=await tx.get(key('projection-policy-seed',scope,p.documents[0]?.documentId));if(!sidecar||JSON.stringify(projectionCanonical(sidecar))!==JSON.stringify(projectionCanonical(p.policySeed)))return corrupt()}
     if(p.seed){const documentId=p.documents[0]?.documentId,seed=await tx.get(key('projection-seed',scope,documentId));if(!seed||JSON.stringify(projectionCanonical(seed))!==JSON.stringify(projectionCanonical(p.seed)))return corrupt();for(const x of p.seed.identities)if(await tx.get(key('projection-seed-command',scope,documentId,x.commandId))!==p.seed.seedId||await tx.get(key('projection-seed-effect',scope,documentId,x.effectId))!==p.seed.seedId)return corrupt();}
     if(p.recovery && await tx.get(key('recovery-challenge-consumed',scope,p.recovery.claimHash))!==inputKey)return corrupt();
@@ -437,8 +541,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if (!(manifest instanceof Uint8Array) || !sameBytes(manifest,p.manifest.bytes)) return corrupt();
     for (const d of p.documents) {
       const doc=await tx.get(key('document',scope,d.documentId)), meta=await tx.get(key('projection-document',scope,d.documentId));
-      // A document may have advanced after publication; its immutable association remains.
-      if (!doc || await tx.get(key('document-owner',scope,d.documentId))!==p.nextAuthority.acceptedParent || !meta || meta.generation!==d.generation || meta.operationId!==p.operationId || (doc.revision===0 && !sameBytes(doc.bytes,d.bytes))) return corrupt();
+      // Legacy documents can advance after publication. The candidate set remains frozen until routing is enabled.
+      if (!doc || p.documentSet&&doc.revision!==0 || await tx.get(key('document-owner',scope,d.documentId))!==p.nextAuthority.acceptedParent || !meta || meta.generation!==d.generation || meta.operationId!==p.operationId || (doc.revision===0 && !sameBytes(doc.bytes,d.bytes))) return corrupt();
     }
     for (const pkg of p.packages) {
       const bytes=await tx.get(key('projection-package',scope,pkg.id)), out=await tx.get(key('projection-outbox',scope,p.operationId,pkg.id));
@@ -455,11 +559,23 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await this.checkProjection(tx,old.input,old.inputKey); return {ok:true,value:snapshot(old.input)};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
-  private async requireSealedFilePublication(tx:Tx,expectedAuthority:LocalCommit['expectedAuthority'],operationId:string,recipientDevice:string){await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id;await this.requireSingleHouseholdDocument(tx,scope,[expectedAuthority.record!.acceptedParent]);const old=await tx.get(key('projection-publication',scope,operationId));if(!old||old.input.expectedAuthority.scope.id!==scope||old.input.operationId!==operationId||old.input.nextAuthority.acceptedParent!==expectedAuthority.record?.acceptedParent||!old.input.packages.some((p:any)=>p.recipientDevice===recipientDevice))conflict();await this.checkProjection(tx,old.input,old.inputKey)}
+  private async requireSealedFilePublication(tx:Tx,expectedAuthority:AuthorityExpectation,operationId:string,recipientDevice:string) {
+    await this.requireAuthority(tx,expectedAuthority);
+    const scope=expectedAuthority.scope.id,old=await tx.get(key('projection-publication',scope,operationId));
+    if(!old||old.input.expectedAuthority.scope.id!==scope||old.input.operationId!==operationId||
+      old.input.nextAuthority.acceptedParent!==expectedAuthority.record?.acceptedParent||
+      !old.input.packages.some((p:any)=>p.recipientDevice===recipientDevice)) conflict();
+    if(old.input.documentSet){
+      if(old.input.documentSet.mode!=='publisher') conflict();
+    }else{
+      await this.requireSingleHouseholdDocument(tx,scope,[expectedAuthority.record!.acceptedParent]);
+    }
+    await this.checkProjection(tx,old.input,old.inputKey);
+  }
   async readHouseholdSealedFile(expectedAuthority:LocalCommit['expectedAuthority'],operationId:string,recipientDevice:string){expectedAuthority=snapshot(expectedAuthority);if(!validId(operationId)||!validId(recipientDevice))return fail('MALFORMED');try{return await this.run(false,async tx=>{await this.requireSealedFilePublication(tx,expectedAuthority,operationId,recipientDevice);return {ok:true as const,value:snapshot((await tx.get(key('household-sealed-file',expectedAuthority.scope.id,operationId,recipientDevice)))??null)}})}catch(e){return fail(mapError(e))}}
   async commitHouseholdSealedFile(expectedAuthority:LocalCommit['expectedAuthority'],operationId:string,recipientDevice:string,record:any){expectedAuthority=snapshot(expectedAuthority);record=snapshot(record);if(!validId(operationId)||!validId(recipientDevice)||!fields(record,['version','digest','bytes','signature'])||record.version!==1||typeof record.digest!=='string'||!/^[0-9a-f]{64}$/.test(record.digest)||!(record.bytes instanceof Uint8Array)||record.bytes.length<48||record.bytes.length>16*1024*1024+48||!(record.signature instanceof Uint8Array)||record.signature.length!==64)return fail('MALFORMED');try{return await this.run(true,async tx=>{await this.requireSealedFilePublication(tx,expectedAuthority,operationId,recipientDevice);const slot=key('household-sealed-file',expectedAuthority.scope.id,operationId,recipientDevice),old=await tx.get(slot);if(old!==undefined){if(old.digest!==record.digest)conflict();return {ok:true as const,value:{record:snapshot(old),replayed:true}}}await tx.put(slot,record);return {ok:true as const,value:{record:snapshot(record),replayed:false}}})}catch(e){return fail(mapError(e))}}
-  async publishProjection(input:ProjectionPublication, rotation?:RotationSourceGuard):Promise<Result<{replayed:boolean},StorageError>> {
-    const inputKey=projectionKey(input); if(inputKey===null)return {ok:false,error:'MALFORMED'}; input=snapshot(input); rotation=rotation&&snapshot(rotation);
+  async publishProjection(input:ProjectionPublication, rotation?:RotationSourceGuard, selectedSource?:SelectedHouseholdSources):Promise<Result<{replayed:boolean},StorageError>> {
+    const inputKey=projectionKey(input); if(inputKey===null)return {ok:false,error:'MALFORMED'}; input=snapshot(input); rotation=rotation&&snapshot(rotation); selectedSource=selectedSource&&snapshot(selectedSource);
     try { return await this.run(true,async tx=>{
       const scope=input.expectedAuthority.scope.id, op=key('projection-publication',scope,input.operationId), old=await tx.get(op);
       if(old) { if(old.inputKey!==inputKey) conflict(); await this.checkProjection(tx,old.input,inputKey); return {ok:true,value:{replayed:true}}; }
@@ -468,7 +584,25 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await this.requireAuthority(tx,input.expectedAuthority);
       const authority=await tx.get(key('pairing-authority','household',scope));
       if(!authority || authority.revision!==input.expectedAuthority.record!.revision) conflict();
-      await this.requireSingleHouseholdDocument(tx,scope,[authority.acceptedParent,input.nextAuthority.acceptedParent]);
+      if(input.documentSet){
+        if(rotation || (input.documentSet.mode==='publisher')!==!!selectedSource) conflict();
+        await this.requireSingleHouseholdDocument(tx,scope,[input.nextAuthority.acceptedParent]);
+        if(await tx.get(key('projection-document-set',scope,input.nextAuthority.acceptedParent))!==undefined) conflict();
+        if(selectedSource){
+          if(!sameRecord(selectedSource.expectedAuthority,input.expectedAuthority) ||
+            !this.matchesRecipeCatalog(selectedSource.binding,input.expectedAuthority)) conflict();
+          const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(input.manifest.bytes));
+          if(selectedSource.catalogRevision!==manifest.catalog.sourceRevision ||
+            selectedSource.binding.sourceDocumentId!==manifest.entries[0].sourceDocumentId ||
+            (selectedSource.root?.revision??null)!==manifest.entries[0].sourceRevision ||
+            manifest.entries.slice(1).some((entry:any)=>!selectedSource!.entries.some(source=>
+              source.recipeId===entry.recipeId&&source.documentId===entry.sourceDocumentId&&source.revision===entry.sourceRevision))) conflict();
+          await this.requireSelectedHouseholdSources(tx,selectedSource);
+        }
+      }else{
+        if(selectedSource) conflict();
+        await this.requireSingleHouseholdDocument(tx,scope,[authority.acceptedParent,input.nextAuthority.acceptedParent]);
+      }
       if(rotation) {
         const same=(a:unknown,b:unknown)=>JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
         const sourceDocument=input.sourceDocument;
@@ -495,10 +629,40 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(input.policySeed&&await tx.get(key('projection-policy-seed',scope,input.documents[0]?.documentId))!==undefined)conflict();
       if(input.seed){if(input.documents.length!==1||await tx.get(key('projection-seed',scope,input.documents[0].documentId))!==undefined)conflict();for(const x of input.seed.identities)if(await tx.get(key('projection-seed-command',scope,input.documents[0].documentId,x.commandId))!==undefined||await tx.get(key('projection-seed-effect',scope,input.documents[0].documentId,x.effectId))!==undefined)conflict();}
       const installed=await installLocalKey(tx,input.localKey.record,input.localKey.catalog);
+      if(input.documentSet&&installed.replayed) conflict();
       if(JSON.stringify(projectionCanonical(installed.record))!==JSON.stringify(projectionCanonical(input.localKey.record))) conflict();
       await tx.put(key('projection-manifest',scope,input.manifest.id),copy(input.manifest.bytes));
       if(input.policySeed)await tx.put(key('projection-policy-seed',scope,input.documents[0].documentId),input.policySeed);
       if(input.seed){const d=input.documents[0].documentId;await tx.put(key('projection-seed',scope,d),input.seed);for(const x of input.seed.identities){await tx.put(key('projection-seed-command',scope,d,x.commandId),input.seed.seedId);await tx.put(key('projection-seed-effect',scope,d,x.effectId),input.seed.seedId);}}
+      if(input.documentSet){
+        for(const record of input.documentSet.childKeys){
+          if((await installLocalKey(tx,record,input.localKey.catalog)).replayed) conflict();
+        }
+        this.fault?.('projection-set-keys');
+        for(const {documentId,seed,policySeed} of input.documentSet.seeds){
+          const seedSlot=key('projection-seed',scope,documentId),policySlot=key('projection-policy-seed',scope,documentId);
+          if(await tx.get(seedSlot)!==undefined || await tx.get(policySlot)!==undefined) conflict();
+          await tx.put(seedSlot,seed);
+          if(policySeed){
+            await tx.put(policySlot,policySeed);
+            for(const policy of (policySeed.bundle as any).policies??[]){
+              const slot=key('disclosure-policy-archive',scope,policy.policyHash),previous=await tx.get(slot);
+              if(previous===undefined) await tx.put(slot,policy);
+              else if(!sameRecord(previous,policy)) conflict();
+            }
+          }
+          for(const identity of seed.identities){
+            const command=key('projection-seed-command',scope,documentId,identity.commandId);
+            const effect=key('projection-seed-effect',scope,documentId,identity.effectId);
+            if(await tx.get(command)!==undefined || await tx.get(effect)!==undefined) conflict();
+            await tx.put(command,seed.seedId);
+            await tx.put(effect,seed.seedId);
+          }
+        }
+        await tx.put(key('projection-document-set',scope,input.nextAuthority.acceptedParent),
+          {manifestId:input.manifest.id,operationId:input.operationId,catalog:input.documentSet.catalog});
+        this.fault?.('projection-set-catalog');
+      }
       for(const d of input.documents) { await tx.put(key('document-owner',scope,d.documentId),input.nextAuthority.acceptedParent); await tx.put(key('document',scope,d.documentId),{bytes:copy(d.bytes),revision:0}); await tx.put(key('projection-document',scope,d.documentId),{generation:d.generation,operationId:input.operationId}); }
       for(const p of input.packages) { await tx.put(key('projection-package',scope,p.id),copy(p.bytes)); await tx.put(key('projection-outbox',scope,input.operationId,p.id),{packageId:p.id,recipientDevice:p.recipientDevice}); }
       for(const p of input.pendingEdits) await tx.put(key('projection-pending',scope,input.operationId,p.scopeId,p.operationId),inputKey);
@@ -506,6 +670,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(input.recovery)await tx.put(key('recovery-challenge-consumed',scope,input.recovery.claimHash),inputKey);
       await tx.put(key('pairing-authority','household',scope),input.nextAuthority);
       await tx.put(op,{inputKey,input});
+      if(input.documentSet) this.fault?.('projection-set-authority');
       return {ok:true,value:{replayed:false}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
@@ -852,7 +1017,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const prefix=key('recipe-catalog',scopeId,branchHead);
     const keys=target ? [] : await tx.keys();
     const slots=target ? [key('recipe-catalog',scopeId,branchHead,target.recipeId)] : keys.filter(k=>k.startsWith(prefix.slice(0,-1)+','));
-    if(maxChildren!==undefined && slots.length>maxChildren) throw new StorageFailure('TOO_LARGE');
+    let sourceBytes=source?.bytes.length??0;
+    if(maxChildren!==undefined && (slots.length>maxChildren || sourceBytes>MAX_SELECTED_SOURCE_BYTES)) {
+      throw new StorageFailure('TOO_LARGE');
+    }
     const entries:SelectedRecipeSource[]=[];
     for (const slot of slots.sort()) {
       const row=await tx.get(slot);
@@ -869,6 +1037,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const child=await this.checkoutDocument(tx,scopeId,{head:branchHead,documentId:row.documentId});
       const proof=await this.validatedDisclosureSource(tx,scopeId,row.effectId);
       if (!child || !proof || proof.objectId!==row.objectId || proof.documentId!==row.documentId || proof.checkpoint!==branchHead) return corrupt();
+      sourceBytes+=child.bytes.length+proof.envelope.length;
+      if(maxChildren!==undefined && (child.bytes.length>MAX_SELECTED_SOURCE_BYTES || sourceBytes>MAX_SELECTED_SET_BYTES)) {
+        throw new StorageFailure('TOO_LARGE');
+      }
       entries.push({recipeId:row.recipeId,documentId:row.documentId,effectId:row.effectId,sourceRevision:row.sourceRevision,revision:child.revision,
         bytes:child.bytes,objectId:row.objectId,envelope:proof.envelope});
     }

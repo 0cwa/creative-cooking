@@ -10,6 +10,12 @@ const hex=bytes=>Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
 const equal=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 const canonical=x=>x instanceof Uint8Array?{__bytes:Array.from(x)}:Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 function revive(x){if(Array.isArray(x))return x.map(revive);if(!x||typeof x!=='object')return x;if(Object.keys(x).length===1&&Array.isArray(x.__bytes)&&x.__bytes.every(v=>Number.isInteger(v)&&v>=0&&v<=255))return Uint8Array.from(x.__bytes);return Object.fromEntries(Object.entries(x).map(([k,v])=>[k,revive(v)]))}
+export function encodeHouseholdDocumentSetFile(release){
+ const bytes=encoder.encode(JSON.stringify(canonical({version:3,release})));
+ if(bytes.length>MAX){bytes.fill(0);throw Error('TOO_LARGE')}
+ return bytes;
+}
+
 /** Export only a committed recipient-specific publication, encrypted to the key
  * from the sponsor's own completed independently pinned ceremony. */
 export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessionStore,keys,operationId,recipientDevice,LoroDoc,kind='admission'}){
@@ -19,13 +25,23 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
   if(!saved.ok||!saved.value)throw Error('MISSING_PUBLICATION');
   const p=saved.value;
   if(current.activeHead!==p.nextAuthority.acceptedParent)throw Error('STALE_AUTHORITY');
+  const set=kind==='document-set';
+  if(set!==!!p.documentSet)throw Error('UNSUPPORTED_VERSION');
   const rotation=kind==='revocation'||kind==='recovery',item=current.state.events.find(x=>rotation ?
     x.rotation?.grant?.version===2&&x.rotation.operationId===operationId&&(x.event.kind==='recoverDevice')===(kind==='recovery') :
     x.admission?.operationId===operationId&&x.event?.kind==='inviteAdult');
   const transition=rotation?item?.rotation:item?.admission;
   if(!transition)throw Error('INVALID_AUTHORITY');
-  const authorized=await resolveRuntimeAuthority(storage,sc,pin,provider,transition.localDeviceId);
-  if(authorized.scope.branchHead!==current.activeHead||authorized.expectedAuthority.record.revision!==current.revision)throw Error('STALE_AUTHORITY');
+  let expectedAuthority;
+  if(set){
+   const r=p.nextAuthority;
+   if(r.revision!==current.revision||p.documentSet.mode!=='publisher')throw Error('STALE_AUTHORITY');
+   expectedAuthority={version:2,scope:sc,record:{revision:r.revision,acceptedParent:r.acceptedParent,authorizationSnapshot:r.authorizationSnapshot}};
+  }else{
+   const authorized=await resolveRuntimeAuthority(storage,sc,pin,provider,transition.localDeviceId);
+   if(authorized.scope.branchHead!==current.activeHead||authorized.expectedAuthority.record.revision!==current.revision)throw Error('STALE_AUTHORITY');
+   expectedAuthority=authorized.expectedAuthority;
+  }
   const verified=await verifyAuthority(current.state,pin,provider),parent=verified.nodes.get(item.event.parentHead);
   const {context,proof}=rotation?await revocationPackage({provider,parent,item,recipientDevice}):
     await admissionPackage({sodium,provider,parent,authorizationSnapshot:p.expectedAuthority.record.authorizationSnapshot,item,recipientDevice});
@@ -37,21 +53,27 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
    if(local.hash!==context.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
   }
   const packets=p.packages.filter(x=>x.recipientDevice===recipientDevice);
-  if(packets.length!==1||packets[0].id!==context.releaseId||p.documents.length!==1||!p.seed)throw Error('INVALID_PROOF');
-  verifyStoredKeyPackage(sodium,packets[0].bytes,context);
-  let transport;
-  if(rotation){
-   transport={version:2,publication:{item,selection:JSON.parse(decoder.decode(p.nextAuthority.authorityState)).selections.at(-1),admissionEventHash:p.admissionEventHash,grantHash:p.grantHash,
-     manifest:p.manifest,document:p.documents[0],packet:packets[0].bytes},seed:p.seed,policyBundle:null};
+  let plain;
+  if(set){
+   const {householdDocumentSetRelease}=await import('./household-document-set.mjs');
+   plain=encodeHouseholdDocumentSetFile(await householdDocumentSetRelease({sodium,storage,scope:sc,pin,provider,operationId,recipientDevice,LoroDoc}));
   }else{
-   const peerId=transition.manifest.schemaVersion.split('|')[2],doc=new LoroDoc();doc.import(p.documents[0].bytes);
-   const seed={version:1,seedId:p.seed.seedId,peerId,snapshot:new Uint8Array(p.documents[0].bytes),
-     identities:structuredClone(p.seed.identities),purchaseIds:Object.keys(doc.getMap('purchases').toJSON()).sort()};
-   const publication={expectedAuthority:p.expectedAuthority,nextAuthority:p.nextAuthority,admissionEventHash:p.admissionEventHash,
-     grantHash:p.grantHash,manifest:p.manifest,epochId:p.epochId,documents:p.documents,packages:packets,seed:p.seed,...(p.policySeed?{policySeed:p.policySeed}:{})};
-   transport={version:1,publication,seed,policyBundle:p.policySeed?.bundle??null};
+   if(packets.length!==1||packets[0].id!==context.releaseId||p.documents.length!==1||!p.seed)throw Error('INVALID_PROOF');
+   verifyStoredKeyPackage(sodium,packets[0].bytes,context);
+   let transport;
+   if(rotation){
+    transport={version:2,publication:{item,selection:JSON.parse(decoder.decode(p.nextAuthority.authorityState)).selections.at(-1),admissionEventHash:p.admissionEventHash,grantHash:p.grantHash,
+      manifest:p.manifest,document:p.documents[0],packet:packets[0].bytes},seed:p.seed,policyBundle:null};
+   }else{
+    const peerId=transition.manifest.schemaVersion.split('|')[2],doc=new LoroDoc();doc.import(p.documents[0].bytes);
+    const seed={version:1,seedId:p.seed.seedId,peerId,snapshot:new Uint8Array(p.documents[0].bytes),
+      identities:structuredClone(p.seed.identities),purchaseIds:Object.keys(doc.getMap('purchases').toJSON()).sort()};
+    const publication={expectedAuthority:p.expectedAuthority,nextAuthority:p.nextAuthority,admissionEventHash:p.admissionEventHash,
+      grantHash:p.grantHash,manifest:p.manifest,epochId:p.epochId,documents:p.documents,packages:packets,seed:p.seed,...(p.policySeed?{policySeed:p.policySeed}:{})};
+    transport={version:1,publication,seed,policyBundle:p.policySeed?.bundle??null};
+   }
+   plain=encoder.encode(JSON.stringify(canonical(transport)));
   }
-  const plain=encoder.encode(JSON.stringify(canonical(transport)));
   try{
    if(plain.length>MAX)throw Error('TOO_LARGE');
    const digest=sodium.to_hex(sodium.crypto_generichash(32,plain));
@@ -61,12 +83,12 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
        !sodium.crypto_sign_verify_detached(record.signature,signedBytes(record.bytes),sender))throw Error('CONFLICT');
     return new Uint8Array(record.bytes);
    };
-   const read=await storage.readHouseholdSealedFile(authorized.expectedAuthority,operationId,recipientDevice);
+   const read=await storage.readHouseholdSealedFile(expectedAuthority,operationId,recipientDevice);
    if(!read.ok)throw Error(read.error.code);
    if(read.value!==null)return validate(read.value);
    const sealed=sodium.crypto_box_seal(plain,recipient);
    const record={version:1,digest,bytes:new Uint8Array(sealed),signature:sodium.crypto_sign_detached(signedBytes(sealed),secret.signingSecret)};
-   const committed=await storage.commitHouseholdSealedFile(authorized.expectedAuthority,operationId,recipientDevice,record);
+   const committed=await storage.commitHouseholdSealedFile(expectedAuthority,operationId,recipientDevice,record);
    if(!committed.ok)throw Error(committed.error.code);
    return validate(committed.value.record);
   }finally{plain.fill(0)}
@@ -76,5 +98,10 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
  * against the independently accepted local parent and completed session. */
 export async function installHouseholdFile({sodium,bytes,keys,identify,...args}){
  if(!(bytes instanceof Uint8Array)||bytes.length<48||bytes.length>MAX+48)throw Error('MALFORMED');const signingSecret=new Uint8Array(keys.signingSecret),wrappingSecret=new Uint8Array(keys.wrappingSecret),cipher=new Uint8Array(bytes);let plain;
- try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==((args.recipientKind==='revocation'||args.recipientKind==='recovery')?2:1)||raw.version===2&&raw.policyBundle!==null)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
+ try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(args.recipientKind==='document-set'){
+  if(!raw||Object.keys(raw).sort().join(',')!=='release,version'||raw.version!==3)throw Error('INVALID_FILE');
+  const {installHouseholdDocumentSet}=await import('./household-document-set.mjs');
+  const identifiers=identify?identify(raw.release?.item?.admission?.grant?.admissionEventHash):{};
+  return await installHouseholdDocumentSet({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},release:raw.release});
+ }if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==((args.recipientKind==='revocation'||args.recipientKind==='recovery')?2:1)||raw.version===2&&raw.policyBundle!==null)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
 }
