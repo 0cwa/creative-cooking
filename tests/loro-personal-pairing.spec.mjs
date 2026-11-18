@@ -25,7 +25,7 @@ async function saveMessage(page,message){
  await label(page,'Message Chef').fill(message);
  await label(page,'Save private message').click();
  await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();
- await page.goto('./settings');
+ await button(page,'Open settings').last().click();
 }
 async function transferProof(from,to){
  await label(to,'Incoming personal pairing proof').fill(await label(from,'My personal pairing proof').inputValue());
@@ -195,11 +195,23 @@ test('Settings pairs independently provisioned personal devices and reopens the 
     expect(await databaseState(source)).toEqual(before);
    }
    await failWritesAt(source,0);
+   await source.evaluate(()=>{
+    const click=HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click=function(){
+     HTMLAnchorElement.prototype.click=click;
+     throw Error('injected export failure');
+    };
+   });
+   await click(source,buttonLabel);
+   await expect(source.getByText(/^Device authorization saved. The file could not be exported/)).toBeVisible();
+   expect(await source.evaluate(()=>window.personalPairingWrites)).toBe(7);
+   const authorized=await databaseState(source);
    const [download]=await Promise.all([source.waitForEvent('download'),click(source,buttonLabel)]);
    expect(download.suggestedFilename()).toBe('creative-cooking-personal-pairing.ccpair');
    path=await download.path();
    encrypted=await readFile(path);
    expect(await source.evaluate(()=>window.personalPairingWrites)).toBe(7);
+   expect(await databaseState(source)).toEqual(authorized);
    expect(encrypted.includes(privateMessage)).toBe(false);
    expect(encrypted.includes(credential)).toBe(false);
    await click(source,'Reopen paired personal workspace');
@@ -233,6 +245,13 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await click(receiver,select);
    await expect(receiver.getByText(/^Verified private copy saved and selected/)).toBeVisible();
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(originalPin);
+   const selected=await databaseState(receiver);
+   await click(receiver,'Back');
+   await label(receiver,'Message Chef').fill('This edit must wait for the selected workspace');
+   await label(receiver,'Save private message').click();
+   await expect(receiver.getByText('This edit must wait for the selected workspace',{exact:true})).toHaveCount(0);
+   expect(await databaseState(receiver)).toEqual(selected);
+   await button(receiver,'Open settings').last().click();
    await click(receiver,'Reopen paired personal workspace');
    await receiver.goto('./settings');
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(sourcePin);

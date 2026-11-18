@@ -133,9 +133,9 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
     if(!same(old,saved))tx.put(slot(role),saved);
    });
   }else if(!same(old,saved))await write(role,saved,old);
-  return progress(role);
+  return progress(role,transcriptCode);
  }
- async function withSession(role,use){
+ async function withSession(role,use,expectedCode=undefined){
   if(!roles.includes(role))throw Error('UNAUTHORIZED');
   const saved=await read(role);
   if(!saved?.confirmed)throw Error('OOB_REQUIRED');
@@ -143,6 +143,7 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   const pins=Object.fromEntries(roles.map(role=>[role,bundle(transcript[role])]));
   if(pinFingerprint(pins[role])!==pinFingerprint(own)||pinFingerprint(pins[remoteRole(role)])!==peerFingerprint)throw Error('OOB_REQUIRED');
   const oob={hash:code(proposal),pins};
+  if(expectedCode!==undefined&&oob.hash!==expectedCode)throw Error('CONFLICT');
   const sessionStore=role==='responder'?{
    transaction:(apply,options)=>store.transaction(tx=>{
     if(!same(tx.get(slot(role)),saved)||!matchesRequest(proposal,tx.get(slot('request'))))throw Error('CONFLICT');
@@ -152,12 +153,12 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   return withKeys(secrets=>use({proposal,context,transcript,guard,oob,secrets,sessionStore,
    session:durableSession(s,sessionStore,secrets,transcript,guard,role,oob)}));
  }
- async function progress(role){
+ async function progress(role,expectedCode){
   return withSession(role,async({session})=>{
    await session.initialize();
    const {offer,response,ack,complete}=await session.outgoing();
    return {complete,text:pairingText(s,{offer,response,ack}),stage:ack?'Acknowledgement':response?'Response':'Challenge'};
-  });
+  },expectedCode);
  }
  async function accept(role,text){
   const message=parsePairingText(s,text);
@@ -165,21 +166,23 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
    !(message.response===null||exact(message.response,['role','hash','offer','token','signature']))||
    !(message.ack===null||exact(message.ack,['role','hash','response','signature']))||
    (message.ack&&!message.response))throw Error('INVALID_PROOF');
-  await withSession(role,async({session})=>{
+  const confirmedCode=await withSession(role,async({session,oob})=>{
    await session.initialize();
    const {revision}=await session.outgoing();
    await session.respond(message.offer,revision);
    if(message.response)await session.acknowledge(message.response,revision+1);
    if(message.ack)await session.finish(message.ack,revision+2);
+   return oob.hash;
   });
-  return progress(role);
+  return progress(role,confirmedCode);
  }
  function ceremony(args,role,offeredParent){
   const {transcript,guard,oob,secrets,context,sessionStore}=args;
   return openPersonalPairing({sodium:s,storage,sessionStore,keys:secrets,transcript,guard,role,oob,
    rootPin:context.rootPin,ownerId:context.ownerId,provider,offeredParent});
  }
- async function publish(){
+ async function publish(expectedCode){
+  if(!hash(expectedCode))throw Error('OOB_REQUIRED');
   return withSession('initiator',async args=>{
    const {context,transcript,oob,secrets}=args;
    if(transcript.scope.id!==selected.scopeId||context.rootPin!==selected.pin)throw Error('UNAUTHORIZED');
@@ -198,7 +201,7 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
    },selection);
    verifyPersonalCopyFile(s,file,oob.hash,transcript.initiator.signingPublicKey);
    return {file,replayed,scopeId:transcript.scope.id,head:transcript.acceptedParent,authorizationSnapshot};
-  });
+  },expectedCode);
  }
  async function install(file){
   if(!(file instanceof Uint8Array)||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
@@ -238,8 +241,9 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
  async function resume(role){
   const saved=await read(role);
   if(!saved)return null;
-  return {...proposalView(saved.proposal,role),peerFingerprint:saved.peerFingerprint,confirmed:saved.confirmed,
-   progress:saved.confirmed?await progress(role):null};
+  const view=proposalView(saved.proposal,role);
+  return {...view,peerFingerprint:saved.peerFingerprint,confirmed:saved.confirmed,
+   progress:saved.confirmed?await progress(role,view.code):null};
  }
  async function history(){
   const {resolved,record}=await authority(selected);

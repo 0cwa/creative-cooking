@@ -475,7 +475,7 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   const offer=await a.confirm('initiator',proposal.text,b.fingerprint,a.rootPin,proposal.code);
   let message=await b.confirm('responder',proposal.text,a.fingerprint,a.rootPin,review.code);
   assert.equal(offer.complete,false);
-  await assert.rejects(a.publish(),/INCOMPLETE/);
+  await assert.rejects(a.publish(proposal.code),/INCOMPLETE/);
   for(const [role,number] of [['initiator',i],['responder',j],['initiator',i],['responder',j],['initiator',i]]){
    message=await workspaces[number].personalPairing.accept(role,message.text);
   }
@@ -534,6 +534,13 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
    assert.deepEqual(readCeremony(),staleCeremony);
    await receiver.request(true);
   }finally{pairingDb.close();}
+  const firstPeer=await progress(0,1);
+  await progress(0,2);
+  const beforeObsoletePublish=rows(0);
+  await assert.rejects(()=>sponsor.publish(firstPeer.code),/CONFLICT/);
+  assert.deepEqual(rows(0),beforeObsoletePublish);
+  await receiver.request(true);
+  await workspaces[2].personalPairing.request(true);
   // The full settings service resumes against real SQLite after re-open.
   const proposal=await progress(0,1);
   await boot(0);await boot(1);
@@ -542,7 +549,7 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   const current=await getAuthority(0);
   const stale={...current,revision:current.revision+1};
   assert.equal((await workspaces[0].personal.storage.compareAndSwapPairingAuthority({expectedRevision:current.revision,record:stale})).ok,true);
-  await assert.rejects(workspaces[0].personalPairing.publish(),/CONFLICT/);
+  await assert.rejects(workspaces[0].personalPairing.publish(proposal.code),/CONFLICT/);
   const originalAuthority=sponsorBefore.find(row=>row.key===JSON.stringify(['pairing-authority','personal',first.scopeId]));
   database(0,db=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[originalAuthority.value,originalAuthority.key]));
   // Change the durable document between reading it and entering publication.
@@ -552,19 +559,19 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
    assert.equal((await workspaces[0].personal.storage.commitLocal(update.commit)).ok,true);
    return rawWrite(...values);
   };
-  await assert.rejects(workspaces[0].personalPairing.publish(),/CONFLICT/);
+  await assert.rejects(workspaces[0].personalPairing.publish(proposal.code),/CONFLICT/);
   workspaces[0].personal.storage.commitPersonalAdmissionRelease=rawWrite;
   const afterRace=rows(0);
   assert.equal(afterRace.some(row=>JSON.parse(row.key)[0]==='personal-pairing-file'),false);
   for(let fault=1;fault<=7;fault++){
    controllers[0].fail=fault;controllers[0].count=0;
-   await assert.rejects(workspaces[0].personalPairing.publish(),/IO/);
+   await assert.rejects(workspaces[0].personalPairing.publish(proposal.code),/IO/);
    assert.equal(controllers[0].count,fault);assert.deepEqual(rows(0),afterRace);
   }
   controllers[0].fail=0;
-  const release=await workspaces[0].personalPairing.publish();
+  const release=await workspaces[0].personalPairing.publish(proposal.code);
   await boot(0);
-  assert.deepEqual((await workspaces[0].personalPairing.publish()).file,release.file);
+  assert.deepEqual((await workspaces[0].personalPairing.publish(proposal.code)).file,release.file);
 
   const installPairingDb=openDatabase(names[1]+'-pairing');
   const savedCeremony=()=>installPairingDb.executeSync('SELECT value FROM loro_records WHERE key=?',[ceremonyKey]).rows[0].value;
@@ -657,8 +664,8 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   assert.deepEqual(rows(1),unrelatedState);
   database(1,db=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[savedDocument.value,documentKey]));
 
-  await progress(1,2);
-  const second=await workspaces[1].personalPairing.publish();
+  const secondProposal=await progress(1,2);
+  const second=await workspaces[1].personalPairing.publish(secondProposal.code);
   await workspaces[2].personalPairing.install(second.file);
   await boot(1);await boot(2);
   assert.equal(JSON.parse(new TextDecoder().decode((await getAuthority(2)).authorityState)).version,2);
@@ -673,7 +680,7 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
    return readPairingFile(...params);
   };
   try{
-   await assert.rejects(workspaces[1].personalPairing.publish(),/CONFLICT/);
+   await assert.rejects(workspaces[1].personalPairing.publish(secondProposal.code),/CONFLICT/);
    assert.ok(switched);
    assert.deepEqual(rows(1),switched);
   }finally{pairedStorage.readPersonalPairingFile=readPairingFile;}
@@ -688,8 +695,8 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   const rotation=await getAuthority(2);
   const rotatedEpoch=workspaces[2].personal.scope.epochId;
   await workspaces[3].personalPairing.request();
-  await progress(2,3);
-  const third=await workspaces[2].personalPairing.publish();
+  const thirdProposal=await progress(2,3);
+  const third=await workspaces[2].personalPairing.publish(thirdProposal.code);
   await workspaces[3].personalPairing.install(third.file);
   await boot(3);
   const state=record=>JSON.parse(new TextDecoder().decode(record.authorityState));
@@ -708,8 +715,8 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   await boot(3);
   assert.equal((await workspaces[3].personal.document()).revision,null);
   await workspaces[1].personalPairing.request(true);
-  await progress(3,1);
-  const empty=await workspaces[3].personalPairing.publish();
+  const emptyProposal=await progress(3,1);
+  const empty=await workspaces[3].personalPairing.publish(emptyProposal.code);
   await workspaces[1].personalPairing.install(empty.file);
   await boot(1);
   assert.equal((await workspaces[1].personal.document()).revision,null);

@@ -12,6 +12,9 @@ type Progress={text:string;stage:string;complete:boolean};
 type History={rootDevice:string;ownerId:string;devices:{deviceId:string;active:boolean;local:boolean}[];
  events:{deviceId:string;sponsor:string;action:string}[]};
 type Reopen={scopeId:string;head:string;authorizationSnapshot:string};
+// The app mutation gate survives leaving Settings. Keep its reopen target with
+// the mounted workspace so returning to Settings can finish the transition.
+const pendingReopens=new WeakMap<object,Reopen>();
 
 export function PersonalDevicePairing(){
  const workspace=useContext(LoroWorkspaceValue),app=useAppState(),service=workspace?.personalPairing;
@@ -21,7 +24,8 @@ export function PersonalDevicePairing(){
  const [request,setRequest]=useState(''),[incoming,setIncoming]=useState(''),[proposal,setProposal]=useState<Proposal|null>(null);
  const [peerPin,setPeerPin]=useState(''),[root,setRoot]=useState(''),[code,setCode]=useState('');
  const [progress,setProgress]=useState<Progress|null>(null),[peerProof,setPeerProof]=useState('');
- const [file,setFile]=useState<Uint8Array|null>(null),[reopen,setReopen]=useState<Reopen|null>(null);
+ const [file,setFile]=useState<Uint8Array|null>(null),[reopen,setReopen]=useState<Reopen|null>(()=>
+  workspace?pendingReopens.get(workspace)??null:null);
  if(!service)return null;
  const run=(action:()=>Promise<void>)=>{
   if(working.current)return;
@@ -61,12 +65,37 @@ export function PersonalDevicePairing(){
   if(saved){setProposal(saved);setPeerPin(saved.peerFingerprint);setProgress(saved.progress)}
  };
  const reopenPersonal=(target:Reopen)=>workspace.reopen({...target,kind:'personal'});
- const save=async()=>transition(async()=>{
-  const result=await service.publish();
-  setReopen(result);
-  setStatus(result.replayed?'The same encrypted pairing file is ready.':'Device authorization saved. Send the encrypted file to the verified device to finish on that screen.');
-  await saveExchangeFile('creative-cooking-personal-pairing.ccpair','application/octet-stream',result.file);
- });
+ const selectPersonal=async<T extends Reopen,>(select:()=>Promise<T>)=>{
+  const finish=app.beginWorkspaceTransition();
+  let saved=false;
+  try{
+   await app.flushCurrentWorkspace();
+   const result=await select();
+   pendingReopens.set(workspace,result);
+   setReopen(result);
+   saved=true;
+   return result;
+  }finally{if(!saved)finish()}
+ };
+ const finishReopen=async(target:Reopen)=>{
+  if(pendingReopens.has(workspace)){reopenPersonal(target);return;}
+  const finish=app.beginWorkspaceTransition();
+  try{await app.flushCurrentWorkspace();reopenPersonal(target)}
+  catch(error){finish();throw error;}
+ };
+ const save=async()=>{
+  if(!proposal)throw Error('OOB_REQUIRED');
+  await transition(async()=>{
+   const result=await service.publish(proposal.code);
+   setReopen(result);
+   try{
+    await saveExchangeFile('creative-cooking-personal-pairing.ccpair','application/octet-stream',result.file);
+    setStatus(result.replayed?'The same encrypted pairing file is ready.':'Device authorization saved. Send the encrypted file to the verified device to finish on that screen.');
+   }catch{
+    setStatus('Device authorization saved. The file could not be exported. Use Save encrypted personal pairing file to retry.');
+   }
+  });
+ };
  return <View style={{gap:8}}>
   <Text accessibilityRole="header">Personal devices</Text>
   <Text>Pair your own devices to share the saved private copy, including Chef conversations, proposals and personal preferences. Provider API keys stay on the device where you configured them. Household access and voting stay separate.</Text>
@@ -82,7 +111,7 @@ export function PersonalDevicePairing(){
   </View>:null}
   {button('Pair from this device',()=>open('initiator'),!!reopen)}
   {button('Receive my private copy',()=>open('responder'),!!reopen)}
-  {!service.usingOriginal?button('Return to original personal workspace',()=>transition(async()=>reopenPersonal(await service.returnToOriginal())),!!reopen):null}
+  {!service.usingOriginal?button('Return to original personal workspace',async()=>reopenPersonal(await selectPersonal(()=>service.returnToOriginal())),!!reopen):null}
   {role==='initiator'&&proposal&&!reopen?button('Prepare another device',async()=>reset('initiator')):null}
   {role==='responder'&&service.usingOriginal&&!reopen?button('Create a new personal pairing request',async()=>{
    const renewed=await service.request(true);reset('responder');setRequest(renewed);
@@ -122,13 +151,13 @@ export function PersonalDevicePairing(){
      const chosen=await chooseExchangeFile({accept:Platform.OS==='web'?['application/octet-stream','.ccpair']:['*/*'],minBytes:113,maxBytes:MAX_PERSONAL_PAIRING_FILE});
      setFile(chosen);if(chosen)setStatus('Encrypted pairing file selected. Review and select the verified copy to open it.');
     })}
-    {button('Install and select verified personal copy',()=>transition(async()=>{
-     const result=await service.install(file);
-     setReopen(result);setStatus(result.replayed?'The same verified personal copy is selected.':'Verified private copy saved and selected. Reopen to use it.');
-    }),!file||!!reopen)}
+    {button('Install and select verified personal copy',async()=>{
+     const result=await selectPersonal<Reopen & {replayed:boolean}>(()=>service.install(file));
+     setStatus(result.replayed?'The same verified personal copy is selected.':'Verified private copy saved and selected. Reopen to use it.');
+    },!file||!!reopen)}
    </>:null}
   </View>:null}
-  {reopen?button('Reopen paired personal workspace',async()=>reopenPersonal(reopen)):null}
+  {reopen?button('Reopen paired personal workspace',()=>finishReopen(reopen)):null}
   {status?<Text accessibilityRole="alert">{status}</Text>:null}
  </View>;
 }
