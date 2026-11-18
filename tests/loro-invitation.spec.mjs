@@ -612,7 +612,9 @@ async function routedRevocation({a,b,c,existingId,thirdId,thirdAdult,scope,publi
  await uploadFile(c,'Choose encrypted cooking update',bytes);
  await expect(c.getByText(/Update not applied:/)).toBeVisible();
  expect(await rows(c)).toEqual(unchangedC);
- await a.goto('./settings');
+ await a.goto('./');
+ await expect(a.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await a.getByRole('button',{name:'Open settings'}).click();
  await button(a,'Exchange encrypted cooking files').click();
  const imported=a.waitForEvent('load',{timeout:15000});
  await uploadFile(a,'Choose encrypted cooking update',bytes);
@@ -651,6 +653,7 @@ const personalRevision=page=>page.evaluate(async()=>{
 });
 async function registerRecovery(a,b,c){
  await c.goto('./chef');
+ await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();
  await c.getByLabel('Message Chef').fill('Private continuity dinner');
  const before=await personalRevision(c);
  await c.getByLabel('Save private message').click();

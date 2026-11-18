@@ -18,6 +18,7 @@ import {householdTransfer} from './household-transfer.mjs';
 import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
 import {continuityBindingBytes,continuityBindingHash,continuityPublicKey,recoveryClaimBytes,recoveryClaimHash} from '../recovery/readmission.mjs';
 import {householdRevocation} from './household-revocation.mjs';
+import {digest} from '../compromise/revocation.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {localProvider} from './local-provider.mjs';
 import {commitCookingBatchWithPolicy} from '../disclosure/cooking.mjs';
@@ -600,6 +601,26 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
   assert.deepEqual(await serviceA().issue({request,explicit:true}),challenge);
   assert.notDeepEqual(a.rows(),beforeIssue);
   const answer=message=>freshService().answer({householdId:scope.id,message,explicit:true});
+  const alternateSponsor={deviceId:'beta',snapshot:await digest(b.provider,'authority-state',alternate.state)};
+  alternateSponsor.signature=sodium.to_hex(await b.provider.sign(b.signingKey,
+   domain('household-readmission-sponsor-parent',{...alternateSponsor,scope,rootPin:pin,head:retired.eventHash})));
+  const changeSponsor=()=>freshService().request({householdId:scope.id,
+   sponsorParent:{bundle:alternate,sponsor:alternateSponsor},explicit:true});
+  const beforeSponsorChange=fresh.rows(), signRequest=fresh.provider.sign;
+  fresh.provider.sign=async()=>{throw Error('request signing interrupted');};
+  try{await assert.rejects(changeSponsor(),/request signing interrupted/);}
+  finally{fresh.provider.sign=signRequest;}
+  assert.deepEqual(fresh.rows(),beforeSponsorChange);
+  for(const boundary of ['readmission-parent','readmission-request']){
+   fresh.fault=step=>{if(step===boundary)throw Error('sponsor change interrupted');};
+   try{await assert.rejects(changeSponsor(),/IO/);}
+   finally{fresh.fault=null;}
+   fresh.close();fresh.open();
+   assert.deepEqual(fresh.rows(),beforeSponsorChange);
+  }
+  assert.deepEqual(await draftRequest(freshService()),request);
+  assert.deepEqual(fresh.rows(),beforeSponsorChange);
+  await answer(challenge);
   await assert.rejects(answer({...challenge,sponsorDevice:'gamma'}),/INVALID_PROOF/);
   const response=await answer(challenge),bindings=[await serviceB().binding()];
   await assert.rejects(serviceB().prepare({response,bindings,explicit:true}),/INVALID_SPONSOR/);
@@ -625,6 +646,33 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
   assert.deepEqual(await serviceA().seal({operationId:publication,recipientDevice:'fresh'}),file);
   await assert.rejects(serviceA().seal({operationId:publication,recipientDevice:'gamma'}),/INVALID_RECIPIENT/);
   const install=()=>freshService().install({proposal:decision.proposal,bytes:file,fresh:true,explicit:true});
+  const sameIndexBundle=structuredClone(publicBundle);
+  const selection=sameIndexBundle.state.selections.at(-1),{from,to,index}=selection;
+  selection.deviceId='beta';
+  selection.signature=sodium.to_hex(await b.provider.sign(b.signingKey,
+   domain('select-head',{root:pin,householdId:scope.id,from,to,index,deviceId:'beta'})));
+  const otherSponsor={deviceId:'beta',snapshot:await digest(b.provider,'authority-state',sameIndexBundle.state)};
+  otherSponsor.signature=sodium.to_hex(await b.provider.sign(b.signingKey,
+   domain('household-readmission-sponsor-parent',{...otherSponsor,scope,rootPin:pin,head:retired.eventHash})));
+  const readParent=fresh.storage.readPairingAuthority.bind(fresh.storage);
+  let parentReads=0,afterReplacement;
+  fresh.storage.readPairingAuthority=async (...args)=>{
+   if(++parentReads===2){
+    await freshService().request({householdId:scope.id,sponsorParent:{bundle:sameIndexBundle,sponsor:otherSponsor},explicit:true});
+    afterReplacement=fresh.rows();
+   }
+   return readParent(...args);
+  };
+  try{
+   await assert.rejects(install(),/INVALID_AUTHORITY/);
+   assert.ok(afterReplacement);
+   assert.notDeepEqual(afterReplacement,beforeFresh);
+   assert.deepEqual(fresh.rows(),afterReplacement);
+  }finally{
+   fresh.storage.readPairingAuthority=readParent;
+   for(const row of beforeFresh.filter(row=>row.key.startsWith('["pairing-authority",')||
+    row.key.startsWith('["recovery-install","readmission-request",')))fresh.replaceRow(row.key,row.value);
+  }
   fresh.fault=()=>{if(fresh.rows().some(row=>row.key.startsWith('["recipient-admission",')))throw Error('interrupt after recipient receipt');};
   await assert.rejects(install(),/IO/);
   fresh.close();fresh.fault=null;fresh.open();

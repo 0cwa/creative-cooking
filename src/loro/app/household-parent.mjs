@@ -8,12 +8,15 @@ export async function exportHouseholdParent({storage,scope,pin,provider}){
  const sc=structuredClone(scope),authority=await readAuthority(storage,sc,pin,provider);
  return {version:1,scope:sc,rootPin:pin,selectedHead:authority.activeHead,state:structuredClone(authority.state)};
 }
-/** Accept a public parent only after the user separately confirms both pins. */
-export async function acceptHouseholdParent({storage,provider,bundle,confirmedRootPin,confirmedSelectedHead,explicit,replacePublic=false}){
+/** Verify a public parent against both independently confirmed pins. */
+export async function verifyHouseholdParentRecord({provider,bundle,confirmedRootPin,confirmedSelectedHead,explicit}){
  const input=structuredClone(bundle);if(explicit!==true||!input||Object.keys(input).sort().join(',')!=='rootPin,scope,selectedHead,state,version'||input.version!==1||input.scope?.kind!=='household'||!input.scope.id||typeof confirmedRootPin!=='string'||typeof confirmedSelectedHead!=='string'||input.rootPin!==confirmedRootPin||input.selectedHead!==confirmedSelectedHead||input.state?.activeHead!==confirmedSelectedHead||input.state?.root?.householdId!==input.scope.id)throw Error('CONFIRMATION_REQUIRED');
  await verifyAuthority(input.state,confirmedRootPin,provider);const bytes=enc.encode(JSON.stringify(canonical(input.state))),hash=await provider.hash(domain('authority-state',canonical(input.state)));if(!(hash instanceof Uint8Array)||hash.length!==32)throw Error('INVALID_AUTHORITY');
- const record={scope:input.scope,revision:0,acceptedParent:confirmedSelectedHead,authorizationSnapshot:hex(hash),authorityState:bytes};
- const result=await storage.retainPublicHouseholdParent(record,replacePublic);
+ return {scope:input.scope,revision:0,acceptedParent:confirmedSelectedHead,authorizationSnapshot:hex(hash),authorityState:bytes};
+}
+export async function acceptHouseholdParent({storage,...input}){
+ const record=await verifyHouseholdParentRecord(input);
+ const result=await storage.retainPublicHouseholdParent(record);
  if(!result.ok)throw Error(result.error?.code??result.error);
  return result.value;
 }

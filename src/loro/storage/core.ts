@@ -14,6 +14,13 @@ type RotationSourceGuard = {
   source:{documentId:string;bytes:Uint8Array;revision:number}|null;
 } & ({} | {reviewId:string;review:unknown;original:{checkpoint:Uint8Array;objects:Uint8Array[]}});
 type AuthorityExpectation = LocalCommit['expectedAuthority'];
+type HouseholdReadmissionRequest = {
+  claim: {householdId:string;checkpoint:string;deviceId:string;nonce:string};
+  sponsor: {deviceId:string;snapshot:string;signature:string};
+  continuitySignature:string;
+  deviceSignature:string;
+  sponsorSignature:string;
+};
 type BranchDocument = {head:string;documentId:string};
 type BranchRevision = BranchDocument & {revision:number|null};
 type PolicyCheckout = {
@@ -35,6 +42,15 @@ const snapshot = <T>(v: T): T => (v instanceof Uint8Array ? copy(v) : Array.isAr
 const corrupt = (): never => { throw new StorageFailure('CORRUPT'); };
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Uint8Array);
 const fields = (v: unknown, names: string[]): v is Record<string, any> => object(v) && Object.keys(v).length === names.length && names.every(k => Object.hasOwn(v,k));
+const hexOf = (value: unknown,length: number) => typeof value==='string' && value.length===length && /^[0-9a-f]+$/.test(value);
+function validReadmissionRequest(v:unknown,scope:string,deviceId:string) {
+  if(!object(v)||!object(v.claim)||v.claim.householdId!==scope||v.claim.deviceId!==deviceId||
+    !validId(v.claim.checkpoint)||!hexOf(v.claim.nonce,64)||!hexOf(v.continuitySignature,128)||!hexOf(v.deviceSignature,128))return false;
+  if(!Object.hasOwn(v,'sponsor'))return fields(v,['claim','continuitySignature','deviceSignature']);
+  return fields(v,['claim','continuitySignature','deviceSignature','sponsor','sponsorSignature'])&&
+    fields(v.sponsor,['deviceId','snapshot','signature'])&&validId(v.sponsor.deviceId)&&
+    hexOf(v.sponsor.snapshot,64)&&hexOf(v.sponsor.signature,128)&&hexOf(v.sponsorSignature,128);
+}
 export const denseArray = (v: unknown, check: (item: any) => boolean): v is any[] => {
   if (!Array.isArray(v)) return false;
   for (let i = 0; i < v.length; i++) if (!Object.hasOwn(v,i) || !check(v[i])) return false;
@@ -45,7 +61,7 @@ const revision = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
 const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && denseArray(v.revisions, (x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision)) && v.revisions.length > 0;
 const validateRecord = (k: string, v: any) => {
   if (v === undefined) return;
-  const namespace = JSON.parse(k)[0];
+  const parts=JSON.parse(k),namespace=parts[0];
   let valid = false;
   switch (namespace) {
     case 'compromise-review': valid=object(v) && v.version===1 && typeof v.reviewId==='string'; break;
@@ -64,6 +80,11 @@ const validateRecord = (k: string, v: any) => {
     case 'continuity-binding': valid=fields(v,['version','binding','bindingSignature','bindingHash']) && v.version===1 && object(v.binding) && typeof v.bindingSignature==='string' && typeof v.bindingHash==='string' && !!v.bindingHash; break;
     case 'continuity-head': valid=fields(v,['generation','bindingHash']) && revision(v.generation) && typeof v.bindingHash==='string' && !!v.bindingHash; break;
     case 'recovery-readmission-challenge': valid=fields(v,['claimHash','tokenCommitment','sealed']) && [v.claimHash,v.tokenCommitment,v.sealed].every((x:any)=>typeof x==='string'&&!!x); break;
+    case 'recovery-install': {
+      const [,category,scope,deviceId]=parts;
+      valid=parts.length===4&&category==='readmission-request'&&validId(scope)&&validId(deviceId)&&validReadmissionRequest(v,scope,deviceId);
+      break;
+    }
     case 'recovery-challenge-consumed': valid=typeof v==='string' && !!v; break;
     case 'local-master-catalog': valid = validMasterCatalog(v) || (fields(v,['version','state','id']) && v.version===1 && v.state==='reserved' && typeof v.id==='string' && !!v.id); break;
     case 'local-key': case 'local-key-operation': valid = validLocalRecord(v); break;
@@ -220,25 +241,51 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try { return await this.run(true,async tx => { const r=write.record, k=key('pairing-authority',r.scope.kind,r.scope.id), old=await tx.get(k); if (old && (old.scope.kind !== r.scope.kind || old.scope.id !== r.scope.id)) corrupt(); if ((old === undefined ? null : old.revision) !== write.expectedRevision) conflict(); await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
   /** Retain an independently verified public proof without granting local authority. */
-  async retainPublicHouseholdParent(record:PairingAuthorityRecord,replace=false):Promise<Result<{replayed:boolean},StorageError>> {
+  async retainPublicHouseholdParent(record:PairingAuthorityRecord):Promise<Result<{replayed:boolean},StorageError>> {
     const checked=validatePairingAuthority(record);
     if(!checked.ok)return checked;
     if(record.scope.kind!=='household'||record.revision!==0)return {ok:false,error:'MALFORMED'};
     record=snapshot(record);
+    try{return await this.run(true,async tx=>({ok:true,value:{replayed:await this.retainPublicParent(tx,record,false)}}));}
+    catch(error){return {ok:false,error:mapError(error)};}
+  }
+  private async retainPublicParent(tx:Tx,record:PairingAuthorityRecord,replace:boolean):Promise<boolean> {
+    const scope=record.scope.id,slot=key('pairing-authority','household',scope),prior=await tx.get(slot);
+    if(prior===undefined){
+      if(replace)return conflict();
+    }else{
+      if(!validatePairingAuthority(prior).ok||prior.scope.kind!=='household'||prior.scope.id!==scope)return corrupt();
+      if(prior.revision!==0||prior.acceptedParent!==record.acceptedParent)return conflict();
+      if(prior.authorizationSnapshot===record.authorizationSnapshot&&sameBytes(prior.authorityState,record.authorityState))return true;
+      if(!replace)return conflict();
+      const localPrefixes=[key('local-key','household',scope),...['document','document-owner','projection-document','projection-publication',
+        'recipient-admission','recipient-admission-event','continuity-head','continuity-binding','inbox','object'].map(kind=>key(kind,scope))]
+        .map(prefix=>prefix.slice(0,-1)+',');
+      if((await tx.keys()).some(k=>localPrefixes.some(prefix=>k.startsWith(prefix))))return conflict();
+    }
+    await tx.put(slot,record);
+    return false;
+  }
+  /** Store an already signed request and its verified sponsor parent together. */
+  async commitHouseholdReadmissionRequest(record:PairingAuthorityRecord,request:HouseholdReadmissionRequest):Promise<Result<HouseholdReadmissionRequest,StorageError>> {
+    const checked=validatePairingAuthority(record);
+    if(!checked.ok)return checked;
+    if(record.scope.kind!=='household'||record.revision!==0||!validId(request?.claim?.deviceId)||
+      !validReadmissionRequest(request,record.scope.id,request.claim.deviceId)||request.claim.checkpoint!==record.acceptedParent||
+      request.sponsor?.snapshot!==record.authorizationSnapshot)return {ok:false,error:'MALFORMED'};
+    record=snapshot(record);
+    request=snapshot(request);
     try{return await this.run(true,async tx=>{
-      const scope=record.scope.id,slot=key('pairing-authority','household',scope),prior=await tx.get(slot);
-      if(prior!==undefined){
-        if(!validatePairingAuthority(prior).ok||prior.scope.kind!=='household'||prior.scope.id!==scope)return corrupt();
-        if(prior.revision!==0||prior.acceptedParent!==record.acceptedParent)return conflict();
-        if(prior.authorizationSnapshot===record.authorizationSnapshot&&sameBytes(prior.authorityState,record.authorityState))return {ok:true as const,value:{replayed:true}};
-        if(!replace)return conflict();
-        const localPrefixes=[key('local-key','household',scope),...['document','document-owner','projection-document','projection-publication',
-          'recipient-admission','recipient-admission-event','continuity-head','continuity-binding','inbox','object'].map(kind=>key(kind,scope))]
-          .map(prefix=>prefix.slice(0,-1)+',');
-        if((await tx.keys()).some(k=>localPrefixes.some(prefix=>k.startsWith(prefix))))return conflict();
+      const sameParent=await this.retainPublicParent(tx,record,true);
+      if(!sameParent)this.fault?.('readmission-parent');
+      const slot=key('recovery-install','readmission-request',record.scope.id,request.claim.deviceId),prior=await tx.get(slot);
+      const same=(a:unknown,b:unknown)=>JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
+      if(sameParent&&prior&&same({...prior.claim,nonce:request.claim.nonce},request.claim)&&same(prior.sponsor,request.sponsor)){
+        return {ok:true as const,value:snapshot(prior)};
       }
-      await tx.put(slot,record);
-      return {ok:true as const,value:{replayed:false}};
+      await tx.put(slot,request);
+      this.fault?.('readmission-request');
+      return {ok:true as const,value:snapshot(request)};
     });}catch(error){return {ok:false,error:mapError(error)};}
   }
   private async checkoutDocument(tx:Tx,scope:string,{head,documentId}:BranchDocument,allowUninstalled=false):Promise<{bytes:Uint8Array;revision:number}|null> {

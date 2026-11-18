@@ -10,7 +10,7 @@ import {answerRecoveryChallenge,continuityBindingBytes,continuityPublicKey,persi
 import {recoveryHash} from '../recovery/enrollment.mjs';
 import {inspectPersonal} from '../recovery/recovery.mjs';
 import {openRecoveryArchive} from './recovery-archive.mjs';
-import {acceptHouseholdParent} from './household-parent.mjs';
+import {verifyHouseholdParentRecord} from './household-parent.mjs';
 
 const slot=(...parts)=>JSON.stringify(['recovery-install',...parts]);
 const challengeDomain='household-readmission-challenge';
@@ -177,6 +177,7 @@ export function householdReadmission({
   },
   async request({householdId,sponsorParent,explicit}){
    requireExplicit(explicit);
+   sponsorParent=structuredClone(sponsorParent);
    const {parent,confirmed}=await freshParent(householdId);
    return recoveryImport.useContinuity(async (saved,credential)=>{
     const continuityKey=continuityPublicKey(sodium,credential);
@@ -187,18 +188,15 @@ export function householdReadmission({
     if(!exact(sponsorParent,'bundle,sponsor'))throw Error('MISSING_SPONSOR_PARENT');
     const {bundle,sponsor}=sponsorParent;
     if(!same(bundle?.scope,confirmed.scope)||bundle.rootPin!==confirmed.pin||bundle.selectedHead!==confirmed.head)throw Error('INVALID_SPONSOR');
-    await checkSponsor(sponsor,confirmed,parent,await digest(provider,'authority-state',bundle.state));
-    await acceptHouseholdParent({storage,provider,bundle,confirmedRootPin:confirmed.pin,confirmedSelectedHead:confirmed.head,explicit,replacePublic:true});
+    const record=await verifyHouseholdParentRecord({provider,bundle,confirmedRootPin:confirmed.pin,confirmedSelectedHead:confirmed.head,explicit});
+    await checkSponsor(sponsor,confirmed,parent,record.authorizationSnapshot);
     const payload=recoveryClaimBytes(claim), seed=sodium.from_hex(credential),pair=sodium.crypto_sign_seed_keypair(seed);
     try{
      const sponsorSignature=await sign(domain(sponsorRequestDomain,{claimHash:recoveryClaimHash(sodium,claim),sponsor}));
      const request={claim,continuitySignature:hex(sodium.crypto_sign_detached(payload,pair.privateKey)),deviceSignature:await sign(payload),sponsor,sponsorSignature};
-     return run(true,async tx=>{
-      const key=requestSlot(householdId), prior=await tx.get(key);
-      if(prior&&same({...prior.claim,nonce:claim.nonce},claim)&&same(prior.sponsor,sponsor))return prior;
-      await tx.put(key,request);
-      return request;
-     });
+     const saved=await storage.commitHouseholdReadmissionRequest(record,request);
+     if(!saved.ok)throw Error(saved.error);
+     return saved.value;
     }finally{seed.fill(0);pair.privateKey.fill(0);}
    });
   },
