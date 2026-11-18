@@ -34,6 +34,7 @@ import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {replayAuthenticated} from '../domain/replay.mjs';
 import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
+import {observeSelectedSourceSet,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
 test('retained updates distinguish policy evidence and other retry reasons',async()=>{
  const ok=value=>({ok:true,value});
  const header=(branchHead,epochId='epoch')=>new TextEncoder().encode(JSON.stringify({header:{branchHead,epochId,authorDevice:'peer'}}));
@@ -621,6 +622,62 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
  const refreshedContext=await b.service.authority();
  const verifyFollowOn=createSourceVerifier({runtime:b.runtime,service:b.service,context:refreshedContext,allowIncomplete:true});
  assert.deepEqual((await verifyFollowOn(check.effectId)).policies,[accepted.policyHash]);
+
+ // The source set includes both children and the household document with a
+ // signed copy dependency. The peer authenticates the claim from its own pin.
+ const observation=await observeSelectedSourceSet(a.runtime);
+ const {signed,guard}=observation;
+ const verifySet=signed=>verifySelectedSourceSet({storage:b.storage,scope,pin:b.root.head,provider:b.provider,signed});
+ const verified=await verifySet(signed);
+ assert.equal(verified.selected.head,a.root.head);
+ assert.deepEqual(verified.manifest.children.map(x=>x.recipeId),[recipeId,'sibling']);
+ assert.equal(verified.manifest.catalog.revision,2);
+ assert.equal(verified.manifest.root.revision,(await a.runtime.document()).revision);
+ assert.deepEqual(verified.manifest.children.map(x=>x.revision),
+  [(await ar.document()).revision,(await sibling.document()).revision]);
+ assert.equal(must(await a.storage.checkSelectedHouseholdSources(guard)),undefined);
+ b.reopen();a.reopen();
+ assert.deepEqual((await verifySet(signed)).manifest,verified.manifest);
+ assert.deepEqual((await observeSelectedSourceSet(a.runtime)).signed,signed);
+ const signSet=async(manifest,deviceId=a.deviceId)=>{
+  const ref=a.root.devices.find(device=>device.deviceId===deviceId).signingKeyRef;
+  return {manifest,deviceId,signature:sodium.to_hex(await a.provider.sign(ref,
+   domain('selected-household-sources-v1',{manifest,deviceId})))};
+ };
+ for(const manifest of [
+  {...signed.manifest,rootPin:'0'.repeat(64)},
+  {...signed.manifest,epochId:'different-epoch'},
+  {...signed.manifest,root:{...signed.manifest.root,documentId:ar.scope.documentId}},
+  {...signed.manifest,children:[signed.manifest.children[0]]},
+  {...signed.manifest,children:[...signed.manifest.children,signed.manifest.children[0]]},
+  {...signed.manifest,children:[signed.manifest.children[0],signed.manifest.children[0]]},
+  {...signed.manifest,children:[{...signed.manifest.children[0],documentId:sibling.scope.documentId},signed.manifest.children[1]]},
+ ]){
+  await assert.rejects(()=>signSet(manifest).then(verifySet),/INVALID_SOURCE_SET/);
+ }
+ await assert.rejects(()=>verifySet({...signed,deviceId:b.deviceId}),/INVALID_SOURCE_SIGNATURE/);
+ const checkGuard=guard=>a.storage.checkSelectedHouseholdSources(guard);
+ const tamperedObservation=structuredClone(guard);
+ tamperedObservation.entries[0].bytes[0]^=1;
+ assert.equal((await checkGuard(tamperedObservation)).error.code,'CONFLICT');
+ await edit(a,ar,'source-set-child-race',{id:recipeId,title:'New child title'});
+ assert.equal((await checkGuard(guard)).error.code,'CONFLICT');
+ const beforeRootRace=(await observeSelectedSourceSet(a.runtime)).guard;
+ await a.edit('source-set-root-race',++sequence);
+ assert.equal((await checkGuard(beforeRootRace)).error.code,'CONFLICT');
+ const beforeInsert=(await observeSelectedSourceSet(a.runtime)).guard;
+ const inserted=await a.runtime.forRecipe('third');
+ await edit(a,inserted,'source-set-catalog-race',recipe('third','Third carrot'));
+ assert.equal((await checkGuard(beforeInsert)).error.code,'CONFLICT');
+ const afterInsert=await observeSelectedSourceSet(a.runtime);
+ assert.equal(afterInsert.signed.manifest.catalog.revision,3);
+ assert.equal(afterInsert.signed.manifest.root.revision,beforeInsert.root.revision);
+ const head=must(await a.storage.readPairingAuthority(scope));
+ const staleSingleDocument=await a.storage.compareAndSwapPairingAuthority({expectedRevision:head.revision,
+  record:{...head,revision:head.revision+1,acceptedParent:'different-head'}});
+ assert.equal(staleSingleDocument.error,'UNSUPPORTED_VERSION');
+ assert.deepEqual(must(await a.storage.readPairingAuthority(scope)),head);
+
 });
 
 test('parent-format recipe children without catalog entries remain intact and require an explicit upgrade',async t=>{

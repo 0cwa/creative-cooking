@@ -9,6 +9,20 @@ export type RecipeCatalogBinding = {
   documentGeneration: number;
   epochId: Id;
 };
+export const MAX_SELECTED_CHILDREN = 15;
+
+export type SelectedSourceDocument = {documentId:Id;revision:number;bytes:Bytes};
+export type SelectedRecipeSource = SelectedSourceDocument & {
+  recipeId:Id;effectId:Id;sourceRevision:number|null;objectId:Id;envelope:Bytes;
+};
+export type SelectedHouseholdSources = {
+  binding:RecipeCatalogBinding;
+  expectedAuthority:AuthorityPrecondition;
+  catalogRevision:number;
+  root:SelectedSourceDocument|null;
+  entries:SelectedRecipeSource[];
+};
+
 export type RecipePublication = {
   binding: RecipeCatalogBinding;
   sourceRevision: number | null;

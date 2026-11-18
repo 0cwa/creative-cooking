@@ -1,3 +1,4 @@
+import {hasSelectedRecipeChildren} from './selected-recipe-children.ts';
 // Experimental transaction seam, not an authorization verifier. Must only be
 // invoked by a verifier that has authenticated the whole admission and packet.
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
@@ -79,6 +80,7 @@ export class HouseholdRecipientTransaction {
    }
    const current=await tx.get(authority);
    if(!(p.ownDevice&&current===undefined&&p.expectedAuthority.revision===0)&&!equal(current,p.expectedAuthority))fail('CONFLICT');
+   if(await hasSelectedRecipeChildren(tx,scope,[p.expectedAuthority.acceptedParent,p.nextAuthority.acceptedParent]))fail('UNSUPPORTED_VERSION');
    if(continuity){
     const local=await readContinuityHead(tx,scope,continuity.owner);
     if(!local.ok)return fail('CORRUPT');
@@ -90,6 +92,6 @@ export class HouseholdRecipientTransaction {
    const installed=await installLocalKey({get:tx.get,keys:async()=>[],put:async(slot,value)=>write(tx,slot,value)},p.localKey.record,p.localKey.catalog);if(installed.replayed)fail('CONFLICT');
    await write(tx,manifest,p.manifest.bytes);await write(tx,seed,p.seed);if(p.policySeed!==null)await write(tx,sidecar,p.policySeed);for(const [slot,value] of [...reservations,...copied])await write(tx,slot,value);for(const [slot,value] of policies)if(await tx.get(slot)===undefined)await write(tx,slot,value);
    await write(tx,owner,p.nextAuthority.acceptedParent);await write(tx,doc,{bytes:p.snapshot,revision:0});await write(tx,meta,{generation:p.generation,operationId:p.operationId});await write(tx,guard,op);await write(tx,eventIndex,p.operationId);if(p.ownDevice)await write(tx,k('policy-disclosure-head',scope,p.nextAuthority.acceptedParent),null);await write(tx,authority,p.nextAuthority);await write(tx,op,{fingerprint:fp,input:p});return {ok:true as const,value:{replayed:false,receipt:p.receipt}};
-  })}catch(e){const code=e instanceof Error&&['MALFORMED','CONFLICT','CORRUPT','LOCKED'].includes(e.message)?e.message:'IO';return {ok:false as const,error:code}}
+  })}catch(e){const code=e instanceof Error&&['MALFORMED','CONFLICT','CORRUPT','LOCKED','UNSUPPORTED_VERSION'].includes(e.message)?e.message:'IO';return {ok:false as const,error:code}}
  }
 }
