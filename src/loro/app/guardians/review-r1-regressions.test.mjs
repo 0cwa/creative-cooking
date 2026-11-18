@@ -18,6 +18,51 @@ test('an unpublished legacy draft requires confirmation under the selected root 
   assert.equal((await workflow.resume({operationId:'op'})).status.generation,0);
  }finally{f.db.close()}
 });
+test('an unpublished legacy draft can retry with a distinct root-confirmed key for the same guardian',async()=>{
+ const {f,args}=await ownerFixture(beforeOwner);
+ try{
+  const signing=sodium.crypto_sign_keypair(),wrapping=sodium.crypto_box_keypair();
+  const alice={version:1,holder:'alice',signingKey:sodium.to_hex(signing.publicKey),wrappingKey:sodium.to_hex(wrapping.publicKey)};
+  signing.privateKey.fill(0);wrapping.privateKey.fill(0);
+  const bob=await f.run(false,tx=>tx.get(JSON.stringify(['recovery-custody-ack','pinned-holder','bob'])));
+  for(const bundle of [alice,bob])await pinHolder({sodium,run:f.run,bundle,authorityPin:args.pin,confirmedFingerprint:holderFingerprint(sodium,bundle)});
+  const prepare=workflow=>createGuardianPreparation({run:f.run,owner:'owner',workspaceName:'scope',
+   locks:{request:async(_name,_options,use)=>use()},createGeneration:workflow.createGeneration});
+  const pending=JSON.stringify(['recovery-generation-operation','app-pending','owner']);
+  await f.run(true,tx=>tx.put(pending,{operationId:'op',holders:['alice','bob'],threshold:2}));
+  const before=rows(f);
+  const faultRun=(write,use)=>f.run(write,tx=>use({...tx,put:async(key,value)=>{
+   await tx.put(key,value);
+   if(JSON.parse(key)[1]==='guardian-draft')throw Error('interrupted after replacing draft');
+  }}));
+  await assert.rejects(()=>prepare(ownerGuardians({...args,run:faultRun}))(['alice','bob'],2),/interrupted after replacing draft/);
+  assert.deepEqual(rows(f),before);
+  const draftSlot=JSON.stringify(['recovery-generation-operation','guardian-draft','owner','op']);
+  const publishedSlot=JSON.stringify(['recovery-generation-operation','owner','op']);
+  let guardChecked=false;
+  const racedRun=(write,use)=>f.run(write,tx=>{
+   let readPublication=false;
+   return use({...tx,get:async key=>{
+    const stored=await tx.get(key);
+    if(key===publishedSlot)readPublication=true;
+    if(write&&readPublication&&key===draftSlot){
+     guardChecked=true;
+     return {...stored,requestHash:'0'.repeat(64)};
+    }
+    return stored;
+   }});
+  });
+  await assert.rejects(()=>prepare(ownerGuardians({...args,run:racedRun}))(['alice','bob'],2),/CONFLICT/);
+  assert.equal(guardChecked,true);
+  assert.equal(await f.run(false,tx=>tx.get(publishedSlot)),undefined);
+  const retry=prepare(ownerGuardians(args));
+  const result=await retry(['alice','bob'],2);
+  assert.equal(result.message.manifest.generation,0);
+  assert.equal(result.message.manifest.roster[0].signingKey,alice.signingKey);
+  assert.equal(result.message.manifest.roster[0].wrappingKey,alice.wrappingKey);
+  assert.deepEqual(await retry(['alice','bob'],2),result);
+ }finally{f.db.close()}
+});
 test('interrupted draft rejects changed threshold and roster without changing any stored record; exact retry publishes and reopens',async()=>{if(!process.env.GUARDIAN_TEST_DIR)throw Error('GUARDIAN_TEST_DIR required');const path=join(process.env.GUARDIAN_TEST_DIR,`regression-${randomUUID()}.sqlite`),{f,args,workflow}=await ownerFixture(ownerGuardians,path);let closed=false,reopenedDb;try{const saved=rows(f);for(const retry of [{holders:['alice','bob'],threshold:1},{holders:['alice','carol'],threshold:2},{holders:['bob','alice'],threshold:2}]){await assert.rejects(()=>workflow.createGeneration({operationId:'op',...retry}),/CONFLICT/);assert.deepEqual(rows(f),saved)}const result=await workflow.createGeneration({operationId:'op',holders:['alice','bob'],threshold:2});assert.equal(result.status.generation,0);assert.equal(result.status.threshold,2);f.db.close();closed=true;reopenedDb=new DatabaseSync(path);const reopenedStorage=openSQLiteStorage({executeSync(sql,p=[]){const st=reopenedDb.prepare(sql);return {rows:sql.startsWith('SELECT')?st.all(...p):(st.run(...p),[])}}}),reopenedArgs={...args,run:reopenedStorage.recoveryTransaction,storage:reopenedStorage,keys:reopenedStorage.localKeys(f.master,sodium)},reopened=await ownerGuardians(reopenedArgs).resume({operationId:'op'});assert.deepEqual(reopened,result);assert.deepEqual(await ownerGuardians(reopenedArgs).createGeneration({operationId:'op',holders:['alice','bob'],threshold:2}),result)}finally{if(!closed)f.db.close();reopenedDb?.close();unlinkSync(path)}});
 test('multibyte authority and contribution messages fail before clone, storage, or crypto',async()=>{const huge='é'.repeat(Math.floor(MAX_GUARDIAN_MESSAGE/2)+20);assert.ok(huge.length<MAX_GUARDIAN_MESSAGE);assert.ok(new TextEncoder().encode(huge).length>MAX_GUARDIAN_MESSAGE);let clones=0,reads=0,crypto=0;const original=globalThis.structuredClone;globalThis.structuredClone=(...a)=>{clones++;return original(...a)};const storage={readPairingAuthority:async()=>{reads++;throw Error('unexpected store')}},authorityProvider={hash:async()=>{crypto++;throw Error('unexpected crypto')},verify:async()=>{crypto++;throw Error('unexpected crypto')}},run=async()=>{reads++;throw Error('unexpected store')};try{await assert.rejects(()=>acceptGuardianAuthority({storage,authorityProvider,bundle:{oversize:huge},confirmedPin:'x'}),/GUARDIAN_MESSAGE_TOO_LARGE/);assert.equal(clones,0);assert.equal(reads,0);assert.equal(crypto,0);const fresh=guardianReconstructor({sodium,run,storage,authorityProvider,pin:'pin'});await assert.rejects(()=>fresh.reconstruct({message:{},contributions:[huge]}),/GUARDIAN_MESSAGE_TOO_LARGE/);assert.equal(clones,0);assert.equal(reads,0);assert.equal(crypto,0);const owner=ownerGuardians({sodium,run,storage,authorityProvider,scopeId:'scope',owner:'owner',deviceId:'device',pin:'pin',keys:{},signing:{},master:{},masterId:'master'});await assert.rejects(()=>owner.reconstruct({message:{},contributions:[huge]}),/GUARDIAN_MESSAGE_TOO_LARGE/);assert.equal(clones,0);assert.equal(reads,0);assert.equal(crypto,0)}finally{globalThis.structuredClone=original}});
 test('UTF-8 transfer limit accepts exact byte boundary and rejects next multibyte character before parse',()=>{const exact='é'.repeat((MAX_GUARDIAN_MESSAGE-2)/2),encoded=guardianTransferText(exact);assert.equal(new TextEncoder().encode(encoded).length,MAX_GUARDIAN_MESSAGE);assert.equal(parseGuardianTransfer(encoded),exact);const oversized=JSON.stringify(exact+'é');assert.ok(oversized.length<MAX_GUARDIAN_MESSAGE);let parses=0;const original=JSON.parse;try{JSON.parse=(...args)=>{parses++;return original(...args)};assert.throws(()=>parseGuardianTransfer(oversized),/GUARDIAN_MESSAGE_TOO_LARGE/);assert.equal(parses,0);assert.throws(()=>guardianTransferText(exact+'é'),/GUARDIAN_MESSAGE_TOO_LARGE/)}finally{JSON.parse=original}});

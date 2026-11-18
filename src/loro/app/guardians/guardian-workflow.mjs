@@ -67,26 +67,54 @@ export function ownerGuardians({sodium,run,storage,authorityProvider,scopeId,own
   if(!id(operationId)||!Array.isArray(holders)||holders.length<1||holders.length>255||holders.some(x=>!id(x))||new Set(holders).size!==holders.length||!Number.isInteger(threshold)||threshold<1||threshold>holders.length||catalog?.owner!==owner)throw Error('INVALID_INPUT');
   const resolved=await resolvePersonalAuthority(storage,{kind:'personal',id:scopeId},pin,authorityProvider,deviceId);if(resolved.scope.ownerId!==owner)throw Error('INVALID_AUTHORITY');
   const slot=draftKey(owner,operationId);
+  const publicationKey=key('recovery-generation-operation',owner,operationId);
   const {draftRecord,published}=await run(false,async tx=>({
-   draftRecord:await tx.get(slot),published:await tx.get(key('recovery-generation-operation',owner,operationId))
+   draftRecord:await tx.get(slot),published:await tx.get(publicationKey)
   }));
   let saved=draftRecord;
   const pins=saved!==undefined&&published!==undefined
    ?await historicalPins((await readDraft(operationId,saved)).manifest)
    :await pinned(run,holders,pin);
   const requestHash=recoveryHash(sodium,[catalog,personalKit,archive,holders,threshold,pins,pin,deviceId]);
-  if(saved===undefined){
+  const replace=saved&&saved.requestHash!==requestHash&&saved.authorityPin===undefined&&published===undefined;
+  if(replace){
+   const old=await readDraft(operationId,saved),manifest=old.manifest;
+   if(manifest.authorityPin!==pin||manifest.scopeId!==scopeId||manifest.owner!==owner||manifest.signerDevice!==deviceId||
+    manifest.threshold!==threshold||!equal(manifest.roster.map(row=>row.holder),holders)||
+    saved.requestHash!==recoveryHash(sodium,[catalog,personalKit,archive,holders,threshold,old.holderPins,pin,deviceId]))throw Error('CONFLICT');
+  }
+  if(saved===undefined||replace){
    const hash=recoveryHash(sodium,catalog),wrapping=Object.fromEntries(holders.map(holder=>[holder,unhex(pins[holder].wrappingKey,32)])),guardian=await createGuardians(sodium,personalKit,holders,threshold,{owner,scope:'personal',generation:catalog.generation,catalogHash:hash,consent:operationId,grant:null},wrapping);
    const manifest={...(resolved.rotation?{version:2,epochId:resolved.scope.epochId,
     authoritySnapshot:resolved.scope.authorizationSnapshot}:{version:1}),owner,scopeId,authorityPin:pin,signerDevice:deviceId,generation:catalog.generation,catalogHash:hash,roster:holders.map((holder,i)=>({holder,...pins[holder],shareHash:recoveryHash(sodium,guardian.envelopes[i])})),threshold,purpose:'personal-recovery',packageHash:recoveryHash(sodium,guardian.package),personalKitHash:recoveryHash(sodium,personalKit)};
    const signature=await keys.use(signing.operationId,signing.identity,secret=>{const pair=sodium.crypto_sign_seed_keypair(secret.slice(0,32));try{if(hex(pair.publicKey)!==resolved.signingKeyRefs[deviceId])throw Error('INVALID_AUTHORITY');return hex(sodium.crypto_sign_detached(enrollmentBytes(manifest),secret))}finally{pair.privateKey.fill(0)}});
    guardianTransferText({version:1,manifest,signature,catalog,guardianPackage:guardian.package,envelopes:guardian.envelopes});const draft={manifest,signature,catalog,guardianPackage:guardian.package,envelopes:guardian.envelopes,holderPins:pins,personalKit,archive};const input={sodium,storage,authorityProvider,pin,...draft};await verifyEnrollment(input);
    const clear=e.encode(JSON.stringify(draft));let sealed;try{sealed=await master.wrap(masterId,clear,draftAAD(owner,operationId))}finally{clear.fill(0)}
-   saved=await run(true,async tx=>{const existing=await tx.get(slot);if(existing!==undefined){if(existing.requestHash!==requestHash)throw Error('CONFLICT');return existing}const head=await tx.get(key('recovery-generation-head',owner));if(head===undefined?(catalog.generation!==0||catalog.previousCatalogHash!==null):(!head||catalog.generation!==head.generation+1||catalog.previousCatalogHash!==head.catalogHash))throw Error('CONFLICT');const reservationKey=key('recovery-generation-operation','guardian-reservation',owner,String(catalog.generation)),prior=await tx.get(reservationKey);if(prior!==undefined&&(!prior||prior.operationId!==operationId||prior.requestHash!==requestHash))throw Error('CONFLICT');const record={version:1,requestHash,sealed};await tx.put(reservationKey,{version:1,operationId,requestHash});await tx.put(slot,record);return record});
+   saved=await run(true,async tx=>{
+    const existing=await tx.get(slot);
+    if(existing?.requestHash===requestHash)return existing;
+    if(replace){
+     if(!equal(existing,draftRecord)||await tx.get(publicationKey)!==undefined)throw Error('CONFLICT');
+     const authority=await tx.get(key('pairing-authority','personal',scopeId)),expected=resolved.expectedAuthority.record;
+     if(!authority||authority.revision!==expected.revision||authority.acceptedParent!==expected.acceptedParent||
+      authority.authorizationSnapshot!==expected.authorizationSnapshot)throw Error('CONFLICT');
+    }else if(existing!==undefined)throw Error('CONFLICT');
+    const head=await tx.get(key('recovery-generation-head',owner));
+    if(head===undefined?(catalog.generation!==0||catalog.previousCatalogHash!==null):
+     (!head||catalog.generation!==head.generation+1||catalog.previousCatalogHash!==head.catalogHash))throw Error('CONFLICT');
+    const reservationKey=key('recovery-generation-operation','guardian-reservation',owner,String(catalog.generation));
+    const prior=await tx.get(reservationKey);
+    if(replace?(!prior||prior.operationId!==operationId||prior.requestHash!==draftRecord.requestHash):
+     (prior!==undefined&&(!prior||prior.operationId!==operationId||prior.requestHash!==requestHash)))throw Error('CONFLICT');
+    const record={version:1,requestHash,sealed,authorityPin:pin};
+    await tx.put(reservationKey,{version:1,operationId,requestHash});
+    await tx.put(slot,record);
+    return record;
+   });
   }
   if(!saved||saved.version!==1||saved.requestHash!==requestHash||!(saved.sealed instanceof Uint8Array))throw Error('CONFLICT');let bytes;let draft;try{bytes=await master.unwrap(masterId,saved.sealed,draftAAD(owner,operationId));draft=JSON.parse(d.decode(bytes))}finally{bytes?.fill(0)}
   const input={sodium,storage,authorityProvider,pin,...draft};const status=await life.begin({operationId,enrollment:input,personalKit:draft.personalKit,
-   expectedAuthority:resolved.expectedAuthority,rotated:!!resolved.rotation});
+   expectedAuthority:resolved.expectedAuthority,rotated:!!resolved.rotation,draftHash:requestHash});
   const {personalKit:_,holderPins:__,archive:___,...message}=draft;
   return {message:{version:1,...message},recovery:{code:draft.personalKit.code,archive:draft.archive},status:{generation:status.generation,rotationStatus:status.rotationStatus,threshold,holders:[...holders],holderReadAccess:`${threshold} holders can read the recovered personal package`,householdAuthority:'readmission-required'}};
  }
