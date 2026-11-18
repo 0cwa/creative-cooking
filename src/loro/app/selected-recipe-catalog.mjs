@@ -64,6 +64,23 @@ export async function openSelectedRecipeCatalog(runtime, recipeId, maxChildren) 
   return {...catalog,parent};
 }
 
+/** Shopping can use either a signed admission member or a published creation. */
+export async function openShoppingRecipeCatalog(runtime, recipeId) {
+  const auth=await runtime.authorization();
+  const member=auth.members?.find(entry=>entry.recipeId===recipeId);
+  if(!member)return openSelectedRecipeCatalog(runtime,recipeId);
+  const binding=recipeCatalogBinding(runtime.scope,runtime.authority.rootPin);
+  const source=await runtime.forRecipe(recipeId);
+  const [parent,child]=await Promise.all([runtime.document(),source.document()]);
+  const index=child.doc.getMap('recipe-index').toJSON();
+  if(source.scope.documentId!==member.documentId||child.revision===null||
+     parent.doc.getMap('recipe-index').get(recipeId)||Object.keys(index).length!==1||!index[recipeId]) {
+    throw Error('INVALID_RECIPE_DOCUMENT');
+  }
+  return {parent,binding,expectedAuthority:auth.expectedAuthority,
+    children:new Map([[recipeId,{...child,documentId:member.documentId,admitted:true}]])};
+}
+
 /** Legacy recipes keep their original document and history. */
 export function projectSelectedRecipes({parent,children}) {
   return [...projectRecipes(parent.doc),...[...children.values()].flatMap(({doc})=>projectRecipes(doc))]

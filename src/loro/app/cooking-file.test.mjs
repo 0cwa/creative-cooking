@@ -1275,7 +1275,7 @@ test('selected recipe shopping copies and current-only admission survive durable
    provider:a.provider,sodium,keys,signing:{publicKey,operationId:'test-signing'},wrapping,LoroDoc,decodeImportBlobMeta});
   const service=disclosureService({storage,scope,rootPin:a.root.head,provider:a.provider,
    deviceId:runtime.scope.authorDevice,installedSet:{...installedSet,sodium,LoroDoc}});
-  const householdContent=bindHouseholdContent({runtime,sequences:peerSequences,disclosure:service});
+  const householdContent=bindHouseholdContent({runtime,sequences:peerSequences,disclosure:service,shoppingRecipeCopies:true});
   return {runtime,service,householdContent,files:cookingFiles({runtime,service,recipeCatalogVersion:1})};
  };
  const openSponsor=async()=>openPeer(a.storage,await resolveOriginalHousehold({...sealOptions,deviceId:a.deviceId}),signerKeys,signingRef);
@@ -1325,6 +1325,115 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(cooking.recipes.find(recipe=>recipe.id===recipeId)?.title,'Edited on the sponsor');
   assert.ok(cooking.pantry.some(item=>item.name==='Chickpeas'));
  }
+
+ await t.test('admitted shopping claims preserve signed seed ancestry and transact against both documents',async()=>{
+  const before=await sponsor.householdContent.readCooking();
+  const sourceRecipe=before.recipes.find(row=>row.id===recipeId);
+  const ingredient=sourceRecipe.ingredients[0],list=before.shopping.lists.find(row=>!row.removedAt);
+  const item={id:'admitted-copy',listId:list.id,recipeId,ingredientId:ingredient.id,name:ingredient.name,
+   displayQuantity:ingredient.amount,purchaseCycleId:list.currentCycleId,checked:false,createdAt:at,updatedAt:at};
+  const after={...before.shopping,items:[...before.shopping.items,item]};
+  const attempt={actionId:'admitted-copy-action',at,commands:null};
+  a.faultAt('disclosure-local');
+  await assert.rejects(()=>sponsor.householdContent.saveShoppingCopy(attempt,before,after),/IO/);
+  a.faultAt(null);
+  assert.equal(must(await a.storage.getLocalOperation(scope.id,attempt.actionId)),null);
+  assert.deepEqual((await sponsor.householdContent.readCooking()).shopping,before.shopping);
+  await sponsor.householdContent.saveShoppingCopy(attempt,before,after);
+  const command=attempt.commands.find(c=>c.kind==='shopping-item-create');
+  const applied=must(await a.storage.getLocalOperation(scope.id,attempt.actionId));
+  const objects=applied.commit.outbound.map(row=>row.object);
+  const [copy]=objects;
+  const auth=await sponsor.runtime.authorization();
+  const opened=await sponsor.runtime.codec.openContent(copy.bytes,auth.signingKeyRefs);
+  assert.equal(opened.header.disclosureIncomplete,true);
+  assert.deepEqual(opened.header.disclosurePolicyHashes,[accepted.policyHash]);
+  await assert.rejects(()=>newcomer.files.verify(copy.bytes,copy.id,a.deviceId),/UNSUPPORTED_VERSION/);
+  assert.ok(!(await sponsor.files.directBatch(newcomer.runtime.scope.authorDevice,256,new Map()))
+   .objects.some(row=>row.objectId===copy.id));
+
+  const localCommit=freshStorage.commitImportWithDisclosurePolicy.bind(freshStorage);
+  const rootBefore=(await newcomer.runtime.document()).revision;
+  const rejectReceipt=async change=>{
+   freshStorage.commitImportWithDisclosurePolicy=(...args)=>{
+    change(args[5][0]);
+    return localCommit(...args);
+   };
+   try{await assert.rejects(()=>newcomer.files.receive(copy.bytes),/CONFLICT/);}
+   finally{freshStorage.commitImportWithDisclosurePolicy=localCommit;}
+   assert.equal((await newcomer.runtime.document()).revision,rootBefore);
+   assert.equal(must(await freshStorage.getInboxApplication(scope.id,copy.id)),null);
+  };
+  await rejectReceipt(receipt=>{receipt.rootRevision++});
+  await rejectReceipt(receipt=>{receipt.revision++});
+  await rejectReceipt(receipt=>{receipt.recipeId='different-recipe'});
+  await rejectReceipt(receipt=>{receipt.effects.find(effect=>effect.seedId).seedId='forged-seed'});
+
+  const rootPrior=(await sponsor.runtime.document()).doc.forkAt(sponsor.runtime.inspectUpdate(
+   Uint8Array.from(JSON.parse(new TextDecoder().decode(opened.value)).update)).frontiers);
+  const sign=async change=>{
+   const forged=structuredClone(command);
+   change(forged.data);
+   const doc=rootPrior.fork();
+   doc.setPeerId(sponsor.runtime.scope.authorPeers[a.deviceId]);
+   const from=doc.oplogVersion();
+   apply(doc,forged);
+   const payload=new TextEncoder().encode(JSON.stringify({version:1,command:forged,
+    update:[...doc.export({mode:'update',from})]}));
+   return sponsor.runtime.codec.sealContent(opened.header,payload,sponsor.runtime.keyRef,auth.signingKeyRefs[a.deviceId]);
+  };
+  for(const change of [
+   data=>{data.ingredientId='different-ingredient'},
+   data=>{data.name='Different ingredient'},
+   data=>{data.recipeSource.frontiers[0].counter--},
+  ]){
+   const forged=await sign(change);
+   await assert.rejects(()=>newcomer.files.receive(forged.bytes),/INVALID_RECIPE_SOURCE|POLICY_BASELINE_UNAVAILABLE/);
+   assert.equal(must(await freshStorage.getInboxApplication(scope.id,forged.id)),null);
+  }
+  const raceId='root-copy-race';
+  const race={version:1,kind:'pantry-create',commandId:raceId,effectId:raceId,dependencyEffectIds:[],
+   data:{itemId:raceId,name:'Race pantry item',preference:3,at,author:newcomer.runtime.scope.authorDevice}};
+  freshStorage.commitImportWithDisclosurePolicy=async (...args)=>{
+   freshStorage.commitImportWithDisclosurePolicy=localCommit;
+   await commitCookingWithPolicy({runtime:newcomer.runtime,service:newcomer.service,input:{
+    operationId:raceId,command:race,deviceSequence:++sequence}});
+   return localCommit(...args);
+  };
+  await assert.rejects(()=>newcomer.files.retry(copy.id),/CONFLICT/);
+  assert.equal((await newcomer.runtime.document()).revision,rootBefore+1);
+  assert.equal(must(await freshStorage.getInboxApplication(scope.id,copy.id)),null);
+
+  const childRuntime=await newcomer.runtime.forRecipe(recipeId);
+  const currentRecipe=(await newcomer.householdContent.readCooking()).recipes.find(row=>row.id===recipeId);
+  const edited={...currentRecipe,ingredients:currentRecipe.ingredients.map(row=>row.id===ingredient.id
+   ? {...row,amount:'5 cups'} : row)};
+  freshStorage.commitImportWithDisclosurePolicy=async (...args)=>{
+   freshStorage.commitImportWithDisclosurePolicy=localCommit;
+   const actionId='child-copy-race';
+   const {doc}=await childRuntime.document();
+   const commands=planRecipeAction({doc,before:currentRecipe,after:edited,actionId,at,author:childRuntime.scope.authorDevice});
+   await newcomer.householdContent.execute(actionId,commands,recipeId);
+   return localCommit(...args);
+  };
+  await assert.rejects(()=>newcomer.files.retry(copy.id),/CONFLICT/);
+  assert.equal((await newcomer.runtime.document()).revision,rootBefore+1);
+  assert.equal(must(await freshStorage.getInboxApplication(scope.id,copy.id)),null);
+  freshFault='import-documents';
+  await assert.rejects(()=>newcomer.files.retry(copy.id),/IO/);
+  freshFault=null;
+  assert.equal((await newcomer.runtime.document()).revision,rootBefore+1);
+  assert.equal(must(await freshStorage.getInboxApplication(scope.id,copy.id)),null);
+  for(const object of objects)await newcomer.files.receive(object.bytes);
+  assert.equal((await newcomer.householdContent.readCooking()).recipes.find(row=>row.id===recipeId)
+   .ingredients.find(row=>row.id===ingredient.id).amount,'5 cups');
+  const context=await newcomer.service.authority();
+  const settings={runtime:newcomer.runtime,service:newcomer.service,context};
+  assert.deepEqual((await createSourceVerifier({...settings,allowIncomplete:true})(command.effectId)).policies,[accepted.policyHash]);
+  await assert.rejects(()=>createSourceVerifier(settings)(command.effectId),/INCOMPLETE_PROVENANCE/);
+  const copied=(await newcomer.householdContent.readCooking()).shopping.items.find(row=>row.id===item.id);
+  assert.deepEqual(copied,item);
+ });
 
  // Use the same Add Recipe binding as production with the fixture devices' real
  // ceremony secrets, and durable LocalKeys for every installed data key.

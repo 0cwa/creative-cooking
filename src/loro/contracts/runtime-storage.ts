@@ -40,8 +40,9 @@ export type ShoppingRecipeSourceReceipt = {
   recipeId: Id;
   documentId: Id;
   revision: number;
-  creationObjectId: Id;
-  effects: {effectId: Id; objectId: Id}[];
+  rootRevision: number | null;
+  creationObjectId?: Id;
+  effects: ({effectId: Id; objectId: Id} | {effectId: Id; seedId: Id})[];
 };
 
 /** Copied durable data, always unauthenticated. These reads do not provide a transactional snapshot across calls. */

@@ -50,9 +50,9 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|
    recipe={id:recipeId,create:command.kind==='recipe-create'};
   }
   validateCookingHeader(opened,expectedId??opened.object.id,target.scope);
-  if(!allowRecipeSources||auth.members){
+  if(!allowRecipeSources||auth.members||expectedAuthor!==undefined){
    command??=decodeCookingPayload(opened).command;
-   if(!allowRecipeSources&&command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
+   if((!allowRecipeSources||expectedAuthor!==undefined)&&command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
    target.assertRecipeCommand(command);
   }
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
@@ -109,7 +109,17 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|
   const members=await authorizedMembers(false);
   const [rows,states]=await Promise.all([outbound(members),runtime.storage.listReceiptStates(scopeId)]);
   const receipts=new Map(must(states).filter(x=>x.destination==='peer'&&x.recipientId===peerId).map(x=>[x.objectId,x.state]));
-  const pending=rows.filter(row=>receipts.get(row.objectId)!=='applied').map(row=>{
+  const queued=rows.filter(row=>receipts.get(row.objectId)!=='applied');
+  if(allowRecipeSources){
+   const refs=(await runtime.authorization()).signingKeyRefs;
+   for(let i=queued.length-1;i>=0;i--){
+    const row=queued[i];
+    if(JSON.parse(decoder.decode(row.bytes)).header.version!==4)continue;
+    const opened=await runtime.codec.openContent(row.bytes,refs);
+    if(decodeCookingPayload(opened).command.data.recipeSource)queued.splice(i,1);
+   }
+  }
+  const pending=queued.map(row=>{
    const {header}=JSON.parse(decoder.decode(row.bytes));
    if(header.authorDevice!==runtime.scope.authorDevice||!Number.isSafeInteger(header.deviceSequence))throw Error('CORRUPT');
    return {...row,sequence:header.deviceSequence,attempts:attempts.get(row.objectId)??(receipts.get(row.objectId)==='stored'?1:0)};

@@ -1,10 +1,11 @@
 import {projectCooking,projectRecipes} from '../domain/app-projection.mjs';
 import {executeAction} from './action.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
-import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
+import {planShoppingAction} from './shopping-actions.mjs';
+import {openSelectedRecipeCatalog,openShoppingRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 
 /** Use the platform's shared workspace operation boundary for reads and saves. */
-export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,disclosure,originalRecipeDocuments=false}) {
+export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,disclosure,originalRecipeDocuments=false,shoppingRecipeCopies=false}) {
  async function recipeRuntime(recipeId){
   if(recipeId===undefined)return runtime;
   if(runtime.authority?.installedSet){
@@ -61,6 +62,34 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
     return executeAction(target,sequences,actionId,input,disclosure);
    });
   },
+  ...(shoppingRecipeCopies?{saveShoppingCopy:(attempt,before,after)=>withCurrent(async()=>{
+   if(!attempt.commands){
+    const existing=new Set(before.shopping.items.map(item=>item.id));
+    const recipes=new Set(after.items.filter(item=>!existing.has(item.id)&&item.recipeId).map(item=>item.recipeId));
+    const children=new Map();
+    let parent;
+    for(const id of recipes){
+     const selected=await openShoppingRecipeCatalog(runtime,id);
+     if(parent&&parent.revision!==selected.parent.revision)throw Error('CONFLICT');
+     parent=selected.parent;
+     for(const [recipeId,child] of selected.children)children.set(recipeId,child);
+    }
+    if(!parent)return;
+    attempt.commands=planShoppingAction({doc:parent.doc,recipeCatalog:{children},before:before.shopping,after,
+     pantryBefore:before.pantry,pantryAfter:before.pantry,actionId:attempt.actionId,author:runtime.scope.authorDevice,
+     at:attempt.at});
+   }
+   if(!attempt.commands.length)return;
+   try {
+    await executeAction(runtime,sequences,attempt.actionId,attempt.commands,disclosure);
+   } catch(error){
+    if(error?.message==='CONFLICT'||error?.message==='REBASE_REQUIRED'){
+     const saved=await runtime.storage.getLocalOperation(runtime.scope.scopeId,attempt.actionId);
+     if(saved.ok&&!saved.value)attempt.commands=null;
+    }
+    throw error;
+   }
+  })}:{}),
   createRecipe:(actionId,recipe,beforeNewCommit=/** @type {(() => void)|undefined} */(undefined))=>{
    const after=structuredClone(recipe);
    return withCurrent(async()=>{

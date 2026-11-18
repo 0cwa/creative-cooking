@@ -12,10 +12,10 @@ const shoppingName='Invitation market carrots';
 const button=(page,name)=>page.getByRole('button',{name,exact:true});
 const label=(page,name)=>page.getByLabel(name,{exact:true});
 const text=(page,name)=>label(page,name).textContent();
-const addRecipe=async (page,title)=>{
+const addRecipe=async (page,title,ingredients='2 cups carrots')=>{
  await label(page,'Add recipe').click();
  await label(page,'New recipe title').fill(title);
- await label(page,'New recipe ingredients').fill('2 cups carrots');
+ await label(page,'New recipe ingredients').fill(ingredients);
  await label(page,'New recipe steps').fill('Simmer gently.');
  await label(page,'Save new recipe').click();
 };
@@ -244,10 +244,10 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await expect(newcomer.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await expect(newcomer.getByText(changedPantry,{exact:true})).toBeVisible();
 
-  const checkCooking=async (page,title)=>{
+  const checkCooking=async (page,title,ingredient='2 cups carrots')=>{
    await page.goto(app+'recipes');
    await label(page,'Open recipe '+title).click();
-   await expect(page.getByText(/2 cups carrots/)).toBeVisible();
+   await expect(page.getByText('• '+ingredient,{exact:true})).toBeVisible();
    await expect(page.getByText('1. Simmer gently.',{exact:true})).toBeVisible();
    await page.goto(app+'shopping');
    await expect(page.getByTestId('shopping-local-persistence-status')).toHaveText('Saved on this device only.');
@@ -314,7 +314,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   },loseAcknowledgement);
   await reopened.goto(app+'recipes');
   await interruptNextCatalogWrite(reopened);
-  await addRecipe(reopened,added);
+  await addRecipe(reopened,added,'Fresh turnips');
   await expect(label(reopened,'Retry new recipe save')).toBeEnabled();
   await expect(label(reopened,'Open recipe '+added)).toHaveCount(0);
   await interruptNextCatalogWrite(reopened,true);
@@ -331,10 +331,21 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await label(reopened,'Close recipe').click();
   await reopened.getByRole('tab',{name:/Pantry/}).click();
   await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:12_000});
+  const copyFrom=async(title,ingredient)=>{
+   await reopened.goto(app+'recipes');
+   await label(reopened,'Open recipe '+title).click();
+   await button(reopened,'Add ingredients to shopping list (1)').click();
+   await button(reopened,'Add 1 ingredients to list').click();
+   await expect(reopened.getByText(`1 ingredient added to ${shoppingList}.`)).toBeVisible();
+   await expect(label(reopened,'Check '+ingredient)).toBeVisible();
+   if(ingredient==='carrots')await expect(reopened.getByText('2 cups',{exact:true})).toBeVisible();
+  };
+  await copyFrom(editedTitle,'carrots');
+  await copyFrom(edited,'Fresh turnips');
   await reopened.goto(app+'settings');
   await button(reopened,'Exchange encrypted cooking files').click();
   const downloads=reopened.getByRole('button',{name:/^Download encrypted update /});
-  await expect(downloads).toHaveCount(5);
+  await expect(downloads).toHaveCount(7);
   const exported=[];
   for(const control of await downloads.all()){
    const pending=reopened.waitForEvent('download');
@@ -362,6 +373,15 @@ test('Settings transfers and reopens a verified recipe document set and new reci
    await button(sponsor,'Choose encrypted cooking update').click();
    await (await pending).setFiles({name:'recipe-update.bin',mimeType:'application/octet-stream',buffer});
   };
+  const [seedCopy,newCopy]=exported.filter(x=>x.envelope.header.version===4)
+   .sort((a,b)=>a.envelope.header.deviceSequence-b.envelope.header.deviceSequence);
+  await openExchange();
+  const importedSeedCopy=sponsor.waitForEvent('load');
+  await chooseUpdate(seedCopy.buffer);
+  await importedSeedCopy;
+  await openExchange();
+  await chooseUpdate(newCopy.buffer);
+  await expect(sponsor.getByText(/MISSING_DEPENDENCY/)).toBeVisible();
   await openExchange();
   await chooseUpdate(edits[0].buffer);
   await expect(sponsor.getByText('Choose the encrypted file that created this recipe first, then choose this edit again.',{exact:true})).toBeVisible();
@@ -374,12 +394,21 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   const installedCreation=sponsor.waitForEvent('load');
   await retry.click();
   await installedCreation;
+  await openExchange();
+  await button(sponsor,'Refresh retained cooking updates').click();
+  await button(sponsor,`Retry retained update ${newCopy.objectId}`).click();
+  await expect(sponsor.getByText(/MISSING_DEPENDENCY/)).toBeVisible();
   for(const {buffer} of edits){
    await openExchange();
    const loaded=sponsor.waitForEvent('load');
    await chooseUpdate(buffer);
    await loaded;
   }
+  await openExchange();
+  await button(sponsor,'Refresh retained cooking updates').click();
+  const importedNewCopy=sponsor.waitForEvent('load');
+  await button(sponsor,`Retry retained update ${newCopy.objectId}`).click();
+  await importedNewCopy;
   await openExchange();
   await chooseUpdate(creation.buffer);
   await expect(sponsor.getByText('This exact update was already applied. No new changes were made.',{exact:true})).toBeVisible();
@@ -392,6 +421,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
      q.onerror=()=>reject(q.error);
     });
     const {default:initLoro,LoroDoc}=await import('loro-crdt/web/loro_wasm.js');
+    const {projectCooking}=await import('/src/loro/domain/app-projection.mjs');
     await initLoro('/src/loro/app/loro_wasm_bg.wasm');
     const name=localStorage.getItem('creative-cooking-local-workspace-v1');
     const db=await request(indexedDB.open(`${name}-records`));
@@ -413,7 +443,8 @@ test('Settings transfers and reopens a verified recipe document set and new reci
       rootHasRecipe:!!parent.getMap('recipe-index').get(catalog.recipeId),
       title:doc.getMap('recipe:'+encodeURIComponent(catalog.recipeId)).get('title'),revision:child.revision,
       keySlots:installedKeys.map(key=>key[5]),opaque:!new TextDecoder().decode(object.bytes).includes(catalog.recipeId),
-      applied:!!receipt,edits:editReceipts.every(Boolean)};
+      applied:!!receipt,edits:editReceipts.every(Boolean),
+      links:projectCooking(parent).shopping.items.filter(item=>item.recipeId)};
     }finally{db.close();}
    },{documentId,objectId:creation.objectId,local,head:creation.envelope.header.branchHead,
     scopeId:creation.envelope.header.scopeId,editIds:edits.map(x=>x.objectId)});
@@ -425,10 +456,20 @@ test('Settings transfers and reopens a verified recipe document set and new reci
     title:edited,revision:applied?edits.length:1,opaque:true,applied,edits:true});
    expect(new Set(stored.keySlots).size).toBeGreaterThanOrEqual(3);
   }
+  expect(storedAuthor.links).toEqual(storedRecipient.links);
+  expect(storedRecipient.links).toHaveLength(2);
+  expect(storedRecipient.links).toEqual(expect.arrayContaining([
+   expect.objectContaining({name:'carrots',displayQuantity:'2 cups',recipeId:expect.any(String),ingredientId:expect.any(String)}),
+   expect.objectContaining({name:'Fresh turnips',recipeId:expect.any(String),ingredientId:expect.any(String)}),
+  ]));
   const recheckSponsor=await sponsorContext.newPage();
   const recheckNewcomer=await newcomerContext.newPage();
   try{
-   await Promise.all([checkCooking(recheckSponsor,edited),checkCooking(recheckNewcomer,edited)]);
+   await Promise.all([recheckSponsor,recheckNewcomer].map(async page=>{
+    await checkCooking(page,edited,'Fresh turnips');
+    await expect(label(page,'Check carrots')).toBeVisible();
+    await expect(label(page,'Check Fresh turnips')).toBeVisible();
+   }));
   }finally{
    await recheckSponsor.close();
    await recheckNewcomer.close();

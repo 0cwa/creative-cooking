@@ -144,7 +144,7 @@ type AppStateApi = PersistedState & {
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
   createShoppingList(input: NewShoppingList): void;
-  addShoppingItems(listId: string, inputs: NewShoppingItem[]): void;
+  addShoppingItems(listId: string, inputs: NewShoppingItem[]): void | Promise<void>;
   updateShoppingItem(id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }): void;
   removeShoppingItem(id: string): void;
   removeShoppingList(id: string): void;
@@ -182,6 +182,8 @@ function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace
 }
 function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
   const transitionInProgress=useRef(false);
+  const shoppingCopy=useRef<{key:string;attempt:{actionId:string;at:string;commands:unknown[]|null};
+    before:PersistedState;after:PersistedState['shopping']}|null>(null);
   const recipeCreation=useRef<{actionId:string;recipe:Recipe}|null>(null);
   const [pendingRecipeTitle,setPendingRecipeTitle]=useState<string|null>(null);
   const [mutationsPaused,setMutationsPaused]=useState(false);
@@ -455,11 +457,59 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
 
   const addShoppingItems = useCallback((listId: string, inputs: NewShoppingItem[]) => {
     if (!ensureSharedEditAllowed()) return;
+    const save=content.saveShoppingCopy;
+    if (save && inputs.some(item=>item.recipeId)) {
+      const key=JSON.stringify([listId,inputs.map(({recipeId,ingredientId,name,displayQuantity,displayUnit})=>
+        [recipeId,ingredientId,name,displayQuantity,displayUnit])]);
+      const run=async()=>{
+        const release=beginWorkspaceTransition();
+        try {
+          await flushCurrentWorkspace();
+          const prior=shoppingCopy.current;
+          if(prior){
+            try {
+              await save(prior.attempt,prior.before,prior.after);
+            } catch(error){
+              if(prior.attempt.commands)throw error;
+              shoppingCopy.current=null;
+              await refreshSharedCooking();
+              throw error;
+            }
+            shoppingCopy.current=null;
+            await refreshSharedCooking();
+            if(prior.key===key)return;
+          }
+          const before=appStateRef.current;
+          const after=appendShoppingItems(before.shopping,listId,inputs);
+          if(after===before.shopping)return;
+          const attempt={actionId:randomUUID(),at:new Date().toISOString(),commands:null};
+          shoppingCopy.current={key,attempt,before,after};
+          try {
+            await save(attempt,before,after);
+          } catch(error){
+            if(!shoppingCopy.current?.attempt.commands){
+              shoppingCopy.current=null;
+              if(error instanceof Error&&['CONFLICT','REBASE_REQUIRED','INVALID_RECIPE_SOURCE'].includes(error.message)){
+                await refreshSharedCooking();
+                throw Error('The recipe or list changed. Review the ingredients and try again.');
+              }
+            }
+            throw error;
+          }
+          shoppingCopy.current=null;
+          await refreshSharedCooking();
+        } finally {
+          release();
+        }
+      };
+      return run();
+    }
     if (inputs.some(item=>item.recipeId&&content.separateRecipeIds?.includes(item.recipeId))) {
       throw Error('Adding ingredients from this recipe is not available yet. You can add items manually.');
     }
     updateAppState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
-  }, [content.separateRecipeIds, ensureSharedEditAllowed, updateAppState]);
+  }, [beginWorkspaceTransition, content.saveShoppingCopy, content.separateRecipeIds, ensureSharedEditAllowed,
+    flushCurrentWorkspace, refreshSharedCooking, updateAppState]);
 
   const updateShoppingItem = useCallback((id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }) => {
     if (!ensureSharedEditAllowed()) return;

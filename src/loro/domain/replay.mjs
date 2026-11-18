@@ -98,7 +98,8 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
     const {disclosureService}=await import('../disclosure/service.mjs');
     const {createShoppingRecipeSourceVerifier}=await import('../disclosure/shopping-recipe-source.mjs');
     const service=disclosureService({storage:runtime.storage,scope:expectedAuthority.scope,rootPin:runtime.authority.rootPin,
-     provider:runtime.authority.provider,deviceId:scope.authorDevice});
+     provider:runtime.authority.provider,deviceId:scope.authorDevice,
+     installedSet:runtime.authority.installedSet});
     verifyRecipeSource=createShoppingRecipeSourceVerifier({runtime,service,context:await service.authority()});
    }
    linked=await verifyRecipeSource(command,expectedAuthority);

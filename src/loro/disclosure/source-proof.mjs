@@ -4,7 +4,7 @@ const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.co
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 /** Reverify retained signed envelopes and recursively reconstruct source policy ancestry. */
-export function createSourceVerifier({runtime,service,context,allowIncomplete=false,allowOwnDeviceBaseline=false,selectedDocument=null}) {
+export function createSourceVerifier({runtime,service,context,allowIncomplete=false,allowOwnDeviceBaseline=false,selectedDocument=null,selectedSeedEffects=null}) {
  const verified=new Map(),visiting=new Set(),baselines=new Map();let replayChecked=null,verifyShoppingRecipeSource=null;
  const scope=runtime.scope;
  const ancestors=context.verified?.nodes ? policyBranchAncestors(context.verified,scope.branchHead) : [];
@@ -22,6 +22,12 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
     for(const hash of copied.policyHashes)await service.validateStored(hash,context);
     const result={policies:copied.policyHashes,incomplete:true};
     visiting.delete(effect);verified.set(effect,result);return result;
+   }
+   const seedEffect=selectedSeedEffects?.get(effect);
+   if(seedEffect){
+    if(!allowIncomplete)throw Error('SOURCE_MAPPING_UNVERIFIED');
+    for(const hash of seedEffect.policies)await service.validateStored(hash,context);
+    visiting.delete(effect);verified.set(effect,seedEffect);return seedEffect;
    }
    let source=must(await runtime.storage.readDisclosureSource(scope.scopeId,effect)),legacy=false;
    if(!source&&!selectedDocument&&allowIncomplete&&ancestors.length>1){

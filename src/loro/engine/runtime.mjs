@@ -55,7 +55,7 @@ export class OfflineRuntime {
   }
   assertRecipeCommand(command) {
     if(this.authority?.installedSet&&
-      (command.data?.recipeSource||((command.kind==='recipe-create')!==!!this.recipeCreation)))throw Error('UNSUPPORTED_VERSION');
+      ((command.kind==='recipe-create')!==!!this.recipeCreation))throw Error('UNSUPPORTED_VERSION');
     if (this.#recipeId !== null && commandRecipeId(command) !== this.#recipeId) throw Error('INVALID_RECIPE_DOCUMENT');
   }
   async authorization() {

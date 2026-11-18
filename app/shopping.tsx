@@ -31,6 +31,7 @@ export default function ShoppingScreen() {
     setShoppingItemChecked,
     startNewPurchaseCycle,
     purchaseCheckedShoppingItems,
+    canEditSharedContent,
     contentWorkspaceName,
     contentSyncStatus,
     contentSyncError,
@@ -143,8 +144,8 @@ export default function ShoppingScreen() {
     setMessage(`${itemName.trim()} added to ${selectedList.name}.`);
   };
 
-  const addRecipeItems = () => {
-    if (!selectedList || !sourceRecipe) return;
+  const addRecipeItems = async () => {
+    if (!canEditSharedContent || !selectedList || !sourceRecipe) return;
     if (!selectedPreviewRows.length) {
       setMessage('Select at least one ingredient to add.');
       return;
@@ -154,8 +155,9 @@ export default function ShoppingScreen() {
       return;
     }
     const at = new Date().toISOString();
+    setMessage('');
     try {
-      addShoppingItems(selectedList.id, addablePreviewRows.map(({ ingredient }) => ({
+      await addShoppingItems(selectedList.id, addablePreviewRows.map(({ ingredient }) => ({
         id: newId('shopping-item'),
         name: ingredient.name,
         recipeId: sourceRecipe.id,
@@ -422,9 +424,9 @@ export default function ShoppingScreen() {
                 </Text>
                 <Pressable
                   accessibilityRole="button"
-                  disabled={!selectedList || !addablePreviewRows.length}
+                  disabled={!canEditSharedContent || !selectedList || !addablePreviewRows.length}
                   onPress={addRecipeItems}
-                  style={[styles.primaryAction, (!selectedList || !addablePreviewRows.length) && styles.disabledAction]}
+                  style={[styles.primaryAction, (!canEditSharedContent || !selectedList || !addablePreviewRows.length) && styles.disabledAction]}
                 >
                   <Text style={styles.primaryActionText}>Add {addablePreviewRows.length} ingredients to list</Text>
                 </Pressable>
