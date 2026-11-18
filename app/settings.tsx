@@ -1,3 +1,4 @@
+import { HouseholdCompromise } from '@/loro/app/HouseholdCompromise';
 import { HouseholdExistingDevice } from '@/loro/app/HouseholdExistingDevice';
 import { HouseholdGrantReview } from '@/loro/app/HouseholdGrantReview';
 import { HouseholdDelegation } from '@/loro/app/HouseholdDelegation';
@@ -552,6 +553,7 @@ export default function SettingsScreen() {
             <HouseholdGrantReview />
             <HouseholdExistingDevice />
             <HouseholdLocalTrust onQuarantine={() => setQuarantineChanged(changed => changed + 1)} />
+            <HouseholdCompromise />
             <CookingDirect />
             <CookingExchange quarantineChanged={quarantineChanged} />
             {Platform.OS === 'web' && <DisclosureControls items={app.pantry} />}

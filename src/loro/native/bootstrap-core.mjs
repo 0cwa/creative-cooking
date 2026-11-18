@@ -1,3 +1,4 @@
+import {householdCompromise} from '../app/household-compromise.mjs';
 import {householdLocalTrust} from '../app/household-local-trust.mjs';
 import {openSQLiteStorage,openSQLiteTransaction,scheduleSQLite} from '../storage/sqlite.ts';
 import {rootPin,policyId,initializeAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
@@ -40,7 +41,7 @@ export async function openNativeWorkspaceWith(options) {
 export async function returnToOriginalNativeWorkspaceWith(options) {
  await serializeOpen({...options,create:false,returnToOriginal:true});
 }
-async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect,returnToOriginal,initialPolicy}){
+async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,sha256,openDirect,returnToOriginal,initialPolicy}){
  await sodium.ready;const db=openDatabase(name);let master,sequences,pairing,joinedSequences;
  try {
   master=openMaster(name);
@@ -116,6 +117,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   if(!ready)await transaction(db,async()=>{const now=load();if(!now||!['sealed','ready'].includes(now.stage))throw Error('LOCKED');const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(now.data),aad));if(decoded.stage!==now.stage)throw Error('LOCKED');const {stage,...current}=decoded;if(JSON.stringify(current)!==JSON.stringify(r))throw Error('LOCKED');if(now.stage==='sealed'){const complete=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['ready',complete])}});
   const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
   return {
+   householdCompromise:householdCompromise({runtime:household,withCurrent,sha256,randomUUID}),
    householdLocalTrust:householdLocalTrust({runtime:household,withCurrent}),
    authorizeHousehold:active(()=>household.authorize()),
    household:{

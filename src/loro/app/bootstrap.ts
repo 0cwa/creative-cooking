@@ -1,3 +1,4 @@
+import {sha256} from '../native/sha256.native';
 import {open} from '@op-engineering/op-sqlite';
 import {randomUUID} from 'expo-crypto';
 import {NativeModules} from 'react-native';
@@ -19,7 +20,7 @@ export async function openLocalWorkspace(name:string,create=false,policy?:unknow
     }
   : undefined;
  return openNativeWorkspaceWith({
-  ...nativeStorage,name,create,policy,randomUUID,openDirect
+  ...nativeStorage,name,create,policy,randomUUID,sha256,openDirect
  });
 }
 

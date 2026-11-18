@@ -362,8 +362,8 @@ test('admitted browser devices independently verify their direct connection, ret
   }
 });
 
-async function scopeFingerprint(page, scopeId, includeQuarantine = true) {
-  return page.evaluate(async ({scopeId,includeQuarantine}) => {
+async function scopeFingerprint(page, scopeId, includeQuarantine = true, excludeReports = false) {
+  return page.evaluate(async ({scopeId,includeQuarantine,excludeReports}) => {
     const name = localStorage.getItem('creative-cooking-local-workspace-v1');
     const db = await new Promise((resolve,reject) => {
       const request = indexedDB.open(`${name}-records`);
@@ -376,8 +376,10 @@ async function scopeFingerprint(page, scopeId, includeQuarantine = true) {
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) return resolve(rows);
-          const [kind,scope] = JSON.parse(cursor.key);
-          if (scope === scopeId && (includeQuarantine || kind !== 'compromise-quarantine')) rows.push([cursor.key,cursor.value]);
+          const [kind,scope,authorityScope] = JSON.parse(cursor.key);
+          const inScope = scope === scopeId || kind === 'pairing-authority' && authorityScope === scopeId;
+          if (inScope && (includeQuarantine || kind !== 'compromise-quarantine') &&
+              (!excludeReports || !['compromise-review','compromise-frozen-original'].includes(kind))) rows.push([cursor.key,cursor.value]);
           cursor.continue();
         };
         request.onerror = () => reject(request.error);
@@ -385,7 +387,7 @@ async function scopeFingerprint(page, scopeId, includeQuarantine = true) {
       const data = JSON.stringify(rows,(_key,value) => value instanceof Uint8Array ? Array.from(value) : value);
       return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(data))));
     } finally { db.close(); }
-  }, {scopeId,includeQuarantine});
+  }, {scopeId,includeQuarantine,excludeReports});
 }
 
 async function downloadCooking(page) {
@@ -547,4 +549,94 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     }
     throw error;
   } finally { await Promise.all(contexts.map(context => context.close())); }
+});
+
+test('enrolled Settings devices share frozen signed incident evidence without applying cooking', async ({browser,baseURL}) => {
+  test.setTimeout(120_000);
+  const contexts = await Promise.all([0,1].map(()=>browser.newContext({baseURL,acceptDownloads:true})));
+  const [organizer,recipient] = await Promise.all(contexts.map(context=>openPage(context,baseURL)));
+  async function chooseReport(page,bytes) {
+    const chooser = page.waitForEvent('filechooser');
+    await button(page,'Choose signed incident report').click();
+    await (await chooser).setFiles({name:'incident.cc-report',mimeType:'application/octet-stream',buffer:bytes});
+  }
+  try {
+    await Promise.all([prepare(organizer,baseURL,true),prepare(recipient,baseURL,false)]);
+    const organizerId = JSON.parse(await text(organizer,'Public device identity')).deviceId;
+    const recipientId = JSON.parse(await text(recipient,'Public device identity')).deviceId;
+    expect(organizerId).not.toEqual(recipientId);
+    await admit(organizer,recipient,baseURL);
+    await add(organizer,'Suspect-authored marjoram');
+    await saved(organizer);
+    await button(organizer,'Open settings').click();
+    const [earlier] = await downloadCooking(organizer);
+    await button(recipient,'Open settings').click();
+    await button(recipient,'Exchange encrypted cooking files').click();
+    const loaded = recipient.waitForEvent('load');
+    await uploadCooking(recipient,earlier.bytes);
+    await loaded;
+    await recipient.goto(baseURL);
+    await visible(recipient,'Suspect-authored marjoram');
+    const pantryRow = recipient.getByTestId(/^pantry-item-/).filter({hasText:'Suspect-authored marjoram'});
+    await pantryRow.getByRole('button',{name:'Set preference to 5 out of 5',exact:true}).click();
+    await saved(recipient);
+    await button(recipient,'Open settings').click();
+    const scope = (await text(recipient,'Open household')).split(' · ')[1];
+    const normal = page=>scopeFingerprint(page,scope,true,true);
+    const beforeReporter = await normal(recipient);
+    const beforeReceiver = await normal(organizer);
+
+    await button(recipient,'Open household incident reports').click();
+    await button(recipient,`Prepare report for ${organizerId}`).click();
+    await recipient.getByRole('button',{name:new RegExp(`^Use signed pantry-create operation ${earlier.id}`)}).click();
+    await visible(recipient,`Selected operation ${earlier.id}`);
+    expect(await normal(recipient)).toEqual(beforeReporter);
+    await button(recipient,'Sign and freeze incident report').click();
+    await visible(recipient,'Signed report saved on this device.');
+    await visible(recipient,'Frozen evidence · 3 signed operations');
+    await visible(recipient,'Authored by the reported device');
+    await expect(recipient.getByText('Depends on work by the reported device',{exact:true})).toHaveCount(2);
+    expect(await normal(recipient)).toEqual(beforeReporter);
+
+    const downloaded = recipient.waitForEvent('download');
+    await button(recipient,'Download signed incident report').click();
+    const file = await readFile(await (await downloaded).path());
+    const tampered = Buffer.from(file);
+    tampered[tampered.length-1] ^= 1;
+    await button(organizer,'Open household incident reports').click();
+    const allBeforeRejection = await scopeFingerprint(organizer,scope);
+    await chooseReport(organizer,tampered);
+    await visible(organizer,'The original evidence does not match the signed report.');
+    expect(await scopeFingerprint(organizer,scope)).toEqual(allBeforeRejection);
+
+    await chooseReport(organizer,file);
+    await visible(organizer,'Signed report verified and available for review.');
+    await visible(organizer,'Frozen evidence · 3 signed operations');
+    await expect(organizer.getByText('Depends on work by the reported device',{exact:true})).toHaveCount(2);
+    await visible(organizer,`Reporter device ${recipientId}`);
+    expect(await normal(organizer)).toEqual(beforeReceiver);
+    const savedReview = await scopeFingerprint(organizer,scope);
+    await chooseReport(organizer,file);
+    await visible(organizer,'This exact signed report was already saved.');
+    expect(await scopeFingerprint(organizer,scope)).toEqual(savedReview);
+    await expect(organizer.getByRole('button',{name:/^Review incident report /})).toHaveCount(1);
+
+    await organizer.goto(baseURL);
+    await add(organizer,'Later signed tarragon');
+    await saved(organizer);
+    await button(organizer,'Open settings').click();
+    await button(organizer,'Open household incident reports').click();
+    await organizer.getByRole('button',{name:/^Review incident report /}).click();
+    await visible(organizer,'Frozen evidence · 3 signed operations');
+    await expect(organizer.getByText('Depends on work by the reported device',{exact:true})).toHaveCount(2);
+
+    await button(organizer,`Prepare report for ${recipientId}`).click();
+    await button(organizer,'Use verified household projection checkpoint').click();
+    await button(organizer,'Sign and freeze incident report').click();
+    await visible(organizer,'Signed report saved on this device.');
+    await visible(organizer,'Verified household projection checkpoint');
+    await expect(organizer.getByRole('button',{name:/^Review incident report /})).toHaveCount(2);
+  } finally {
+    await Promise.all(contexts.map(context=>context.close()));
+  }
 });

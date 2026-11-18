@@ -1,3 +1,7 @@
+import {householdCompromise} from './household-compromise.mjs';
+import {CompromiseReviews} from '../compromise/review.mjs';
+import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
+import {evidenceSha256} from '../compromise/report.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {cookingFiles} from './cooking-file.mjs';
@@ -191,4 +195,140 @@ test('quarantine rejects this device and rechecks household authority within its
   await assert.rejects(receiver.trust.quarantine(target),/STALE_AUTHORITY/);
   assert.equal(await storage.compromise.isQuarantined(scope.id,sender.deviceId),false);
   assert.equal((await receiver.trust.list()).length,2);
+});
+
+test('signed report verifies exact bytes and durable retries without cooking side effects',async t => {
+  const [reporter,receiver] = await household(t);
+  const suspect = await receiver.edit('suspect operation',1);
+  await reporter.cooking.receive(suspect.bytes);
+  const dependent = {
+    version:1,kind:'pantry-field',commandId:'dependent',effectId:'dependent',dependencyEffectIds:['suspect operation'],
+    data:{itemId:'suspect operation',field:'preference',value:5,author:reporter.deviceId,at:'2026-01-01T00:00:00Z'}
+  };
+  await reporter.runtime.execute({operationId:'dependent',deviceSequence:1,command:dependent});
+  const normalRows = peer => peer.rows().filter(row=>!['compromise-review','compromise-frozen-original'].includes(JSON.parse(row.key)[0]));
+  const beforeReporter = normalRows(reporter), beforeReceiver = receiver.rows();
+  const api = peer => householdCompromise({runtime:peer.runtime,withCurrent:use=>use(0),sha256:evidenceSha256});
+  const source = api(reporter), destination = api(receiver);
+  const origin = (await source.open()).confirmation, target = (await destination.open()).confirmation;
+  const draft = await source.prepare(origin,receiver.deviceId);
+  assert.deepEqual(normalRows(reporter),beforeReporter);
+  const reviewId = await source.sign(draft,{kind:'operation',ref:suspect.itemId});
+  let file;
+  await source.share(origin,reviewId,async bytes=>{file=bytes;});
+  assert.deepEqual(normalRows(reporter),beforeReporter);
+
+  const decoded=decodeReportFile(file);
+  const wrongSignature=structuredClone(decoded.report);
+  wrongSignature.signature=(wrongSignature.signature[0]==='0'?'1':'0')+wrongSignature.signature.slice(1);
+  await assert.rejects(destination.receive(target,encodeReportFile(wrongSignature,decoded.manifest,decoded.objects)),/INVALID_REPORT_SIGNATURE/);
+  const wrongBoundary=structuredClone(decoded.report);
+  wrongBoundary.payload.boundary.ref=decoded.objects.find(o=>o.objectId!==suspect.itemId).objectId;
+  await assert.rejects(destination.receive(target,encodeReportFile(wrongBoundary,decoded.manifest,decoded.objects)),/INVALID_REPORT_SIGNATURE/);
+  const changed = new Uint8Array(file);
+  changed[changed.length-1]^=1;
+  await assert.rejects(destination.receive(target,changed),/MANIFEST_MISMATCH/);
+  await assert.rejects(destination.receive(target,encodeReportFile(decoded.report,[...decoded.manifest].reverse(),[...decoded.objects].reverse())),/MANIFEST_MISMATCH/);
+  assert.deepEqual(receiver.rows(),beforeReceiver);
+
+  const healthyStorage = receiver.storage.compromise;
+  for(const failedWrite of [1,2]){
+    let writes=0;
+    const failing = new CompromiseReviews(healthyStorage.run,()=>{if(++writes===failedWrite)throw Error('FAULT');});
+    receiver.storage.compromise=failing;
+    await assert.rejects(api(receiver).receive(target,file),/FAULT/);
+    assert.equal(writes,failedWrite);
+    assert.deepEqual(receiver.rows(),beforeReceiver);
+  }
+  const authorityKey=JSON.stringify(['pairing-authority','household',scope.id]);
+  let originalAuthority;
+  const raced = new CompromiseReviews(async (write,use)=>{
+    if(write)await healthyStorage.run(true,async tx=>{
+      originalAuthority=await tx.get(authorityKey);
+      await tx.put(authorityKey,{...originalAuthority,revision:originalAuthority.revision+1});
+    });
+    return healthyStorage.run(write,use);
+  });
+  receiver.storage.compromise=raced;
+  await assert.rejects(api(receiver).receive(target,file),/STALE_AUTHORITY/);
+  assert.equal(receiver.rows().some(row=>JSON.parse(row.key)[0]==='compromise-review'),false);
+  await healthyStorage.run(true,tx=>tx.put(authorityKey,originalAuthority));
+  assert.deepEqual(receiver.rows(),beforeReceiver);
+  receiver.storage.compromise=healthyStorage;
+  assert.deepEqual(await destination.receive(target,file),{reviewId,replayed:false});
+  assert.deepEqual(normalRows(receiver),beforeReceiver);
+  const saved=receiver.rows();
+  const reopened=api(receiver), reopenedToken=(await reopened.open()).confirmation;
+  assert.deepEqual(await reopened.receive(reopenedToken,file),{reviewId,replayed:true});
+  assert.deepEqual(receiver.rows(),saved);
+  const view=await reopened.inspect(reopenedToken,reviewId);
+  assert.equal(view.count,2);
+  assert.deepEqual(view.rows.map(({category,authorDevice})=>[category,authorDevice]).sort(),[
+    ['dependent',reporter.deviceId],['suspect',receiver.deviceId]
+  ]);
+  assert.equal(view.rows.find(row=>row.objectId===suspect.itemId).boundary,true);
+  await receiver.edit('later evidence',2);
+  assert.deepEqual(await reopened.inspect(reopenedToken,reviewId),view);
+  assert.equal(await receiver.storage.compromise.isQuarantined(scope.id,reporter.deviceId),false);
+
+  const originalKey=JSON.stringify(['compromise-frozen-original',scope.id,reviewId]);
+  await healthyStorage.run(true,async tx=>{
+    const snapshot=await tx.get(originalKey);
+    snapshot.objects[0][0]^=1;
+    snapshot.checkpoint=Uint8Array.of(1);
+    await tx.put(originalKey,snapshot);
+  });
+  const incomplete=await reopened.inspect(reopenedToken,reviewId);
+  assert.equal(incomplete.count,2);
+  assert.equal(incomplete.rows.length,1);
+  assert.equal(incomplete.missing.length,1);
+  assert.equal(incomplete.checkpointUnavailable,true);
+  assert.equal(incomplete.rows[0].category,'suspect');
+  await assert.rejects(reopened.receive(reopenedToken,file),/CONFLICT/);
+});
+
+test('force report preflight before crypto and reject a stale boundary or file selection',async t => {
+  const [reporter,receiver]=await household(t);
+  let selected=0, unauthorizedCalls=0;
+  const api = householdCompromise({runtime:reporter.runtime,withCurrent:use=>use(selected)});
+  const token=(await api.open()).confirmation;
+  const draft=await api.prepare(token,receiver.deviceId);
+  assert.equal(draft.checkpoint,'Pinned household starting checkpoint');
+  selected++;
+  await assert.rejects(api.sign(draft,{kind:'checkpoint'}),/STALE_REPORT_SELECTION/);
+  assert.equal((await api.open()).reports.length,0);
+  selected--;
+  const first = await api.sign(draft,{kind:'checkpoint'});
+  let file;
+  await api.share(token,first,async bytes=>{file=bytes;});
+  const destination=householdCompromise({runtime:receiver.runtime,withCurrent:use=>use(selected)});
+  const target=(await destination.open()).confirmation;
+  selected++;
+  const original=receiver.rows();
+  await assert.rejects(destination.receive(target,file),/STALE_REPORT_SELECTION/);
+  assert.deepEqual(receiver.rows(),original);
+  const freshTarget=(await destination.open()).confirmation;
+  assert.deepEqual(await destination.receive(freshTarget,file),{reviewId:first,replayed:false});
+  const inspected=await destination.inspect(freshTarget,first);
+  assert.equal(inspected.checkpointLabel,'Pinned household starting checkpoint');
+  assert.equal(inspected.count,0);
+
+  const secondDraft=await api.prepare((await api.open()).confirmation,receiver.deviceId);
+  const second=await api.sign(secondDraft,{kind:'checkpoint'});
+  let newFile;
+  await api.share((await api.open()).confirmation,second,async bytes=>{newFile=bytes;});
+
+  const authorize = receiver.runtime.authorization.bind(receiver.runtime);
+  receiver.runtime.authorization = async ()=>{unauthorizedCalls++;return authorize();};
+  await assert.rejects(destination.receive(target,new Uint8Array(REPORT_FILE_LIMIT+1)),/INVALID_REPORT_FILE_SIZE/);
+  const slots=receiver.storage.compromise;
+  await slots.run(true,async tx=>{
+    for(let i=0;i<15;i++)await tx.put(JSON.stringify(['compromise-frozen-original',scope.id,`existing-${i}`]),[]);
+  });
+  const capacity = receiver.rows();
+  await assert.rejects(destination.receive(freshTarget,newFile),/REPORT_CAPACITY/);
+  await assert.rejects(destination.prepare(freshTarget,reporter.deviceId),/REPORT_CAPACITY/);
+  assert.equal(unauthorizedCalls,0);
+  assert.deepEqual(await destination.receive(freshTarget,file),{reviewId:first,replayed:true});
+  assert.deepEqual(receiver.rows(),capacity);
 });

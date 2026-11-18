@@ -1,7 +1,7 @@
 import {resolveEvidenceAuthority,verifyReport} from './report.mjs';
 import {validate,validateOperations,checkPreconditions,apply,bytes} from '../domain/registry.mjs';
 import {REVIEW_LIMITS} from './review.mjs';
-import {assertCommandScope} from '../domain/personal-codec.mjs';
+import {authenticateEvidence} from './authenticated-evidence.mjs';
 const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 const eq=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -28,13 +28,7 @@ export async function reconstructHistorical({runtime,reviews,scopeId,reviewId,ob
    const head=raw?.header?.branchHead;if(typeof head!=='string'||!head)throw Error('MALFORMED');
    if(!attemptedHeads.has(head)){if(attemptedHeads.size>=REVIEW_LIMITS.authorityHeads)throw Error('AUTHORITY_HEAD_BUDGET');attemptedHeads.add(head)}
    let a=cache.get(head);if(!a){a=await resolveEvidenceAuthority(runtime,scope,head,raw?.header?.authorDevice);cache.set(head,a)}
-   const opened=await runtime.codec.openContent(o.bytes,a.signingKeyRefs),h=opened.header,s=a.scope;
-   if(opened.object.id!==o.objectId||h.scopeId!==s.scopeId||h.documentId!==s.documentId||h.documentGeneration!==s.documentGeneration||h.branchHead!==s.branchHead||h.epochId!==s.epochId||h.suiteId!==s.suiteId||!eq(h.policyHashes,s.policyHashes)||!s.acceptedAuthors.includes(h.authorDevice)||h.payloadKind!=='loro-update-v1'||h.semanticEffectIds.length!==1)throw Error('INVALID_AUTHORITY');
-   let p;try{p=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value))}catch{throw Error('MALFORMED_UPDATE')}
-   if(!p||Object.keys(p).sort().join(',')!=='command,update,version'||p.version!==1||!dense(p.update)||!p.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))throw Error('MALFORMED_UPDATE');
-   const command=validate(p.command);assertCommandScope(command.kind,scope.kind);if(command.dependencyEffectIds.length>REVIEW_LIMITS.dependencies||command.effectId!==h.semanticEffectIds[0]||(command.data.author!==undefined&&command.data.author!==h.authorDevice))throw Error('MALFORMED_UPDATE');
-   const update=Uint8Array.from(p.update),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!eq(meta.predecessors,h.predecessorRefs))throw Error('MALFORMED_UPDATE');
-   const startCounter=runtime.decodeImportBlobMeta(update,true).partialStartVersionVector.toJSON().get(meta.peer)??0;all.push({sourceId:o.sourceId,objectId:o.objectId,authorDevice:h.authorDevice,sourceDocumentId:h.documentId,sourceGeneration:h.documentGeneration,sourceHead:h.branchHead,command,update,meta,startCounter});
+   all.push(await authenticateEvidence(runtime,scope.kind,a,o));
   }catch(e){held.push({sourceId:o.sourceId,objectId:o.objectId,reason:e.message||'INVALID_EVIDENCE'})}
  }
  if(new Set(all.map(e=>JSON.stringify([e.sourceDocumentId,e.sourceGeneration]))).size>1)throw Error('MIXED_SOURCE_DOCUMENTS');

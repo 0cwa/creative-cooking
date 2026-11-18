@@ -1,3 +1,4 @@
+import {createHash,randomUUID} from 'node:crypto';
 // Host contract test only; native Android/Hermes proof must run separately.
 import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {copyFileSync,existsSync,readdirSync,rmSync} from 'node:fs';import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';import {openNativeWorkspaceWith,returnToOriginalNativeWorkspaceWith} from './bootstrap-core.mjs';import {executeAction} from '../app/action.mjs';
 import {prepareInitialPolicy,acceptInitialPolicy} from '../disclosure/setup.mjs';
@@ -108,11 +109,12 @@ function directPair() {
 
 test('fresh native workspaces use signed admission, durable selection and guarded direct imports', {timeout:25_000}, async () => {
  const organizerName = 'native-invitation-organizer', recipientName = 'native-invitation-recipient';
+ const nativeReportCrypto={randomUUID,sha256:async bytes=>createHash('sha256').update(bytes).digest('hex')};
  let organizer, recipient, failEnrollment = false, afterReservation, beforeSelectionDecode, nativeDirect;
  const pairingPath = join(dir,`${recipientName}-pairing.sqlite`);
  const recipientPath = join(dir,`${recipientName}.sqlite`);
  const openRecipient = create => openNativeWorkspaceWith({
-  ...args(recipientName,create),openDirect:nativeDirect,
+  ...args(recipientName,create),...nativeReportCrypto,openDirect:nativeDirect,
   openDatabase(name) {
    if (failEnrollment && name.startsWith(`${recipientName}-receive-`)) throw Error('COUNTER_OPEN_FAILED');
    const db = openDatabase(name);
@@ -206,7 +208,7 @@ test('fresh native workspaces use signed admission, durable selection and guarde
   const [organizerDirect,recipientDirect] = directPair();
   nativeDirect = recipientDirect;
   recipient = await openRecipient(false);
-  organizer = await openNativeWorkspaceWith({...args(organizerName,false),openDirect:organizerDirect});
+  organizer = await openNativeWorkspaceWith({...args(organizerName,false),...nativeReportCrypto,openDirect:organizerDirect});
   assert.equal(recipient.household.scope.branchHead,organizer.household.scope.branchHead);
   assert.deepEqual(await pantry(recipient),['seed-leek']);
   assert.equal(recipient.needsDisclosureSetup,false);
@@ -245,6 +247,19 @@ test('fresh native workspaces use signed admission, durable selection and guarde
    await receiver.cookingFiles.receive(await sender.cookingFiles.download(objectId));
   }
   assert.deepEqual(await pantry(recipient),['offline-fennel','offline-mint','seed-leek']);
+  assert.deepEqual(await pantry(organizer),await pantry(recipient));
+
+  const signer=organizer.householdCompromise, verifier=recipient.householdCompromise;
+  const sourceToken=(await signer.open()).confirmation, targetToken=(await verifier.open()).confirmation;
+  const draft=await signer.prepare(sourceToken,recipient.deviceId);
+  assert.equal(draft.checkpoint,'Verified household projection checkpoint');
+  const reviewId=await signer.sign(draft,{kind:'checkpoint'});
+  let reportFile;
+  await signer.share(sourceToken,reviewId,async file=>{reportFile=file;});
+  assert.deepEqual(await verifier.receive(targetToken,reportFile),{reviewId,replayed:false});
+  const frozen=await verifier.inspect(targetToken,reviewId);
+  assert.equal(frozen.checkpointLabel,'Verified household projection checkpoint');
+  assert.equal(frozen.rows.filter(row=>row.category==='suspect').length,1);
   assert.deepEqual(await pantry(organizer),await pantry(recipient));
   const deviceId = recipient.deviceId;
   const joined = houseCounterName(recipientName,scope,deviceId);
