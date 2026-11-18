@@ -4,7 +4,12 @@ import {NativeModules} from 'react-native';
 import sodium from '../native/sodium';
 import {openNativeMaster} from '../native/master';
 import {LoroDoc,decodeImportBlobMeta} from '../native/loro';
-import {openNativeWorkspaceWith} from '../native/bootstrap-core.mjs';
+import {openNativeWorkspaceWith,returnToOriginalNativeWorkspaceWith} from '../native/bootstrap-core.mjs';
+
+const nativeStorage = {
+ sodium,LoroDoc,decodeImportBlobMeta,openMaster:openNativeMaster,
+ openDatabase:(id:string)=>open({name:`loro-native-${id}.sqlite`})
+};
 
 export async function openLocalWorkspace(name:string,create=false) {
  const openDirect = NativeModules.WebRTCModule
@@ -14,7 +19,8 @@ export async function openLocalWorkspace(name:string,create=false) {
     }
   : undefined;
  return openNativeWorkspaceWith({
-  name,create,sodium,LoroDoc,decodeImportBlobMeta,openMaster:openNativeMaster,randomUUID,
-  openDirect,openDatabase:(id:string)=>open({name:`loro-native-${id}.sqlite`})
+  ...nativeStorage,name,create,randomUUID,openDirect
  });
 }
+
+export const returnToOriginalLocalWorkspace = (name:string) => returnToOriginalNativeWorkspaceWith({...nativeStorage,name});

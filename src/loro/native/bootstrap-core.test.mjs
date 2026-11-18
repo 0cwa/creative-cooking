@@ -1,5 +1,5 @@
 // Host contract test only; native Android/Hermes proof must run separately.
-import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {readdirSync,rmSync} from 'node:fs';import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';import {openNativeWorkspaceWith} from './bootstrap-core.mjs';import {executeAction} from '../app/action.mjs';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {readdirSync,rmSync} from 'node:fs';import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';import {openNativeWorkspaceWith,returnToOriginalNativeWorkspaceWith} from './bootstrap-core.mjs';import {executeAction} from '../app/action.mjs';
 import {prepareInitialPolicy,acceptInitialPolicy} from '../disclosure/setup.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {domain} from '../authority/validator.mjs';
@@ -18,6 +18,9 @@ function removeWorkspace(name) {
 test('native bootstrap creates signed authorities and restores a real personal action',async()=>{const name='native-bootstrap-test';try {await assert.rejects(openNativeWorkspaceWith(args(name,false)),/MISSING_BOOTSTRAP/);let w=await openNativeWorkspaceWith(args(name,true));const device=w.deviceId;const c={version:1,kind:'personal-preference-put',commandId:'one',effectId:'one',dependencyEffectIds:[],data:{key:'systemPrompt',value:'Stockholm'}};await executeAction(w.personal,w.sequences,'action',[c]);assert.equal((await w.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');w.close();
  // An upgraded installation has its established workspace but no pairing metadata database.
  rmSync(join(dir,`${name}-pairing.sqlite`));
+ const priorLayout=new DatabaseSync(join(dir,`${name}.sqlite`));
+ priorLayout.prepare('DELETE FROM loro_records WHERE key IN (?,?)').run('["native-household-selection"]','["native-household-selection-required"]');
+ priorLayout.close();
  w=await openNativeWorkspaceWith({...args(name,false),openDirect:async()=>{throw Error('DIRECT_UNAVAILABLE')}});assert.equal(w.deviceId,device);assert.equal(w.direct,undefined);
  assert.equal(w.householdPairing.selectedHousehold,false);
  assert.deepEqual(await w.householdPairing.acceptedParents(),[]);assert.equal((await w.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');assert.equal(await w.sequences.reserve(w.personal.scope.scopeId,JSON.stringify(['action','one'])),1);w.close();masters.delete(keyname(name,'workspace-master'));await assert.rejects(openNativeWorkspaceWith(args(name,true)),/LOCKED/);}finally{removeWorkspace(name)}});
@@ -164,3 +167,15 @@ test('fresh native workspaces use the signed invitation and recover interrupted 
 function houseCounterName(name, scope, deviceId) {
  return `${name}-${householdReceiverIds(sodium,scope,deviceId).operationId}`;
 }
+
+test('return to original requires an established workspace and creates no identity', async () => {
+ const name = 'native-return-missing';
+ try {
+  await assert.rejects(returnToOriginalNativeWorkspaceWith(args(name,false)),/MISSING_BOOTSTRAP/);
+  const db = new DatabaseSync(join(dir,`${name}.sqlite`));
+  try {
+   assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all(),[]);
+   assert.equal(masters.has(keyname(name,'workspace-master')),false);
+  } finally { db.close(); }
+ } finally { removeWorkspace(name); }
+});

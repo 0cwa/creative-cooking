@@ -1,4 +1,4 @@
-import {openSQLiteStorage} from '../storage/sqlite.ts';
+import {openSQLiteStorage,openSQLiteTransaction,scheduleSQLite} from '../storage/sqlite.ts';
 import {rootPin,policyId,initializeAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from '../authority/personal.mjs';
 import {domain} from '../authority/validator.mjs';
@@ -9,7 +9,7 @@ import {disclosureService} from '../disclosure/service.mjs';
 import {householdPairing as bindHouseholdPairing} from '../app/household-pairing.mjs';
 import {bootstrapDisclosurePolicy} from '../app/bootstrap-policy.mjs';
 import {cookingFiles} from '../app/cooking-file.mjs';
-import {openNativeHouseholdPersistence} from './household-persistence.mjs';
+import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
 import {openNativeSequences} from './sequences.mjs';
 const enc=new TextEncoder(),dec=new TextDecoder('utf-8',{fatal:true});
@@ -18,19 +18,34 @@ const fields=['device','adult','house','personal','houseDoc','personalDoc','hous
 const valid=x=>typeof x==='string'&&/^[a-z0-9-]{1,100}$/.test(x);
 const exec=(db,q,p=[])=>db.executeSync(q,p);
 const rows=(db,q,p=[])=>exec(db,q,p).rows??[];
-async function transaction(db,fn){exec(db,'BEGIN IMMEDIATE');try{const r=await fn();exec(db,'COMMIT');return r}catch(e){try{exec(db,'ROLLBACK')}catch{}throw e}}
+function transaction(db,fn){return scheduleSQLite(db,async()=>{exec(db,'BEGIN IMMEDIATE');try{const r=await fn();exec(db,'COMMIT');return r}catch(e){try{exec(db,'ROLLBACK')}catch{}throw e}})}
 function check(r){if(!r||r.version!==1||!fields.every(k=>valid(r[k]))||new Set(fields.map(k=>r[k])).size!==fields.length)throw Error('LOCKED');return r}
 const decode=bytes=>check(JSON.parse(dec.decode(bytes)));
 const serial=new Map();
-export function openNativeWorkspaceWith({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect}) {
+function serializeOpen(options) {
+ const {name,create}=options;
  if(!valid(name)||typeof create!=='boolean')throw Error('MALFORMED');
- const previous=serial.get(name)??Promise.resolve();const current=previous.catch(()=>{}).then(()=>open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect}));serial.set(name,current);current.finally(()=>{if(serial.get(name)===current)serial.delete(name)}).catch(()=>{});return current;
+ const previous=serial.get(name)??Promise.resolve();
+ const current=previous.catch(()=>{}).then(()=>open(options));
+ serial.set(name,current);
+ current.finally(()=>{if(serial.get(name)===current)serial.delete(name)}).catch(()=>{});
+ return current;
 }
-async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect}){
+export function openNativeWorkspaceWith(options) {
+ return serializeOpen({...options,returnToOriginal:false});
+}
+export async function returnToOriginalNativeWorkspaceWith(options) {
+ await serializeOpen({...options,create:false,returnToOriginal:true});
+}
+async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect,returnToOriginal}){
  await sodium.ready;const db=openDatabase(name);let master,sequences,pairing,joinedSequences;
  try {
   master=openMaster(name);
-  exec(db,'CREATE TABLE IF NOT EXISTS loro_bootstrap (id INTEGER PRIMARY KEY CHECK(id=1), stage TEXT NOT NULL, data BLOB NOT NULL)');
+  if(returnToOriginal){
+   const existing=rows(db,"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('loro_bootstrap','loro_records')");
+   if(!existing.some(row=>row.name==='loro_bootstrap'))throw Error('MISSING_BOOTSTRAP');
+   if(existing.length!==2)throw Error('MISSING_AUTHORITY');
+  }else exec(db,'CREATE TABLE IF NOT EXISTS loro_bootstrap (id INTEGER PRIMARY KEY CHECK(id=1), stage TEXT NOT NULL, data BLOB NOT NULL)');
   const storage=openSQLiteStorage(db);
   const load=()=>rows(db,'SELECT stage,data FROM loro_bootstrap WHERE id=1')[0];
   let state=await transaction(db,async()=>{
@@ -40,7 +55,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    const r={version:1};for(const key of fields)r[key]=sodium.to_hex(sodium.randombytes_buf(16));check(r);
    exec(db,'INSERT INTO loro_bootstrap VALUES (1,?,?)',['reserved',enc.encode(JSON.stringify(r))]);return load();
   });
-  if(!['reserved','sealed','ready'].includes(state.stage))throw Error('LOCKED');
+  if(!['reserved','sealed','ready'].includes(state.stage)||returnToOriginal&&state.stage!=='ready')throw Error('LOCKED');
   let r;
   if(state.stage==='reserved'){
    await transaction(db,async()=>{const now=load();if(now.stage!=='reserved')return;if(rows(db,'SELECT key FROM loro_records LIMIT 1').length||rows(db,"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('loro_sequence_counters','loro_sequence_allocations')").length)throw Error('LOCKED');const pending=decode(new Uint8Array(now.data));await master.ensure('workspace-master');const wrapped=await master.wrap('workspace-master',enc.encode(JSON.stringify({...pending,stage:'sealed'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['sealed',wrapped]);});state=load();
@@ -61,8 +76,14 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
   const originalHouse=await resolveRuntimeAuthority(storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,r.device);
+  const workspaceRun=openSQLiteTransaction(db);
+  if(returnToOriginal){
+   await returnToOriginalHousehold(name,workspaceRun);
+   sequences.close();db.close();master.close();
+   return;
+  }
   const runtime=(resolved,kind,rootPin)=>{const p=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epoch,fn)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epoch),fn)});return new OfflineRuntime({storage,codec:candidateCodec(p),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider}})};
-  pairing=openNativeHouseholdPersistence({name,openDatabase,master,storage,provider,sodium,deviceId:r.device});
+  pairing=openNativeHouseholdPersistence({name,openDatabase,workspaceRun,master,storage,provider,sodium,deviceId:r.device});
   const {selection,pins,store,prepareJoinedSequences,finalizeJoinedSequences}=pairing;
   const selected=await selection.openSelected();
   joinedSequences=selected?.sequences;

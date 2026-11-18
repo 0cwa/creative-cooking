@@ -7,6 +7,9 @@ import {openNativeSequences} from './sequences.mjs';
 const enc = new TextEncoder(), dec = new TextDecoder('utf-8', {fatal:true});
 const household = scope => validPairingScope(scope) && scope.kind === 'household';
 const hash = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+const selectionKey = '["native-household-selection"]';
+const markerKey = '["native-household-selection-required"]';
+const enrollmentKey = id => JSON.stringify(['native-household-enrollment', id]);
 const pinKey = id => JSON.stringify(['pin', id]);
 const pinAad = id => enc.encode(`creative-cooking/household-pin/v1/${id}`);
 const validPin = value => value && Object.keys(value).sort().join(',') === 'head,pin,scope,version' &&
@@ -22,7 +25,19 @@ function lockWorkspace(name, operation, use) {
   return result;
 }
 
-export function openNativeHouseholdPersistence({name, openDatabase, master, storage, provider, sodium, deviceId}) {
+async function writeSelection(tx, value) {
+  await tx.put(selectionKey, value);
+  await tx.put(markerKey, value === null ? 0 : 1);
+}
+function saveSelection(run, value) {
+  return run(true, tx => writeSelection(tx, value));
+}
+
+export function returnToOriginalHousehold(name, run) {
+  return lockWorkspace(name, 'selection', () => saveSelection(run, null));
+}
+
+export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun, master, storage, provider, sodium, deviceId}) {
   // This connection is separate from the document and sequence transactions.
   const db = openDatabase(`${name}-pairing`);
   try {
@@ -82,41 +97,42 @@ export function openNativeHouseholdPersistence({name, openDatabase, master, stor
       }
     };
 
-    // Pending enrollment can resume after an interrupted installation, but an
-    // active counter is never recreated. The counter is bound to this receipt.
+    // Only a durable pending record in the main workspace proves this
+    // allocator has never been exposed. Legacy receipts can reuse a verified
+    // counter but cannot authorize creating one.
     function joined({scope, pin, operationId}, mode) {
       scope = structuredClone(scope);
       if (!household(scope) || !hash(pin) || !/^receive-[0-9a-f]{64}$/.test(operationId)) throw Error('MALFORMED');
       return lockWorkspace(name, 'enrollment', async () => {
         const found = await storage.householdRecipient.find(scope.id, operationId);
         if (!found.ok) throw Error('INVALID_ADMISSION');
-        const key = JSON.stringify(['enrollment', scope.id]);
-        let enrollment = await run(false, tx => tx.get(key));
-        if (!enrollment) {
-          if (mode !== 'prepare' || found.value) throw Error('MISSING_ENROLLMENT');
+        const key = enrollmentKey(scope.id);
+        const enrollment = await workspaceRun(false, tx => tx.get(key));
+        const identity = {version:1, scopeId:scope.id, pin, deviceId, operationId};
+        if (enrollment !== undefined && (!enrollment || !['pending', 'active'].includes(enrollment.stage) ||
+          Object.keys(enrollment).length !== Object.keys(identity).length + 1 ||
+          !Object.entries(identity).every(([field, value]) => enrollment[field] === value))) throw Error('ENROLLMENT_CONFLICT');
+        if (mode === 'prepare') {
+          if (found.value) return null;
+          if (enrollment?.stage === 'active') throw Error('MISSING_ADMISSION');
           const established = await storage.householdRecipient.hasDevice(scope.id, deviceId);
           if (!established.ok || established.value) throw Error('MISSING_ENROLLMENT');
-          enrollment = {version:1, stage:'pending', scopeId:scope.id, pin, deviceId, operationId};
-          await run(true, tx => tx.put(key, enrollment));
-        }
-        if (enrollment.version !== 1 || !['pending', 'active'].includes(enrollment.stage) ||
-          enrollment.scopeId !== scope.id || enrollment.pin !== pin || enrollment.deviceId !== deviceId ||
-          enrollment.operationId !== operationId) throw Error('ENROLLMENT_CONFLICT');
-        if (mode === 'prepare') {
-          if (enrollment.stage !== 'pending' && !found.value) throw Error('MISSING_ADMISSION');
+          if (!enrollment) await workspaceRun(true, tx => tx.put(key, {...identity, stage:'pending'}));
           return null;
         }
         if (!found.value) throw Error('MISSING_ADMISSION');
-        if (mode === 'open' && enrollment.stage !== 'active') throw Error('INCOMPLETE_ENROLLMENT');
+        if (mode === 'open' && enrollment?.stage === 'pending') throw Error('INCOMPLETE_ENROLLMENT');
         const resolved = await resolveRuntimeAuthority(storage, scope, pin, provider, deviceId);
         const receipt = found.value, checked = await storage.householdRecipient.check(receipt);
         if (!checked.ok || checked.value !== true || receipt.receiptBody?.recipientDevice !== deviceId ||
           receipt.scopeId !== scope.id) throw Error('INVALID_ADMISSION');
         const counters = openDatabase(`${name}-${operationId}`);
         try {
-          const activate = mode === 'finalize' && enrollment.stage === 'pending';
-          const sequences = openNativeSequences(counters, [scope.id], activate);
-          if (activate) await run(true, tx => tx.put(key, {...enrollment, stage:'active'}));
+          const initialize = mode === 'finalize' && enrollment?.stage === 'pending';
+          const sequences = openNativeSequences(counters, [scope.id], initialize);
+          if (enrollment?.stage !== 'active') {
+            await workspaceRun(true, tx => tx.put(key, {...identity, stage:'active'}));
+          }
           return {resolved, sequences:{reserve:sequences.reserve, close:() => counters.close()}};
         } catch (error) {
           counters.close();
@@ -124,17 +140,55 @@ export function openNativeHouseholdPersistence({name, openDatabase, master, stor
         }
       });
     }
-    const selectionKey = '["selection"]', markerKey = '["selection-required"]';
-    const selection = selectedHousehold({
+    async function readSelection() {
+      const state = await workspaceRun(false, async tx => {
+        const value = await tx.get(selectionKey), marker = await tx.get(markerKey);
+        if (value !== undefined || marker !== undefined) return {value, marker};
+        // An unreleased build stored its selection beside the pins. Surviving
+        // receipts can reveal that layout even when the companion database is lost.
+        for (const key of await tx.keys()) {
+          const [kind, scope] = JSON.parse(key);
+          if (kind === 'recipient-admission' && await tx.get(enrollmentKey(scope)) === undefined) {
+            throw Error('LEGACY_HOUSEHOLD_SELECTION');
+          }
+        }
+        return null;
+      });
+      if (!state) {
+        await run(false, async tx => {
+          if (await tx.get('["selection"]') != null || await tx.get('["selection-required"]') != null) {
+            throw Error('LEGACY_HOUSEHOLD_SELECTION');
+          }
+        });
+        return [undefined, undefined];
+      }
+      if (state.value === null && state.marker === 0) return [undefined, undefined];
+      return [state.value, state.marker];
+    }
+    const lockSelection = (_mode, use) => lockWorkspace(name, 'selection', use);
+    const controls = selectedHousehold({
       master, pins, storage, provider, sodium, deviceId,
       openJoined: args => joined(args, 'open'),
-      lock: (_mode, use) => lockWorkspace(name, 'selection', use),
-      readStored: () => run(false, async tx => [await tx.get(selectionKey) ?? undefined, await tx.get(markerKey) ?? undefined]),
-      writeStored: value => run(true, async tx => {
-        await tx.put(selectionKey, value);
-        await tx.put(markerKey, value === null ? null : 1);
-      })
+      lock: lockSelection,
+      readStored: readSelection,
+      writeStored: value => saveSelection(workspaceRun, value)
     });
+    const selection = {
+      ...controls,
+      openSelected: () => lockSelection('shared', async () => {
+        const selected = await controls.openSelected();
+        if (!selected) {
+          await workspaceRun(true, async tx => {
+            if (await tx.get(markerKey) === undefined) await writeSelection(tx, null);
+          });
+        }
+        return selected;
+      }),
+      available(scope) {
+        const requested = structuredClone(scope);
+        return lockSelection('shared', () => controls.available(requested));
+      }
+    };
     return {
       pins, store, selection,
       prepareJoinedSequences: args => joined(args, 'prepare'),
