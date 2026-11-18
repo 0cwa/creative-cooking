@@ -86,7 +86,13 @@ export function CookingDirect() {
         await current.flushCurrentWorkspace();
         await authorize();
         const result = await workspace.cookingFiles.applyStaged(item);
-        if (result.status !== 'pending') await current.refreshSharedCooking?.();
+        if (result.status !== 'pending') {
+          try {
+            await current.refreshSharedCooking?.();
+          } catch {
+            // The workspace exposes the refresh error. Import already committed.
+          }
+        }
         return result;
       } finally { release(); }
     }});
@@ -137,6 +143,16 @@ export function CookingDirect() {
       : result.more ? 'This batch was applied. Send cooking updates again to continue.' : 'The other device applied this batch.';
     setNotice(text);
   }
+  async function retryRefresh() {
+    await workspace.direct.withSelected(async () => {
+      const current = latestApp.current;
+      const release = current.beginWorkspaceTransition();
+      try {
+        await current.flushCurrentWorkspace();
+        await current.refreshSharedCooking?.();
+      } finally { release(); }
+    });
+  }
 
   if (!workspace.direct || typeof RTCPeerConnection !== 'function') return null;
   const responseInput = (role === 'answer' && !output) || (role === 'offer' && output && !code);
@@ -186,6 +202,10 @@ export function CookingDirect() {
       {(output || status.closed) && button(status.closed ? 'Start over' : 'Disconnect direct exchange', reset, busy)}
       {status.error && <Text accessibilityRole="alert">{messages[status.error] ?? 'The direct connection closed. Reconnect to retry or exchange encrypted cooking files.'}</Text>}
       {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
+    </>}
+    {app.sharedCookingRefreshPending && <>
+      <Text accessibilityRole="alert">Received updates are saved, but this view could not refresh.</Text>
+      {button('Retry cooking refresh', () => run(retryRefresh), busy)}
     </>}
   </View>;
 }

@@ -246,6 +246,18 @@ test('admitted browser devices independently verify their direct connection, ret
     await button(b,'Confirm compared code').click();
     for (const page of [a,b]) await visible(page,'Direct connection verified on both devices.');
 
+    await a.evaluate(() => {
+      const put = IDBObjectStore.prototype.put;
+      const name = localStorage.getItem('creative-cooking-local-workspace-v1');
+      globalThis.receiptSelectionLocks = [];
+      IDBObjectStore.prototype.put = function(value, key) {
+        if (typeof key === 'string' && key.startsWith('["receipt",')) {
+          globalThis.receiptSelectionLocks.push(navigator.locks.query().then(({held}) =>
+            held.some(lock => lock.name === `creative-cooking/bootstrap/v1/${name}` && lock.mode === 'shared')));
+        }
+        return put.call(this, value, key);
+      };
+    });
     await button(a,'Send cooking updates').click();
     await visible(a,'1 update still waiting for the other device to apply. You can retry this batch.');
     await visible(a,'Peer receipts for this connection: 1 stored, 0 applied.');
@@ -266,16 +278,44 @@ test('admitted browser devices independently verify their direct connection, ret
     await visible(a,'1 update still waiting for the other device to apply. You can retry this batch.');
     await visible(a,'Peer receipts for this connection: 1 stored, 0 applied.');
     expect(await durable(b,bHousehold)).toEqual({inbox:1, applied:0, 'receipt-state':0, receipt:0});
+    await b.evaluate(() => {
+      const put = IDBObjectStore.prototype.put;
+      const get = IDBObjectStore.prototype.get;
+      let appliedWritten = false;
+      IDBObjectStore.prototype.put = function(value, key) {
+        if (typeof key === 'string' && key.startsWith('["applied",')) appliedWritten = true;
+        return put.call(this, value, key);
+      };
+      IDBObjectStore.prototype.get = function(key) {
+        if (appliedWritten && this.transaction.mode === 'readonly' && typeof key === 'string' && key.startsWith('["document",')) {
+          IDBObjectStore.prototype.put = put;
+          IDBObjectStore.prototype.get = get;
+          throw Error('Injected projection refresh failure after import');
+        }
+        return get.call(this, key);
+      };
+    });
     await button(a,'Send cooking updates').click();
     await visible(a,'The other device applied this batch.');
     await visible(a,'Peer receipts for this connection: 1 stored, 1 applied.');
     expect(await durable(b,bHousehold)).toEqual({inbox:1, applied:1, 'receipt-state':0, receipt:0});
+    expect(await a.evaluate(() => Promise.all(globalThis.receiptSelectionLocks))).toEqual([true,true]);
+    const refreshError = b.getByText('Received updates are saved, but this view could not refresh.', {exact:true});
+    await expect(refreshError).toBeVisible();
     await button(a,'Send cooking updates').click();
     await visible(a,'No local updates are waiting for this device.');
     await button(b,'Send cooking updates').click();
     await visible(b,'The other device applied this batch.');
     await visible(b,'Peer receipts for this connection: 2 stored, 2 applied.');
     expect(await durable(a,aHousehold)).toEqual({inbox:2, applied:2, 'receipt-state':1, receipt:2});
+
+    await b.goBack();
+    await expect(b.getByText('Direct proof tarragon',{exact:true})).toHaveCount(0);
+    await button(b,'Open settings').click();
+    await expect(refreshError).toBeVisible();
+    await button(b,'Retry cooking refresh').click();
+    await expect(refreshError).toHaveCount(0);
+    expect(await durable(b,bHousehold)).toMatchObject({inbox:1, applied:1});
 
     for (const page of [a,b]) {
       await page.goBack();

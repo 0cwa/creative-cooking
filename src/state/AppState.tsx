@@ -124,6 +124,7 @@ type AppStateApi = PersistedState & {
   keepGuestContent(): Promise<void>;
   prepareAccountExit(): Promise<void>;
   flushCurrentWorkspace(): Promise<void>;
+  sharedCookingRefreshPending: boolean;
   refreshSharedCooking?(): Promise<void>;
   beginWorkspaceTransition(): () => void;
   exportWorkspaceRecovery(): Promise<string>;
@@ -178,6 +179,7 @@ function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace
 function AppStateBody({children,state,setState,content,storageMode}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing'}>) {
   const transitionInProgress=useRef(false);
   const [mutationsPaused,setMutationsPaused]=useState(false);
+  const [sharedCookingRefreshPending,setSharedCookingRefreshPending]=useState(false);
   const beginWorkspaceTransition=useCallback(()=>{if(transitionInProgress.current)throw Error('A workspace switch is already in progress.');transitionInProgress.current=true;setMutationsPaused(true);let released=false;return()=>{if(released)return;released=true;transitionInProgress.current=false;setMutationsPaused(false)}},[]);
   const appStateRef = useRef(state);
   const pantryRef = useRef(state.pantry);
@@ -200,8 +202,14 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
   const retryStorage = content.retryStorage;
   const flushCurrentWorkspace=useCallback(()=>content.flushCurrentWorkspace(storageMode==='fresh-local'?appStateRef.current:undefined),[content.flushCurrentWorkspace,storageMode]);
   const refreshSharedCooking=useCallback(async()=>{
-    const next=await content.refreshSharedCooking?.();
-    if(next){appStateRef.current=next;pantryRef.current=next.pantry;}
+    try {
+      const next=await content.refreshSharedCooking?.();
+      if(next){appStateRef.current=next;pantryRef.current=next.pantry;}
+      setSharedCookingRefreshPending(false);
+    } catch (error) {
+      setSharedCookingRefreshPending(true);
+      throw error;
+    }
   },[content.refreshSharedCooking]);
 
   const ensureSharedEditAllowed = useCallback(() => {
@@ -555,6 +563,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       keepGuestContent: content.keepGuestContent,
       prepareAccountExit: content.prepareAccountExit,
       flushCurrentWorkspace,
+      sharedCookingRefreshPending,
       refreshSharedCooking,
       beginWorkspaceTransition,
       exportWorkspaceRecovery: content.exportWorkspaceRecovery,
@@ -598,6 +607,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       mutationsPaused,
       beginWorkspaceTransition,
       flushCurrentWorkspace,
+      sharedCookingRefreshPending,
       refreshSharedCooking,
       saveAttemptedRecipeAsCopy,
       keepWorkspaceRecipeVersion,

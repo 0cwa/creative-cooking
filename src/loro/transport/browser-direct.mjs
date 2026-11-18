@@ -177,21 +177,26 @@ export function browserDirect({runtime, provider, cooking, assertSelected, withS
         return;
       }
       const {claims} = message, bytes = signature(message.signature);
-      if (message.kind !== 'receipt' || !exact(message, ['version','sessionId','kind','claims','signature']) || !bytes || !waiting ||
-        claims?.objectId !== waiting.id || claims.transferId !== waiting.id || (claims.state === 'applied') !== waiting.stored) throw Error('INVALID_RECEIPT');
-      await authorize();
-      const receiptId = await digest(directDomain('receipt-id', claims));
-      await inbox(waiting.id).acceptReceipt({claims, bytes, receiptId, expectedRecipient:peer.deviceId});
-      if (claims.state === 'stored') {
-        waiting.stored = true;
-        storedByPeer.add(claims.objectId);
-        state.peerStored = storedByPeer.size;
-      } else {
-        appliedByPeer.add(claims.objectId);
-        state.peerApplied = appliedByPeer.size;
-        waiting.settle(null, 'applied');
-      }
-      publish();
+      const pending = waiting;
+      if (message.kind !== 'receipt' || !exact(message, ['version','sessionId','kind','claims','signature']) || !bytes || !pending ||
+        claims?.objectId !== pending.id || claims.transferId !== pending.id || (claims.state === 'applied') !== pending.stored) throw Error('INVALID_RECEIPT');
+      await withSelected(async () => {
+        await authorize();
+        const receiptId = await digest(directDomain('receipt-id', claims));
+        if (closed || waiting !== pending) throw Error('CLOSED');
+        await inbox(pending.id).acceptReceipt({claims, bytes, receiptId, expectedRecipient:peer.deviceId});
+        if (closed || waiting !== pending) return;
+        if (claims.state === 'stored') {
+          pending.stored = true;
+          storedByPeer.add(claims.objectId);
+          state.peerStored = storedByPeer.size;
+        } else {
+          appliedByPeer.add(claims.objectId);
+          state.peerApplied = appliedByPeer.size;
+          pending.settle(null, 'applied');
+        }
+        publish();
+      });
     }
     function waitResult(id) {
       let timeout;
@@ -295,5 +300,5 @@ export function browserDirect({runtime, provider, cooking, assertSelected, withS
       }
     };
   }
-  return {peers, connect};
+  return {peers, connect, withSelected};
 }
