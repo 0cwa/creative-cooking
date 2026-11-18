@@ -120,8 +120,9 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent,sha256
   });
   const originalRecipeDocuments=!selected&&!installedSet;
+  const shoppingRecipeCopies=!!installedSet||originalRecipeDocuments;
   const cooking=cookingFiles({runtime:household,service:disclosure,
-   recipeCatalogVersion:installedSet||originalRecipeDocuments?1:null,allowRecipeSources:false});
+   recipeCatalogVersion:installedSet||originalRecipeDocuments?1:null,allowRecipeSources:shoppingRecipeCopies});
   let direct;
   try {
    direct=await openDirect?.({
@@ -137,7 +138,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const pairPersonal=personalPairing({sodium,storage,recipient:storage.recipient,store,provider,master,keys,
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
    original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
-  const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure,originalRecipeDocuments});
+  const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure,originalRecipeDocuments,shoppingRecipeCopies});
   const installedRecipeIds=installedSet?house.members.flatMap(member=>member.recipeId===null?[]:[member.recipeId]):undefined;
   return {
    personalRotation:rotatePersonal,personalPairing:pairPersonal,
