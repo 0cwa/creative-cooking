@@ -392,7 +392,27 @@ test('two adults retain competing rules and open isolated cooking branches expli
     await openRules(first);
     expect(await downloadUpdate(first)).toEqual(branchUpdate);
     await reviewBranch(first, sibling.head);
-    await confirmBranch(first);
+    await first.evaluate(()=>{
+      const save=Storage.prototype.setItem;
+      Storage.prototype.setItem=function(key,value){
+        if(this===sessionStorage&&key==='creative-cooking-branch-reopen-v1'){
+          window.checkoutSessionWriteDenied=true;
+          throw Error('injected session storage denial');
+        }
+        return save.call(this,key,value);
+      };
+    });
+    await button(first,'Open this cooking branch').click();
+    const manageRules=button(first,'Manage adult admission rules'), openSettings=button(first,'Open settings');
+    await expect(manageRules.or(openSettings)).toBeVisible().catch(async error=>{
+      console.error('In-place checkout reopen',await first.locator('body').innerText());
+      throw error;
+    });
+    expect(await first.evaluate(()=>window.checkoutSessionWriteDenied)).toBe(true);
+    if(await openSettings.isVisible())await openSettings.click();
+    await manageRules.click();
+    await expect(first.getByText(`Current household head: ${sibling.head}`,{exact:true})).toBeVisible();
+    await first.goto('./');
     await expect(first.getByText('Sibling-only parsley', {exact:true})).toBeVisible();
   } finally {
     await Promise.all(contexts.map(context => context.close()));

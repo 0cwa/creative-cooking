@@ -119,15 +119,19 @@ export default function RootLayout() {
   const [openAttempt,setOpenAttempt]=useState(0);
   const [error,setError]=useState<string|null>(null);
   const [admissionRule,setAdmissionRule]=useState<AdmissionRuleDraft>({kind:'allMinusOne',count:'1'});
-  const nativeReopen=useRef<BranchReopen|null>(null);
+  const pendingReopen=useRef<BranchReopen|null>(null);
   const admissionPolicy=admissionPolicyFromDraft(admissionRule);
   const reopenWorkspace=useCallback((expected?:BranchReopen)=>{
     if(Platform.OS==='web'){
-      if(expected)globalThis.sessionStorage.setItem(branchReopenKey,JSON.stringify(expected));
-      globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL??'').replace(/\/$/,'')}/`);
-      return;
+      try{
+        if(expected)globalThis.sessionStorage.setItem(branchReopenKey,JSON.stringify(expected));
+        globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL??'').replace(/\/$/,'')}/`);
+        return;
+      }catch(error){
+        if(!expected)throw error;
+      }
     }
-    nativeReopen.current=expected?{...expected}:null;
+    pendingReopen.current=expected?{...expected}:null;
     setWorkspace(null);
     setError(null);
     setChoice('loading');
@@ -140,9 +144,9 @@ export default function RootLayout() {
       try{
         const {nativeChoiceStore}=await import('@/loro/native/choice-store');
         opened=await nativeChoiceStore.open();
-        await verifyBranchReopen(opened,nativeReopen.current);
+        await verifyBranchReopen(opened,pendingReopen.current);
         if(!active)return;
-        nativeReopen.current=null;
+        pendingReopen.current=null;
         if(opened){
           setWorkspace({...opened,reopen:reopenWorkspace});
           setChoice(opened.needsDisclosureSetup?'policy':'local');
@@ -153,11 +157,10 @@ export default function RootLayout() {
       return;
     }
     if(Platform.OS!=='web'){if(active)setChoice('choose');return;}
-    let opened:any=null,adopted=false,expected:BranchReopen|null=null;
+    let opened:any=null,adopted=false,expected=pendingReopen.current,confirmation:string|null=null;
     try{
-      let confirmation:string|null=null;
       try{confirmation=globalThis.sessionStorage?.getItem(branchReopenKey)??null}catch{/* Ordinary startup also works without session storage. */}
-      if(confirmation!==null)expected=JSON.parse(confirmation);
+      if(!expected&&confirmation!==null)expected=JSON.parse(confirmation);
       const mode=globalThis.localStorage.getItem(webChoiceKey);
       if(expected&&!mode?.startsWith('local:'))await verifyBranchReopen(null,expected);
       if(mode==='legacy'||(mode===null&&globalThis.localStorage.getItem(webLegacyPreferenceKey)==='legacy')){
@@ -175,13 +178,14 @@ export default function RootLayout() {
           if(current!==mode&&current!==ready)throw Error('Workspace choice changed while opening.');
           globalThis.localStorage.setItem(webWorkspaceKey,name);
           if(pending&&current!==ready)globalThis.localStorage.setItem(webChoiceKey,ready);
-          if(expected)globalThis.sessionStorage.removeItem(branchReopenKey);
+          if(confirmation!==null)globalThis.sessionStorage.removeItem(branchReopenKey);
+          pendingReopen.current=null;
           setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;
         }
         return;
       }
       if(active)setChoice('choose');
-    }catch(e){if(active){if(expected)try{globalThis.sessionStorage.removeItem(branchReopenKey)}catch{}setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
+    }catch(e){if(active){pendingReopen.current=null;if(confirmation!==null)try{globalThis.sessionStorage.removeItem(branchReopenKey)}catch{}setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
   const legacy=async()=>{
