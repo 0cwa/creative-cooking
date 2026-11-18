@@ -9,7 +9,7 @@ import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
-import {checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin,verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {approveHouseholdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
 import {householdCompromise} from './household-compromise.mjs';
@@ -41,13 +41,13 @@ const bind=state=>({
  }
 });
 
-test('SQLite revocation verifies source and votes, rolls back, reopens the bound key and preserves old evidence',async()=>{
- const base=join(homedir(),'agent-scratch','creative-cooking','routed-device-revocation');
+async function withRotationFixture({owners,policy},run){
+ const base=join(homedir(),'agent-scratch','creative-cooking','routed-adult-removal');
  await mkdir(base,{recursive:true});
  const directory=await mkdtemp(join(base,'sqlite-'));
  const participants=[];
  try{
-  for(const deviceId of pairedIds){
+  for(const [deviceId,adultId] of Object.entries(owners)){
    const path=join(directory,deviceId+'.sqlite'), states=new Map();
    let database,storage,secret;
    const master={
@@ -60,7 +60,7 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
      return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:value.slice(0,12),additionalData},secret,value.slice(12)));
     }
    };
-   const participant={deviceId,fault:null,close:()=>database?.close(),rows:()=>database.prepare('SELECT * FROM loro_records ORDER BY key').all()};
+   const participant={deviceId,adultId,fault:null,close:()=>database?.close(),rows:()=>database.prepare('SELECT * FROM loro_records ORDER BY key').all()};
    participant.replaceRow=(key,value)=>database.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,key);
    participants.push(participant);
    participant.open=()=>{
@@ -101,20 +101,31 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
      keys().use(wrapping.operationId,wrapping.identity,wrappingSecret=>use({signingSecret,wrappingSecret})));
     runtime.disclosure=disclosureService({storage,scope,rootPin:pin,provider,deviceId});
     Object.assign(participant,{runtime,service:householdRevocation({
-     storage,scope,pin,provider,sodium,master,runtime,deviceId,adultId:deviceId,signingKey,wrappingPublicKey,store:bind(states),
+     storage,scope,pin,provider,sodium,master,runtime,deviceId,adultId,signingKey,wrappingPublicKey,store:bind(states),
      withSecrets,LoroDoc,randomUUID:()=>crypto.randomUUID()
     }),compromise:householdCompromise({runtime,withCurrent})});
    };
   }
-  const [a,b,c]=participants, policy={kind:'fixed',fixedCount:2};
-  const root={householdId:scope.id,head:'',generation:1,epochId:'old-epoch',roster:pairedIds,policy,policyHash:await policyId(a.provider,policy),
-   devices:participants.map(({deviceId,signingKey})=>({adultId:deviceId,deviceId,signingKeyRef:signingKey,active:true})),
-   runtime:{documentId:'old-cooking',authorPeers:{alpha:'1',beta:'2',gamma:'3'},acceptedRecipients:pairedIds}};
-  const pin=root.head=await rootPin(a.provider,root);
+  const roster=[...new Set(Object.values(owners))].sort(), devices=Object.keys(owners).sort();
+  const root={householdId:scope.id,head:'',generation:1,epochId:'old-epoch',roster,policy,policyHash:await policyId(participants[0].provider,policy),
+   devices:participants.map(({deviceId,adultId,signingKey})=>({adultId,deviceId,signingKeyRef:signingKey,active:true})),
+   runtime:{documentId:'old-cooking',authorPeers:Object.fromEntries(devices.map((id,index)=>[id,String(index+1)])),acceptedRecipients:devices}};
+  const pin=root.head=await rootPin(participants[0].provider,root);
   for(const participant of participants){
    await initializeAuthority(participant.storage,root,pin,participant.provider);
    await participant.configure(pin);
   }
+  await run(participants,root,pin);
+ }finally{
+  for(const p of participants)p.close();
+  await rm(directory,{recursive:true,force:true});
+ }
+}
+
+test('SQLite revocation verifies source and votes, rolls back, reopens the bound key and preserves old evidence',async()=>{
+ await withRotationFixture({
+  owners:Object.fromEntries(pairedIds.map(id=>[id,id])),policy:{kind:'fixed',fixedCount:2}
+ },async([a,b,c],root,pin)=>{
   // Beta has a locally accepted inactive sibling and a different selection
   // prefix. Installing the rotation must keep that branch and its old work.
   const member=p=>({storage:p.storage,scope,pin,provider:p.provider,deviceId:p.deviceId,adultId:p.deviceId});
@@ -287,8 +298,194 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
   await assert.rejects(c.keys().useIdentity(keyIdentity('gamma',a.runtime.scope.epochId),()=>{}),/NOT_FOUND/);
   await assert.rejects(b.keys().useIdentity(keyIdentity('beta',a.runtime.scope.epochId),()=>{}),/NOT_FOUND/);
 
- }finally{
-  for(const p of participants)p.close();
-  await rm(directory,{recursive:true,force:true});
- }
+ });
+});
+
+const confirm=({proposal,confirmation})=>({proposal,confirmed:confirmation,explicit:true});
+const approve=(participant,reviewed)=>participant.service.approve(structuredClone(confirm(reviewed)));
+const reopen=async(participant,pin)=>{
+ participant.close();
+ participant.open();
+ await participant.configure(pin);
+};
+const houseState=async(participant,pin)=>{
+ const current=await readAuthority(participant.storage,scope,pin,participant.provider);
+ return (await verifyAuthority(current.state,pin,participant.provider)).nodes.get(current.activeHead);
+};
+
+test('SQLite adult removal excludes all target devices and atomically rotates the approved live cooking',async()=>{
+ await withRotationFixture({
+  owners:{alpha:'alpha',beta:'beta',gamma:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2}
+ },async([a,b,c,d],root,pin)=>{
+  await apply(a.runtime,1,'pantry-create','current',{itemId:'one',name:'Current saffron',preference:3,author:'alpha',at});
+  await apply(a.runtime,2,'pantry-create','deleted',{itemId:'gone',name:'Deleted private canary',preference:3,author:'alpha',at});
+  await apply(a.runtime,3,'pantry-field','remove',{itemId:'gone',field:'removedAt',value:at,author:'alpha',at},['deleted']);
+  const late=[];
+  for(const [deviceId,participant] of [['gamma',c],['tablet',d]]){
+   await apply(participant.runtime,1,'pantry-create',deviceId,{itemId:deviceId,name:`Late ${deviceId}`,preference:3,author:deviceId,at});
+   late.push((await participant.storage.listOutboundObjects(scope.id)).value[0].bytes);
+  }
+  const binding=await b.service.binding();
+  const prepare=(deviceBindings=[binding])=>a.service.prepare({targetAdultId:'gamma',bindings:deviceBindings,explicit:true});
+  await assert.rejects(prepare([]),/RECIPIENT_BINDINGS_REQUIRED/);
+  for(const excluded of [c,d])await assert.rejects(prepare([binding,await excluded.service.binding()]),/INVALID_RECIPIENT/);
+
+  const draft=await prepare();
+  assert.deepEqual(draft.excludedDevices,['gamma','tablet']);
+  assert.deepEqual(draft.proposal.item.event.frozenAdultRoster,['alpha','beta','gamma']);
+  assert.deepEqual(draft.proposal.grant.recipients,['alpha','beta']);
+  assert.equal(draft.proposal.manifest.kind,'adult-removal-source');
+  assert.equal(draft.proposal.manifest.reviewId,undefined);
+  const voteC=await approve(c,draft), voteD=await approve(d,draft);
+  const both=structuredClone(voteC.proposal);
+  both.item.approvals.push(voteD.proposal.item.approvals[0]);
+  both.grant.signatures.push(voteD.proposal.grant.signatures[0]);
+  const duplicateAdult=await a.service.review(both);
+  assert.equal(duplicateAdult.approvals,1);
+  assert.equal(duplicateAdult.required,2);
+  await assert.rejects(a.service.publish(confirm({...duplicateAdult,proposal:both})),/QUORUM_REQUIRED/);
+
+  const stale=await approve(a,voteC);
+  await apply(a.runtime,4,'pantry-create','fresh',{itemId:'fresh',name:'Fresh oregano',preference:3,author:'alpha',at});
+  const afterEdit=a.rows();
+  await assert.rejects(a.service.publish(confirm(stale)),/SOURCE_CHANGED/);
+  assert.deepEqual(a.rows(),afterEdit);
+  const fresh=await prepare();
+  const wrongAudience=structuredClone(fresh.proposal);
+  const excludedBinding=await d.service.binding();
+  wrongAudience.item.event.subject.devices[1]={
+   deviceId:d.deviceId,signingKeyRef:d.signingKey,wrappingKeyRef:excludedBinding.wrappingKey,
+   peerId:wrongAudience.item.event.subject.devices[1].peerId
+  };
+  wrongAudience.item.authorSignature=sodium.to_hex(await a.provider.sign(a.signingKey,domain('event-signature',wrongAudience.item.event)));
+  await assert.rejects(a.service.review(wrongAudience),/INVALID_INPUT/);
+  const publisherVote=await approve(a,fresh);
+  const approved=await approve(b,publisherVote);
+  const changedVotes=await approve(c,publisherVote);
+  const {newEpochId,documentId}=approved.proposal.item.event.subject;
+  const {proposalId}=approved.proposal.item.event;
+  const publish=()=>a.service.publish(confirm(approved));
+  const sourceSlot=JSON.stringify(['document',scope.id,root.runtime.documentId]);
+  const sourceRow=a.rows().find(row=>row.key===sourceSlot);
+  const normalPublish=a.storage.publishProjection.bind(a.storage);
+  a.storage.publishProjection=async (...args)=>{
+   const changed=JSON.parse(sourceRow.value);
+   changed.bytes.__storageBytes.push(99);
+   a.replaceRow(sourceSlot,JSON.stringify(changed));
+   return normalPublish(...args);
+  };
+  await assert.rejects(publish(),/CONFLICT/);
+  a.replaceRow(sourceSlot,sourceRow.value);
+  a.storage.publishProjection=normalPublish;
+  assert.deepEqual(a.rows(),afterEdit);
+
+  a.fault=()=>{
+   if(a.rows().some(row=>JSON.parse(row.key)[0]==='projection-publication'))throw Error('interrupted publication');
+  };
+  await assert.rejects(publish(),/IO/);
+  a.fault=null;
+  await reopen(a,pin);
+  assert.deepEqual(a.rows(),afterEdit);
+  assert.equal((await publish()).acceptedHead,approved.eventHash);
+  const published=a.rows();
+  assert.equal((await publish()).replayed,true);
+  await assert.rejects(a.service.publish(confirm(changedVotes)),/CONFLICT/);
+  assert.deepEqual(a.rows(),published);
+  assert.deepEqual(published.find(row=>row.key===sourceSlot),sourceRow);
+
+  const seal=device=>a.service.seal({operationId:proposalId,recipientDevice:device});
+  const file=await seal('beta');
+  assert.deepEqual(await seal('beta'),file);
+  for(const excluded of [c,d]){
+   const original=excluded.rows();
+   await assert.rejects(seal(excluded.deviceId),/INVALID_RECIPIENT/);
+   assert.equal((await excluded.service.retain(confirm(approved))).replayed,false);
+   assert.equal((await excluded.service.retain(confirm(approved))).replayed,true);
+   assert.equal((await excluded.service.status()).head,pin);
+   await assert.rejects(excluded.service.install({...confirm(approved),bytes:file}),/INVALID_FILE/);
+   await assert.rejects(excluded.keys().useIdentity(keyIdentity(excluded.deviceId,newEpochId),()=>{}),/NOT_FOUND/);
+   assert.deepEqual(excluded.rows(),original);
+  }
+
+  const beforeInstall=b.rows();
+  const install=()=>b.service.install({...confirm(approved),bytes:file});
+  b.fault=()=>{
+   if(b.rows().some(row=>JSON.parse(row.key)[0]==='recipient-admission'))throw Error('interrupted install');
+  };
+  await assert.rejects(install(),/IO/);
+  b.fault=null;
+  await reopen(b,pin);
+  assert.deepEqual(b.rows(),beforeInstall);
+  assert.equal((await install()).acceptedHead,approved.eventHash);
+  assert.equal((await b.service.status()).reopen,approved.eventHash);
+  const installed=b.rows();
+  assert.equal((await install()).replayed,true);
+  assert.deepEqual(b.rows(),installed);
+  await reopen(a,pin);
+  await reopen(b,pin);
+  assert.equal((await install()).replayed,true);
+  const keys=[];
+  for(const survivor of [a,b]){
+   const selected=await houseState(survivor,pin);
+   assert.deepEqual(selected.roster,['alpha','beta']);
+   assert.deepEqual(selected.policy,{kind:'fixed',fixedCount:2});
+   assert.deepEqual(selected.runtime.acceptedRecipients,['alpha','beta']);
+   assert.deepEqual(Object.keys(selected.runtime.authorPeers),['alpha','beta']);
+   assert.ok(selected.devices.filter(device=>device.adultId==='gamma').every(device=>!device.active));
+   assert.equal(survivor.runtime.scope.documentId,documentId);
+   assert.deepEqual(survivor.runtime.scope.acceptedAuthors,['alpha','beta']);
+   assert.deepEqual(projectCooking((await survivor.runtime.document()).doc).pantry.map(item=>item.name).sort(),['Current saffron','Fresh oregano']);
+   const stored=(await survivor.storage.reopenBranchDocument(await survivor.runtime.authorize(),documentId)).value;
+   assert.equal(Buffer.from(stored.bytes).includes(Buffer.from('Deleted private canary')),false);
+   await assert.rejects(survivor.runtime.disclosure.active(),/POLICY_UNRESOLVED/);
+   keys.push(await survivor.keys().useIdentity(keyIdentity(survivor.deviceId,newEpochId),key=>new Uint8Array(key)));
+  }
+  assert.deepEqual(keys[0],keys[1]);
+  assert.notDeepEqual(keys[0],rawKey);
+  keys.forEach(key=>key.fill(0));
+
+  for(const bytes of late){
+   const damaged=new Uint8Array(bytes);
+   damaged[damaged.length-2]^=1;
+   const beforeEvidence=a.rows();
+   await assert.rejects(a.service.holdLateEvidence(damaged));
+   assert.deepEqual(a.rows(),beforeEvidence);
+   const held=await a.service.holdLateEvidence(bytes);
+   assert.equal((await a.service.holdLateEvidence(bytes)).replayed,true);
+   const evidence=await a.service.inspectLate(held.objectId);
+   assert.equal(evidence.sourceHead,pin);
+   assert.equal(evidence.command.data.name,`Late ${evidence.authorDevice}`);
+  }
+  const held=a.rows();
+  assert.equal((await a.runtime.recoverInbox()).length,2);
+  assert.deepEqual(a.rows(),held);
+ });
+});
+
+test('SQLite adult removal uses unanimity on the frozen parent and handles an empty sole-recipient successor',async()=>{
+ await withRotationFixture({
+  owners:{alpha:'alpha',gamma:'gamma',tablet:'gamma'},policy:{kind:'unanimous',fixedCount:null}
+ },async([a,c,d],_root,pin)=>{
+  const draft=await a.service.prepare({targetAdultId:'gamma',bindings:[],explicit:true});
+  assert.equal(draft.proposal.manifest.sourceRevision,null);
+  assert.deepEqual(draft.proposal.grant.packageRefs,[]);
+  const first=await approve(a,draft);
+  await assert.rejects(a.service.publish(confirm(first)),/QUORUM_REQUIRED/);
+  const decided=await approve(c,first);
+  assert.equal(decided.required,2);
+  assert.equal((await d.service.review(decided.proposal)).canApprove,false);
+  assert.equal((await a.service.publish(confirm(decided))).acceptedHead,decided.eventHash);
+  await reopen(a,pin);
+  const selected=await houseState(a,pin);
+  assert.deepEqual(selected.roster,['alpha']);
+  assert.deepEqual(selected.policy,{kind:'unanimous',fixedCount:null});
+  assert.deepEqual(projectCooking((await a.runtime.document()).doc).pantry,[]);
+ });
+ await withRotationFixture({
+  owners:{alpha:'alpha',gamma:'gamma'},policy:{kind:'fixed',fixedCount:2}
+ },async([a])=>{
+  const original=a.rows();
+  await assert.rejects(a.service.prepare({targetAdultId:'gamma',bindings:[],explicit:true}),/FIXED_RULE_TOO_HIGH/);
+  assert.deepEqual(a.rows(),original);
+ });
 });

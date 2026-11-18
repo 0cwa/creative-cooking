@@ -1,10 +1,10 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
-import {validateSuccessor, validParent, domain, isPolicyDocumentId} from './validator.mjs';
+import {validateSuccessor, validParent, domain, isPolicyDocumentId, isRemoval, removedDevice} from './validator.mjs';
 import {policyBranchAncestors,recoverPolicyBaseline} from './policy-baseline.mjs';
 import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
-import {verifyRevocation, revocationPackage, verifyRevocationSeed} from '../compromise/revocation.mjs';
+import {verifyRevocation, revocationPackage, verifyRevocationSeed, projectRemovalSeed} from '../compromise/revocation.mjs';
 import sodium from 'libsodium-wrappers';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -25,7 +25,7 @@ const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
 export async function verifyAuthority(state,pin,provider) {
  state=copy(state);
  if (!state || Array.isArray(state) || !['activeHead,events,root,selections,version','activeHead,agreements,events,root,selections,version'].includes(Object.keys(state).sort().join(',')) || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
- if (!validParent(state.root) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
+ if (!validParent(state.root) || state.root.devices.some(d=>!state.root.roster.includes(d.adultId)) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
  const policyParents=new Map(), legacyPolicyHeads=new Set(), seedSchemas=new Map();
@@ -42,23 +42,35 @@ export async function verifyAuthority(state,pin,provider) {
     policyParents.set(r.eventHash,{head:parent.head,baseline:item.event.subject});
    } else legacyPolicyHeads.add(r.eventHash);
    nodes.set(r.eventHash,child);
-  } else if(['revokeDevice','recoverDevice'].includes(item.event.kind) && item.event.version===2 && ['ROTATION_DISTRIBUTION_REQUIRED','RECOVERY_DISTRIBUTION_REQUIRED'].includes(r.reason)) {
+  } else if((isRemoval(item.event.kind)||item.event.kind==='recoverDevice') && item.event.version===2 && ['ROTATION_DISTRIBUTION_REQUIRED','RECOVERY_DISTRIBUTION_REQUIRED'].includes(r.reason)) {
    const rotation=item.rotation,sub=item.event.subject;
    const product=rotation?.grant?.version===2;
    if(product){
-    if(item.event.kind!=='revokeDevice'||Object.keys(rotation).sort().join(',')!=='authorizationSnapshot,grant,localDeviceId,manifest,operationId,recipientBindings'||
+    if(!isRemoval(item.event.kind)||Object.keys(rotation).sort().join(',')!=='authorizationSnapshot,grant,localDeviceId,manifest,operationId,recipientBindings'||
        rotation.localDeviceId!==item.event.authorDeviceId||rotation.operationId!==item.event.proposalId||
        rotation.authorizationSnapshot!==rotation.manifest?.authorizationSnapshot)throw Error('INVALID_ROTATION');
     await verifyRevocation({provider,parent,item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},...rotation});
     seedSchemas.set(r.eventHash,4);
    } else {
-   if(!rotation||![ 'authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId','authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId,recoveryProof'].includes(Object.keys(rotation).sort().join(','))||(item.event.kind==='recoverDevice')!==Object.hasOwn(rotation,'recoveryProof')||rotation.grant?.eventHash!==r.eventHash||!parent.runtime.acceptedRecipients.includes(rotation.localDeviceId)||rotation.localDeviceId===sub.deviceId||await digest(provider,'rotation-manifest',rotation.manifest)!==rotation.grant.manifestHash||rotation.manifest?.newDocumentId!==sub.documentId||rotation.manifest?.newGeneration!==sub.newGeneration||rotation.manifest?.newEpochId!==sub.newEpochId)throw Error('INVALID_ROTATION');
+   if(item.event.kind==='removeAdult'||!rotation||![ 'authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId','authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId,recoveryProof'].includes(Object.keys(rotation).sort().join(','))||(item.event.kind==='recoverDevice')!==Object.hasOwn(rotation,'recoveryProof')||rotation.grant?.eventHash!==r.eventHash||!parent.runtime.acceptedRecipients.includes(rotation.localDeviceId)||rotation.localDeviceId===sub.deviceId||await digest(provider,'rotation-manifest',rotation.manifest)!==rotation.grant.manifestHash||rotation.manifest?.newDocumentId!==sub.documentId||rotation.manifest?.newGeneration!==sub.newGeneration||rotation.manifest?.newEpochId!==sub.newEpochId)throw Error('INVALID_ROTATION');
    const {checkRotationEvidence}=await import('../compromise/rotation-proof.mjs');await sodium.ready;
    await checkRotationEvidence({sodium,parent,authorizationSnapshot:rotation.authorizationSnapshot,item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},grant:rotation.grant,ceremonies:decodeEvidence(rotation.ceremonies),localDeviceId:rotation.localDeviceId,provider});
    if(item.event.kind==='recoverDevice'){const {verifyRecoveryProof}=await import('../compromise/recovery-proof.mjs');await verifyRecoveryProof({sodium,parent,nodes,event:item.event,proof:rotation.recoveryProof,provider})}
    }
    if(nodes.has(r.eventHash)||isPolicyDocumentId(sub.documentId)||[...nodes.values()].some(n=>n.epochId===sub.newEpochId||n.runtime.documentId===sub.documentId))throw Error('INVALID_ROTATION');
-   const child=copy(parent);child.head=r.eventHash;child.epochId=sub.newEpochId;child.generation=sub.newGeneration;if(item.event.kind==='revokeDevice')child.devices=child.devices.map(d=>d.deviceId===sub.deviceId?{...d,active:false}:d);else child.devices.push({adultId:sub.owner,deviceId:sub.deviceId,signingKeyRef:sub.signingKeyRef,active:true});child.runtime.documentId=sub.documentId;child.runtime.authorPeers=Object.fromEntries(sub.devices.map(d=>[d.deviceId,d.peerId]));child.runtime.acceptedRecipients=sub.devices.map(d=>d.deviceId);if(!validParent(child))throw Error('INVALID_ROTATION');nodes.set(r.eventHash,child);
+   const child=copy(parent);
+   child.head=r.eventHash;
+   child.epochId=sub.newEpochId;
+   child.generation=sub.newGeneration;
+   if(isRemoval(item.event.kind)){
+    if(item.event.kind==='removeAdult')child.roster=child.roster.filter(id=>id!==sub.adultId);
+    child.devices=child.devices.map(d=>removedDevice(item.event,d)?{...d,active:false}:d);
+   }else child.devices.push({adultId:sub.owner,deviceId:sub.deviceId,signingKeyRef:sub.signingKeyRef,active:true});
+   child.runtime.documentId=sub.documentId;
+   child.runtime.authorPeers=Object.fromEntries(sub.devices.map(d=>[d.deviceId,d.peerId]));
+   child.runtime.acceptedRecipients=sub.devices.map(d=>d.deviceId);
+   if(!validParent(child))throw Error('INVALID_ROTATION');
+   nodes.set(r.eventHash,child);
   } else if(item.event.kind==='inviteAdult' && item.event.version===2 && r.reason==='ADMISSION_AND_PROJECTION_REQUIRED') {
    const a=item.admission,subject=item.event.subject;
    if(!a || Array.isArray(a) || Object.keys(a).sort().join(',')!=='ceremonies,existingCeremonies,grant,localDeviceId,manifest,operationId' || a.grant?.admissionEventHash!==r.eventHash || a.grant?.recipientAdult!==subject.adultId || a.grant?.newDocumentGeneration!==subject.newGeneration || a.grant?.newEpochId!==subject.newEpochId || a.manifest?.newDocumentId!==subject.documentId || a.manifest?.newGeneration!==subject.newGeneration || JSON.stringify(a.grant?.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId)) || !parent.runtime.acceptedRecipients.includes(a.localDeviceId)) throw Error('INVALID_ADMISSION');
@@ -472,11 +484,20 @@ export async function publishReviewedRevocation({
  const expectedAuthority=await runtime.authorize();
  if(state.activeHead!==parent.head||record.authorizationSnapshot!==manifest.authorizationSnapshot||
     expectedAuthority.record.revision!==record.revision)throw Error('STALE_AUTHORITY');
- const review=await storage.compromise.get(scope.id,manifest.reviewId);
- const original=review&&await storage.compromise.inspectOriginal(scope.id,manifest.reviewId,sha256);
  const source=await storage.reopenBranchDocument(expectedAuthority,parent.runtime.documentId);
  if(!source.ok)throw Error(source.error);
- const seed=await verifiedRevocationDraft({runtime,provider,item,manifest,review,original,source:source.value,sha256});
+ let seed, sourceGuard={source:source.value};
+ if(event.kind==='removeAdult'){
+  if((source.value?.revision??null)!==manifest.sourceRevision||
+     await digest(provider,'rotation-source-snapshot',hex(source.value?.bytes??new Uint8Array()))!==manifest.sourceHash)throw Error('SOURCE_CHANGED');
+  seed=projectRemovalSeed({LoroDoc:runtime.LoroDoc,source:source.value,seedId:manifest.seedId,peerId:manifest.seedPeerId});
+  await verifyRevocationSeed({provider,LoroDoc:runtime.LoroDoc,parent,item,manifest,snapshot:seed.snapshot,seed});
+ }else{
+  const review=await storage.compromise.get(scope.id,manifest.reviewId);
+  const original=review&&await storage.compromise.inspectOriginal(scope.id,manifest.reviewId,sha256);
+  seed=await verifiedRevocationDraft({runtime,provider,item,manifest,review,original,source:source.value,sha256});
+  sourceGuard={...sourceGuard,reviewId:manifest.reviewId,review,original:{checkpoint:original.checkpointBytes,objects:original.objects.map(o=>o.bytes)}};
+ }
  await sodium.ready;
  const publisher=event.subject.devices.find(d=>d.deviceId===deviceId);
  if(!(signingSecret instanceof Uint8Array)||signingSecret.length!==64||hex(signingSecret.subarray(32))!==publisher.signingKeyRef)throw Error('INVALID_KEY');
@@ -502,7 +523,7 @@ export async function publishReviewedRevocation({
     packages:prepared.packets,localKey:{record:prepared.record,catalog:prepared.catalog},
     // Old document, outbox and pending inbox rows keep their original owners.
     pendingEdits:[]
-   },{reviewId:manifest.reviewId,review,source:source.value,original:{checkpoint:original.checkpointBytes,objects:original.objects.map(o=>o.bytes)}});
+   },sourceGuard);
    if(!result.ok)throw Error(result.error);
    return {acceptedHead:checked.eventHash,operationId,replayed:result.value.replayed};
  }catch(error){

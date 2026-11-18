@@ -3,7 +3,9 @@ import {readFile} from 'node:fs/promises';
 import sodium from 'libsodium-wrappers';
 import {domain} from '../src/loro/authority/validator.mjs';
 import {ceremonyBytes} from '../src/loro/pairing/candidate-v2.mjs';
-test('three enrolled devices preserve and explicitly reopen household admissions and revocation',async({browser,baseURL})=>{
+for(const adultRemoval of [false,true]){
+const decision=adultRemoval?'adult removal':'device revocation';
+test(`three enrolled devices preserve and explicitly reopen household admissions and ${decision}`,async({browser,baseURL})=>{
  test.setTimeout(240000);const aCtx=await browser.newContext({baseURL,acceptDownloads:true}),bCtx=await browser.newContext({baseURL,acceptDownloads:true}),cCtx=await browser.newContext({baseURL,acceptDownloads:true});const a=await aCtx.newPage(),b=await bCtx.newPage(),c=await cCtx.newPage(),errors=[];a.setDefaultTimeout(12000);b.setDefaultTimeout(12000);for(const p of [a,b,c]){p.on('pageerror',e=>errors.push(String(e)));p.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text())});p.on('requestfailed',r=>console.error('REQUEST',r.url(),r.failure()))}try{
  const setup=async p=>{await p.goto('./');await p.getByRole('button',{name:'Start fresh local preview'}).click().catch(async e=>{console.error('SETUP PAGE',p.url(),(await p.locator('body').innerText()).slice(0,2500),errors);throw e});await p.getByRole('button',{name:'Review household policy'}).click();await p.getByRole('button',{name:'Accept this household policy'}).click();await expect(p.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally')};
  await setup(a);await setup(b);await setup(c);await addPantry(b,'Original household bay leaf');await addPantry(c,'Newcomer local basil');await c.getByRole('button',{name:'Open settings'}).click();await c.getByRole('button',{name:'Show device identity'}).click();const thirdIdentity=await c.getByLabel('Public device identity',{exact:true}).textContent();await a.getByLabel('Ingredient and details').fill('Invitation proof onion');await a.getByLabel('Add ingredient').click();await expect(a.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
@@ -248,8 +250,8 @@ test('three enrolled devices preserve and explicitly reopen household admissions
  await expect(c.getByText('Third device thyme',{exact:true})).toBeVisible();
  await c.getByRole('button',{name:'Open settings'}).click();
  await expect(c.getByLabel('Household document generation')).toHaveText('Household generation 3');
- await test.step('approve, publish, install and reopen a device revocation through Settings',async()=>{
-  await routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead:published.head});
+ await test.step(`approve, publish, install and reopen ${decision} through Settings`,async()=>{
+  await routedRevocation({a,b,c,existingId,thirdId,thirdAdult:JSON.parse(thirdIdentity).adultId,scope,publishedHead:published.head,adultRemoval});
  });
  await c.getByRole('button',{name:'Show device identity'}).click();
  await c.getByRole('button',{name:'Return to original local household'}).click();
@@ -271,6 +273,7 @@ test('three enrolled devices preserve and explicitly reopen household admissions
  expect(errors).toEqual([]);
  }finally{await aCtx.close();await bCtx.close();await cCtx.close()}
 });
+}
 
 async function addPantry(page,name){
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
@@ -343,17 +346,21 @@ function readRetained(page,scopeId,documentId,branchHead){
  },{scopeId,documentId,branchHead});
 }
 
-async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
+async function routedRevocation({a,b,c,existingId,thirdId,thirdAdult,scope,publishedHead,adultRemoval}){
+ const decision=adultRemoval?'adult removal':'revocation';
+ const panel=adultRemoval?'adult removal':'device revocation';
+ const approve=adultRemoval?'Sign approval for this adult removal':'Sign approval for this revocation and draft';
+ const publish=adultRemoval?'Confirm adult removal and publish rotation':'Confirm revocation and publish rotation';
  const button=(page,name)=>page.getByRole('button',{name,exact:true});
- const message=page=>page.getByLabel('Signed revocation message');
+ const message=page=>page.getByLabel(`Signed ${decision} message`);
  const open=async page=>{
   await page.goto('./settings');
-  await button(page,'Manage device revocation').click();
+  await button(page,`Manage ${panel}`).click();
   await expect(page.getByText(/Selected household branch /)).toBeVisible();
  };
  const review=async(page,value)=>{
   await message(page).fill(value);
-  await button(page,'Review signed revocation').click();
+  await button(page,`Review signed ${decision}`).click();
  };
  const fault=async(page,namespace,includes)=>page.evaluate(({namespace,includes})=>{
   const put=IDBObjectStore.prototype.put;
@@ -388,18 +395,20 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  const late=await downloadFile(c,lateName);
  const lateId=lateName.split('Download encrypted update ')[1];
 
- await a.goto('./settings');
- await button(a,'Review household devices').click();
- await button(a,`Review local quarantine for ${thirdId}`).click();
- await button(a,'Quarantine on this device').click();
- await expect(a.getByText('Device quarantined on this device.')).toBeVisible();
- await button(a,'Open household incident reports').click();
- await button(a,`Prepare report for ${thirdId}`).click();
- await button(a,'Use verified household projection checkpoint').click();
- await button(a,'Sign and freeze incident report').click();
- await expect(a.getByLabel('Frozen incident evidence')).toBeVisible();
- await button(a,'Save clean draft with 0 selected operations').click();
- await expect(a.getByLabel('Saved clean draft')).toContainText('Revocation market');
+ if(!adultRemoval){
+  await a.goto('./settings');
+  await button(a,'Review household devices').click();
+  await button(a,`Review local quarantine for ${thirdId}`).click();
+  await button(a,'Quarantine on this device').click();
+  await expect(a.getByText('Device quarantined on this device.')).toBeVisible();
+  await button(a,'Open household incident reports').click();
+  await button(a,`Prepare report for ${thirdId}`).click();
+  await button(a,'Use verified household projection checkpoint').click();
+  await button(a,'Sign and freeze incident report').click();
+  await expect(a.getByLabel('Frozen incident evidence')).toBeVisible();
+  await button(a,'Save clean draft with 0 selected operations').click();
+  await expect(a.getByLabel('Saved clean draft')).toContainText('Revocation market');
+ }
  await open(a);
  await open(b);
  await button(b,'Create signed recipient binding').click();
@@ -407,7 +416,9 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  const wrong=JSON.parse(binding);
  wrong.wrappingKey='0'.repeat(64);
  await a.getByLabel('Remaining device bindings').fill(JSON.stringify(wrong));
- const prepare=a.getByRole('button',{name:/^Prepare revocation from /});
+ const prepare=adultRemoval?button(a,`Prepare removal of adult ${thirdAdult}`):
+  a.getByRole('button',{name:/^Prepare revocation from /});
+ if(adultRemoval)await expect(a.getByRole('button',{name:/^Prepare revocation from /})).toHaveCount(0);
  await prepare.click();
  await expect(a.getByText(/binding is invalid/)).toBeVisible();
  await a.getByLabel('Remaining device bindings').fill(binding);
@@ -416,11 +427,19 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  let proposal=await message(a).inputValue();
  const parent=JSON.parse(proposal).item.event.parentHead;
  expect(parent).toBe(publishedHead);
- await button(a,'Sign approval for this revocation and draft').click();
+ if(adultRemoval){
+  const prepared=JSON.parse(proposal);
+  expect(prepared.item.event.kind).toBe('removeAdult');
+  expect(prepared.manifest.kind).toBe('adult-removal-source');
+  expect(prepared.manifest).not.toHaveProperty('reviewId');
+  await expect(a.getByText(`Adult to remove ${thirdAdult}`,{exact:true})).toBeVisible();
+  await expect(a.getByText(`Excluded devices ${thirdId}`,{exact:true})).toBeVisible();
+ }
+ await button(a,approve).click();
  await expect(a.getByText('1 of 2 required adult approvals.')).toBeVisible();
- await expect(button(a,'Confirm revocation and publish rotation')).toHaveCount(0);
+ await expect(button(a,publish)).toHaveCount(0);
  await review(b,await message(a).inputValue());
- await button(b,'Sign approval for this revocation and draft').click();
+ await button(b,approve).click();
  await expect(b.getByText('2 of 2 required adult approvals.')).toBeVisible();
  proposal=await message(b).inputValue();
  const parsed=JSON.parse(proposal);
@@ -429,14 +448,14 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  expect(parsed.grant.recipients).not.toContain(thirdId);
  expect(parsed.grant.packageRefs).toHaveLength(1);
  const altered=structuredClone(parsed);
- altered.manifest.reportHash='0'.repeat(64);
+ altered.manifest[adultRemoval?'sourceHash':'reportHash']='0'.repeat(64);
  await review(a,JSON.stringify(altered));
  await expect(a.getByText('INVALID_GRANT',{exact:true})).toBeVisible();
  await review(a,proposal);
  await expect(a.getByText('2 of 2 required adult approvals.')).toBeVisible();
  const beforeA=await rows(a), beforeB=await rows(b);
  await fault(a,'projection-publication',parsed.item.event.proposalId);
- await button(a,'Confirm revocation and publish rotation').click();
+ await button(a,publish).click();
  await expect(a.getByText('Local storage could not complete the change. You can retry.')).toBeVisible();
  expect(await rows(a)).toEqual(beforeA);
  await a.reload();
@@ -463,7 +482,7 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
    return request;
   };
  },{publication:parsed.item.event.proposalId,authoritySlot});
- await button(a,'Confirm revocation and publish rotation').click();
+ await button(a,publish).click();
  await expect(a.getByText('Rotation saved. Refresh the selected household branch to continue.',{exact:true})).toBeVisible();
  await expect(a.getByText('Local storage could not complete the change. You can retry.',{exact:true})).toBeVisible();
  const committedRows=await rows(a);
@@ -486,22 +505,30 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
   await expect(a.getByText(`Selected household branch ${parent}`,{exact:true})).toBeVisible();
   await expect(a.getByText('The selected household branch changed. Review the displayed branch before reopening.',{exact:true})).toBeVisible();
   await expect(button(a,'Reopen rotated household')).toHaveCount(0);
-  await expect(button(a,'Close device revocation')).toBeVisible();
+  await expect(button(a,`Close ${panel}`)).toBeVisible();
  }finally{
   await changeWorkspaceRecord(a,authoritySlot,rotationAuthority);
  }
- await button(a,'Close device revocation').click();
- await button(a,'Manage device revocation').click();
+ await button(a,`Close ${panel}`).click();
+ await button(a,`Manage ${panel}`).click();
  await button(a,'Reopen rotated household').click();
  await expect(a.getByText('Invitation proof onion',{exact:true})).toBeVisible();
  await open(a);
+ if(adultRemoval){
+  await expect(a.getByText('POLICY_UNRESOLVED',{exact:true})).toBeVisible();
+  await expect(button(a,'Review an external cooking request')).toBeDisabled();
+ }
  expect(await downloadFile(a,download)).toEqual(file);
  await button(a,`Review retained branch ${parent}`).click();
  await expect(a.getByLabel('Retained branch cooking')).toContainText('Revocation market');
- await button(a,`Review archived incident ${parsed.manifest.reviewId}`).click();
- await expect(a.getByLabel('Archived signed incident')).toContainText('Original checkpoint verified.');
+ if(!adultRemoval){
+  await button(a,`Review archived incident ${parsed.manifest.reviewId}`).click();
+  await expect(a.getByLabel('Archived signed incident')).toContainText('Original checkpoint verified.');
+ }
  const advancedA=await rows(a);
- const oldRows=Object.entries(beforeA).filter(([key])=>['document','document-owner','object','compromise-review','compromise-frozen-original'].includes(JSON.parse(key)[0]));
+ const oldRows=Object.entries(beforeA).filter(([key])=>['document','document-owner','object','compromise-review','compromise-frozen-original',
+  'disclosure-active','disclosure-policy','disclosure-policy-archive','disclosure-review'].includes(JSON.parse(key)[0]));
+ if(adultRemoval)expect(oldRows.some(([key])=>JSON.parse(key)[0]==='disclosure-policy')).toBe(true);
  for(const [key,value] of oldRows)expect(advancedA[key]).toEqual(value);
  expect(advancedA[JSON.stringify(['document-owner',scope.id,documentId])]).toBe(parsed.grant.eventHash);
 
@@ -510,12 +537,12 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  const beforeC=await rows(c);
  await review(c,proposal);
  await button(c,'Keep my branch and retain this decision').click();
- await expect(c.getByText(/Retained revocation · branch kept separate/)).toBeVisible();
+ await expect(c.getByText(`Retained ${decision} · branch kept separate ${parsed.grant.eventHash}`,{exact:true})).toBeVisible();
  await expect(button(c,'Install reviewed encrypted rotation')).toHaveCount(0);
  expect(await rows(c)).toEqual(beforeC);
  await c.reload();
  await open(c);
- await expect(c.getByText(/Retained revocation · branch kept separate/)).toBeVisible();
+ await expect(c.getByText(`Retained ${decision} · branch kept separate ${parsed.grant.eventHash}`,{exact:true})).toBeVisible();
  await expect(c.getByLabel('Household document generation')).toHaveText('Household generation 3');
  await c.goto('./');
  await expect(c.getByText('Third device thyme',{exact:true})).toBeVisible();

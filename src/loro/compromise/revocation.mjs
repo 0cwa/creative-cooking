@@ -1,7 +1,7 @@
-// Product device rotation. The enrolled Ed25519 key authenticates each
+// Product household rotation. The enrolled Ed25519 key authenticates each
 // device's chosen wrapping key. The signed grant binds the fresh audience.
-import {domain, admissionThreshold, validateSuccessor} from '../authority/validator.mjs';
-import {verifyCurrentSeed} from './current-seed.mjs';
+import {domain, admissionThreshold, isRemoval, validateSuccessor} from '../authority/validator.mjs';
+import {projectCurrentSeed, verifyCurrentSeed} from './current-seed.mjs';
 
 export const hex = bytes => Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
 export const canonical = value => Array.isArray(value) ? value.map(canonical) :
@@ -32,21 +32,26 @@ export async function checkRecipientBinding(parent, binding, provider) {
   return device;
 }
 
+export const ADULT_REMOVAL_SOURCE='adult-removal-source';
+
 export async function verifyRevocation({provider,parent,item,grant,manifest,recipientBindings,requireQuorum=true}) {
-  if (!exact(item,'event,authorSignature,approvals') || item.event?.kind !== 'revokeDevice') throw Error('INVALID_REVOCATION');
+  if (!exact(item,'event,authorSignature,approvals') || !isRemoval(item.event?.kind)) throw Error('INVALID_REVOCATION');
   const check = await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
   if (!['QUORUM_REQUIRED','ROTATION_DISTRIBUTION_REQUIRED'].includes(check.reason)) throw Error(check.reason);
   const event = item.event, s = event.subject, publisher = event.authorDeviceId;
   if (publisher === s.deviceId || !s.devices.some(d => d.deviceId === publisher)) throw Error('INVALID_REVOCATION');
-  if (!exact(manifest,'version,scopeId,authorizationSnapshot,sourceDocumentId,sourceRevision,sourceHash,reviewId,evidenceDocumentId,evidenceGeneration,reportHash,selectionHash,newDocumentId,newGeneration,newEpochId,draftHash,seedId,seedPeerId,seedSchemaVersion,seedIdentitiesHash,archiveHash') ||
-      manifest.version !== 1 || manifest.seedSchemaVersion !== 4 || manifest.scopeId !== parent.householdId ||
+  const adultRemoval=event.kind==='removeAdult';
+  const commonFields='version,scopeId,authorizationSnapshot,sourceDocumentId,sourceRevision,sourceHash,newDocumentId,newGeneration,newEpochId,draftHash,seedId,seedPeerId,seedSchemaVersion,seedIdentitiesHash';
+  if (!exact(manifest,adultRemoval?commonFields+',kind':commonFields+',reviewId,evidenceDocumentId,evidenceGeneration,reportHash,selectionHash,archiveHash') ||
+      manifest.version !== 1 || (adultRemoval&&manifest.kind!==ADULT_REMOVAL_SOURCE) || manifest.seedSchemaVersion !== 4 || manifest.scopeId !== parent.householdId ||
       manifest.sourceDocumentId !== parent.runtime.documentId || (manifest.sourceRevision!==null && (!Number.isSafeInteger(manifest.sourceRevision) || manifest.sourceRevision < 0)) ||
       manifest.newDocumentId !== s.documentId || manifest.newGeneration !== s.newGeneration || manifest.newEpochId !== s.newEpochId ||
-      ![manifest.reviewId,manifest.evidenceDocumentId,manifest.seedId].every(id) ||
-      !Number.isSafeInteger(manifest.evidenceGeneration) || manifest.evidenceGeneration < 0 ||
-      ![manifest.authorizationSnapshot,manifest.sourceHash,manifest.reportHash,manifest.selectionHash,manifest.draftHash,manifest.seedIdentitiesHash,manifest.archiveHash].every(key) ||
+      !id(manifest.seedId) || ![manifest.authorizationSnapshot,manifest.sourceHash,manifest.draftHash,manifest.seedIdentitiesHash].every(key) ||
       typeof manifest.seedPeerId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(manifest.seedPeerId) || BigInt(manifest.seedPeerId)>18446744073709551615n ||
       [...Object.values(parent.runtime.authorPeers),...s.devices.map(d=>d.peerId)].includes(manifest.seedPeerId)) throw Error('INVALID_MANIFEST');
+  if (!adultRemoval && (![manifest.reviewId,manifest.evidenceDocumentId].every(id) ||
+      !Number.isSafeInteger(manifest.evidenceGeneration) || manifest.evidenceGeneration < 0 ||
+      ![manifest.reportHash,manifest.selectionHash,manifest.archiveHash].every(key))) throw Error('INVALID_MANIFEST');
   const others = s.devices.filter(d => d.deviceId !== publisher);
   if (!exact(grant,'version,householdId,parentHead,eventHash,newEpochId,newGeneration,documentId,manifestHash,recipients,packageRefs,contentClasses,disclosure,signatures') ||
       grant.version !== 2 || grant.householdId !== parent.householdId || grant.parentHead !== parent.head || grant.eventHash !== check.eventHash ||
@@ -101,4 +106,10 @@ export async function verifyRevocationSeed({provider,LoroDoc,parent,item,manifes
       await digest(provider,'projection-seed-identities',seed.identities)!==manifest.seedIdentitiesHash) throw Error('INVALID_SEED');
   const {peers} = verifyCurrentSeed({LoroDoc,snapshot,seed,schemaVersion:4});
   if (peers.some(peer=>peer!==manifest.seedPeerId || [...Object.values(parent.runtime.authorPeers),...item.event.subject.devices.map(d=>d.peerId)].includes(peer))) throw Error('INVALID_SEED');
+}
+
+
+/** Ordinary removal advances the reviewed live values into an independent document. */
+export function projectRemovalSeed({LoroDoc, source, seedId, peerId}) {
+  return projectCurrentSeed({LoroDoc,source:source?.bytes??new LoroDoc().export({mode:'snapshot'}),seedId,peerId,schemaVersion:4});
 }

@@ -11,9 +11,8 @@ import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, Local
 
 type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; keys(): Promise<string[]> };
 type RotationSourceGuard = {
-  reviewId:string; review:unknown; original:{checkpoint:Uint8Array;objects:Uint8Array[]};
   source:{documentId:string;bytes:Uint8Array;revision:number}|null;
-};
+} & ({} | {reviewId:string;review:unknown;original:{checkpoint:Uint8Array;objects:Uint8Array[]}});
 type AuthorityExpectation = LocalCommit['expectedAuthority'];
 type BranchDocument = {head:string;documentId:string};
 type BranchRevision = BranchDocument & {revision:number|null};
@@ -334,10 +333,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(rotation) {
         const same=(a:unknown,b:unknown)=>JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
         const sourceDocument=input.sourceDocument;
-        if(!sourceDocument ||
-           !same(await tx.get(key('compromise-review',scope,rotation.reviewId)),rotation.review) ||
-           !same(await tx.get(key('compromise-frozen-original',scope,rotation.reviewId)),rotation.original)) conflict();
-        if(!sourceDocument) return corrupt();
+        if(!sourceDocument) return conflict();
+        if('reviewId' in rotation &&
+           (!same(await tx.get(key('compromise-review',scope,rotation.reviewId)),rotation.review) ||
+            !same(await tx.get(key('compromise-frozen-original',scope,rotation.reviewId)),rotation.original))) conflict();
+        if(rotation.source &&
+           (rotation.source.documentId!==sourceDocument.documentId || rotation.source.revision!==sourceDocument.revision)) conflict();
         const current=await tx.get(key('document',scope,sourceDocument.documentId));
         const owner=await tx.get(key('document-owner',scope,sourceDocument.documentId));
         if(rotation.source ?

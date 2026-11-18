@@ -17,11 +17,13 @@ const read=(value:string)=>{
   return JSON.parse(value);
 };
 const errors:Record<string,string>={
+  INVALID_ADULT:'Choose another adult from the selected household.',
+  FIXED_RULE_TOO_HIGH:'The fixed approval count exceeds the number of adults who would remain. Agree to a valid rule before preparing removal.',
   INVALID_DRAFT:'Choose a saved clean draft for an active device. Resolve held operations first.',
   RECIPIENT_BINDINGS_REQUIRED:'Collect a signed key binding from each remaining device.',
   INVALID_RECIPIENT:'A signed key binding is invalid, duplicated, or belongs to an excluded device.',
   STALE_AUTHORITY:'The proposal uses an earlier household authority. Review the current branch and prepare again.',
-  SOURCE_CHANGED:'The report, draft, or source changed. Review the originals and save a fresh clean draft before preparing again.',
+  SOURCE_CHANGED:'The approved cooking revision changed. Prepare and review a fresh decision before publishing.',
   INVALID_FILE:'This encrypted rotation file is unavailable for this device or does not match the reviewed decision.',
   INVALID_LATE_EVIDENCE:'This file is outside the selected branch’s verified revocation history.',
   CONFLICT:'The workspace changed or already holds different evidence. Reopen Settings and review the current branch.',
@@ -32,6 +34,9 @@ const errors:Record<string,string>={
 export function HouseholdRevocation(){
   const workspace=useContext(LoroWorkspaceValue), app=useAppState();
   const service=workspace?.householdPairing?.revocation as Service|undefined;
+  const [mode,setMode]=useState<'revokeDevice'|'removeAdult'>('revokeDevice');
+  const adultRemoval=mode==='removeAdult';
+  const decision=adultRemoval?'adult removal':'revocation';
   const [state,setState]=useState<Status|null>(null), [reviewed,setReviewed]=useState<Reviewed|null>(null);
   const [proposal,setProposal]=useState(''), [bindings,setBindings]=useState(''), [binding,setBinding]=useState('');
   const [status,setStatus]=useState(''), [busy,setBusy]=useState(false);
@@ -101,11 +106,18 @@ export function HouseholdRevocation(){
     {!!status&&<Text accessibilityRole="alert">{status}</Text>}
   </View>;
   return <View style={{gap:8}}>
-    {!state?action('Manage device revocation',refresh):<>
-      {!reopen&&action('Close device revocation',async()=>{setState(null);setReviewed(null);setProposal('');setBinding('');setBindings('');setInspection(null);setArchive(null);setArchivedReport(null);})}
+    {!state?<>
+      {action('Manage device revocation',async()=>{setMode('revokeDevice');await refresh();})}
+      {action('Manage adult removal',async()=>{setMode('removeAdult');await refresh();})}
+    </>:<>
+      {!reopen&&action(adultRemoval?'Close adult removal':'Close device revocation',async()=>{setState(null);setReviewed(null);setProposal('');setBinding('');setBindings('');setInspection(null);setArchive(null);setArchivedReport(null);})}
       <Text selectable>Selected household branch {state.head}</Text>
-      {state.devices.filter((device:{active:boolean})=>!device.active).map((device:{deviceId:string})=><Text key={device.deviceId} selectable>Revoked device {device.deviceId}</Text>)}
-      <Text>Local quarantine applies on this device. A signed revocation creates a successor with a new key and clean cooking document. Each device chooses whether to open it.</Text>
+      {state.devices.filter((device:{active:boolean})=>!device.active).map((device:{deviceId:string;removedAdult:boolean})=><Text key={device.deviceId} selectable>
+        {device.removedAdult?'Device of removed adult':'Revoked device'} {device.deviceId}
+      </Text>)}
+      <Text>{adultRemoval?
+        'A signed adult removal excludes that adult and all their devices from future cooking on the successor. The current cooking values carry forward under a fresh key. Each eligible device chooses whether to install and reopen the successor.':
+        'Local quarantine applies on this device. A signed revocation creates a successor with a new key and clean cooking document. Each device chooses whether to open it.'}</Text>
       {reopen&&action('Reopen rotated household',async()=>{
         const result=await controls.status();
         showStatus(result);
@@ -116,7 +128,7 @@ export function HouseholdRevocation(){
         }
         workspace.reopen({scopeId:workspace.household.scope.scopeId,head:reopen});
       })}
-      {state.published&&<>
+      {state.published?.proposal.item.event.kind===mode&&<>
         <Text>Encrypted packages for generation {state.published.generation}</Text>
         {state.published.recipients.map((recipientDevice:string)=><View key={recipientDevice}>
           {action(`Download rotation for ${recipientDevice}`,async()=>{
@@ -124,14 +136,14 @@ export function HouseholdRevocation(){
             await saveExchangeFile(`creative-cooking-${recipientDevice}.cc-rotation`,'application/octet-stream',bytes);
           })}
         </View>)}
-        {action('Show signed revocation decision',async()=>{
+        {action(`Show signed ${decision} decision`,async()=>{
           const next=state.published!.proposal;
           setReview({proposal:next,...await controls.review(next,true,true)});
         })}
       </>}
-      {state.branches.map(branch=><View key={branch.eventHash}>
-        <Text selectable>{branch.selected?'Selected revocation':'Retained revocation · branch kept separate'} {branch.eventHash}</Text>
-        {action('Review retained revocation',async()=>setReview({proposal:branch.proposal,...await controls.review(branch.proposal,true,true)}))}
+      {state.branches.filter(branch=>branch.proposal.item.event.kind===mode).map(branch=><View key={branch.eventHash}>
+        <Text selectable>{branch.selected?`Selected ${decision}`:`Retained ${decision} · branch kept separate`} {branch.eventHash}</Text>
+        {action(`Review retained ${decision}`,async()=>setReview({proposal:branch.proposal,...await controls.review(branch.proposal,true,true)}))}
       </View>)}
       {!reopen&&<>
         {action('Create signed recipient binding',async()=>setBinding(JSON.stringify(await controls.binding())))}
@@ -140,12 +152,22 @@ export function HouseholdRevocation(){
           {action('Copy signed recipient binding',()=>copy(binding))}
           <PublicMessageFile label="recipient binding" limit={publicLimit} outgoing={binding} run={run} disabled={busy}/>
         </>}
-        {!!state.drafts.length&&<>
-          <Text>Paste the signed recipient bindings, one per line. The draft determines which device is excluded.</Text>
+        {adultRemoval&&!state.adults.length&&<Text>There are no other adults on this branch.</Text>}
+        {adultRemoval&&!!state.adults.length&&!state.canKeepRule&&<Text>{errors.FIXED_RULE_TOO_HIGH}</Text>}
+        {(adultRemoval?state.adults.length>0&&state.canKeepRule:state.drafts.length>0)&&<>
+          <Text>{adultRemoval?'Paste one signed binding from every remaining device other than this one.':
+            'Paste the signed recipient bindings, one per line. The draft determines which device is excluded.'}</Text>
           <TextInput accessibilityLabel="Remaining device bindings" multiline editable={!busy} maxLength={publicLimit}
             value={bindings} onChangeText={setBindings} style={{borderWidth:1,padding:8}}/>
           <PublicMessageFile label="recipient binding" limit={publicLimit} onRead={value=>setBindings(previous=>[previous,value].filter(Boolean).join('\n'))} run={run} disabled={busy}/>
-          {state.drafts.map(draft=><View key={draft.reviewId}>
+          {adultRemoval?state.adults.map((adult:{adultId:string;devices:string[]})=><View key={adult.adultId}>
+            <Text selectable>Adult {adult.adultId} · Active devices {adult.devices.join(', ')||'None'}</Text>
+            {action(`Prepare removal of adult ${adult.adultId}`,async()=>{
+              await app.flushCurrentWorkspace();
+              setReviewed(null);
+              setReview(await controls.prepare({targetAdultId:adult.adultId,bindings:bindings.split('\n').filter(line=>line.trim()).map(read),explicit:true}));
+            })}
+          </View>):state.drafts.map(draft=><View key={draft.reviewId}>
             <Text selectable>Clean draft {draft.documentId} · Device {draft.deviceId}</Text>
             {action(`Prepare revocation from ${draft.reviewId}`,async()=>{
               setReviewed(null);
@@ -154,20 +176,28 @@ export function HouseholdRevocation(){
           </View>)}
         </>}
       </>}
-      <TextInput accessibilityLabel="Signed revocation message" multiline editable={!busy} maxLength={publicLimit}
+      <TextInput accessibilityLabel={`Signed ${decision} message`} multiline editable={!busy} maxLength={publicLimit}
         value={proposal} onChangeText={loadProposal} style={{borderWidth:1,padding:8}}/>
-      <PublicMessageFile label="signed revocation" limit={publicLimit} onRead={loadProposal} run={run} disabled={busy}/>
-      {!!proposal&&action('Review signed revocation',async()=>{setReviewed(null);const next=read(proposal);setReview({proposal:next,...await controls.review(next,true)});})}
+      <PublicMessageFile label={`signed ${decision}`} limit={publicLimit} onRead={loadProposal} run={run} disabled={busy}/>
+      {!!proposal&&action(`Review signed ${decision}`,async()=>{
+        setReviewed(null);
+        const next=read(proposal);
+        if(next?.item?.event?.kind!==mode)throw Error(`Choose a signed ${decision} message.`);
+        setReview({proposal:next,...await controls.review(next,true)});
+      })}
       {!!reviewed&&<>
-        <Text selectable>Device to revoke {reviewed.proposal.item.event.subject.deviceId}</Text>
+        {adultRemoval?<Text selectable>Adult to remove {reviewed.proposal.item.event.subject.adultId}</Text>:
+          <Text selectable>Device to revoke {reviewed.proposal.item.event.subject.deviceId}</Text>}
+        {adultRemoval&&<Text selectable>Excluded devices {reviewed.excludedDevices.join(', ')||'None active'}</Text>}
         <Text selectable>Parent branch {reviewed.parentHead}</Text>
-        <Text selectable>Incident report {reviewed.proposal.manifest.reviewId} · {reviewed.proposal.manifest.reportHash}</Text>
+        {adultRemoval?<Text selectable>Source cooking revision {reviewed.proposal.manifest.sourceRevision??'Empty'} · {reviewed.proposal.manifest.sourceHash}</Text>:
+          <Text selectable>Incident report {reviewed.proposal.manifest.reviewId} · {reviewed.proposal.manifest.reportHash}</Text>}
         <Text selectable>Clean document {reviewed.proposal.manifest.newDocumentId} · {reviewed.proposal.manifest.draftHash}</Text>
         <Text selectable>Remaining devices {reviewed.proposal.grant.recipients.join(', ')}</Text>
         <Text>{reviewed.approvals} of {reviewed.required} required adult approvals.</Text>
-        {action('Copy signed revocation message',()=>copy(proposal))}
-        <PublicMessageFile label="signed revocation" limit={publicLimit} outgoing={proposal} run={run} disabled={busy}/>
-        {!reopen&&reviewed.canApprove&&reviewed.parentHead===state.head&&action('Sign approval for this revocation and draft',async()=>{
+        {action(`Copy signed ${decision} message`,()=>copy(proposal))}
+        <PublicMessageFile label={`signed ${decision}`} limit={publicLimit} outgoing={proposal} run={run} disabled={busy}/>
+        {!reopen&&reviewed.canApprove&&reviewed.parentHead===state.head&&action(adultRemoval?'Sign approval for this adult removal':'Sign approval for this revocation and draft',async()=>{
           setReview(await controls.approve({proposal:reviewed.proposal,confirmed:reviewed.confirmation,explicit:true}));
         })}
         {reviewed.complete&&<>
@@ -177,7 +207,7 @@ export function HouseholdRevocation(){
             setStatus('Signed decision retained. This device kept its selected branch.');
           })}
           {!reopen&&reviewed.proposal.item.event.authorDeviceId===author&&reviewed.parentHead===state.head&&
-            action('Confirm revocation and publish rotation',()=>transition(()=>controls.publish({proposal:reviewed.proposal,confirmed:reviewed.confirmation,explicit:true})))}
+            action(adultRemoval?'Confirm adult removal and publish rotation':'Confirm revocation and publish rotation',()=>transition(()=>controls.publish({proposal:reviewed.proposal,confirmed:reviewed.confirmation,explicit:true})))}
           {!reopen&&reviewed.proposal.item.event.authorDeviceId!==author&&reviewed.proposal.grant.recipients.includes(author)&&
             (reviewed.parentHead===state.head||reviewed.selected)&&action('Install reviewed encrypted rotation',async()=>{
               const bytes=await chooseExchangeFile({accept:['application/octet-stream','application/x-binary','.cc-rotation'],minBytes:48,maxBytes:16*1024*1024+48});

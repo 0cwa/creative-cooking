@@ -1,6 +1,6 @@
 import {publishReviewedRevocation, readAuthority, resolveHistoricalAuthority, verifyAuthority, verifiedRevocationDraft} from '../authority/chain.mjs';
-import {domain} from '../authority/validator.mjs';
-import {digest, exact, grantBody, hex, same, verifyRevocation, verifySignature, checkRecipientBinding} from '../compromise/revocation.mjs';
+import {domain, removedDevice, validAdmissionPolicy} from '../authority/validator.mjs';
+import {ADULT_REMOVAL_SOURCE, digest, exact, grantBody, hex, same, verifyRevocation, verifySignature, checkRecipientBinding, projectRemovalSeed} from '../compromise/revocation.mjs';
 import {projectCurrentSeed} from '../compromise/current-seed.mjs';
 import {canonicalReportBytes, evidenceSha256, manifestDigest, validateReport, verifyReport} from '../compromise/report.mjs';
 import {sealHouseholdFile, installHouseholdFile} from '../pairing/household-file.mjs';
@@ -34,8 +34,10 @@ export function householdRevocation({
     const verified=await verifyRevocation({provider,parent,...proposal,requireQuorum});
     const local=parent.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId);
     const canApprove=!!local && !proposal.item.approvals.some(v=>v.adultId===adultId);
-    const confirmation=await digest(provider,'reviewed-device-revocation',{eventHash:verified.eventHash,grantHash:verified.grantHash});
-    return {...verified,confirmation,canApprove,parentHead:parent.head,selected:current.activeHead===verified.eventHash};
+    const removal=proposal.item.event.kind==='removeAdult';
+    const confirmation=await digest(provider,removal?'reviewed-adult-removal':'reviewed-device-revocation',{eventHash:verified.eventHash,grantHash:verified.grantHash});
+    const excludedDevices=parent.devices.filter(d=>d.active&&removedDevice(proposal.item.event,d)).map(d=>d.deviceId);
+    return {...verified,confirmation,canApprove,excludedDevices,parentHead:parent.head,selected:current.activeHead===verified.eventHash};
   }
   const freshPeer=(peers)=>{
     for(let i=0;i<32;i++){
@@ -56,7 +58,8 @@ export function householdRevocation({
     let head=current.activeHead, revoked=false;
     while(head!==header?.branchHead&&edges.has(head)){
       const event=edges.get(head);
-      revoked ||= event.kind==='revokeDevice'&&event.subject.deviceId===header?.authorDevice;
+      const author=current.nodes.get(event.parentHead).devices.find(d=>d.active&&d.deviceId===header?.authorDevice);
+      revoked ||= !!author&&removedDevice(event,author);
       head=event.parentHead;
     }
     if(!revoked||head!==header?.branchHead||current.parent.devices.find(d=>d.deviceId===header.authorDevice)?.active!==false)throw Error('INVALID_LATE_EVIDENCE');
@@ -85,7 +88,12 @@ export function householdRevocation({
         }
       }
       const archivedHeads=[...new Set([pin,...state.selections.map(entry=>entry.to)])].filter(head=>head!==activeHead);
-      return {head:activeHead,drafts,archivedHeads,archivedReports,devices:parent.devices.map(d=>({deviceId:d.deviceId,active:d.active})),branches,
+      const adults=parent.roster.filter(id=>id!==adultId).map(adultId=>({
+        adultId,devices:parent.devices.filter(d=>d.active&&d.adultId===adultId).map(d=>d.deviceId)
+      }));
+      const canKeepRule=validAdmissionPolicy(parent.policy,parent.roster.length-1);
+      return {head:activeHead,drafts,archivedHeads,archivedReports,adults,canKeepRule,
+        devices:parent.devices.map(d=>({deviceId:d.deviceId,active:d.active,removedAdult:!parent.roster.includes(d.adultId)})),branches,
         reopen:activeHead!==runtime.scope.branchHead?activeHead:null,
         published:published&&{operationId:published.rotation.operationId,generation:parent.generation,
           proposal:{item:{event:published.event,approvals:published.approvals,authorSignature:published.authorSignature},
@@ -93,53 +101,72 @@ export function householdRevocation({
           recipients:parent.runtime.acceptedRecipients.filter(id=>id!==deviceId)}};
     },
     binding,
-    async prepare({reviewId,bindings,explicit}){
+    /** @param {{reviewId?:string,targetAdultId?:string,bindings:any[],explicit:boolean}} input */
+    async prepare({reviewId,targetAdultId,bindings,explicit}){
       if(explicit!==true||!Array.isArray(bindings)||bindings.length>127)throw Error('CONFIRMATION_REQUIRED');
+      const adultRemoval=targetAdultId!==undefined;
       const a=await runtime.authorize();
       const {parent,revision}=await authority();
       if(a.record.revision!==revision||a.record.acceptedParent!==parent.head)throw Error('STALE_AUTHORITY');
-      const saved=await reviews.get(scope.id,reviewId);
-      const draft=saved?.draft, target=saved?.report?.payload?.suspectDeviceIds?.[0];
-      if(!saved?.isolated||saved.status!=='local-draft'||!saved.selection||!draft||draft.held.length||target===deviceId||
-         saved.report.payload.suspectDeviceIds.length!==1||!parent.devices.some(d=>d.active&&d.deviceId===target))throw Error('INVALID_DRAFT');
+      let saved, draft, original, eventKind, target;
+      if(adultRemoval){
+        if(reviewId!==undefined||targetAdultId===adultId||!parent.roster.includes(targetAdultId))throw Error('INVALID_ADULT');
+        if(!validAdmissionPolicy(parent.policy,parent.roster.length-1))throw Error('FIXED_RULE_TOO_HIGH');
+        eventKind='removeAdult';
+        target={adultId:targetAdultId};
+      }else{
+        saved=await reviews.get(scope.id,reviewId);
+        draft=saved?.draft;
+        const targetDevice=saved?.report?.payload?.suspectDeviceIds?.[0];
+        if(!saved?.isolated||saved.status!=='local-draft'||!saved.selection||!draft||draft.held.length||targetDevice===deviceId||
+           saved.report.payload.suspectDeviceIds.length!==1||!parent.devices.some(d=>d.active&&d.deviceId===targetDevice))throw Error('INVALID_DRAFT');
+        eventKind='revokeDevice';
+        target={deviceId:targetDevice};
+      }
       const source=must(await storage.reopenBranchDocument(a,parent.runtime.documentId));
-      if(draft.publicationBaseRevision!==(source?.revision??null))throw Error('SOURCE_CHANGED');
-      const original=await reviews.inspectOriginal(scope.id,reviewId,sha256);
-      if(await verifyReport({runtime,report:saved.report,context:saved.context,reviewId,manifest:saved.manifest,sha256})!==saved.reportHash)throw Error('INVALID_REPORT');
+      if(draft){
+        if(draft.publicationBaseRevision!==(source?.revision??null))throw Error('SOURCE_CHANGED');
+        original=await reviews.inspectOriginal(scope.id,reviewId,sha256);
+        if(await verifyReport({runtime,report:saved.report,context:saved.context,reviewId,manifest:saved.manifest,sha256})!==saved.reportHash)
+          throw Error('INVALID_REPORT');
+      }else if(source?.bytes.length>REVIEW_LIMITS.objectBytes)throw Error('TOO_LARGE');
       const old=new LoroDoc(), clean=new LoroDoc();
       if(source)old.import(source.bytes);
-      clean.import(draft.snapshot);
+      if(draft)clean.import(draft.snapshot);
       const peers=new Set([...old.oplogVersion().toJSON().keys(),...clean.oplogVersion().toJSON().keys(),...Object.values(parent.runtime.authorPeers)]);
+      const removal={kind:eventKind,subject:target};
       const supplied=[...bindings,await binding()], byDevice=new Map();
       for(const binding of supplied){
         const d=await checkRecipientBinding(parent,binding,provider);
-        if(d.deviceId===target||byDevice.has(d.deviceId))throw Error('INVALID_RECIPIENT');
+        if(removedDevice(removal,d)||byDevice.has(d.deviceId))throw Error('INVALID_RECIPIENT');
         byDevice.set(d.deviceId,binding);
       }
-      const remaining=parent.devices.filter(d=>d.active&&d.deviceId!==target).sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+      const remaining=parent.devices.filter(d=>d.active&&!removedDevice(removal,d)).sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
       if(remaining.some(d=>!byDevice.has(d.deviceId)))throw Error('RECIPIENT_BINDINGS_REQUIRED');
       const recipientBindings=remaining.map(d=>byDevice.get(d.deviceId));
       const devices=remaining.map(({deviceId,signingKeyRef})=>({deviceId,signingKeyRef,wrappingKeyRef:byDevice.get(deviceId).wrappingKey,peerId:freshPeer(peers)}));
-      const subject={deviceId:target,documentId:draft.documentId,newGeneration:parent.generation+1,newEpochId:randomUUID(),devices};
+      const subject={...target,documentId:draft?.documentId??randomUUID(),newGeneration:parent.generation+1,newEpochId:randomUUID(),devices};
       const event={version:2,suiteId,householdId:scope.id,parentHead:parent.head,policyHash:parent.policyHash,
-        generation:parent.generation,epochId:parent.epochId,proposalId:randomUUID(),kind:'revokeDevice',authorDeviceId:deviceId,
+        generation:parent.generation,epochId:parent.epochId,proposalId:randomUUID(),kind:eventKind,authorDeviceId:deviceId,
         frozenAdultRoster:parent.roster,subject,nextPolicy:null};
       const item={event,authorSignature:await sign('event-signature',event),approvals:[]};
       const seedId=randomUUID(),seedPeerId=freshPeer(peers);
-      const seed=projectCurrentSeed({LoroDoc,source:draft.snapshot,seedId,peerId:seedPeerId,schemaVersion:4});
-      const manifest={version:1,scopeId:scope.id,authorizationSnapshot:a.record.authorizationSnapshot,sourceDocumentId:parent.runtime.documentId,sourceRevision:source?.revision??null,
-        sourceHash:await digest(provider,'rotation-source-snapshot',hex(source?.bytes??new Uint8Array())),reviewId,
-        evidenceDocumentId:draft.sourceDocumentId,evidenceGeneration:draft.sourceGeneration,reportHash:saved.reportHash,
-        selectionHash:await digest(provider,'rotation-selection',saved.selection),newDocumentId:subject.documentId,newGeneration:subject.newGeneration,
-        newEpochId:subject.newEpochId,draftHash:await digest(provider,'rotation-draft-snapshot',hex(seed.snapshot)),seedId,seedPeerId,seedSchemaVersion:4,
-        seedIdentitiesHash:await digest(provider,'projection-seed-identities',seed.identities),
-        archiveHash:await digest(provider,'rotation-archive-snapshot',hex(draft.snapshot))};
+      const seed=draft?projectCurrentSeed({LoroDoc,source:draft.snapshot,seedId,peerId:seedPeerId,schemaVersion:4}):
+        projectRemovalSeed({LoroDoc,source,seedId,peerId:seedPeerId});
+      const manifest={version:1,...(adultRemoval?{kind:ADULT_REMOVAL_SOURCE}:{}),scopeId:scope.id,authorizationSnapshot:a.record.authorizationSnapshot,sourceDocumentId:parent.runtime.documentId,sourceRevision:source?.revision??null,
+        sourceHash:await digest(provider,'rotation-source-snapshot',hex(source?.bytes??new Uint8Array())),
+        newDocumentId:subject.documentId,newGeneration:subject.newGeneration,newEpochId:subject.newEpochId,draftHash:await digest(provider,'rotation-draft-snapshot',hex(seed.snapshot)),
+        seedId,seedPeerId,seedSchemaVersion:4,seedIdentitiesHash:await digest(provider,'projection-seed-identities',seed.identities)};
+      if(draft){
+        Object.assign(manifest,{reviewId,evidenceDocumentId:draft.sourceDocumentId,evidenceGeneration:draft.sourceGeneration,reportHash:saved.reportHash,
+          selectionHash:await digest(provider,'rotation-selection',saved.selection),archiveHash:await digest(provider,'rotation-archive-snapshot',hex(draft.snapshot))});
+        await verifiedRevocationDraft({runtime,provider,item,manifest,review:saved,original,source,sha256});
+      }
       const grant={version:2,householdId:scope.id,parentHead:parent.head,eventHash:await digest(provider,'event',event),
         newEpochId:subject.newEpochId,newGeneration:subject.newGeneration,documentId:subject.documentId,
         manifestHash:await digest(provider,'rotation-manifest',manifest),recipients:devices.map(d=>d.deviceId),
         packageRefs:devices.filter(d=>d.deviceId!==deviceId).map(()=>randomUUID()),contentClasses:['pantry','recipe','shopping'],
         disclosure:'current-state-only',signatures:[]};
-      await verifiedRevocationDraft({runtime,provider,item,manifest,review:saved,original,source,sha256});
       const proposal={item,grant,manifest,recipientBindings};
       return {proposal,...await review(proposal)};
     },
@@ -148,8 +175,8 @@ export function householdRevocation({
       if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
       const checked=await review(proposal);
       if(checked.confirmation!==confirmed||!checked.canApprove)throw Error('APPROVAL_UNAVAILABLE');
-      await runtime.authorize();
       const {event}=proposal.item;
+      if((await runtime.authorize()).record.acceptedParent!==event.parentHead)throw Error('STALE_AUTHORITY');
       const approval={version:1,householdId:scope.id,eventHash:checked.eventHash,parentHead:event.parentHead,
         policyHash:event.policyHash,generation:event.generation,epochId:event.epochId,adultId,deviceId};
       const signature=await sign('approval-signature',approval);
