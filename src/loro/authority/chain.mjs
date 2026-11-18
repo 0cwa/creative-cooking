@@ -11,6 +11,7 @@ const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const unhex=s=>typeof s==='string' && /^[0-9a-f]{128}$/.test(s) ? Uint8Array.from(s.match(/../g),x=>parseInt(x,16)) : null;
 const canonical=v=>Array.isArray(v)?v.map(canonical):v && typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
+const same=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 const bytes=v=>enc.encode(JSON.stringify(canonical(v)));
 const digest=async(provider,purpose,v)=>{const b=await provider.hash(domain(purpose,canonical(v)));if (!(b instanceof Uint8Array)||b.length!==32) throw Error('INVALID_PROOF');return hex(b)};
 const read=async(storage,scope)=>{const r=await storage.readPairingAuthority(scope);if(!r.ok)throw Error(r.error);return r.value};
@@ -346,16 +347,31 @@ export async function checkoutPolicyHead({storage,scope,pin,provider,LoroDoc,adu
  return {head:targetHead};
 }
 /** Resolve only from a pinned and replayed selected head, never from runtime options. */
-export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorDevice) {
+async function resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,installed) {
  const {record,state,nodes}=await load(storage,scope,pin,provider), selected=nodes.get(state.activeHead);
- if(state.events.some(item=>item.admission?.manifest.version===5&&item.admission.grant.admissionEventHash===state.activeHead)){
-  throw Error('UNSUPPORTED_VERSION');
- }
+ const selectedSet=state.events.find(item=>item.admission?.manifest.version===5&&item.admission.grant.admissionEventHash===state.activeHead);
+ if(selectedSet && (!installed || !same(record,installed.publication.nextAuthority) ||
+   !same(selectedSet,installed.item) || installed.selection.to!==state.activeHead)) throw Error('UNSUPPORTED_VERSION');
+ if(installed && !selectedSet) throw Error('INVALID_AUTHORITY');
  const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();
  if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
  const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};
  const signingKeyRefs=Object.freeze(Object.fromEntries(selected.devices.filter(d=>d.active).map(d=>[d.deviceId,d.signingKeyRef]).sort(([a],[b])=>a.localeCompare(b))));
  return {scope:runtimeScope,signingKeyRefs,adultId:selected.devices.find(d=>d.deviceId===authorDevice).adultId,selectionIndex:state.selections.length,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+}
+
+/** Default callers cannot use a multi-document admission. */
+export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorDevice) {
+ return resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,null);
+}
+
+/** Resolve only after verifying the locally installed, selected document set. */
+export async function resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice,sodium,operationId,LoroDoc}) {
+ const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
+ const installed=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId,LoroDoc});
+ if(installed.publication.localKey.record.identity.deviceId!==authorDevice) throw Error('UNAUTHORIZED_DEVICE');
+ const resolved=await resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,installed);
+ return {...resolved,members:installed.item.admission.manifest.entries.map(({recipeId,documentId})=>({recipeId:recipeId??null,documentId}))};
 }
 
 /** Persist explicit acceptance at the currently selected frozen parent. */

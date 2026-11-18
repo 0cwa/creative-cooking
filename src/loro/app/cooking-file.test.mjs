@@ -12,7 +12,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
-import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,resolveInstalledSetAuthority,rootPin} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec,SUITE} from '../crypto/candidate.mjs';
@@ -1048,6 +1048,13 @@ test('selected recipe shopping copies and current-only admission survive durable
  const sponsorSelected=await readInstalledHouseholdDocumentSet(sealOptions);
  const newcomerSelected=await readInstalledHouseholdDocumentSet({...newcomerOptions,operationId});
  assert.deepEqual(newcomerSelected.documents,sponsorSelected.documents);
+ const sponsorAuthority=await resolveInstalledSetAuthority({...sealOptions,authorDevice:a.deviceId});
+ const newcomerAuthority=await resolveInstalledSetAuthority({...newcomerOptions,operationId,authorDevice:newcomerContext.recipientDeviceId});
+ assert.deepEqual(sponsorAuthority.members,newcomerAuthority.members);
+ assert.deepEqual(sponsorAuthority.members.map(member=>member.documentId),sponsorSelected.documents.map(document=>document.documentId));
+ await assert.rejects(()=>resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),/UNSUPPORTED_VERSION/);
+ await assert.rejects(()=>resolveInstalledSetAuthority({...sealOptions,authorDevice:'unauthorized'}),/UNAUTHORIZED_DEVICE/);
+
  // Exercise the production codec against the independently installed catalogs.
  const sponsorCatalog=a.storage.localKeys(sponsorMaster,sodium);
  const newcomerCatalog=freshStorage.localKeys(newcomerMaster,sodium);
