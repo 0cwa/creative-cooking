@@ -8,15 +8,15 @@ export function subscribeActions(runtime,listener) {
  return ()=>{set.delete(listener);if(!set.size)listeners.delete(runtime)};
 }
 
-export function executeAction(runtime,sequences,actionId,commands,disclosure=null) {
+export function executeAction(runtime,sequences,actionId,commands,disclosure=null,beforeNewCommit=/** @type {(() => void)|undefined} */(undefined)) {
  const input=structuredClone(commands);
  const previous=queues.get(runtime)??Promise.resolve();
- const current=previous.catch(()=>{}).then(()=>execute(runtime,sequences,actionId,input,disclosure)).then(result=>{for(const listener of listeners.get(runtime)??[]){try{listener()}catch{}}return result});
+ const current=previous.catch(()=>{}).then(()=>execute(runtime,sequences,actionId,input,disclosure,beforeNewCommit)).then(result=>{for(const listener of listeners.get(runtime)??[]){try{listener()}catch{}}return result});
  queues.set(runtime,current);
  void current.finally(()=>{if(queues.get(runtime)===current)queues.delete(runtime)}).catch(()=>{});
  return current;
 }
-async function execute(runtime,sequences,actionId,commands,disclosure) {
+async function execute(runtime,sequences,actionId,commands,disclosure,beforeNewCommit) {
  if(typeof actionId!=='string'||!actionId||!Array.isArray(commands)||!commands.length||commands.some(c=>typeof c?.commandId!=='string'||!c.commandId)||new Set(commands.map(c=>c.commandId)).size!==commands.length)throw Error('MALFORMED');
  commands=structuredClone(commands);
  if(runtime.authority?.kind==='household'&&!disclosure)throw Error('POLICY_REQUIRED');
@@ -28,6 +28,8 @@ async function execute(runtime,sequences,actionId,commands,disclosure) {
   items=commands.map((command,i)=>{let header;try{header=JSON.parse(new TextDecoder().decode(saved.commit.outbound[i].object.bytes)).header}catch{throw Error('CORRUPT')}return {command,deviceSequence:header.deviceSequence}});
  } else {
   await runtime.authorize();
+  // Apply current draft validation before reserving a sequence for a new write.
+  beforeNewCommit?.();
   items=[];for(const command of commands)items.push({command,deviceSequence:await sequences.reserve(runtime.scope.scopeId,JSON.stringify([actionId,command.commandId]))});
  }
  if(saved&&disclosure)return recoverCookingBatchWithPolicy({runtime,service:disclosure,operationId:actionId,items});

@@ -377,3 +377,65 @@ test('Recipe creation preserves the original submission and retries a saved reci
  await page.reload();
  await expect(label(page,'Open recipe '+title)).toHaveCount(1);
 });
+
+test('Recipe retry checks new allergies only when the recipe has not committed',async({page})=>{
+ await page.goto(app);
+ await button(page,'Start fresh local preview').click();
+ await button(page,'Review household policy').click();
+ await button(page,'Accept this household policy').click();
+ await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await page.goto(app+'recipes');
+
+ await page.evaluate(()=>{
+  const put=IDBObjectStore.prototype.put;
+  let fault='rollback',attempts=0;
+  IDBObjectStore.prototype.put=function(value,key){
+   if(typeof key==='string'&&key.startsWith('["recipe-catalog",')){
+    attempts++;
+    const next=fault;
+    fault=null;
+    if(next==='rollback')throw Error('Injected recipe write failure');
+    // Deliver the failure callback after IndexedDB actually commits.
+    if(next==='lose-ack')this.transaction.oncomplete=this.transaction.onabort;
+   }
+   return put.call(this,value,key);
+  };
+  globalThis.recipeAttempts=()=>attempts;
+  globalThis.loseRecipeSaveAcknowledgement=()=>{fault='lose-ack';};
+ });
+
+ const addAllergyAndReturn=async allergy=>{
+  await label(page,'Cancel new recipe').click();
+  await expect(page.locator('[aria-label="New recipe title"]')).toHaveCount(0);
+  await button(page,'Open settings').click();
+  const input=page.getByRole('textbox',{name:'Add allergies',exact:true});
+  await input.fill(allergy);
+  await expect(input).toHaveValue(allergy);
+  await input.press('Enter');
+  await expect(button(page,`Remove allergy ${allergy}`)).toBeVisible();
+  await button(page,'Back').click();
+  await label(page,'Add recipe').click();
+ };
+ await addRecipe(page,'Corrected recipe');
+ await expect(label(page,'Retry new recipe save')).toBeEnabled();
+ await addAllergyAndReturn('carrots');
+ await label(page,'Retry new recipe save').click();
+ await expect(page.getByRole('alert')).toContainText('Recipe blocked by allergy validation');
+ await expect(label(page,'New recipe ingredients')).toBeEditable();
+ expect(await page.evaluate(()=>globalThis.recipeAttempts())).toBe(1);
+ await label(page,'New recipe ingredients').fill('2 cups rice');
+ await label(page,'Save new recipe').click();
+ await expect(label(page,'Open recipe Corrected recipe')).toBeVisible();
+
+ await page.evaluate(()=>globalThis.loseRecipeSaveAcknowledgement());
+ await label(page,'Add recipe').click();
+ await label(page,'New recipe title').fill('Already committed recipe');
+ await label(page,'New recipe ingredients').fill('2 cups peanuts');
+ await label(page,'New recipe steps').fill('Simmer gently.');
+ await label(page,'Save new recipe').click();
+ await expect(label(page,'Retry new recipe save')).toBeEnabled();
+ await addAllergyAndReturn('peanuts');
+ await label(page,'Retry new recipe save').click();
+ await expect(label(page,'Open recipe Already committed recipe')).toHaveCount(1);
+ expect(await page.evaluate(()=>globalThis.recipeAttempts())).toBe(3);
+});

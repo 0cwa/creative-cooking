@@ -50,7 +50,7 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
     return executeAction(target,sequences,actionId,input,disclosure);
    });
   },
-  createRecipe:(actionId,recipe)=>{
+  createRecipe:(actionId,recipe,beforeNewCommit=/** @type {(() => void)|undefined} */(undefined))=>{
    const after=structuredClone(recipe);
    return withCurrent(async()=>{
     if(runtime.authority?.installedSet)throw Error('UNSUPPORTED_VERSION');
@@ -59,7 +59,7 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
     // Plan from an empty document so retries reproduce the exact create command.
     const commands=planRecipeAction({doc:new runtime.LoroDoc(),before:null,after,
      actionId,author:runtime.scope.authorDevice,at:after.createdAt});
-    return executeAction(target,sequences,actionId,commands,disclosure);
+    return executeAction(target,sequences,actionId,commands,disclosure,beforeNewCommit);
    });
   },
  };

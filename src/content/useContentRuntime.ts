@@ -87,7 +87,7 @@ export type ContentRuntimeSnapshot = {
   selectWorkspace(spaceId: string): Promise<void>;
   keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
   separateRecipeIds?: string[];
-  createRecipe?(actionId: string, recipe: Recipe): Promise<void>;
+  createRecipe?(actionId: string, recipe: Recipe, beforeNewCommit: () => void): Promise<void>;
   readRecipeHistory?(recipeId: string): Promise<RecipeHistoryEntry[]>;
   restoreRecipeEdit?(recipeId: string, entry: RecipeHistoryEntry): Promise<void>;
   mergeGuestContent(): Promise<void>;

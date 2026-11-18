@@ -362,7 +362,16 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       await flushCurrentWorkspace();
       recipeCreation.current = attempt;
       setPendingRecipeTitle(attempt.recipe.title);
-      await content.createRecipe(attempt.actionId,attempt.recipe);
+      const {actionId,recipe}=attempt;
+      try {
+        await content.createRecipe(actionId,recipe,()=>validateRecipe(recipe));
+      } catch (error) {
+        if (error instanceof RecipeAllergyError) {
+          recipeCreation.current = null;
+          setPendingRecipeTitle(null);
+        }
+        throw error;
+      }
       recipeCreation.current = null;
       setPendingRecipeTitle(null);
       try {
