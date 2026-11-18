@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
@@ -80,7 +80,11 @@ export default function RecipesScreen() {
     deleteRecipe,
     canEditSharedContent,
     readRecipeHistory,
-    restoreRecipeEdit
+    restoreRecipeEdit,
+    beginWorkspaceTransition,
+    flushCurrentWorkspace,
+    refreshSharedCooking,
+    sharedCookingRefreshPending
   } = useAppState();
   const [creating,setCreating]=useState(false);
   const [newTitle,setNewTitle]=useState('');
@@ -91,6 +95,8 @@ export default function RecipesScreen() {
   const [history, setHistory] = useState<RecipeHistoryEntry[] | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [restoreSaved, setRestoreSaved] = useState(false);
+  const historyRequest = useRef<symbol | null>(null);
 
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? null;
   const missingShoppingIngredients = selected
@@ -104,29 +110,56 @@ export default function RecipesScreen() {
       })()
     : [];
 
-  const openRecipe = (recipe: Recipe) => {
-    setSelectedId(recipe.id);
-    setDraft(null);
+  const resetHistory = () => {
+    historyRequest.current = null;
+    setHistory(null);
+    setHistoryBusy(false);
+    setHistoryError(null);
+    setRestoreSaved(false);
   };
 
-  const closeRecipe = () => {
-    setSelectedId(null);
+  const selectRecipe = (id: string | null) => {
+    resetHistory();
+    setSelectedId(id);
     setDraft(null);
-    setHistory(null);
-    setHistoryError(null);
   };
+  const openRecipe = (recipe: Recipe) => selectRecipe(recipe.id);
+  const closeRecipe = () => selectRecipe(null);
 
   const loadHistory = async (entry?: RecipeHistoryEntry) => {
-    if (!selected || !readRecipeHistory || historyBusy) return;
+    if (!selected || !readRecipeHistory || historyRequest.current) return;
+    const request = Symbol(), recipeId = selected.id;
+    const stillSelected = () => historyRequest.current === request;
+    historyRequest.current = request;
     setHistoryBusy(true);
     setHistoryError(null);
+    if (entry) setRestoreSaved(false);
     try {
-      if (entry) await restoreRecipeEdit?.(selected.id, entry);
-      setHistory(await readRecipeHistory(selected.id));
+      if (entry && restoreRecipeEdit) {
+        const result = await restoreRecipeEdit(recipeId, entry);
+        if (!stillSelected()) return;
+        setHistory(null);
+        setRestoreSaved(true);
+        if (!result.refreshed) return;
+      } else if (sharedCookingRefreshPending && refreshSharedCooking) {
+        const release = beginWorkspaceTransition();
+        try {
+          await flushCurrentWorkspace();
+          await refreshSharedCooking();
+        } finally {
+          release();
+        }
+      }
+      if (!stillSelected()) return;
+      const rows = await readRecipeHistory(recipeId);
+      if (stillSelected()) setHistory(rows);
     } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : 'Recipe history is unavailable.');
+      if (stillSelected()) setHistoryError(error instanceof Error ? error.message : 'Recipe history is unavailable.');
     } finally {
-      setHistoryBusy(false);
+      if (stillSelected()) {
+        historyRequest.current = null;
+        setHistoryBusy(false);
+      }
     }
   };
 
@@ -380,8 +413,9 @@ export default function RecipesScreen() {
                 {readRecipeHistory && (
                   <View style={styles.shoppingSection}>
                     <Pressable accessibilityRole="button" disabled={historyBusy} onPress={() => void loadHistory()} style={styles.shoppingLink}>
-                      <Text style={styles.shoppingLinkText}>{history === null ? 'Show recipe edit history' : 'Refresh recipe edit history'}</Text>
+                      <Text style={styles.shoppingLinkText}>{sharedCookingRefreshPending ? 'Retry recipe refresh' : history === null ? 'Show recipe edit history' : 'Refresh recipe edit history'}</Text>
                     </Pressable>
+                    {restoreSaved && <Text accessibilityLiveRegion="polite" style={styles.line}>{sharedCookingRefreshPending ? 'Recipe edit saved. Refresh the recipe to see it.' : 'Recipe edit saved.'}</Text>}
                     {historyError && <Text accessibilityRole="alert" style={styles.delete}>{historyError}</Text>}
                     {history?.length === 0 && <Text style={styles.line}>No text edits recorded for this recipe.</Text>}
                     {history?.map(entry => (

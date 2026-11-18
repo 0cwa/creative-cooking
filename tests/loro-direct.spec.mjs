@@ -271,9 +271,58 @@ test('admitted browser workspaces exchange offline recipe edits and explicitly r
       await visible(page,alternative);
       await visible(page,'Competing edit');
     }
+
+    // Keep A's completed document read pending at the transaction boundary
+    // while the Recipes tab is reused to open a different recipe.
+    await a.evaluate(() => {
+      const get = IDBObjectStore.prototype.get;
+      IDBObjectStore.prototype.get = function(key) {
+        if (this.transaction.mode === 'readonly' && typeof key === 'string' && key.startsWith('["document",')) {
+          IDBObjectStore.prototype.get = get;
+          const transaction = this.transaction, complete = transaction.oncomplete;
+          transaction.oncomplete = function(event) {
+            globalThis.releaseRecipeHistory = () => complete.call(this,event);
+          };
+        }
+        return get.call(this,key);
+      };
+    });
+    await button(a,'Refresh recipe edit history').click();
+    await a.waitForFunction(() => typeof globalThis.releaseRecipeHistory === 'function');
+    await a.getByRole('button',{name:/^Add ingredients to shopping list/}).click();
+    await button(a,'Back').click();
+    await openRecipe(a,'Independent recipe canary');
+    await button(a,'Show recipe edit history').click();
+    await visible(a,'No text edits recorded for this recipe.');
+    await a.evaluate(() => globalThis.releaseRecipeHistory());
+    await expect(a.getByText('No text edits recorded for this recipe.',{exact:true})).toBeVisible();
+    await expect(a.getByText('Competing edit',{exact:true})).toHaveCount(0);
+
+    await b.evaluate(() => {
+      const put = IDBObjectStore.prototype.put, get = IDBObjectStore.prototype.get;
+      globalThis.recipeRestoreWrites = 0;
+      IDBObjectStore.prototype.put = function(value,key) {
+        if (typeof key === 'string' && key.startsWith('["document",')) {
+          this.transaction.addEventListener('complete',() => {globalThis.recipeRestoreWrites++;});
+        }
+        return put.call(this,value,key);
+      };
+      IDBObjectStore.prototype.get = function(key) {
+        if (globalThis.recipeRestoreWrites > 0 && this.transaction.mode === 'readonly' && typeof key === 'string' && key.startsWith('["document",')) {
+          IDBObjectStore.prototype.get = get;
+          throw Error('Injected recipe view refresh failure');
+        }
+        return get.call(this,key);
+      };
+    });
     await button(b,'Restore title edit').click();
+    await visible(b,'Recipe edit saved. Refresh the recipe to see it.');
+    await expect(button(b,'Restore title edit')).toHaveCount(0);
+    await button(b,'Retry recipe refresh').click();
+    await visible(b,'Recipe edit saved.');
     await expect(b.getByText(alternative,{exact:true}).first()).toBeVisible();
     await expect(b.getByText('Competing edit',{exact:true})).toHaveCount(0);
+    expect(await b.evaluate(() => globalThis.recipeRestoreWrites)).toBe(1);
     await exchange(b);
     const restoreFiles=await encryptedUpdates(b,4);
     await exchange(a);

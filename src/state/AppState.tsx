@@ -117,7 +117,7 @@ type AppStateApi = PersistedState & {
   saveAttemptedRecipeAsCopy(conflictId: string): Recipe;
   keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
   readRecipeHistory?: import('@/content/useContentRuntime').ContentRuntimeSnapshot['readRecipeHistory'];
-  restoreRecipeEdit?: import('@/content/useContentRuntime').ContentRuntimeSnapshot['restoreRecipeEdit'];
+  restoreRecipeEdit?(recipeId: string, entry: import('@/content/useContentRuntime').RecipeHistoryEntry): Promise<{refreshed: boolean}>;
   personalContentConflicts: import('@/content/contentStore').PersonalContentConflict[];
   recoveryArchives: import('@/content/contentStore').ArchivedWorkspace[];
   retryStorage(): Promise<boolean>;
@@ -215,11 +215,11 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
   },[content.refreshSharedCooking]);
 
   const ensureSharedEditAllowed = useCallback(() => {
-    if(transitionInProgress.current)return false;
+    if(transitionInProgress.current||sharedCookingRefreshPending)return false;
     if (content.canEditShared) return true;
     content.reportEditDenied();
     return false;
-  }, [content.canEditShared, content.reportEditDenied]);
+  }, [content.canEditShared, content.reportEditDenied, sharedCookingRefreshPending]);
 
   const readRecipeHistory = useCallback(async (recipeId: string) => {
     await flushCurrentWorkspace();
@@ -236,7 +236,12 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
     try {
       await flushCurrentWorkspace();
       await content.restoreRecipeEdit(recipeId, entry);
-      await refreshSharedCooking();
+      try {
+        await refreshSharedCooking();
+        return {refreshed:true};
+      } catch {
+        return {refreshed:false};
+      }
     } finally {
       release();
     }
@@ -572,7 +577,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       contentSyncStatus: content.syncStatus,
       contentSyncError: content.syncError,
       localPersistenceStatus: content.localPersistenceStatus,
-      canEditSharedContent: content.canEditShared&&!mutationsPaused,
+      canEditSharedContent: content.canEditShared&&!mutationsPaused&&!sharedCookingRefreshPending,
       guestContentAvailable: content.guestAdoption.available,
       guestContentDecision: content.guestAdoption.decision,
       localRecipeConflicts: content.recipeConflicts,
