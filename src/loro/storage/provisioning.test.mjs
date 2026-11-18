@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {webcrypto} from 'node:crypto';
 import sodium from 'libsodium-wrappers';
@@ -14,7 +15,7 @@ function persistentMaster(){
  return {provision,ensure,get creations(){return creations;},async wrap(name,p,a){if(name!==id||!key)throw Error('LOCKED');const iv=webcrypto.getRandomValues(new Uint8Array(12));return new Uint8Array([...iv,...new Uint8Array(await webcrypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:a},key,p))]);},async unwrap(name,v,a){if(name!==id||!key)throw Error('LOCKED');return new Uint8Array(await webcrypto.subtle.decrypt({name:'AES-GCM',iv:v.slice(0,12),additionalData:a},key,v.slice(12)));}};
 }
 for(const phase of ['reservation','master','ready'])test(`matching master provisioning resumes after ${phase} interruption without replacement`,async()=>{
- const directory=mkdtempSync('/var/home/x/agent-scratch/creative-cooking/loro-implementation/provisioning-'),path=join(directory,'records.sqlite');
+ const directory=mkdtempSync(join(tmpdir(),'loro-provisioning-')),path=join(directory,'records.sqlite');
  let db=new DatabaseSync(path),failReady=phase==='ready';
  const conn={executeSync(sql,args=[]){if(failReady&&sql.startsWith('INSERT')&&args[0]===JSON.stringify(['local-master-catalog'])&&JSON.parse(args[1]).state==='ready')throw Error('injected ready');const st=db.prepare(sql);return {rows:sql.startsWith('SELECT')?st.all(...args):(st.run(...args),[])};}};
  const master=persistentMaster(),fail=async()=>{throw Error('injected interruption');};

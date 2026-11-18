@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {LoroDoc, decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
@@ -17,7 +18,7 @@ const read=async runtime=>{const {doc}=await runtime.document(); return Object.f
 
 test('real Loro, SQLite and candidate encryption survive failures, reorder, duplicates and reopen',async()=>{
  await sodium.ready;
- const dir=mkdtempSync(join('/var/home/x/agent-scratch/creative-cooking/loro-implementation','runtime-test-'));
+ const dir=mkdtempSync(join(tmpdir(),'loro-runtime-test-'));
  const signing=sodium.crypto_sign_keypair(), recipient=sodium.crypto_box_keypair(), dataKey=sodium.randombytes_buf(32);
  const signingB=sodium.crypto_sign_keypair();
  const codec=()=>{const provider=testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey}); provider.sign=async (who,bytes)=>sodium.crypto_sign_detached(bytes,who==='sender'?signing.privateKey:signingB.privateKey); provider.verify=async (who,bytes,signature)=>sodium.crypto_sign_verify_detached(signature,bytes,who==='sender'?signing.publicKey:signingB.publicKey); return candidateCodec(provider);};

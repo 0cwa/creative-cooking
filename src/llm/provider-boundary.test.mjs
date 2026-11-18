@@ -1,6 +1,5 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {registerHooks} from 'node:module';import {fileURLToPath,pathToFileURL} from 'node:url';import {existsSync} from 'node:fs';import {resolve} from 'node:path';
-const root=fileURLToPath(new URL('../../',import.meta.url));
-registerHooks({resolve(specifier,context,next){if(specifier.startsWith('@/')){let path=resolve(root,'src',specifier.slice(2));if(!existsSync(path))for(const ext of ['.ts','.mjs','.js'])if(existsSync(path+ext)){path+=ext;break}return next(pathToFileURL(path).href,context)}return next(specifier,context)}});
+import test from 'node:test';import assert from 'node:assert/strict';import {register} from 'node:module';
+register('../../tests/source-alias-loader.mjs', import.meta.url);
 const {createOpenAiCompatibleProvider}=await import('./openaiCompatibleProvider.ts');const {anthropicProvider}=await import('./anthropic/provider.ts');const {geminiProvider}=await import('./gemini/provider.ts');
 const event=x=>`data: ${JSON.stringify(x)}\n\n`;
 const cases=[

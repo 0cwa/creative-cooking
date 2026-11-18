@@ -1,5 +1,6 @@
 import {test} from 'node:test'; import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite'; import {mkdtempSync,rmSync} from 'node:fs'; import {join} from 'node:path'; import sodium from 'libsodium-wrappers';
+import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import {openSQLiteStorage} from '../storage/sqlite.ts'; import {rootPin,policyId,initializeAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from '../authority/personal.mjs'; import {domain} from '../authority/validator.mjs';
@@ -8,7 +9,7 @@ import {proposalMapName} from './registry.mjs'; import {OfflineRuntime} from '..
 await sodium.ready;
 test('Chef group rollback, lost acknowledgement, and replay with separately pinned scopes',async()=>{
  const pair=sodium.crypto_sign_keypair(), recipient=sodium.crypto_box_keypair(); const provider={hash:async b=>sodium.crypto_generichash(32,b),verify:async(k,b,s)=>sodium.crypto_sign_verify_detached(s,b,pair.publicKey)};
- const dir=mkdtempSync('/var/home/x/agent-scratch/creative-cooking/loro-implementation/group-test-'); let db;let faultAt=0,writes=0,storage; const open=()=>{db=new DatabaseSync(join(dir,'group.sqlite'));const conn={executeSync:(sql,args=[])=>{const s=db.prepare(sql);return {rows:sql.startsWith('SELECT')?s.all(...args):(s.run(...args),[])}}};storage=openSQLiteStorage(conn,b=>{if(b==='write' && ++writes===faultAt)throw Error('injected')})};open();
+ const dir=mkdtempSync(join(tmpdir(),'loro-group-test-')); let db;let faultAt=0,writes=0,storage; const open=()=>{db=new DatabaseSync(join(dir,'group.sqlite'));const conn={executeSync:(sql,args=[])=>{const s=db.prepare(sql);return {rows:sql.startsWith('SELECT')?s.all(...args):(s.run(...args),[])}}};storage=openSQLiteStorage(conn,b=>{if(b==='write' && ++writes===faultAt)throw Error('injected')})};open();
  const policy={kind:'allMinusOne',fixedCount:null};const root={householdId:'house',head:'',policyHash:await policyId(provider,policy),generation:1,epochId:'epoch',roster:['a'],devices:[{adultId:'a',deviceId:'a',signingKeyRef:'a',active:true}],policy,runtime:{documentId:'house-doc',authorPeers:{a:'1'},acceptedRecipients:['a']}};root.head=await rootPin(provider,root);
  const pr={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',scopeId:'private',ownerId:'a',signerDeviceId:'a',devices:[{deviceId:'a',ownerId:'a',signingKeyRef:'a',peerId:'2',active:true}],documentId:'personal-doc',generation:1,epochId:'personal-epoch'};const pin=await personalRootPin(provider,pr);const signature=Buffer.from(sodium.crypto_sign_detached(domain('personal-root-signature',pr),pair.privateKey)).toString('hex');
  try {await initializeAuthority(storage,root,root.head,provider); await initializePersonalAuthority(storage,{kind:'personal',id:'private'},pin,provider,{version:1,root:pr,signature});
