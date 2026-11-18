@@ -1348,7 +1348,33 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   async readRetainedProjectionSeed(scopeId:string,documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array;head:string}|null,StorageError>> {
     if(!validId(scopeId)||!validId(documentId))return {ok:false,error:'MALFORMED'};
-    try{const found=await this.run(false,async tx=>{const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const p=await this.getProjectionPublication(scopeId,found.operationId);if(p.ok&&!p.value){const recipient=await this.readRecipientProjection(scopeId,found.operationId,documentId);if(recipient&&JSON.stringify(projectionCanonical(recipient.seed))===JSON.stringify(projectionCanonical(found.seed)))return {ok:true,value:recipient.ownDevice?.seedSnapshot===null?null:{seed:found.seed,snapshot:copy(recipient.ownDevice?.seedSnapshot??recipient.documents[0].bytes),head:recipient.nextAuthority.acceptedParent}};}if(!p.ok||!p.value||p.value.documents.length!==1||p.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(p.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(p.value.documents[0].bytes),head:p.value.nextAuthority.acceptedParent}}}catch(e){return {ok:false,error:mapError(e)}}
+    try{
+      const found=await this.run(false,async tx=>{
+        const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));
+        if(seed===undefined)return null;
+        if(!meta||!validId(meta.operationId))return corrupt();
+        return {seed:snapshot(seed),operationId:meta.operationId};
+      });
+      if(!found)return {ok:true,value:null};
+      const stored=await this.getProjectionPublication(scopeId,found.operationId);
+      if(!stored.ok)return {ok:false,error:'CORRUPT'};
+      const publication=stored.value;
+      if(!publication){
+        const recipient=await this.readRecipientProjection(scopeId,found.operationId,documentId);
+        if(!recipient||!sameRecord(recipient.seed,found.seed))return corrupt();
+        return {ok:true,value:recipient.ownDevice?.seedSnapshot===null?null:{
+          seed:found.seed,snapshot:copy(recipient.ownDevice?.seedSnapshot??recipient.documents[0].bytes),
+          head:recipient.nextAuthority.acceptedParent,
+        }};
+      }
+      const documents=publication.documents,set=publication.documentSet;
+      const index=set?documents.findIndex(doc=>doc.documentId===documentId):0;
+      const document=documents[index];
+      const entry=set?.seeds[index];
+      if(document?.documentId!==documentId||(!set&&documents.length!==1)||(set&&entry?.documentId!==documentId)||
+        !sameRecord(set?entry?.seed:publication.seed,found.seed))return corrupt();
+      return {ok:true,value:{seed:found.seed,snapshot:copy(document.bytes),head:publication.nextAuthority.acceptedParent}};
+    }catch(e){return {ok:false,error:mapError(e)}}
   }
   private async projectionLineage(tx:Tx,scope:string,documentId:string,head?:string) {
     let current={documentId,head};

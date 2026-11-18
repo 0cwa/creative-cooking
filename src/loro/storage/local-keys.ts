@@ -58,6 +58,16 @@ export class LocalKeys {
   await this.unlock();
  }
  async unlock():Promise<ReadyMasterCatalog>{const c=await this.run(false,tx=>tx.get(ck));if(!validMasterCatalog(c))throw Error('LOCKED');try{if(!eq(await this.master.unwrap(c.id,c.check,masterContext(c.id)),sentinel))throw Error();}catch{throw Error('LOCKED')}return copy(c)}
+ private async wrapPreparedKey(catalog:ReadyMasterCatalog,identity:LocalKeyIdentity,material:Uint8Array){
+  const aad=context(identity),wrapped=await this.master.wrap(catalog.id,material,aad);
+  if(!bytes(wrapped,29,1024))throw Error('LOCKED');
+  let opened:Uint8Array|undefined;
+  try{
+   opened=await this.master.unwrap(catalog.id,wrapped,aad);
+   if(!eq(opened,material))throw Error('LOCKED');
+   return wrapped;
+  }catch{throw Error('LOCKED')}finally{opened?.fill(0)}
+ }
  private async verify(r:LocalKeyRecord,c:ReadyMasterCatalog){if(!validLocalRecord(r)||r.masterId!==c.id)throw Error('LOCKED');let secret:Uint8Array|undefined;try{secret=await this.master.unwrap(c.id,r.wrapped,context(r.identity));const p=r.identity.purpose;if(p==='device-signing'){if(secret.length!==64)throw Error();const pair=this.sodium.crypto_sign_seed_keypair(secret.slice(0,32));const ok=eq(pair.publicKey,r.publicKey)&&eq(pair.privateKey,secret);pair.privateKey.fill(0);if(!ok)throw Error()}else if(p==='device-wrapping'){if(secret.length!==32||!eq(this.sodium.crypto_scalarmult_base(secret),r.publicKey))throw Error()}else if(secret.length!==32||r.publicKey!==null)throw Error()}catch{throw Error('LOCKED')}finally{secret?.fill(0)}}
  async generate(operationId:string,identity:LocalKeyIdentity){if(!id(operationId)||!validLocalIdentity(identity))throw Error('MALFORMED');identity=copy(identity);const c=await this.unlock();const old=await this.run(false,tx=>findLocalKey(tx,operationId,identity));if(old){await this.verify(old,c);return {publicKey:copy(old.publicKey),replayed:true}}let secret:Uint8Array,publicKey:Uint8Array|null=null;const p=identity.purpose;if(p==='device-signing'||p==='device-wrapping'){const pair=p==='device-signing'?this.sodium.crypto_sign_keypair():this.sodium.crypto_box_keypair();secret=pair.privateKey;publicKey=pair.publicKey}else secret=this.sodium.randombytes_buf(32);try{const wrapped=await this.master.wrap(c.id,secret,context(identity));const record:LocalKeyRecord={version:1,operationId,identity,masterId:c.id,publicKey,wrapped};const result=await this.run(true,async tx=>{const prior=await findLocalKey(tx,operationId,identity);if(prior)return {record:prior,replayed:true};return installLocalKey(tx,record,c)});this.afterCommit?.();await this.verify(result.record,c);return {publicKey:copy(result.record.publicKey),replayed:result.replayed}}finally{secret.fill(0)}}
  /** Prepare a recovered personal data key for atomic installation; caller must authenticate the recovery package and commit all records together. */
@@ -71,11 +81,11 @@ export class LocalKeys {
   identity=copy(identity);const material=new Uint8Array(secret);try{
    const catalog=await this.unlock(),old=await this.run(false,tx=>findLocalKey(tx,operationId,identity));
    if(old){await this.verify(old,catalog);await this.use(operationId,identity,key=>{if(!eq(key,material))throw Error('CONFLICT')});return {record:old,catalog};}
-   const wrapped=await this.master.wrap(catalog.id,material,context(identity));return {record:{version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped},catalog};
+   const wrapped=await this.wrapPreparedKey(catalog,identity,material);return {record:{version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped},catalog};
   }finally{material.fill(0)}
  }
  /** Trusted internal preparation: caller must withhold packet outputs until its atomic publication commits. */
- async prepareForAtomicInstall<T>(operationId:string,identity:LocalKeyIdentity,makePackets:(secret:Uint8Array)=>Promise<T>|T):Promise<{record:LocalKeyRecord;catalog:ReadyMasterCatalog;packets:T}>{if(!id(operationId)||!validLocalIdentity(identity)||!['data','recovery'].includes(identity.purpose)||typeof makePackets!=='function')throw Error('MALFORMED');identity=copy(identity);const catalog=await this.unlock();if(await this.run(false,tx=>findLocalKey(tx,operationId,identity)))throw Error('CONFLICT');const secret:Uint8Array=this.sodium.randombytes_buf(32);try{const wrapped=await this.master.wrap(catalog.id,secret,context(identity));const record:LocalKeyRecord={version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped};const packets=await makePackets(secret);return {record:copy(record),catalog:copy(catalog),packets}}finally{secret.fill(0)}}
+ async prepareForAtomicInstall<T>(operationId:string,identity:LocalKeyIdentity,makePackets:(secret:Uint8Array)=>Promise<T>|T):Promise<{record:LocalKeyRecord;catalog:ReadyMasterCatalog;packets:T}>{if(!id(operationId)||!validLocalIdentity(identity)||!['data','recovery'].includes(identity.purpose)||typeof makePackets!=='function')throw Error('MALFORMED');identity=copy(identity);const catalog=await this.unlock();if(await this.run(false,tx=>findLocalKey(tx,operationId,identity)))throw Error('CONFLICT');const secret:Uint8Array=this.sodium.randombytes_buf(32);try{const wrapped=await this.wrapPreparedKey(catalog,identity,secret);const record:LocalKeyRecord={version:1,operationId,identity,masterId:catalog.id,publicKey:null,wrapped};const packets=await makePackets(secret);return {record:copy(record),catalog:copy(catalog),packets}}finally{secret.fill(0)}}
  /** Resolve only an exact durable identity and verify both catalog indexes before use. */
  async useIdentity<T>(identity:LocalKeyIdentity,fn:(secret:Uint8Array)=>Promise<T>|T):Promise<T>{
   if(!validLocalIdentity(identity))throw Error('MALFORMED');

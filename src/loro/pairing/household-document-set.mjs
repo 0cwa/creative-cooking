@@ -22,6 +22,18 @@ const clearSecrets=keys=>{keys.signingSecret.fill(0);keys.wrappingSecret.fill(0)
 const expectedAuthority=record=>({version:2,scope:record.scope,record:{revision:record.revision,
   acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}});
 
+async function writeOrReplay(storage,scopeId,operationId,write,replay){
+  const read=async()=>must(await storage.getProjectionPublication(scopeId,operationId));
+  const prior=await read();
+  if(prior)return replay(prior);
+  try{return await write();}
+  catch(error){
+    const committed=await read();
+    if(!committed)throw error;
+    return replay(committed);
+  }
+}
+
 async function nextAuthority({pin,provider,parentState,record,item,selection}) {
   const {grant,manifest,operationId}=item.admission??{};
   if (manifest?.version!==5 || operationId!==item.event.proposalId || grant?.admissionEventHash!==selection?.to ||
@@ -190,41 +202,39 @@ export async function publishHouseholdDocumentSet({storage,scope,pin,provider,so
         !same(documents,saved.documents)||saved.publication.localKey.record.operationId!==keyOperationId) throw Error('CONFLICT');
       return {operationId,replayed:true,head:saved.state.activeHead};
     };
-    if(must(await storage.getProjectionPublication(scope.id,operationId)))return await replay();
-    const checked=await proofAtParent({storage,scope,pin,provider,LoroDoc:runtime.LoroDoc,item:packed,selection,documents});
-    const source=await verifyCurrentDocumentSetSource({runtime,service,item,manifest,documents});
-    if(!same(source.expectedAuthority,expectedAuthority(checked.record)))throw Error('CONFLICT');
-    const pendingEdits=must(await storage.listBranchLocalOperations(source.expectedAuthority));
-    const recipients=checked.selected.runtime.acceptedRecipients.filter(device=>device!==localDeviceId);
-    if(!recipients.length||recipients.length*documents.length>128)throw Error('TOO_LARGE');
-    const routes=[];
-    for(const recipientDevice of recipients){
-      const result=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item:packed,recipientDevice});
-      await checkSession(sodium,sessionStore,secrets,result.proof,'initiator');
-      routes.push(result);
-    }
-    const localKeys=storage.localKeys(master,sodium),prepared=[];
-    for(const [index,{documentId}] of documents.entries()){
-      const {operationId,identity}=await localIdentity(provider,scope,localDeviceId,manifest,documentId,keyOperationId);
-      prepared.push(await localKeys.prepareForAtomicInstall(operationId,identity,key=>routes.map(({contexts})=>{
-        const context=contexts[index];
-        return {id:context.releaseId,recipientDevice:context.recipientDevice,
-          bytes:makeKeyPackage(sodium,context,key,secrets.signingSecret)};
-      })));
-    }
-    const {encodeHouseholdDocumentSetFile}=await import('./household-file.mjs');
-    for(const [index] of routes.entries()){
-      const packets=prepared.map(key=>key.packets[index]);
-      encodeHouseholdDocumentSetFile({version:1,item:packed,selection,documents,packets}).fill(0);
-    }
-    const packets=routes.flatMap((_,index)=>prepared.map(key=>key.packets[index]));
-    const publication=forStorage({checked,item:packed,documents,operationId,guardIds:routes.map(route=>route.guardId).sort(),
-      mode:'publisher',keys:prepared,packets,pendingEdits});
-    const committed=await storage.publishProjection(publication,undefined,source);
-    if(!committed.ok&&committed.error==='CONFLICT'&&must(await storage.getProjectionPublication(scope.id,operationId))){
-      return await replay();
-    }
-    return {...must(committed),operationId,head:checked.eventHash};
+    return await writeOrReplay(storage,scope.id,operationId,async()=>{
+      const checked=await proofAtParent({storage,scope,pin,provider,LoroDoc:runtime.LoroDoc,item:packed,selection,documents});
+      const source=await verifyCurrentDocumentSetSource({runtime,service,item,manifest,documents});
+      if(!same(source.expectedAuthority,expectedAuthority(checked.record)))throw Error('CONFLICT');
+      const pendingEdits=must(await storage.listBranchLocalOperations(source.expectedAuthority));
+      const recipients=checked.selected.runtime.acceptedRecipients.filter(device=>device!==localDeviceId);
+      if(!recipients.length||recipients.length*documents.length>128)throw Error('TOO_LARGE');
+      const routes=[];
+      for(const recipientDevice of recipients){
+        const result=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item:packed,recipientDevice});
+        await checkSession(sodium,sessionStore,secrets,result.proof,'initiator');
+        routes.push(result);
+      }
+      const localKeys=storage.localKeys(master,sodium),prepared=[];
+      for(const [index,{documentId}] of documents.entries()){
+        const {operationId,identity}=await localIdentity(provider,scope,localDeviceId,manifest,documentId,keyOperationId);
+        prepared.push(await localKeys.prepareForAtomicInstall(operationId,identity,key=>routes.map(({contexts})=>{
+          const context=contexts[index];
+          return {id:context.releaseId,recipientDevice:context.recipientDevice,
+            bytes:makeKeyPackage(sodium,context,key,secrets.signingSecret)};
+        })));
+      }
+      const {encodeHouseholdDocumentSetFile}=await import('./household-file.mjs');
+      for(const [index] of routes.entries()){
+        const packets=prepared.map(key=>key.packets[index]);
+        encodeHouseholdDocumentSetFile({version:1,item:packed,selection,documents,packets}).fill(0);
+      }
+      const packets=routes.flatMap((_,index)=>prepared.map(key=>key.packets[index]));
+      const publication=forStorage({checked,item:packed,documents,operationId,guardIds:routes.map(route=>route.guardId).sort(),
+        mode:'publisher',keys:prepared,packets,pendingEdits});
+      const committed=await storage.publishProjection(publication,undefined,source);
+      return {...must(committed),operationId,head:checked.eventHash};
+    },replay);
   }finally{clearSecrets(secrets);}
 }
 
@@ -253,40 +263,50 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
     const {item,selection,documents,packets}=release;
     const {manifest,operationId}=item?.admission??{};
     if(!manifest||typeof operationId!=='string'||typeof confirmedParent!=='string')throw Error('INVALID_DOCUMENT_SET');
-    const prior=must(await storage.getProjectionPublication(scope.id,operationId));
-    const parentStorage=prior?(await parentFromPublication({scope,pin,provider,publication:prior})).parentStorage:storage;
-    const checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
-    if(checked.record.acceptedParent!==confirmedParent)throw Error('INVALID_AUTHORITY');
-    const {contexts,proof,guardId}=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item,recipientDevice});
-    await checkSession(sodium,sessionStore,secrets,proof,'responder');
-    checkPackets(sodium,packets,contexts);
-    const replay=async()=>{
+    const verifyInput=async parentStorage=>{
+      const checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
+      if(checked.record.acceptedParent!==confirmedParent)throw Error('INVALID_AUTHORITY');
+      const route=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item,recipientDevice});
+      await checkSession(sodium,sessionStore,secrets,route.proof,'responder');
+      checkPackets(sodium,packets,route.contexts);
+      return {checked,...route};
+    };
+    const localKeys=storage.localKeys(master,sodium);
+    const replay=async prior=>{
       const saved=await readInstalledHouseholdDocumentSet({sodium,storage,scope,pin,provider,operationId,LoroDoc});
       const installed=saved.publication;
       if(saved.mode!=='recipient'||!same(item,saved.item)||!same(selection,saved.selection)||!same(documents,saved.documents)||
         !same(packets,installed.packages)||installed.localKey.record.operationId!==keyOperationId||
         installed.localKey.record.identity.deviceId!==recipientDevice) throw Error('CONFLICT');
+      const {parentStorage}=await parentFromPublication({scope,pin,provider,publication:prior});
+      const {contexts,checked}=await verifyInput(parentStorage);
+      const retainedKeys=[installed.localKey.record,...installed.documentSet.childKeys];
+      for(const [index,packet] of packets.entries()){
+        const {operationId,identity}=retainedKeys[index];
+        await withOpenedKeyPackage(sodium,packet.bytes,contexts[index],secrets.wrappingSecret,key=>
+          localKeys.use(operationId,identity,retained=>{
+            if(retained.length!==key.length||retained.some((byte,index)=>byte!==key[index]))throw Error('LOCKED');
+          }));
+      }
       return {replayed:true,head:checked.eventHash};
     };
-    if(prior)return await replay();
-    const prepared=[],seenKeys=new Set(),localKeys=storage.localKeys(master,sodium);
-    for(const [index,packet] of packets.entries()){
-      const context=contexts[index],documentId=documents[index].documentId;
-      const {operationId,identity}=await localIdentity(provider,scope,recipientDevice,manifest,documentId,keyOperationId);
-      prepared.push(await withOpenedKeyPackage(sodium,packet.bytes,context,secrets.wrappingSecret,async key=>{
-        const fingerprint=await selectedSourceHash(provider,'household-admission-key-distinctness',hex(key));
-        if(seenKeys.has(fingerprint))throw Error('INVALID_KEY_PACKAGE');
-        seenKeys.add(fingerprint);
-        return localKeys.preparePairedDataKey(operationId,identity,key);
-      }));
-    }
-    const publication=forStorage({checked,item,documents,operationId,guardIds:[guardId],mode:'recipient',
-      keys:prepared,packets,pendingEdits:[]});
-    publication.documentSet.recipientSignature=sodium.crypto_sign_detached(await receiptBytes(provider,publication),secrets.signingSecret);
-    const committed=await storage.publishProjection(publication);
-    if(!committed.ok&&committed.error==='CONFLICT'&&must(await storage.getProjectionPublication(scope.id,operationId))){
-      return await replay();
-    }
-    return {...must(committed),head:checked.eventHash};
+    return await writeOrReplay(storage,scope.id,operationId,async()=>{
+      const {checked,contexts,guardId}=await verifyInput(storage);
+      const prepared=[],seenKeys=new Set();
+      for(const [index,packet] of packets.entries()){
+        const context=contexts[index],documentId=documents[index].documentId;
+        const {operationId,identity}=await localIdentity(provider,scope,recipientDevice,manifest,documentId,keyOperationId);
+        prepared.push(await withOpenedKeyPackage(sodium,packet.bytes,context,secrets.wrappingSecret,async key=>{
+          const fingerprint=await selectedSourceHash(provider,'household-admission-key-distinctness',hex(key));
+          if(seenKeys.has(fingerprint))throw Error('INVALID_KEY_PACKAGE');
+          seenKeys.add(fingerprint);
+          return localKeys.preparePairedDataKey(operationId,identity,key);
+        }));
+      }
+      const publication=forStorage({checked,item,documents,operationId,guardIds:[guardId],mode:'recipient',
+        keys:prepared,packets,pendingEdits:[]});
+      publication.documentSet.recipientSignature=sodium.crypto_sign_detached(await receiptBytes(provider,publication),secrets.signingSecret);
+      return {...must(await storage.publishProjection(publication)),head:checked.eventHash};
+    },replay);
   }finally{clearSecrets(secrets);}
 }

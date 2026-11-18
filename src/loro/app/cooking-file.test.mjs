@@ -945,6 +945,13 @@ test('selected recipe shopping copies and current-only admission survive durable
   documents,selection,localDeviceId:a.deviceId,ceremonies,existingCeremonies,keyOperationId:'set-sponsor-key'};
  const attempt=(updates={})=>publishHouseholdDocumentSet({...publicationInput,...updates});
  const beforePublisher=a.rows();
+ const wrongWrappedKey=master=>({...master,async wrap(id,key,aad){
+  const changed=new Uint8Array(key);
+  changed[0]^=1;
+  try{return await master.wrap(id,changed,aad);}finally{changed.fill(0);}
+ }});
+ await assert.rejects(()=>attempt({master:wrongWrappedKey(sponsorMaster)}),/LOCKED/);
+ assert.deepEqual(a.rows(),beforePublisher);
  const operationId=event.proposalId;
  const sealOptions={sodium,storage:a.storage,scope,pin:a.root.head,provider:a.provider,keys:sponsorKeys,
   sessionStore:sponsorSession,operationId,LoroDoc,recipientDevice:newcomerContext.recipientDeviceId,kind:'document-set'};
@@ -975,7 +982,19 @@ test('selected recipe shopping copies and current-only admission survive durable
   acceptedDraft=await prepare();
   finalInput={grant:await grantFor(acceptedDraft.manifest),manifest:acceptedDraft.manifest,documents:acceptedDraft.documents};
  }
- assert.deepEqual(await attempt(finalInput),{replayed:false,operationId,head:eventHash});
+ // Both runs initially miss the publication. The winner commits before the
+ // other run first checks its local key slot.
+ const sponsorLocalKeys=a.storage.localKeys;
+ a.storage.localKeys=(...args)=>{
+  a.storage.localKeys=sponsorLocalKeys;
+  const local=sponsorLocalKeys(...args),prepareKey=local.prepareForAtomicInstall.bind(local);
+  local.prepareForAtomicInstall=async(...keyArgs)=>{
+   assert.deepEqual(await attempt(finalInput),{replayed:false,operationId,head:eventHash});
+   return prepareKey(...keyArgs);
+  };
+  return local;
+ };
+ assert.deepEqual(await attempt(finalInput),{replayed:true,operationId,head:eventHash});
  a.reopen();
  assert.deepEqual(await attempt(finalInput),{replayed:true,operationId,head:eventHash});
  const sealed=await sealHouseholdFile(sealOptions);
@@ -997,6 +1016,8 @@ test('selected recipe shopping copies and current-only admission survive durable
  await assert.rejects(()=>install(existingSealed),/INVALID_FILE/);
  await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,recipientKind:'newcomer'}),/INVALID_FILE/);
  assert.deepEqual(freshRows(),beforeNewcomer);
+ await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,master:wrongWrappedKey(newcomerMaster)}),/LOCKED/);
+ assert.deepEqual(freshRows(),beforeNewcomer);
  for(const fault of ['projection-set-keys','projection-set-catalog','projection-set-authority']){
   freshFault=fault;
   await assert.rejects(()=>install(),/IO/);
@@ -1004,7 +1025,17 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.deepEqual(freshRows(),beforeNewcomer);
  }
  freshFault=null;
- assert.deepEqual(await install(),{replayed:false,head:eventHash});
+ // Pause after reading an absent receipt until an identical install advances
+ // the parent. An exact retry must verify the retained original parent.
+ const getPublication=freshStorage.getProjectionPublication.bind(freshStorage);
+ freshStorage.getProjectionPublication=async(...args)=>{
+  freshStorage.getProjectionPublication=getPublication;
+  const absent=await getPublication(...args);
+  assert.equal(must(absent),null);
+  assert.deepEqual(await install(),{replayed:false,head:eventHash});
+  return absent;
+ };
+ assert.deepEqual(await install(),{replayed:true,head:eventHash});
  reopenFresh();
  assert.deepEqual(await install(),{replayed:true,head:eventHash});
  const sponsorSelected=await readInstalledHouseholdDocumentSet(sealOptions);
@@ -1012,6 +1043,24 @@ test('selected recipe shopping copies and current-only admission survive durable
  assert.deepEqual(newcomerSelected.documents,sponsorSelected.documents);
  assert.equal((await readAuthority(freshStorage,scope,a.root.head,a.provider)).activeHead,eventHash);
  assert.equal(newcomerSelected.publication.documentSet.catalog.length,3);
+ const beforeReplay=freshRows();
+ const wrongChildEpoch=newcomerSelected.publication.documentSet.childKeys[0].identity.epochId;
+ const wrongChildMaster={...newcomerMaster,async unwrap(id,bytes,aad){
+  const key=await newcomerMaster.unwrap(id,bytes,aad);
+  if(JSON.parse(new TextDecoder().decode(aad)).at(-1)===wrongChildEpoch)key[0]^=1;
+  return key;
+ }};
+ for(const master of [testMaster(),wrongChildMaster]){
+  await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,master}),/LOCKED/);
+  assert.deepEqual(freshRows(),beforeReplay);
+ }
+ for(const [index,document] of newcomerSelected.documents.entries()){
+  const saved=must(await freshStorage.readRetainedProjectionSeed(scope.id,document.documentId));
+  assert.deepEqual(saved,{
+   seed:newcomerSelected.publication.documentSet.seeds[index].seed,
+   snapshot:document.seed.snapshot,head:eventHash,
+  });
+ }
  const catalogSlot=JSON.stringify(['projection-document-set',scope.id,eventHash]);
  const installedCatalog=freshRows().find(row=>row.key===catalogSlot).value;
  freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({
