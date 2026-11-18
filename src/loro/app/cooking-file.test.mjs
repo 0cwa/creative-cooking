@@ -21,6 +21,7 @@ import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
 import {acceptInitialPolicy,prepareInitialPolicy} from '../disclosure/setup.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
+import {hash as disclosureHash} from '../disclosure/policy.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {householdLocalTrust} from './household-local-trust.mjs';
@@ -706,8 +707,10 @@ test('selected recipe shopping copies and current-only admission survive durable
  await a.edit('source-set-root-race',++sequence);
  assert.equal((await checkGuard(beforeRootRace)).error.code,'CONFLICT');
  const beforeInsert=(await observeSelectedSourceSet(a.runtime)).guard;
- const inserted=await a.runtime.forRecipe('third');
- await edit(a,inserted,'source-set-catalog-race',recipe('third','Third carrot'));
+ const omittedRecipeId='omitted-catalog-recipe',omittedIngredientId='omitted-catalog-ingredient';
+ const inserted=await a.runtime.forRecipe(omittedRecipeId);
+ await edit(a,inserted,'source-set-catalog-race',{...recipe(omittedRecipeId,'Third carrot'),
+  ingredients:[{id:omittedIngredientId,name:'Third carrot',amount:'1 cup'}]});
  assert.equal((await checkGuard(beforeInsert)).error.code,'CONFLICT');
  const afterInsert=await observeSelectedSourceSet(a.runtime);
  assert.equal(afterInsert.signed.manifest.catalog.revision,3);
@@ -722,6 +725,14 @@ test('selected recipe shopping copies and current-only admission survive durable
   dependencyEffectIds:[],data:{conversationId:'private',proposalId:'private',toolName:'draft',
    arguments:'UNRELATED_PRIVATE_CANARY',status:'pending',createdAt:at}};
  await a.runtime.execute({operationId:'private-canary',deviceSequence:++sequence,command:unrelatedPrivate});
+ const copySource=await openSelectedRecipeCatalog(a.runtime);
+ const cookingBeforeRemoval=projectCooking(copySource.parent.doc);
+ const detachedCopy={...copied,id:'retained-detached-copy',recipeId:omittedRecipeId,ingredientId:omittedIngredientId,
+  name:'Third carrot',displayQuantity:'1 cup'};
+ const detachCommands=planShoppingAction({doc:copySource.parent.doc,recipeCatalog:copySource,before:cookingBeforeRemoval.shopping,
+  after:{...cookingBeforeRemoval.shopping,items:[...cookingBeforeRemoval.shopping.items,detachedCopy]},
+  pantryBefore:cookingBeforeRemoval.pantry,pantryAfter:cookingBeforeRemoval.pantry,actionId:'copy-before-removal',author:a.deviceId,at});
+ await save(a,a.runtime,'copy-before-removal',detachCommands);
  const {doc:thirdDoc}=await inserted.document();
  await save(a,inserted,'remove-entire-child',planRecipeAction({doc:thirdDoc,before:projectCooking(thirdDoc).recipes[0],
   after:null,actionId:'remove-entire-child',author:a.deviceId,at}));
@@ -797,14 +808,26 @@ test('selected recipe shopping copies and current-only admission survive durable
   const doc=new LoroDoc();
   assert.ok(!doc.import(document.seed.snapshot).pending?.size);
   const ops=JSON.stringify(doc.exportJsonUpdates(undefined,undefined,false));
-  for(const canary of ['HIDDEN_INGREDIENT_TEXT','removed-ingredient','Third carrot',
+  for(const canary of ['HIDDEN_INGREDIENT_TEXT','removed-ingredient',omittedRecipeId,omittedIngredientId,
    'SUPERSEDED_SIBLING_TITLE','UNRELATED_PRIVATE_CANARY','recipe-intentions','recipeSource']){
    assert.equal(ops.includes(canary),false,canary);
   }
   return doc;
  });
  const links=items=>items.map(({id,recipeId,ingredientId,displayQuantity})=>({id,recipeId,ingredientId,displayQuantity}));
- assert.deepEqual(links(projectCooking(fresh[0]).shopping.items),links((await shopping(a.runtime)).items));
+ const sourceItems=(await shopping(a.runtime)).items;
+ const projectedItems=projectCooking(fresh[0]).shopping.items;
+ assert.deepEqual(links(projectedItems),links(sourceItems.map(item=>item.id===detachedCopy.id?
+  {...item,recipeId:undefined,ingredientId:undefined}:item)));
+ const detached=projectedItems.find(item=>item.id===detachedCopy.id);
+ assert.equal(detached.name,detachedCopy.name);
+ assert.equal(detached.displayQuantity,detachedCopy.displayQuantity);
+ for(const field of ['recipeId','ingredientId']){
+  assert.equal(fresh[0].getMap('shopping-item-fields:'+detachedCopy.id).get(field),undefined);
+  assert.equal(fresh[0].getMap('field-head:'+encodeURIComponent(JSON.stringify(['shopping-item',detachedCopy.id,field]))).get('effect'),undefined);
+ }
+ const detachedEffect=fresh[0].getMap('shopping-item:'+detachedCopy.id).get('value').effectId;
+ assert.ok(documents[0].policyBundle.entries.find(entry=>entry.effectId===detachedEffect).policyHashes.includes(accepted.policyHash));
  assert.equal(projectCooking(fresh[1]).recipes[0].title,'New child title');
  assert.equal(projectCooking(fresh[2]).recipes[0].title,'New sibling title');
  const copiedEffect=fresh[0].getMap('shopping-item:selected-item').get('value').effectId;
@@ -816,6 +839,21 @@ test('selected recipe shopping copies and current-only admission survive durable
   sodium.to_hex(stolen[1].seed.snapshot));
  await assert.rejects(async()=>verifyCurrentDocumentSet({...verifyOptions,manifest:sealedOldHistory,
   grant:await grantFor(sealedOldHistory),documents:stolen}),/INVALID_SEED/);
+ const malformed=structuredClone(documents),malformedManifest=structuredClone(manifest);
+ const malformedDoc=new LoroDoc();
+ malformedDoc.setPeerId(malformed[1].seed.peerId);
+ for(const [container,entries] of Object.entries(fresh[1].toJSON())){
+  for(const [key,value] of Object.entries(entries)){
+   malformedDoc.getMap(container).set(key,container.startsWith('recipe:')&&key==='title'?{old:'HIDDEN_OLD_TITLE'}:value);
+  }
+ }
+ const invalidSnapshot=malformedDoc.export({mode:'snapshot'});
+ malformed[1].seed.snapshot=invalidSnapshot;
+ malformed[1].policyBundle.snapshotHash=await disclosureHash(a.provider,'seed-snapshot',Array.from(invalidSnapshot));
+ malformedManifest.entries[1].snapshotHash=await selectedSourceHash(a.provider,'projection-snapshot',sodium.to_hex(invalidSnapshot));
+ malformedManifest.entries[1].policyBundleHash=await disclosureHash(a.provider,'projection-policy-bundle',malformed[1].policyBundle);
+ await assert.rejects(async()=>verifyCurrentDocumentSet({...verifyOptions,manifest:malformedManifest,
+  grant:await grantFor(malformedManifest),documents:malformed}),/INVALID_SEED/);
  for(const badDocuments of [documents.slice(1),[...documents,documents[1]],[documents[0],documents[2],documents[2]],
   [documents[0],{...documents[1],policyBundle:documents[2].policyBundle},documents[2]]]){
   await assert.rejects(()=>verifyCurrentDocumentSet({...verifyOptions,documents:badDocuments}),/INVALID_DOCUMENT_SET|INVALID_PROOF/);

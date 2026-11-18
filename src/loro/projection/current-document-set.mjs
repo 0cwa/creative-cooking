@@ -110,18 +110,20 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
     sourceSetHash:await selectedSourceHash(provider,'selected-household-source-set-v1',source),
     catalog:{sourceRevision:source.catalog.revision,sourceHash:source.catalog.hash,targetRevision:0,removed:[]},entries:[]};
   const documents=[];
+  const omittedRecipeIds=new Set();
+  // Bind omitted children to the source without disclosing their recipe IDs.
+  for(const [index,captured] of sources.slice(1).entries()){
+    const recipeId=captured.runtime.recipeId;
+    const recipe=captured.doc.getMap(`recipe:${encodeURIComponent(recipeId)}`);
+    if(recipe.get('removed')===true||recipe.get('removedAt')){
+      omittedRecipeIds.add(recipeId);
+      manifest.catalog.removed.push(await selectedSourceHash(provider,'removed-recipe-source-v1',source.children[index]));
+    }
+  }
   let projectedBytes=0;
   for (const [index,captured] of sources.entries()) {
     const recipeId=captured.runtime.recipeId;
-    // A removed catalog recipe contributes to the source commitment. Its
-    // recipe identity and child snapshot are excluded from the recipient set.
-    if (recipeId!==null) {
-      const recipe=captured.doc.getMap(`recipe:${encodeURIComponent(recipeId)}`);
-      if (recipe.get('removed')===true || recipe.get('removedAt')) {
-        manifest.catalog.removed.push(await selectedSourceHash(provider,'removed-recipe-source-v1',source.children[index-1]));
-        continue;
-      }
-    }
+    if(omittedRecipeIds.has(recipeId))continue;
     const allocation=await allocateSeed(captured.runtime.scope.documentId);
     if (!allocation) throw Error('SOURCE_CHANGED');
     const {seedId,peerId}=allocation;
@@ -129,7 +131,8 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
     const {seed,bundle, bundleHash}=captured.bytes===null ? {
       seed:projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:new runtime.LoroDoc().export({mode:'snapshot'}),
         seedId,peerId,schemaVersion:4}),bundle:null,bundleHash:null,
-    } : await preparePolicyProjection({runtime:captured.runtime,service,provider,seedId,peerId,version:4,selectedSource:captured});
+    } : await preparePolicyProjection({runtime:captured.runtime,service,provider,seedId,peerId,version:4,selectedSource:captured,
+      omittedRecipeIds:recipeId===null?omittedRecipeIds:undefined});
     projectedBytes+=seed.snapshot.length;
     if (projectedBytes>MAX_SELECTED_SET_BYTES) throw Error('TOO_LARGE');
     const documentId=recipeId===null ? target.documentId : await recipeDocumentId(target,pin,provider,recipeId);
