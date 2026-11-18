@@ -169,6 +169,9 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const beforeCatalog=await openSelectedRecipeCatalog(b.runtime);
  assert.equal(beforeCatalog.children.size,0);
  assert.deepEqual(projectSelectedRecipes(beforeCatalog).map(r=>r.id),['legacy','original']);
+ const duplicateChild=await b.runtime.forRecipe('legacy');
+ const duplicateCreate=await change(b,duplicateChild,'duplicate-child',makeRecipe('legacy','Duplicate child recipe'));
+ await assert.rejects(()=>execute(b,duplicateChild,'duplicate-child',duplicateCreate),/CONFLICT/);
  const legacyBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),b.runtime.scope.documentId));
  const anotherLegacy=await change(a,a.runtime,'legacy-second',makeRecipe('legacy-second','Legacy second soup'));
  await execute(a,a.runtime,'legacy-second',anotherLegacy);
@@ -506,9 +509,12 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
  // The recipient authors its own recipe edit before importing the delayed
  // shopping command. A write racing the verified child read must retry.
  const originalCommit=b.storage.commitImportWithDisclosurePolicy.bind(b.storage);
+ let intermediateAmount;
  b.storage.commitImportWithDisclosurePolicy=async (...args)=>{
   b.storage.commitImportWithDisclosurePolicy=originalCommit;
   assert.equal(args[5][0].documentId,br.scope.documentId);
+  const intermediate=await edit(b,br,'intermediate-amount',{id:recipeId,ingredients:[{id:ingredientId,name:'Purple carrot',amount:'3 cups',needsShopping:true}]});
+  intermediateAmount=intermediate.find(c=>c.data.field==='amount');
   await edit(b,br,'concurrent-amount',{id:recipeId,ingredients:[{id:ingredientId,name:'Purple carrot',amount:'4 cups',needsShopping:true}]});
   return originalCommit(...args);
  };
@@ -536,6 +542,7 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
 
  // Exchange the independently signed later recipe edit, then retry the exact
  // original local and imported shopping commands against the changed recipe.
+ await send(b,a,'intermediate-amount');
  await send(b,a,'concurrent-amount');
  a.reopen();b.reopen();
  assert.equal((await save(a,a.runtime,'copy',commands)).replayed,true);
@@ -583,6 +590,14 @@ test('selected recipe shopping copies authenticate causal fields and commit acro
  assert.ok((await files(b).pending()).some(x=>x.itemId===incoming.id));
  await files(b).retry(incoming.id);
  assert.deepEqual((await shopping(b.runtime)).items,[sameDocument,secondCopy,copied]);
+ assert.ok(intermediateAmount);
+ assert.ok(!copyItem.dependencyEffectIds.includes(intermediateAmount.effectId));
+ const earlierExcluded=await replayAuthenticated({runtime:b.runtime,checkpoint:new Uint8Array(),excludedEffectIds:[intermediateAmount.effectId]});
+ assert.ok(earlierExcluded.applied.some(row=>row.command.effectId===linked.effectId));
+ assert.ok(!earlierExcluded.applied.some(row=>row.command.effectId===copyItem.effectId));
+ assert.equal(earlierExcluded.held.find(row=>row.command.effectId===copyItem.effectId)?.reason,'DEPENDENCY_EXCLUDED');
+ const {storedBytes:withCopies}=await b.runtime.document();
+ await assert.rejects(()=>replayAuthenticated({runtime:b.runtime,checkpoint:withCopies,excludedEffectIds:[intermediateAmount.effectId]}),/INVALID_BOUNDARY/);
  const {doc:shoppingDoc}=await b.runtime.document();
  const reviewed=projectCooking(shoppingDoc);
  const checked={...copied,checked:true};

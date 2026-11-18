@@ -74,6 +74,7 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
    }
    const governing=legacy ? null : h.disclosurePolicyHash;
    const ancestry=new Set(governing===null?[]:[governing]);
+   const sourceDependencies=selectedDocument ? new Set() : null;
    let incomplete=legacy||h.version===3||h.version===4&&h.disclosureIncomplete===true;
    if(governing!==null)await service.validateStored(governing,context);
    if(incomplete&&!allowIncomplete)throw Error('INCOMPLETE_PROVENANCE');
@@ -82,6 +83,10 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
     if(parent.incomplete&&!incomplete)throw Error('INVALID_SOURCE_PROOF');
     incomplete||=!!parent.incomplete;
     for(const policy of parent.policies)ancestry.add(policy);
+    if(sourceDependencies){
+     sourceDependencies.add(dep);
+     for(const dependency of parent.sourceDependencies)sourceDependencies.add(dependency);
+    }
    }
    const values=[...ancestry].sort();
    if(!legacy&&!equal(values,h.disclosurePolicyHashes))throw Error('INVALID_SOURCE_PROOF');
@@ -96,6 +101,7 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
     const ends=runtime.decodeImportBlobMeta(update,true).partialEndVersionVector.toJSON();
     result.objectId=source.objectId;
     result.end={peer:meta.peer,counter:ends.get(meta.peer)-1};
+    result.sourceDependencies=[...sourceDependencies];
    }
    visiting.delete(effect);verified.set(effect,result);return result;
   }

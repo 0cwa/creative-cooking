@@ -75,6 +75,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  for(const row of outbound)if(row.branchHead===scope.branchHead&&row.epochId===scope.epochId)include(row.objectId,row.bytes);
  for(const item of inbox)if(required(await runtime.storage.getInboxApplication(scope.scopeId,item.itemId)))include(item.itemId,item.bytes);
  const {doc:original,storedBytes}=await runtime.document(),entries=[],identities=new Map(),effects=new Set();
+ const excludedRecipeCopies=new Set(),excluded=new Set(excludedEffectIds);
  let verifyRecipeSource;
 
  for(const object of objects) {
@@ -103,6 +104,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
    linked=await verifyRecipeSource(command,expectedAuthority);
    for(const source of linked.sources.values()){
     if(source.incomplete&&!h.disclosureIncomplete||source.policies.some(hash=>!h.disclosurePolicyHashes.includes(hash)))throw Error('INVALID_SOURCE_PROOF');
+    if(source.sourceDependencies.some(dep=>excluded.has(dep)))excludedRecipeCopies.add(command.effectId);
    }
   }
   checkPreconditions(prior,command,{importing:true,recipeSource:linked?.source});
@@ -129,8 +131,8 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  if(seed&&checkpoint.length){let checked;try{checked=base.forkAt(seedDoc.frontiers())}catch{throw Error('INSUFFICIENT_EVIDENCE')}if(!same(checked.exportJsonUpdates(undefined,undefined,false),seedDoc.exportJsonUpdates(undefined,undefined,false)))throw Error('INSUFFICIENT_EVIDENCE')}
  const markers=base.getMap('domain-effects').toJSON(),checkpointIds=new Map();
  for(const [id,marker] of Object.entries(markers)){if(marker?.version===3){if(!seed||marker.seedId!==seed.seed.seedId||marker.effectId!==id||marker.commandId!==seedIds.get(id))throw Error('INSUFFICIENT_EVIDENCE');continue}if(marker?.version!==2 || !marker?.command || marker.command.effectId!==id)throw Error('INSUFFICIENT_EVIDENCE');const command=validate(marker.command);if(checkpointIds.has(command.commandId))throw Error('CONFLICT');checkpointIds.set(command.commandId,command);}
- const excluded=new Set(excludedEffectIds);
- for(const [id,marker] of Object.entries(markers)){if(excluded.has(id)||(marker.dependencyEffectIds??[]).some(x=>excluded.has(x)))throw Error('INVALID_BOUNDARY');}
+ const excludedDependencies=new Set([...excluded,...excludedRecipeCopies]);
+ for(const [id,marker] of Object.entries(markers)){if(excludedDependencies.has(id)||(marker.dependencyEffectIds??[]).some(x=>excludedDependencies.has(x)))throw Error('INVALID_BOUNDARY');}
  for(const e of entries){const old=checkpointIds.get(e.command.commandId),effect=markers[e.command.effectId];if((old||effect)&&(!old||!effect||!same(old,e.command)))throw Error('CONFLICT');}
  for(const [id,marker] of Object.entries(markers)){if(marker.version===3)continue;const source=identities.get(marker.command.commandId);if(!source || source.effectId!==id || !same(source,marker.command))throw Error('INSUFFICIENT_EVIDENCE');}
  for(const [id,marker] of Object.entries(original.getMap('domain-effects').toJSON())) if(marker?.version===3 ? (!seed||marker.seedId!==seed.seed.seedId||marker.commandId!==seedIds.get(id)) : (marker?.version!==2 || !marker?.command || !effects.has(id))) throw Error('INSUFFICIENT_EVIDENCE');
@@ -147,7 +149,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  for(const entry of sourceOrder){while(peers.has(String(peer)))peer--;freshPeers.set(entry.command.effectId,String(peer--));}
  let progress=true;
  while(progress){progress=false;for(const [id,e] of pending){
-  if(e.command.dependencyEffectIds.some(dep=>excluded.has(dep)||!branches.has(dep)&&
+  if(excludedRecipeCopies.has(id)||e.command.dependencyEffectIds.some(dep=>excludedDependencies.has(dep)||!branches.has(dep)&&
     !seedIds.has(dep)&&!e.command.data.recipeSource?.effectIds.includes(dep)))continue;
   if([...e.prior].some(dep=>pending.has(dep)))continue;
   const branch=new runtime.LoroDoc();if(seedSnapshot)branch.import(seedSnapshot);
@@ -156,7 +158,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
   apply(branch,e.command);const snapshot=branch.export({mode:'snapshot'});branches.set(id,snapshot);out.import(snapshot);
   const {prior,sourcePeer,sourceCounter,...record}=e;applied.push(record);pending.delete(id);progress=true;break;
  }}
- const blocked=new Set([...excluded,...held.map(x=>x.command.effectId)]);let changed=true;while(changed){changed=false;for(const e of pending.values())if(!blocked.has(e.command.effectId)&&e.command.dependencyEffectIds.some(id=>blocked.has(id))){blocked.add(e.command.effectId);changed=true;}}
+ const blocked=new Set([...excludedDependencies,...held.map(x=>x.command.effectId)]);let changed=true;while(changed){changed=false;for(const e of pending.values())if(!blocked.has(e.command.effectId)&&e.command.dependencyEffectIds.some(id=>blocked.has(id))){blocked.add(e.command.effectId);changed=true;}}
  for(const e of pending.values()){const {prior,sourcePeer,sourceCounter,...record}=e;held.push({...record,reason:blocked.has(e.command.effectId)?'DEPENDENCY_EXCLUDED':'MISSING_DEPENDENCY'});}
  if(!same((await runtime.authorization()).expectedAuthority,expectedAuthority))throw Error('INVALID_AUTHORITY');
  return {doc:out,applied,held};
