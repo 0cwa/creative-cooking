@@ -1,5 +1,6 @@
 import {householdCompromise} from './household-compromise.mjs';
 import {householdLocalTrust} from './household-local-trust.mjs';
+import {bindHouseholdContent} from './household-content.mjs';
 import {householdPairing as bindHouseholdPairing} from './household-pairing.mjs';
 import {prepareJoinedSequences,finalizeJoinedSequences} from './joined-sequences.web.ts';
 import {householdSelection} from './household-selection.web.ts';
@@ -126,8 +127,10 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   }};
 
   const withCurrent = <T,>(use:(revision:number)=>Promise<T>)=>selection.withCurrent(selectedId,use);
-  return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:{reserve:(scopeId:string,operationId:string)=>scopeId===selectedPersonal.scopeId?
+  const workspaceSequences={reserve:(scopeId:string,operationId:string)=>scopeId===selectedPersonal.scopeId?
    sequences!.reserve(r.personal,operationId):selected&&scopeId===activeScope.id?
-   joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId)},close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};
+   joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId)};
+  const householdContent=bindHouseholdContent({runtime:householdRuntime,sequences:workspaceSequences,disclosure});
+  return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:workspaceSequences,householdContent,close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {joinedSequences?.close();householdPins?.close();ceremonyStore?.close();sequences?.close();db.close();master.close();meta.close();throw error}
 }

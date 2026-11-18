@@ -1,5 +1,6 @@
 import {householdCompromise} from '../app/household-compromise.mjs';
 import {householdLocalTrust} from '../app/household-local-trust.mjs';
+import {bindHouseholdContent} from '../app/household-content.mjs';
 import {openSQLiteStorage,openSQLiteTransaction,scheduleSQLite} from '../storage/sqlite.ts';
 import {rootPin,policyId,initializeAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from '../authority/personal.mjs';
@@ -10,7 +11,7 @@ import {localProvider} from '../app/local-provider.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {householdPairing as bindHouseholdPairing} from '../app/household-pairing.mjs';
 import {bootstrapDisclosurePolicy} from '../app/bootstrap-policy.mjs';
-import {executeAction,subscribeActions} from '../app/action.mjs';
+import {subscribeActions} from '../app/action.mjs';
 import {cookingFiles} from '../app/cooking-file.mjs';
 import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
@@ -129,6 +130,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const pairPersonal=personalPairing({sodium,storage,recipient:storage.recipient,store,provider,master,keys,
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
    original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
+  const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure});
   return {
    personalRotation:rotatePersonal,personalPairing:pairPersonal,
    householdCompromise:householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)}),
@@ -141,10 +143,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
     subscribe:listener=>subscribeActions(household,listener)
    },
    personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing,cookingFiles:activeMethods(cooking),direct,
-   executeHouseholdAction(id,commands){
-    const input=structuredClone(commands);
-    return withCurrent(()=>executeAction(household,joinedSequences??sequences,id,input,disclosure));
-   },
+   householdContent,executeHouseholdAction:householdContent.execute,
    disclosure:activeMethods(disclosure),disclosureProvider:activeMethods(provider),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,

@@ -28,6 +28,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {householdLocalTrust} from './household-local-trust.mjs';
 import {executeAction} from './action.mjs';
+import {bindHouseholdContent} from './household-content.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planRecipeRestore,readRecipeHistory} from '../domain/recipe-history.mjs';
@@ -1221,7 +1222,8 @@ test('selected recipe shopping copies and current-only admission survive durable
     selectionIndex:resolved.selectionIndex,installedSet}});
   const service=disclosureService({storage,scope,rootPin:a.root.head,provider:a.provider,
    deviceId:runtime.scope.authorDevice,installedSet});
-  return {runtime,service,files:cookingFiles({runtime,service,recipeCatalogVersion:1})};
+  const householdContent=bindHouseholdContent({runtime,sequences,disclosure:service});
+  return {runtime,service,householdContent,files:cookingFiles({runtime,service,recipeCatalogVersion:1})};
  };
  let sponsor=openPeer(a.storage,sender,sponsorAuthority);
  let newcomer=openPeer(freshStorage,receiverCodec,newcomerAuthority);
@@ -1234,11 +1236,13 @@ test('selected recipe shopping copies and current-only admission survive durable
  await assert.rejects(()=>executeAction(sponsor.runtime,sequences,newRecipe,unsupported,sponsor.service),/UNSUPPORTED_VERSION/);
  assert.equal(sequence,beforeUnsupportedSequence);
  assert.deepEqual(a.rows(),beforeUnsupported);
- const originalRecipe=projectCooking((await recipeRuntime.document()).doc).recipes[0];
+ const originalRecipe=(await sponsor.householdContent.readCooking()).recipes.find(recipe=>recipe.id===recipeId);
  const recipeAction='installed-recipe-edit';
- const recipeCommands=planRecipeAction({doc:(await recipeRuntime.document()).doc,before:originalRecipe,
+ const recipeDocument=await sponsor.householdContent.readRecipe(recipeId);
+ assert.equal(recipeDocument.scope.documentId,recipeRuntime.scope.documentId);
+ const recipeCommands=planRecipeAction({doc:recipeDocument.doc,before:originalRecipe,
   after:{...originalRecipe,title:'Edited on the sponsor'},actionId:recipeAction,author:a.deviceId,at});
- await executeAction(recipeRuntime,sequences,recipeAction,recipeCommands,sponsor.service);
+ await sponsor.householdContent.execute(recipeAction,recipeCommands,recipeId);
  const storedRecipeEdit=must(await a.storage.getLocalOperation(scope.id,recipeAction));
  const recipeObjectId=storedRecipeEdit.commit.outbound[0].object.id;
  const recipeBytes=await sponsor.files.download(recipeObjectId);
@@ -1249,7 +1253,7 @@ test('selected recipe shopping copies and current-only admission survive durable
  const rootAction='installed-pantry-edit';
  const pantry={version:1,kind:'pantry-create',commandId:rootAction,effectId:rootAction,dependencyEffectIds:[],
   data:{itemId:'shared-after-join',name:'Chickpeas',preference:3,at,author:newcomer.runtime.scope.authorDevice}};
- await executeAction(newcomer.runtime,sequences,rootAction,[pantry],newcomer.service);
+ await newcomer.householdContent.execute(rootAction,[pantry]);
  const pantryObjectId=must(await freshStorage.getLocalOperation(scope.id,rootAction)).commit.outbound[0].object.id;
  await sponsor.files.receive(await newcomer.files.download(pantryObjectId));
  assert.equal((await newcomer.files.receive(recipeBytes)).replayed,true);
@@ -1260,9 +1264,9 @@ test('selected recipe shopping copies and current-only admission survive durable
   ...newcomerOptions,operationId,authorDevice:newcomerContext.recipientDeviceId,
  }));
  for(const peer of [sponsor,newcomer]){
-  const childRuntime=await peer.runtime.forRecipe(recipeId);
-  assert.equal(projectCooking((await childRuntime.document()).doc).recipes[0].title,'Edited on the sponsor');
-  assert.ok(projectCooking((await peer.runtime.document()).doc).pantry.some(item=>item.name==='Chickpeas'));
+  const cooking=await peer.householdContent.readCooking();
+  assert.equal(cooking.recipes.find(recipe=>recipe.id===recipeId)?.title,'Edited on the sponsor');
+  assert.ok(cooking.pantry.some(item=>item.name==='Chickpeas'));
  }
 
 });
