@@ -1426,8 +1426,15 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         const recipient=await this.readRecipientProjection(scope,operationId,origin.documentId,origin.head);
         if(recipient&&JSON.stringify(projectionCanonical(recipient.policySeed))===JSON.stringify(projectionCanonical(sidecar)))return {ok:true as const,value:{publication:recipient,policySeed:sidecar}};
       }
-      if(!published.ok||!published.value||published.value.nextAuthority.acceptedParent!==origin.head||published.value.documents.length!==1||published.value.documents[0].documentId!==origin.documentId||JSON.stringify(projectionCanonical(published.value.policySeed))!==JSON.stringify(projectionCanonical(sidecar)))return fail('CORRUPT');
-      return {ok:true as const,value:{publication:published.value,policySeed:sidecar}};
+      if(!published.ok||!published.value||published.value.nextAuthority.acceptedParent!==origin.head)return fail('CORRUPT');
+      const publication=published.value,set=publication.documentSet;
+      if(set){
+        const index=publication.documents.findIndex(document=>document.documentId===origin.documentId);
+        const entry=set.seeds[index];
+        if(entry?.documentId!==origin.documentId||!sameRecord(entry.policySeed,sidecar))return fail('CORRUPT');
+      }else if(publication.documents.length!==1||publication.documents[0].documentId!==origin.documentId||
+        !sameRecord(publication.policySeed,sidecar))return fail('CORRUPT');
+      return {ok:true as const,value:{publication,policySeed:sidecar}};
     }catch(e){return fail(mapError(e))}
   }
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {

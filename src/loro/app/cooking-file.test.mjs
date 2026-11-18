@@ -20,6 +20,7 @@ import {localProvider} from './local-provider.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
+import {verifiedSeedSources} from '../disclosure/seed-source.mjs';
 import {acceptInitialPolicy,prepareInitialPolicy} from '../disclosure/setup.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {hash as disclosureHash} from '../disclosure/policy.mjs';
@@ -1051,7 +1052,10 @@ test('selected recipe shopping copies and current-only admission survive durable
  const sponsorCatalog=a.storage.localKeys(sponsorMaster,sodium);
  const newcomerCatalog=freshStorage.localKeys(newcomerMaster,sodium);
  const sponsorContent=await installedDocumentSetContent(sealOptions,sponsorCatalog);
- const newcomerContent=await installedDocumentSetContent({...newcomerOptions,operationId},newcomerCatalog);
+ const callerScope={...scope};
+ const openingContent=installedDocumentSetContent({...newcomerOptions,scope:callerScope,operationId},newcomerCatalog);
+ callerScope.id='redirected';
+ const newcomerContent=await openingContent;
  const signingRef=sodium.to_hex(a.signingTestKey.publicKey);
  const signerKeys={use:(op,identity,fn)=>op==='test-signing'?fn(a.signingTestKey.privateKey):sponsorCatalog.use(op,identity,fn)};
  const sender=candidateCodec(localProvider(sodium,signerKeys,{signing:{publicKey:signingRef,operationId:'test-signing'},content:sponsorContent}));
@@ -1076,7 +1080,26 @@ test('selected recipe shopping copies and current-only admission survive durable
  const wrongScope=await wrongSender.sealContent({...header,scopeId:'wrong'},payload,header.epochId);
  await assert.rejects(()=>receiver.openContent(wrongScope.bytes),/INVALID_AUTHORITY/);
 
- assert.equal((await readAuthority(freshStorage,scope,a.root.head,a.provider)).activeHead,eventHash);
+ const installedAuthority=await readAuthority(freshStorage,scope,a.root.head,a.provider);
+ assert.equal(installedAuthority.activeHead,eventHash);
+ const installedRecord=must(await freshStorage.readPairingAuthority(scope));
+ const expectedAuthority={version:2,scope,record:{revision:installedRecord.revision,
+  acceptedParent:installedRecord.acceptedParent,authorizationSnapshot:installedRecord.authorizationSnapshot}};
+ const seedContext={current:installedAuthority,resolved:{expectedAuthority}};
+ const seedRuntime=documentId=>({storage:freshStorage,LoroDoc,authority:{rootPin:a.root.head,provider:a.provider},
+  scope:{scopeId:scope.id,documentId,branchHead:eventHash,epochId:routingManifest.newEpochId,
+   documentGeneration:routingManifest.newGeneration}});
+ for(const {documentId,policyBundle} of newcomerSelected.documents){
+  const source=await verifiedSeedSources({runtime:seedRuntime(documentId),context:seedContext});
+  assert.equal(source.sourceMapping,'signed-attestation-only');
+  assert.deepEqual([...source.entries],policyBundle.entries.map(entry=>[entry.effectId,entry.policyHashes]));
+ }
+ const [seedRoot,seedChild]=newcomerSelected.documents;
+ const swappedSidecar=must(await freshStorage.readProjectionPolicySeed(expectedAuthority,seedChild.documentId));
+ const wrongSeedSource={...seedRuntime(seedRoot.documentId),storage:{
+  readProjectionPolicySeed:async()=>({ok:true,value:swappedSidecar}),
+ }};
+ await assert.rejects(()=>verifiedSeedSources({runtime:wrongSeedSource,context:seedContext}),/INVALID_SEED_PROOF/);
  assert.equal(newcomerSelected.publication.documentSet.catalog.length,3);
  const beforeReplay=freshRows();
  const wrongChildEpoch=newcomerSelected.publication.documentSet.childKeys[0].identity.epochId;
