@@ -315,11 +315,11 @@ const houseState=async(participant,pin)=>{
 
 test('SQLite adult removal excludes all target devices and atomically rotates the approved live cooking',async()=>{
  await withRotationFixture({
-  owners:{alpha:'alpha',beta:'beta',gamma:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2}
+  owners:{a:'alpha',B:'beta',gamma:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2}
  },async([a,b,c,d],root,pin)=>{
-  await apply(a.runtime,1,'pantry-create','current',{itemId:'one',name:'Current saffron',preference:3,author:'alpha',at});
-  await apply(a.runtime,2,'pantry-create','deleted',{itemId:'gone',name:'Deleted private canary',preference:3,author:'alpha',at});
-  await apply(a.runtime,3,'pantry-field','remove',{itemId:'gone',field:'removedAt',value:at,author:'alpha',at},['deleted']);
+  await apply(a.runtime,1,'pantry-create','current',{itemId:'one',name:'Current saffron',preference:3,author:a.deviceId,at});
+  await apply(a.runtime,2,'pantry-create','deleted',{itemId:'gone',name:'Deleted private canary',preference:3,author:a.deviceId,at});
+  await apply(a.runtime,3,'pantry-field','remove',{itemId:'gone',field:'removedAt',value:at,author:a.deviceId,at},['deleted']);
   const late=[];
   for(const [deviceId,participant] of [['gamma',c],['tablet',d]]){
    await apply(participant.runtime,1,'pantry-create',deviceId,{itemId:deviceId,name:`Late ${deviceId}`,preference:3,author:deviceId,at});
@@ -333,7 +333,6 @@ test('SQLite adult removal excludes all target devices and atomically rotates th
   const draft=await prepare();
   assert.deepEqual(draft.excludedDevices,['gamma','tablet']);
   assert.deepEqual(draft.proposal.item.event.frozenAdultRoster,['alpha','beta','gamma']);
-  assert.deepEqual(draft.proposal.grant.recipients,['alpha','beta']);
   assert.equal(draft.proposal.manifest.kind,'adult-removal-source');
   assert.equal(draft.proposal.manifest.reviewId,undefined);
   const voteC=await approve(c,draft), voteD=await approve(d,draft);
@@ -346,7 +345,7 @@ test('SQLite adult removal excludes all target devices and atomically rotates th
   await assert.rejects(a.service.publish(confirm({...duplicateAdult,proposal:both})),/QUORUM_REQUIRED/);
 
   const stale=await approve(a,voteC);
-  await apply(a.runtime,4,'pantry-create','fresh',{itemId:'fresh',name:'Fresh oregano',preference:3,author:'alpha',at});
+  await apply(a.runtime,4,'pantry-create','fresh',{itemId:'fresh',name:'Fresh oregano',preference:3,author:a.deviceId,at});
   const afterEdit=a.rows();
   await assert.rejects(a.service.publish(confirm(stale)),/SOURCE_CHANGED/);
   assert.deepEqual(a.rows(),afterEdit);
@@ -387,6 +386,7 @@ test('SQLite adult removal excludes all target devices and atomically rotates th
   await reopen(a,pin);
   assert.deepEqual(a.rows(),afterEdit);
   assert.equal((await publish()).acceptedHead,approved.eventHash);
+  assert.deepEqual(approved.proposal.grant.recipients,['B','a']);
   const published=a.rows();
   assert.equal((await publish()).replayed,true);
   await assert.rejects(a.service.publish(confirm(changedVotes)),/CONFLICT/);
@@ -394,8 +394,8 @@ test('SQLite adult removal excludes all target devices and atomically rotates th
   assert.deepEqual(published.find(row=>row.key===sourceSlot),sourceRow);
 
   const seal=device=>a.service.seal({operationId:proposalId,recipientDevice:device});
-  const file=await seal('beta');
-  assert.deepEqual(await seal('beta'),file);
+  const file=await seal(b.deviceId);
+  assert.deepEqual(await seal(b.deviceId),file);
   for(const excluded of [c,d]){
    const original=excluded.rows();
    await assert.rejects(seal(excluded.deviceId),/INVALID_RECIPIENT/);
@@ -429,11 +429,11 @@ test('SQLite adult removal excludes all target devices and atomically rotates th
    const selected=await houseState(survivor,pin);
    assert.deepEqual(selected.roster,['alpha','beta']);
    assert.deepEqual(selected.policy,{kind:'fixed',fixedCount:2});
-   assert.deepEqual(selected.runtime.acceptedRecipients,['alpha','beta']);
-   assert.deepEqual(Object.keys(selected.runtime.authorPeers),['alpha','beta']);
+   assert.deepEqual(selected.runtime.acceptedRecipients,['B','a']);
+   assert.deepEqual(Object.keys(selected.runtime.authorPeers),['B','a']);
    assert.ok(selected.devices.filter(device=>device.adultId==='gamma').every(device=>!device.active));
    assert.equal(survivor.runtime.scope.documentId,documentId);
-   assert.deepEqual(survivor.runtime.scope.acceptedAuthors,['alpha','beta']);
+   assert.deepEqual(survivor.runtime.scope.acceptedAuthors,['B','a']);
    assert.deepEqual(projectCooking((await survivor.runtime.document()).doc).pantry.map(item=>item.name).sort(),['Current saffron','Fresh oregano']);
    const stored=(await survivor.storage.reopenBranchDocument(await survivor.runtime.authorize(),documentId)).value;
    assert.equal(Buffer.from(stored.bytes).includes(Buffer.from('Deleted private canary')),false);

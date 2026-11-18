@@ -565,6 +565,7 @@ async function routedRevocation({a,b,c,existingId,thirdId,thirdAdult,scope,publi
  await expect(b.getByLabel('Household document generation')).toHaveText('Household generation 3');
  await button(b,'Reopen rotated household').click();
  await expect(b.getByText('Invitation proof onion',{exact:true})).toBeVisible();
+ await addPantry(b,'Fresh-epoch coriander');
  const advancedB=await rows(b);
  for(const [key,value] of Object.entries(beforeB)){
   if(['document','document-owner','object','inbox'].includes(JSON.parse(key)[0]))expect(advancedB[key]).toEqual(value);
@@ -592,7 +593,6 @@ async function routedRevocation({a,b,c,existingId,thirdId,thirdAdult,scope,publi
   await page.goto('./');
   await expect(page.getByText('Third device thyme',{exact:true})).toHaveCount(0);
  }
- await addPantry(b,'Fresh-epoch coriander');
  await b.goto('./settings');
  await button(b,'Exchange encrypted cooking files').click();
  const fresh=b.getByRole('button',{name:/^Download encrypted update /});

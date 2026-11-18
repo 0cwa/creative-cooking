@@ -29,6 +29,14 @@ export const validParent = parent => !(!keys(parent,['householdId','head','polic
 export const isRemoval = kind => kind==='revokeDevice' || kind==='removeAdult';
 export const removedDevice = (event, device) => event.kind==='removeAdult' ?
  device.adultId===event.subject.adultId : event.kind==='revokeDevice' && device.deviceId===event.subject.deviceId;
+export function remainingRotationDevices(parent,event) {
+ const devices=parent.devices.filter(d=>d.active&&!removedDevice(event,d));
+ if(event.kind==='removeAdult'){
+  // Adult removal carries this order into the child's acceptedRecipients.
+  return devices.sort((a,b)=>a.deviceId<b.deviceId?-1:a.deviceId>b.deviceId?1:0);
+ }
+ return devices.sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+}
 const eventFields = ['version','suiteId','householdId','parentHead','policyHash','generation','epochId','proposalId','kind','authorDeviceId','frozenAdultRoster','subject','nextPolicy'];
 const approvalFields = ['version','householdId','eventHash','parentHead','policyHash','generation','epochId','adultId','deviceId','signature'];
 export const validPolicyBaseline = subject => keys(subject,['frontiers','historyHash']) &&
@@ -72,7 +80,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
        !parent.runtime.acceptedRecipients.includes(author.deviceId))return deny('INVALID_INPUT');
     if(!validAdmissionPolicy(parent.policy,parent.roster.length-1))return deny('FIXED_RULE_TOO_HIGH');
    } else if(!parent.devices.some(d=>d.active&&removedDevice(event,d)))return deny('INVALID_INPUT');
-   const active=parent.devices.filter(d=>d.active&&!removedDevice(event,d)).sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+   const active=remainingRotationDevices(parent,event);
    if(s.devices.length!==active.length || (adult&&active.some(d=>!parent.runtime.acceptedRecipients.includes(d.deviceId))))return deny('INVALID_INPUT');
    const peers=new Set(Object.values(parent.runtime.authorPeers));for(let i=0;i<active.length;i++){const d=s.devices[i];if(!keys(d,['deviceId','signingKeyRef','wrappingKeyRef','peerId'])||d.deviceId!==active[i].deviceId||d.signingKeyRef!==active[i].signingKeyRef||typeof d.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(d.wrappingKeyRef)||typeof d.peerId!=='string'||!/^(0|[1-9][0-9]*)$/.test(d.peerId)||d.peerId.length>20||BigInt(d.peerId)>18446744073709551615n||peers.has(d.peerId))return deny('INVALID_INPUT');peers.add(d.peerId)}
   }

@@ -1,5 +1,5 @@
 import {publishReviewedRevocation, readAuthority, resolveHistoricalAuthority, verifyAuthority, verifiedRevocationDraft} from '../authority/chain.mjs';
-import {domain, removedDevice, validAdmissionPolicy} from '../authority/validator.mjs';
+import {domain, remainingRotationDevices, removedDevice, validAdmissionPolicy} from '../authority/validator.mjs';
 import {ADULT_REMOVAL_SOURCE, digest, exact, grantBody, hex, same, verifyRevocation, verifySignature, checkRecipientBinding, projectRemovalSeed} from '../compromise/revocation.mjs';
 import {projectCurrentSeed} from '../compromise/current-seed.mjs';
 import {canonicalReportBytes, evidenceSha256, manifestDigest, validateReport, verifyReport} from '../compromise/report.mjs';
@@ -141,7 +141,7 @@ export function householdRevocation({
         if(removedDevice(removal,d)||byDevice.has(d.deviceId))throw Error('INVALID_RECIPIENT');
         byDevice.set(d.deviceId,binding);
       }
-      const remaining=parent.devices.filter(d=>d.active&&!removedDevice(removal,d)).sort((a,b)=>a.deviceId.localeCompare(b.deviceId));
+      const remaining=remainingRotationDevices(parent,removal);
       if(remaining.some(d=>!byDevice.has(d.deviceId)))throw Error('RECIPIENT_BINDINGS_REQUIRED');
       const recipientBindings=remaining.map(d=>byDevice.get(d.deviceId));
       const devices=remaining.map(({deviceId,signingKeyRef})=>({deviceId,signingKeyRef,wrappingKeyRef:byDevice.get(deviceId).wrappingKey,peerId:freshPeer(peers)}));
