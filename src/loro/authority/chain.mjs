@@ -172,13 +172,6 @@ async function observePolicySuccessor(storage,scope,pin,provider,item,retry,expe
  }
  return {eventHash:r.eventHash,replayed:false};
 }
-/** Signature is from an active device on the currently selected branch. */
-export async function selectHead(storage,scope,pin,provider,selection) {
- selection=copy(selection); const {record,state}=await load(storage,scope,pin,provider);
- if(selection.from!==state.activeHead)throw Error('CONFLICT');
- state.selections.push(selection); state.activeHead=selection.to;
- await verifyAuthority(state,pin,provider); await save(storage,record,state,provider);
-}
 
 /** Traverse only signed policy edges. Each component has one retained starting workspace. */
 export function policyCheckoutCandidates({nodes,state,policyParents,legacyPolicyHeads}) {

@@ -1,3 +1,4 @@
+import {writeFixtureSelection} from './chain-test-fixture.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -8,7 +9,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
-import {rootPin,policyId,initializeAuthority,observeSuccessor,selectHead,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement,checkCurrentAdmission,checkAdmissionProofs} from './chain.mjs';
+import {rootPin,policyId,initializeAuthority,observeSuccessor,readAuthority,resolveRuntimeAuthority,verifyAuthority,acceptAdmissionAgreement,checkCurrentAdmission,checkAdmissionProofs} from './chain.mjs';
 await sodium.ready;
 const recipe=(commandId,effectId,title)=>({version:1,kind:'recipe-create',commandId,effectId,dependencyEffectIds:[],data:{recipe:{id:effectId,title,portions:1,ingredients:[],steps:[],stepIds:[]},author:'a',at:'2026-01-01T00:00:00Z'}});
 const title=async(runtime,id)=>(await runtime.document()).doc.getMap(`recipe:${id}`).get('title');
@@ -55,7 +56,7 @@ test('array selection wrappers leave the durable authority unchanged',async()=>{
  try {await initializeAuthority(storage,root,root.head,provider);const to=await observeSuccessor(storage,scope,root.head,provider,await item('array-selection'));
   const before=await storage.readPairingAuthority(scope),payload={root:root.head,householdId:'house',from:root.head,to,deviceId:'a',index:0};
   const selection=Object.assign([],{from:root.head,to,deviceId:'a',index:0,signature:sign('a','select-head',payload)});
-  await assert.rejects(selectHead(storage,scope,root.head,provider,selection),/INVALID_SELECTION/);
+  await assert.rejects(writeFixtureSelection(storage,scope,root.head,provider,selection),/INVALID_SELECTION/);
   assert.deepEqual(await storage.readPairingAuthority(scope),before);
   assert.equal((await readAuthority(storage,scope,root.head,provider)).activeHead,root.head);
  } finally {database.close();}
@@ -86,9 +87,9 @@ test('durable siblings and signed deliberate selection survive reopen; failed CA
  assert.deepEqual(new Set(view.heads),new Set([first,second])); assert.equal(view.activeHead,root.head);
  const payload={root:root.head,householdId:'house',from:root.head,to:first,deviceId:'a',index:0};
  const selection={from:root.head,to:first,deviceId:'a',index:0,signature:sign('a','select-head',payload)};
- fail=true; await assert.rejects(selectHead(store,scope,root.head,provider,selection)); fail=false;
+ fail=true; await assert.rejects(writeFixtureSelection(store,scope,root.head,provider,selection)); fail=false;
  assert.equal((await readAuthority(store,scope,root.head,provider)).activeHead,root.head);
- await selectHead(store,scope,root.head,provider,selection);
+ await writeFixtureSelection(store,scope,root.head,provider,selection);
  await assert.rejects(runtime.authorize(),/INVALID_AUTHORITY/);
  const switched=await resolveRuntimeAuthority(store,scope,root.head,provider,'a');
  const siblingRuntime=makeRuntime({scope:switched.scope});
@@ -105,7 +106,7 @@ test('switching sibling heads cannot read or extend the other branch snapshot',a
   for(const x of clients)await initializeAuthority(x.store,root,root.head,provider);
   const firstItem=await item('branch-a'),secondItem=await item('branch-b');let first,second;
   for(const x of clients){first=await observeSuccessor(x.store,scope,root.head,provider,firstItem);second=await observeSuccessor(x.store,scope,root.head,provider,secondItem)}
-  const select=async(x,from,to,index)=>{const p={root:root.head,householdId:'house',from,to,deviceId:'a',index};await selectHead(x.store,scope,root.head,provider,{from,to,deviceId:'a',index,signature:sign('a','select-head',p)})};
+  const select=async(x,from,to,index)=>{const p={root:root.head,householdId:'house',from,to,deviceId:'a',index};await writeFixtureSelection(x.store,scope,root.head,provider,{from,to,deviceId:'a',index,signature:sign('a','select-head',p)})};
   await select(one,root.head,first,0);await select(two,root.head,second,0);
   const recipient=sodium.crypto_box_keypair(), crypt=testProvider(sodium,{signing:pair.a,publicSigning:pair.a.publicKey,recipient,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
   const cp={...crypt,sign:async(w,b)=>sodium.crypto_sign_detached(b,pair.a.privateKey),verify:async(w,b,s)=>sodium.crypto_sign_verify_detached(s,b,pair.a.publicKey)};

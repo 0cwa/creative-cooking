@@ -1,3 +1,4 @@
+import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -5,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import sodium from 'libsodium-wrappers';
 import {LoroDoc, decodeImportBlobMeta} from 'loro-crdt';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
-import {checkoutPolicyHead, initializeAuthority, policyId, readAuthority, rootPin, resolveRuntimeAuthority, selectHead} from '../authority/chain.mjs';
+import {checkoutPolicyHead, initializeAuthority, policyId, readAuthority, rootPin, resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {domain, validateSuccessor} from '../authority/validator.mjs';
 import {prepareHouseholdInvite} from './household-invite.mjs';
 import {approveHouseholdAdmissionRule, householdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
@@ -230,7 +231,8 @@ test('checkout verifies inherited source envelopes only inside the signed causal
 
     const selection = {from:pin,to:sibling.eventHash,deviceId,index:2};
     const signature = sodium.to_hex(await provider.sign(deviceId,domain('select-head',{root:pin,householdId:scope.id,...selection})));
-    await selectHead(storage,scope,pin,provider,{...selection,signature});
+    assert.equal((await import('../authority/chain.mjs')).selectHead,undefined);
+    await writeFixtureSelection(storage,scope,pin,provider,{...selection,signature});
     const unprepared = await open();
     await assert.rejects(unprepared.document(), /CHECKOUT_REQUIRED/);
     await assert.rejects(unprepared.execute(create('unprepared',6)), /CHECKOUT_REQUIRED/);
