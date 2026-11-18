@@ -13,7 +13,9 @@ const id=x=>typeof x==='string'&&x.length>0&&e.encode(x).length<=128;
 const hex=x=>Array.from(x,n=>n.toString(16).padStart(2,'0')).join('');
 const unhex=(x,n)=>{if(typeof x!=='string'||!new RegExp(`^[0-9a-f]{${n*2}}$`).test(x))throw Error('INVALID_INPUT');return Uint8Array.from(x.match(/../g),y=>parseInt(y,16))};
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-const pinKey=holder=>key('recovery-custody-ack','pinned-holder',holder);
+const pinKey=(holder,authorityPin)=>authorityPin===undefined
+ ?key('recovery-custody-ack','pinned-holder',holder)
+ :key('recovery-custody-ack','pinned-owner-holder',authorityPin,holder);
 const draftKey=(owner,operation)=>key('recovery-generation-operation','guardian-draft',owner,operation);
 const draftAAD=(owner,operation)=>e.encode(JSON.stringify(['creative-cooking/guardian-draft/v1',owner,operation]));
 const publicBundle=x=>x&&Object.keys(x).sort().join(',')==='holder,signingKey,version,wrappingKey'&&x.version===1&&id(x.holder)&&/^[0-9a-f]{64}$/.test(x.signingKey)&&/^[0-9a-f]{64}$/.test(x.wrappingKey);
@@ -24,22 +26,55 @@ export async function acceptGuardianAuthority({storage,authorityProvider,bundle,
 
 /** Generates a holder-specific signing and wrapping identity in that holder's own personal store. */
 export async function initializeGuardianHolder({keys,scopeId,deviceId,holder}){if(![scopeId,deviceId,holder].every(id)||typeof keys?.generate!=='function')throw Error('INVALID_INPUT');const identity=purpose=>({version:1,scope:{kind:'personal',id:scopeId},deviceId,purpose,epochId:'guardian-v1'}),tag=encodeURIComponent(holder);if(e.encode(tag).length>120)throw Error('INVALID_INPUT');const signing={operationId:`guardian-sign:${tag}`,identity:identity('device-signing')},wrapping={operationId:`guardian-wrap:${tag}`,identity:identity('device-wrapping')},a=await keys.generate(signing.operationId,signing.identity),b=await keys.generate(wrapping.operationId,wrapping.identity);if(!(a.publicKey instanceof Uint8Array)||a.publicKey.length!==32||!(b.publicKey instanceof Uint8Array)||b.publicKey.length!==32)throw Error('INVALID_HOLDER_KEY');return {bundle:{version:1,holder,signingKey:hex(a.publicKey),wrappingKey:hex(b.publicKey)},signing,wrapping}}
-/** The human must compare the displayed fingerprint over an independent channel. Pins are immutable here. */
-export async function pinHolder({sodium,run,bundle,confirmedFingerprint}){
- bundle=structuredClone(bundle);if(holderFingerprint(sodium,bundle)!==confirmedFingerprint)throw Error('INVALID_HOLDER_PIN');
- return run(true,async tx=>{const slot=pinKey(bundle.holder),old=await tx.get(slot);if(old!==undefined){if(!equal(old,bundle))throw Error('CONFLICT');return {replayed:true}}await tx.put(slot,bundle);return {replayed:false}});
+/** The human must compare the displayed fingerprint over an independent channel. Pins are immutable here.
+ * @param {{sodium:any,run:any,bundle:unknown,confirmedFingerprint:string,authorityPin?:string}} options
+ */
+export async function pinHolder({sodium,run,bundle,confirmedFingerprint,authorityPin=undefined}){
+ bundle=structuredClone(bundle);if(authorityPin!==undefined&&(typeof authorityPin!=='string'||!/^[0-9a-f]{64}$/.test(authorityPin))||
+  holderFingerprint(sodium,bundle)!==confirmedFingerprint)throw Error('INVALID_HOLDER_PIN');
+ return run(true,async tx=>{const slot=pinKey(bundle.holder,authorityPin),old=await tx.get(slot);if(old!==undefined){if(!equal(old,bundle))throw Error('CONFLICT');return {replayed:true}}await tx.put(slot,bundle);return {replayed:false}});
 }
-async function pinned(run,holders){const pins=Object.create(null);for(const holder of holders){const b=await run(false,tx=>tx.get(pinKey(holder)));if(!publicBundle(b)||b.holder!==holder)throw Error('MISSING_HOLDER_PIN');pins[holder]={signingKey:b.signingKey,wrappingKey:b.wrappingKey}}return pins}
+async function pinned(run,holders,authorityPin,historicalRoster){
+ const pins=Object.create(null);
+ for(const holder of holders){
+  const enrolled=historicalRoster?.get(holder);
+  const matches=b=>publicBundle(b)&&b.holder===holder&&
+   (!enrolled||b.signingKey===enrolled.signingKey&&b.wrappingKey===enrolled.wrappingKey);
+  const bundle=await run(false,async tx=>{
+   const scoped=await tx.get(pinKey(holder,authorityPin));
+   if(matches(scoped)||!enrolled)return scoped;
+   // Legacy pins may verify a named historical share. New shares require a root-scoped pin.
+   return tx.get(pinKey(holder));
+  });
+  if(!matches(bundle))throw Error('MISSING_HOLDER_PIN');
+  pins[holder]={signingKey:bundle.signingKey,wrappingKey:bundle.wrappingKey};
+ }
+ return pins;
+}
 /** Owner prepares a stable, wrapped draft before publishing a generation. The supplied kit and
  * catalog must be produced locally by the accepted personal workspace and never from a holder. */
 export function ownerGuardians({sodium,run,storage,authorityProvider,scopeId,owner,deviceId,pin,keys,signing,master,masterId}){
  const life=recoveryLifecycle({sodium,run,master,masterId});
+ async function historicalPins(manifest){
+  if(manifest?.authorityPin!==pin||manifest.scopeId!==scopeId||manifest.owner!==owner||
+   !Array.isArray(manifest.roster)||manifest.roster.length>255||
+   Array.from(manifest.roster).some(row=>!id(row?.holder)))throw Error('INVALID_ENROLLMENT');
+  const roster=new Map(manifest.roster.map(row=>[row.holder,row]));
+  return pinned(run,[...roster.keys()],pin,roster);
+ }
  async function prepare({operationId,catalog,personalKit,archive,holders,threshold}){
   ({catalog,personalKit,archive,holders}=structuredClone({catalog,personalKit,archive,holders}));
   if(!id(operationId)||!Array.isArray(holders)||holders.length<1||holders.length>255||holders.some(x=>!id(x))||new Set(holders).size!==holders.length||!Number.isInteger(threshold)||threshold<1||threshold>holders.length||catalog?.owner!==owner)throw Error('INVALID_INPUT');
   const resolved=await resolvePersonalAuthority(storage,{kind:'personal',id:scopeId},pin,authorityProvider,deviceId);if(resolved.scope.ownerId!==owner)throw Error('INVALID_AUTHORITY');
-  const pins=await pinned(run,holders),slot=draftKey(owner,operationId),requestHash=recoveryHash(sodium,[catalog,personalKit,archive,holders,threshold,pins,pin,deviceId]);
-  let saved=await run(false,tx=>tx.get(slot));
+  const slot=draftKey(owner,operationId);
+  const {draftRecord,published}=await run(false,async tx=>({
+   draftRecord:await tx.get(slot),published:await tx.get(key('recovery-generation-operation',owner,operationId))
+  }));
+  let saved=draftRecord;
+  const pins=saved!==undefined&&published!==undefined
+   ?await historicalPins((await readDraft(operationId,saved)).manifest)
+   :await pinned(run,holders,pin);
+  const requestHash=recoveryHash(sodium,[catalog,personalKit,archive,holders,threshold,pins,pin,deviceId]);
   if(saved===undefined){
    const hash=recoveryHash(sodium,catalog),wrapping=Object.fromEntries(holders.map(holder=>[holder,unhex(pins[holder].wrappingKey,32)])),guardian=await createGuardians(sodium,personalKit,holders,threshold,{owner,scope:'personal',generation:catalog.generation,catalogHash:hash,consent:operationId,grant:null},wrapping);
    const manifest={...(resolved.rotation?{version:2,epochId:resolved.scope.epochId,
@@ -57,11 +92,11 @@ export function ownerGuardians({sodium,run,storage,authorityProvider,scopeId,own
  }
  async function prepareFromArchive({archive,code,operationId,holders,threshold}){const verified=await openRecoveryArchive(sodium,archive,code),body=verified.body;if(body.owner!==owner||body.scopeId!==scopeId||body.pin!==pin||body.deviceId!==deviceId)throw Error('INVALID_AUTHORITY');const map=new Map(body.bindings.map(x=>[x.ref,x]));await restorePersonal(sodium,body.package,code,{owner,generation:body.catalog.generation},{installPersonalDataKeys:async(requestOwner,items)=>{if(requestOwner!==owner||items.length!==map.size)throw Error('INVALID_AUTHORITY');for(const item of items){const binding=map.get(item.ref);if(!binding)throw Error('INVALID_AUTHORITY');await keys.use(binding.operationId,binding.identity,secret=>{if(!sodium.memcmp(secret,item.key))throw Error('INVALID_AUTHORITY')})}},hasEncryptedObject:async()=>false});return prepare({operationId,catalog:body.catalog,personalKit:{code,package:body.package},archive,holders,threshold})}
  async function createGeneration({operationId,holders,threshold,expectedSnapshot}){({operationId,holders,threshold}=structuredClone({operationId,holders,threshold}));if(!id(operationId))throw Error('INVALID_INPUT');if(await run(false,tx=>tx.get(draftKey(owner,operationId)))!==undefined){const draft=await readDraft(operationId);if(draft.manifest.threshold!==threshold||!equal(draft.manifest.roster.map(x=>x.holder),holders))throw Error('CONFLICT');return resume({operationId});}const resolved=await resolvePersonalAuthority(storage,{kind:'personal',id:scopeId},pin,authorityProvider,deviceId);if(resolved.scope.ownerId!==owner)throw Error('INVALID_AUTHORITY');if(expectedSnapshot&&expectedSnapshot!==resolved.scope.authorizationSnapshot)throw Error('CONFLICT');const records=await run(false,async tx=>{const found=[];for(const slot of await tx.keys()){let parts;try{parts=JSON.parse(slot)}catch{continue}if(parts[0]!=='local-key'||parts[1]!=='personal'||parts[2]!==scopeId||parts[3]!==deviceId||parts[4]!=='data'||parts[5]!==resolved.scope.epochId)continue;const record=await tx.get(slot);if(!validLocalRecord(record))throw Error('LOCKED');found.push(record)}return found});if(records.length!==1)throw Error('MISSING_KEY');const record=records[0];await keys.use(record.operationId,record.identity,()=>undefined);const bindings=[{ref:resolved.scope.epochId,operationId:record.operationId,identity:record.identity}],objects=await storage.listOutboundObjects(scopeId);if(!objects.ok)throw Error(objects.error);const head=await run(false,tx=>tx.get(key('recovery-generation-head',owner))),catalog={version:1,owner,generation:head===undefined?0:head.generation+1,previousCatalogHash:head===undefined?null:head.catalogHash,keyRefs:[resolved.scope.epochId],encryptedObjectRefs:objects.value.filter(x=>x.epochId===resolved.scope.epochId).map(x=>x.objectId),trustedCheckpoints:resolved.rotation?[resolved.scope.branchHead]:[],custodyLocations:[]};const recovery=personalRecovery({sodium,keys,run,storage,master,masterId,owner,scopeId,bindings,operationId:`guardian-export:${operationId}`}),kit=await recovery.create(catalog),archive=await createRecoveryArchive({sodium,storage,keys,scopeId,owner,deviceId,pin,catalog,bindings,kit,includeObjects:true,includeSnapshot:true});return prepare({operationId,catalog,personalKit:kit,archive,holders,threshold})}
- async function readDraft(operationId){if(!id(operationId))throw Error('INVALID_INPUT');const saved=await run(false,tx=>tx.get(draftKey(owner,operationId)));if(!saved||saved.version!==1||!(saved.sealed instanceof Uint8Array))throw Error('MISSING_DRAFT');let clear,draft;try{clear=await master.unwrap(masterId,saved.sealed,draftAAD(owner,operationId));draft=JSON.parse(d.decode(clear))}finally{clear?.fill(0)}if(!draft?.manifest||!Array.isArray(draft.manifest.roster)||draft.manifest.roster.some(x=>!id(x?.holder))||!Number.isInteger(draft.manifest.threshold))throw Error('INVALID_INPUT');return draft}
- async function resume({operationId}){const draft=await readDraft(operationId);const holders=draft.manifest.roster.map(x=>x.holder),pins=await pinned(run,holders);if(!equal(pins,draft.holderPins))throw Error('INVALID_HOLDER_PIN');return prepare({operationId,catalog:draft.catalog,personalKit:draft.personalKit,archive:draft.archive,holders,threshold:draft.manifest.threshold})}
- async function acknowledge({operationId,message,holder,signature}){const parts=strip(message),holderPins=await pinned(run,parts.manifest.roster.map(x=>x.holder));return life.acknowledge({operationId,enrollment:{sodium,storage,authorityProvider,pin,...parts,holderPins},holder,signature})}
- async function custodyStatus({operationId,message}){if(!id(operationId))throw Error('INVALID_INPUT');const parts=strip(message),holderPins=await pinned(run,parts.manifest.roster.map(x=>x.holder)),input={sodium,storage,authorityProvider,pin,...parts,holderPins},verified=await verifyEnrollment(input),manifest=verified.manifest,representation=recoveryHash(sodium,[manifest,parts.signature,parts.catalog,parts.guardianPackage,parts.envelopes]),stored=await run(false,tx=>tx.get(key('recovery-generation-operation',owner,operationId)));if(!stored||stored.representation!==representation)throw Error('CONFLICT');const acknowledged=[],pending=[];for(const row of manifest.roster){const record=await run(false,tx=>tx.get(key('recovery-custody-ack',owner,String(manifest.generation),row.holder)));if(record===undefined){pending.push(row.holder);continue}if(!record||record.version!==1||record.holder!==row.holder||record.representation!==representation||!sodium.crypto_sign_verify_detached(unhex(record.signature,64),custodyAcknowledgementBytes(recoveryHash(sodium,manifest),row.holder,row.shareHash),unhex(row.signingKey,32)))throw Error('INVALID_PROOF');acknowledged.push(row.holder)}return {generation:manifest.generation,threshold:manifest.threshold,acknowledged,pending,rotationStatus:stored.rotationStatus}}
- async function reconstruct({message,contributions}){guardianTransferText(contributions);const parts=strip(message),holderPins=await pinned(run,parts.manifest.roster.map(x=>x.holder));return reconstructEnrolled({sodium,storage,authorityProvider,pin,...parts,holderPins},contributions)}
+ async function readDraft(operationId,record=undefined){if(!id(operationId))throw Error('INVALID_INPUT');const saved=record??await run(false,tx=>tx.get(draftKey(owner,operationId)));if(!saved||saved.version!==1||!(saved.sealed instanceof Uint8Array))throw Error('MISSING_DRAFT');let clear,draft;try{clear=await master.unwrap(masterId,saved.sealed,draftAAD(owner,operationId));draft=JSON.parse(d.decode(clear))}finally{clear?.fill(0)}if(!draft?.manifest||!Array.isArray(draft.manifest.roster)||draft.manifest.roster.some(x=>!id(x?.holder))||!Number.isInteger(draft.manifest.threshold))throw Error('INVALID_INPUT');return draft}
+ async function resume({operationId}){const draft=await readDraft(operationId);const holders=draft.manifest.roster.map(x=>x.holder);return prepare({operationId,catalog:draft.catalog,personalKit:draft.personalKit,archive:draft.archive,holders,threshold:draft.manifest.threshold})}
+ async function acknowledge({operationId,message,holder,signature}){const parts=strip(message),holderPins=await historicalPins(parts.manifest);return life.acknowledge({operationId,enrollment:{sodium,storage,authorityProvider,pin,...parts,holderPins},holder,signature})}
+ async function custodyStatus({operationId,message}){if(!id(operationId))throw Error('INVALID_INPUT');const parts=strip(message),holderPins=await historicalPins(parts.manifest),input={sodium,storage,authorityProvider,pin,...parts,holderPins},verified=await verifyEnrollment(input),manifest=verified.manifest,representation=recoveryHash(sodium,[manifest,parts.signature,parts.catalog,parts.guardianPackage,parts.envelopes]),stored=await run(false,tx=>tx.get(key('recovery-generation-operation',owner,operationId)));if(!stored||stored.representation!==representation)throw Error('CONFLICT');const acknowledged=[],pending=[];for(const row of manifest.roster){const record=await run(false,tx=>tx.get(key('recovery-custody-ack',owner,String(manifest.generation),row.holder)));if(record===undefined){pending.push(row.holder);continue}if(!record||record.version!==1||record.holder!==row.holder||record.representation!==representation||!sodium.crypto_sign_verify_detached(unhex(record.signature,64),custodyAcknowledgementBytes(recoveryHash(sodium,manifest),row.holder,row.shareHash),unhex(row.signingKey,32)))throw Error('INVALID_PROOF');acknowledged.push(row.holder)}return {generation:manifest.generation,threshold:manifest.threshold,acknowledged,pending,rotationStatus:stored.rotationStatus}}
+ async function reconstruct({message,contributions}){guardianTransferText(contributions);const parts=strip(message),holderPins=await historicalPins(parts.manifest);return reconstructEnrolled({sodium,storage,authorityProvider,pin,...parts,holderPins},contributions)}
  return {createGeneration,prepareFromArchive,resume,acknowledge,custodyStatus,reconstruct};
 }
 function strip(message){guardianTransferText(message);if(!message||message.version!==1||Object.keys(message).sort().join(',')!=='catalog,envelopes,guardianPackage,manifest,signature,version')throw Error('INVALID_INPUT');const {version:_,...rest}=structuredClone(message);return rest}

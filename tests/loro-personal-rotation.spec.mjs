@@ -115,6 +115,14 @@ test('Settings rotates personal authority and the guardian catalog across indepe
   let requestText,requestFingerprint,pin,parent;
   await test.step('restore the old private copy without writes and verify a separate device request',async()=>{
    await start(recipient);
+   await openRecovery(recipient);
+   await label(recipient,'My guardian name').fill(bundle.holder);
+   await click(recipient,'Open my guardian keys');
+   await click(recipient,'Export my holder key');
+   const originalGuardian=JSON.parse(await output(recipient).inputValue());
+   expect(originalGuardian.wrappingKey).not.toBe(bundle.wrappingKey);
+   await pinGuardian(recipient,originalGuardian,'owner');
+   await click(recipient,'Close recovery setup');
    await openPersonal(recipient);
    await restorePersonal(recipient,oldArchive,legacyCode);
    await expect(recipient.getByText(original,{exact:true}).last()).toBeVisible();
@@ -168,6 +176,19 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await expect(label(recipient,'Personal document generation')).toHaveText('Personal generation 2');
    await expect(label(recipient,'City')).toHaveValue('Fixturetown');
    await expect(recipient.getByText('Not connected',{exact:true})).toBeVisible();
+   await openRecovery(recipient);
+   await label(recipient,'Guardian names').fill(bundle.holder);
+   await label(recipient,'Required guardians').fill('1');
+   await click(recipient,'Create guardian enrollment');
+   await expect(recipient.getByText('Verify and save each guardian’s key for this personal workspace.',{exact:true})).toBeVisible();
+   await pinGuardian(recipient,bundle,'owner');
+   await click(recipient,'Create guardian enrollment');
+   await expect(recipient.getByText(/^Generation 0: initial/)).toBeVisible();
+   const selectedEnrollment=JSON.parse(await label(recipient,'Owner guardian enrollment').inputValue());
+   expect(selectedEnrollment.manifest.authorityPin).toBe(pin);
+   expect(selectedEnrollment.manifest.roster[0]).toMatchObject({
+    holder:bundle.holder,signingKey:bundle.signingKey,wrappingKey:bundle.wrappingKey
+   });
    await savedMessage(recipient,newer);
    await recipient.reload();
    await expect(recipient.getByText(newer,{exact:true}).last()).toBeVisible();
