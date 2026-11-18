@@ -181,7 +181,9 @@ export class CompromiseReviews {
        stored.objects.length!==original.objects.length||!original.objects.every((o,i)=>matchBytes(stored.objects[i],o.bytes)))throw Error('STALE_EVIDENCE');
    }
    r.selection=clone(selection);
-   r.draft={documentId,sourceDocumentId,sourceGeneration,publicationBaseDocumentId,snapshot:new Uint8Array(snapshot),included:clone(included),excluded:clone(excluded),held:clone(held),state:'local-draft'};
+   r.draft={documentId,sourceDocumentId,sourceGeneration,publicationBaseDocumentId,
+    ...(base===undefined?{}:{publicationBaseRevision:base?.revision??null}),
+    snapshot:new Uint8Array(snapshot),included:clone(included),excluded:clone(excluded),held:clone(held),state:'local-draft'};
    r.status='local-draft';
    await this.put(tx,k,r);
    return clone(r);

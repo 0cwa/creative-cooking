@@ -449,6 +449,20 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  const file=await downloadFile(a,download);
  expect(file.includes(Buffer.from('Rotation carrots'))).toBe(false);
  await expect(button(a,`Download rotation for ${thirdId}`)).toHaveCount(0);
+ const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
+ const parentAuthority={...beforeA[authoritySlot],authorityState:new Uint8Array(Object.values(beforeA[authoritySlot].authorityState))};
+ const rotationAuthority=await changeWorkspaceRecord(a,authoritySlot,parentAuthority);
+ try{
+  await button(a,'Reopen rotated household').click();
+  await expect(a.getByText(`Selected household branch ${parent}`,{exact:true})).toBeVisible();
+  await expect(a.getByText('The selected household branch changed. Review the displayed branch before reopening.',{exact:true})).toBeVisible();
+  await expect(button(a,'Reopen rotated household')).toHaveCount(0);
+  await expect(button(a,'Close device revocation')).toBeVisible();
+ }finally{
+  await changeWorkspaceRecord(a,authoritySlot,rotationAuthority);
+ }
+ await button(a,'Close device revocation').click();
+ await button(a,'Manage device revocation').click();
  await button(a,'Reopen rotated household').click();
  await expect(a.getByText('Invitation proof onion',{exact:true})).toBeVisible();
  await open(a);

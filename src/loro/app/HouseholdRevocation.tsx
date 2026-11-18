@@ -21,7 +21,7 @@ const errors:Record<string,string>={
   RECIPIENT_BINDINGS_REQUIRED:'Collect a signed key binding from each remaining device.',
   INVALID_RECIPIENT:'A signed key binding is invalid, duplicated, or belongs to an excluded device.',
   STALE_AUTHORITY:'The proposal uses an earlier household authority. Review the current branch and prepare again.',
-  SOURCE_CHANGED:'The report, draft, or source changed. Review the originals and prepare again.',
+  SOURCE_CHANGED:'The report, draft, or source changed. Review the originals and save a fresh clean draft before preparing again.',
   INVALID_FILE:'This encrypted rotation file is unavailable for this device or does not match the reviewed decision.',
   INVALID_LATE_EVIDENCE:'This file is outside the selected branch’s verified revocation history.',
   CONFLICT:'The workspace changed or already holds different evidence. Reopen Settings and review the current branch.',
@@ -34,7 +34,9 @@ export function HouseholdRevocation(){
   const service=workspace?.householdPairing?.revocation as Service|undefined;
   const [state,setState]=useState<Status|null>(null), [reviewed,setReviewed]=useState<Reviewed|null>(null);
   const [proposal,setProposal]=useState(''), [bindings,setBindings]=useState(''), [binding,setBinding]=useState('');
-  const [status,setStatus]=useState(''), [busy,setBusy]=useState(false), [reopen,setReopen]=useState<string|null>(null);
+  const [status,setStatus]=useState(''), [busy,setBusy]=useState(false);
+  const reopen=state?.reopen??null;
+  const paused=useRef<ReturnType<typeof app.beginWorkspaceTransition>|null>(null);
   const [late,setLate]=useState<string[]>([]), [inspection,setInspection]=useState<Awaited<ReturnType<Service['inspectLate']>>|null>(null);
   const [archive,setArchive]=useState<Awaited<ReturnType<Service['inspectBranch']>>|null>(null);
   const [archivedReport,setArchivedReport]=useState<Awaited<ReturnType<Service['inspectArchivedReport']>>|null>(null);
@@ -56,8 +58,11 @@ export function HouseholdRevocation(){
   async function refresh(){
     const current=await controls.status();
     setState(current);
-    if(current.reopen)setReopen(current.reopen);
-    else setLate(await controls.lateEvidence());
+    if(!current.reopen){
+      paused.current?.();
+      paused.current=null;
+      setLate(await controls.lateEvidence());
+    }
   }
   function setReview(value:Reviewed){
     setReviewed(value);
@@ -73,12 +78,16 @@ export function HouseholdRevocation(){
         // A competing transition can finish after a saved retry. Reopen only
         // the still-selected head returned by the status read.
         const current=await controls.status();
+        setState(current);
+        if(current.reopen){
+          keep=true;
+          paused.current=release;
+        }
         if(current.head!==result.acceptedHead)throw Error('STALE_AUTHORITY');
-        keep=true;
-        setReopen(result.acceptedHead);
+      }else{
+        await refresh();
       }
       setStatus(result.replayed?'This exact rotation was already saved.':'Rotation saved on this device.');
-      await refresh();
     }finally{if(!keep)release();}
   }
   function loadProposal(value:string){setProposal(value);setReviewed(null);}
@@ -90,7 +99,16 @@ export function HouseholdRevocation(){
       <Text>Local quarantine applies on this device. A signed revocation creates a successor with a new key and clean cooking document. Each device chooses whether to open it.</Text>
       {reopen&&action('Reopen rotated household',async()=>{
         const result=await controls.status();
-        if(result.head!==reopen)throw Error('STALE_AUTHORITY');
+        setState(result);
+        if(result.head!==reopen){
+          if(!result.reopen){
+            paused.current?.();
+            paused.current=null;
+            setLate(await controls.lateEvidence());
+          }
+          setStatus('The selected household branch changed. Review the displayed branch before reopening.');
+          return;
+        }
         workspace.reopen({scopeId:workspace.household.scope.scopeId,head:reopen});
       })}
       {state.published&&<>

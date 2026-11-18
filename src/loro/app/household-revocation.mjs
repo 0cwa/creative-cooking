@@ -103,6 +103,7 @@ export function householdRevocation({
       if(!saved?.isolated||saved.status!=='local-draft'||!saved.selection||!draft||draft.held.length||target===deviceId||
          saved.report.payload.suspectDeviceIds.length!==1||!parent.devices.some(d=>d.active&&d.deviceId===target))throw Error('INVALID_DRAFT');
       const source=must(await storage.reopenBranchDocument(a,parent.runtime.documentId));
+      if(draft.publicationBaseRevision!==(source?.revision??null))throw Error('SOURCE_CHANGED');
       const original=await reviews.inspectOriginal(scope.id,reviewId,sha256);
       if(await verifyReport({runtime,report:saved.report,context:saved.context,reviewId,manifest:saved.manifest,sha256})!==saved.reportHash)throw Error('INVALID_REPORT');
       const old=new LoroDoc(), clean=new LoroDoc();

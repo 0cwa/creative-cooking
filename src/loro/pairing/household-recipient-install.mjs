@@ -24,7 +24,8 @@ export async function installHouseholdRecipient({sodium,storage,scope,pin,provid
   const proof=await verify({sodium,storage:parentStorage,scope:sc,pin,provider,sessionStore,keys:privateKeys,recipientDevice,publication:p,seed:s,policyBundle:bundle,LoroDoc,confirmedEventHash,confirmedGrantHash,savedSelection});
   if((recipientKind!==undefined&&proof.kind!==recipientKind)||(confirmedParent!==undefined&&proof.expectedAuthority.acceptedParent!==confirmedParent))throw Error('INVALID_AUTHORITY');
   const context=proof.context,packetHash=await hash(provider,'household-recipient-packet',Array.from(proof.packet));
-  const body={version:1,scopeId:sc.id,operationId,keyOperationId,guardId:proof.guardId,recipientDevice,parentHead:proof.expectedAuthority.acceptedParent,acceptedHead:proof.nextAuthority.acceptedParent,documentId:context.projectionId,epochId:context.epochId,manifestHash:context.manifestHash,grantHash:context.grantHash,policyBundleHash:bundle?p.policySeed.bundleHash:null,packetHash};
+  const publisherSelection=proof.kind==='revocation'?{publisherSelectionHash:await hash(provider,'household-rotation-publisher-selection',p.selection)}:{};
+  const body={version:1,scopeId:sc.id,operationId,keyOperationId,guardId:proof.guardId,recipientDevice,parentHead:proof.expectedAuthority.acceptedParent,acceptedHead:proof.nextAuthority.acceptedParent,documentId:context.projectionId,epochId:context.epochId,manifestHash:context.manifestHash,grantHash:context.grantHash,policyBundleHash:bundle?p.policySeed.bundleHash:null,packetHash,...publisherSelection};
   const signed=domain('household-recipient-receipt',body),recipientKey=unhex(context.recipientSigningKey);
   if(!recipientKey)throw Error('INVALID_PROOF');
   const receipt=prior.value?new Uint8Array(prior.value.receipt):sodium.crypto_sign_detached(signed,privateKeys.signingSecret);

@@ -25,7 +25,9 @@ export async function verifyRecipientInstallation({storage,scope,pin,provider,so
      p.policySeed!==null||!eq(next,{...parent,events:[...parent.events,item],selections:[...parent.selections,selection],activeHead:eventHash}))throw Error('INVALID_AUTHORITY');
   const {context,guardId}=await verifyRotationPayload({sodium,provider,LoroDoc:await loadLoroDoc(),parent:verified.nodes.get(parent.activeHead),item,
     recipientDevice:p.localKey.record.identity.deviceId,documentId:p.documentId,generation:p.generation,manifest:p.manifest,seed:p.seed,snapshot:p.snapshot,packet:p.packet});
-  return verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash:null});
+  const publisherSelectionHash=p.receiptBody.publisherSelectionHash;
+  if(publisherSelectionHash!==undefined&&!unhex(publisherSelectionHash))throw Error('INVALID_AUTHORITY');
+  return verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash:null,publisherSelectionHash});
  }
  if(!item||!grant||!manifest||!eq(next,{...parent,events:[...parent.events,item],selections:[...parent.selections,selection],activeHead:selection.to})||item.event.parentHead!==parent.activeHead||selection.from!==parent.activeHead||selection.to!==eventHash||await digest(provider,'event',item.event)!==eventHash||![1,2,3,4].includes(manifest.version)||await digest(provider,'projection-manifest',manifest)!==grant.projectionManifestHash||p.manifest.id!==grant.projectionManifestHash||hex(p.manifest.bytes)!==hex(e.encode(JSON.stringify(canon(manifest))))||await digest(provider,'projection-snapshot',hex(p.snapshot))!==manifest.projectedStateHash||p.documentId!==manifest.newDocumentId||p.generation!==manifest.newGeneration||(manifest.version===1?p.policySeed!==null:(!p.policySeed||p.policySeed.bundle.version!==manifest.version||p.policySeed.bundleHash!==manifest.policyBundleHash||p.seed.seedId!==p.policySeed.bundle.seedId)))throw Error('INVALID_AUTHORITY');
  const LoroDoc=await loadLoroDoc(),parts=manifest.schemaVersion.split('|'),peerId=parts[2],doc=new LoroDoc();if(parts.length!==3||parts[0]!==`registry-seed-v${manifest.version}`||parts[1]!==p.seed.seedId||(manifest.version!==1&&peerId!==p.policySeed.bundle.peerId))throw Error('INVALID_AUTHORITY');try{doc.import(p.snapshot)}catch{throw Error('INVALID_AUTHORITY')}
@@ -35,13 +37,14 @@ export async function verifyRecipientInstallation({storage,scope,pin,provider,so
  return verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash:manifest.version===1?null:manifest.policyBundleHash});
 }
 
-async function verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash}) {
+async function verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash,publisherSelectionHash}) {
  const recipient=p.localKey.record.identity.deviceId;
  if(p.localKey.record.identity.scope.id!==scope.id||p.localKey.record.identity.scope.kind!=='household'||p.localKey.record.identity.purpose!=='data'||p.localKey.record.identity.epochId!==context.epochId||p.guardId!==guardId)throw Error('INVALID_AUTHORITY');
  verifyStoredKeyPackage(sodium,p.packet,context);
  const body={version:1,scopeId:scope.id,operationId:p.operationId,keyOperationId:p.localKey.record.operationId,guardId,recipientDevice:recipient,
   parentHead:parent.activeHead,acceptedHead:eventHash,documentId:p.documentId,epochId:context.epochId,manifestHash:context.manifestHash,
-  grantHash:context.grantHash,policyBundleHash,packetHash:await digest(provider,'household-recipient-packet',Array.from(p.packet))};
+  grantHash:context.grantHash,policyBundleHash,packetHash:await digest(provider,'household-recipient-packet',Array.from(p.packet)),
+  ...(publisherSelectionHash===undefined?{}:{publisherSelectionHash})};
  const key=unhex(context.recipientSigningKey);
  if(!key||!eq(body,p.receiptBody)||!sodium.crypto_sign_verify_detached(p.receipt,domain('household-recipient-receipt',body),key))throw Error('INVALID_AUTHORITY');
  return {parent,installation:p,transcriptHash:context.transcriptHash};

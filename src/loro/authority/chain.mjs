@@ -527,6 +527,7 @@ export async function verifiedRevocationDraft({runtime,provider,item,manifest,re
  if(await verifyReport({runtime,report:review.report,context:review.context,reviewId:manifest.reviewId,manifest:review.manifest,sha256})!==manifest.reportHash||
     await digest(provider,'rotation-selection',review.selection)!==manifest.selectionHash||
     await digest(provider,'rotation-archive-snapshot',hex(draft.snapshot))!==manifest.archiveHash||
+    draft.publicationBaseRevision!==manifest.sourceRevision||
     (source?.revision??null)!==manifest.sourceRevision||
     await digest(provider,'rotation-source-snapshot',hex(source?.bytes??new Uint8Array()))!==manifest.sourceHash)throw Error('SOURCE_CHANGED');
  const seed=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:draft.snapshot,seedId:manifest.seedId,peerId:manifest.seedPeerId,schemaVersion:4});

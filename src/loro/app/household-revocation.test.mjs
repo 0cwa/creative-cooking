@@ -10,6 +10,7 @@ import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {domain} from '../authority/validator.mjs';
 import {approveHouseholdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
 import {householdCompromise} from './household-compromise.mjs';
 import {householdRevocation} from './household-revocation.mjs';
@@ -142,10 +143,14 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
   assert.equal(late.outcome.state,'saved');
   const oldObject=(await c.storage.listOutboundObjects(scope.id)).value[0];
   const {confirmation}=await a.compromise.open();
-  const report=await a.compromise.prepare(confirmation,'gamma');
-  const reviewId=await a.compromise.sign(report,{kind:'checkpoint'});
-  const view=await a.compromise.inspect(confirmation,reviewId);
-  await a.compromise.saveCleanDraft(view,view.rows.map(v=>v.effectId));
+  const saveDraft=async()=>{
+   const report=await a.compromise.prepare(confirmation,'gamma');
+   const id=await a.compromise.sign(report,{kind:'checkpoint'});
+   const view=await a.compromise.inspect(confirmation,id);
+   await a.compromise.saveCleanDraft(view,view.rows.filter(v=>v.effectId!=='later').map(v=>v.effectId));
+   return id;
+  };
+  let reviewId=await saveDraft();
   const remaining=await b.service.binding(), excluded=await c.service.binding();
   await assert.rejects(a.service.prepare({reviewId,bindings:[remaining,excluded],explicit:true}),/INVALID_RECIPIENT/);
   const prepare=()=>a.service.prepare({reviewId,bindings:[remaining],explicit:true});
@@ -158,7 +163,9 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
   await apply(a.runtime,3,'shopping-list-create','later',{listId:'later',cycleId:'later-cycle',name:'Later list in original only',at});
   const advancedSource=a.rows();
   await assert.rejects(a.service.publish(confirm(stale)),/SOURCE_CHANGED/);
+  await assert.rejects(prepare(),/SOURCE_CHANGED/);
   assert.deepEqual(a.rows(),advancedSource);
+  reviewId=await saveDraft();
 
   const approved=await approve(b,await approve(a,await prepare()));
   const {newEpochId, documentId}=approved.proposal.item.event.subject;
@@ -216,6 +223,20 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
   assert.equal((await b.service.status()).reopen,approved.eventHash);
   const installed=b.rows();
   assert.equal((await install()).replayed,true);
+  const rollingFile=await b.keys().use('wrapping',wrapperIdentity('beta'),async secret=>{
+   const publicKey=sodium.crypto_scalarmult_base(secret);
+   const plain=sodium.crypto_box_seal_open(file,publicKey,secret);
+   try{
+    const transport=JSON.parse(new TextDecoder().decode(plain));
+    const selection=transport.publication.selection;
+    const {from,to,deviceId}=selection, index=selection.index+1;
+    selection.index=index;
+    selection.signature=sodium.to_hex(await a.provider.sign(a.signingKey,
+     domain('select-head',{root:pin,householdId:scope.id,from,to,deviceId,index})));
+    return sodium.crypto_box_seal(new TextEncoder().encode(JSON.stringify(transport)),publicKey);
+   }finally{plain.fill(0);}
+  });
+  await assert.rejects(b.service.install({...confirm(approved),bytes:rollingFile}),/CONFLICT/);
   assert.deepEqual(b.rows(),installed);
 
   for(const p of [a,b]){
@@ -239,6 +260,10 @@ test('SQLite revocation verifies source and votes, rolls back, reopens the bound
   const held=await a.service.holdLateEvidence(oldObject.bytes);
   assert.equal((await a.service.holdLateEvidence(oldObject.bytes)).replayed,true);
   assert.equal((await a.service.inspectLate(held.objectId)).command.data.name,'Late thyme');
+  const afterHold=a.rows();
+  const attempted=await a.runtime.recoverInbox();
+  assert.ok(attempted.find(result=>result.itemId===held.objectId)?.error);
+  assert.deepEqual(a.rows(),afterHold);
   assert.equal(projectCooking((await a.runtime.document()).doc).pantry.length,0);
   const oldA=(await a.storage.reopenDocument(scope.id,root.runtime.documentId)).value;
   const doc=new LoroDoc();doc.import(oldA.bytes);
