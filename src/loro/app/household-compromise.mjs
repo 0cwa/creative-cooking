@@ -15,7 +15,7 @@ function classify(entries,suspects,knownCheckpointEffects,boundary) {
   const effects = new Map(), overlaps = new Set();
   for(const entry of entries) {
     const id = entry.command.effectId;
-    if(effects.has(id)) overlaps.add(id);
+    if(effects.has(id)||knownCheckpointEffects.has(id)) overlaps.add(id);
     effects.set(id,entry);
   }
   const suspect = new Set(entries.filter(e=>suspects.includes(e.authorDevice)).map(e=>e.command.effectId));
@@ -55,10 +55,10 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
     return {...authority,scope,token};
   }
 
-  async function checkpoint(authority) {
+  async function checkpoint(authority,envelopeBytes=0) {
     const seed = must(await runtime.storage.readProjectionSeed(authority.expectedAuthority,scope.documentId));
     if(seed) {
-      if(seed.snapshot.length>REVIEW_LIMITS.bytes)throw Error('TOO_LARGE');
+      if(seed.snapshot.length+envelopeBytes>REVIEW_LIMITS.bytes)throw Error('TOO_LARGE');
       await runtime.document(); // Checks the retained seed against the authorized local document frontier.
       return {bytes:seed.snapshot,label:'Verified household projection checkpoint',effects:new Set(seed.seed.identities.map(row=>row.effectId))};
     }
@@ -68,13 +68,13 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
     return null;
   }
 
-  async function matchBoundary(authority,payload) {
+  async function matchBoundary(authority,payload,envelopeBytes=0) {
     if(payload?.head!==scope.branchHead||payload.scopeId!==scope.scopeId||payload.scopeKind!=='household')throw Error('REPORT_BRANCH_UNAVAILABLE');
     if(!Array.isArray(payload.suspectDeviceIds)||payload.suspectDeviceIds.length!==1||
         payload.suspectDeviceIds[0]===payload.reporterDevice||
         !Object.hasOwn(authority.signingKeyRefs,payload.suspectDeviceIds[0]))throw Error('INVALID_REPORT_DEVICE');
     if(payload.boundary?.kind==='operation')return {bytes:new Uint8Array(),effects:new Set()};
-    const local = await checkpoint(authority);
+    const local = await checkpoint(authority,envelopeBytes);
     if(!local)throw Error('CHECKPOINT_UNAVAILABLE');
     return local;
   }
@@ -172,11 +172,13 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
       received = decodeReportFile(new Uint8Array(file));
       if(received.report.payload?.reviewId!==reviewId)throw Error('MALFORMED_REPORT');
       const a = await current(revision,confirmation);
-      const local = await matchBoundary(a,received.report.payload);
+      const checkpointHash = received.report.payload.checkpointHash;
+      const reviewContext = context(a,checkpointHash);
+      await verifyReport({runtime,report:received.report,manifest:received.manifest,context:reviewContext,reviewId,sha256});
+      const local = await matchBoundary(a,received.report.payload,received.measuredBytes);
       const checkpointBytes = local.bytes;
-      if(checkpointBytes.length+received.measuredBytes>REVIEW_LIMITS.bytes)throw Error('TOO_LARGE');
-      const checkpointHash = await sha256(checkpointBytes);
-      const {replayed} = await reviews.stageEvidence({frozenReview:{reviewId,runtime,context:context(a,checkpointHash),report:received.report,
+      if(await sha256(checkpointBytes)!==checkpointHash)throw Error('CHECKPOINT_MISMATCH');
+      const {replayed} = await reviews.stageEvidence({frozenReview:{reviewId,runtime,context:reviewContext,report:received.report,
         expectedManifest:received.manifest,objects:received.objects,checkpointBytes,sha256,
         verifyEvidence:async objects=>{for(const o of objects)await authenticate(a,o);}}});
       return {reviewId,replayed};

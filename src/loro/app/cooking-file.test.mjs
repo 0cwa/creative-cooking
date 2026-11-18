@@ -1,5 +1,5 @@
 import {householdCompromise} from './household-compromise.mjs';
-import {CompromiseReviews} from '../compromise/review.mjs';
+import {CompromiseReviews,REVIEW_LIMITS} from '../compromise/review.mjs';
 import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
 import {evidenceSha256} from '../compromise/report.mjs';
 import test from 'node:test';
@@ -331,4 +331,44 @@ test('force report preflight before crypto and reject a stale boundary or file s
   assert.equal(unauthorizedCalls,0);
   assert.deepEqual(await destination.receive(freshTarget,file),{reviewId:first,replayed:true});
   assert.deepEqual(receiver.rows(),capacity);
+});
+
+test('checkpoint report authentication and limits precede document reads, and overlapping effects stay ambiguous',async t=>{
+  const [reporter,receiver]=await household(t);
+  const suspect=await receiver.edit('checkpoint overlap',1);
+  await reporter.cooking.receive(suspect.bytes);
+  await reporter.runtime.execute({operationId:'depends',deviceSequence:1,command:{
+    version:1,kind:'pantry-field',commandId:'depends',effectId:'depends',dependencyEffectIds:['checkpoint overlap'],
+    data:{itemId:'checkpoint overlap',field:'preference',value:5,author:reporter.deviceId,at:'2026-01-01T00:00:00Z'}
+  }});
+  const api=peer=>householdCompromise({runtime:peer.runtime,withCurrent:use=>use(0)});
+  const source=api(reporter),destination=api(receiver);
+  const origin=(await source.open()).confirmation,target=(await destination.open()).confirmation;
+  const draft=await source.prepare(origin,receiver.deviceId);
+  const reviewId=await source.sign(draft,{kind:'checkpoint'});
+  let file;
+  await source.share(origin,reviewId,async bytes=>{file=bytes});
+
+  // Model the verified projection boundary at the runtime/storage interface.
+  const checkpointDoc=await receiver.runtime.document();
+  const seed={snapshot:new Uint8Array(REVIEW_LIMITS.bytes),seed:{identities:[{effectId:'checkpoint overlap'}]}};
+  let documentReads=0;
+  receiver.storage.readProjectionSeed=async()=>({ok:true,value:seed});
+  receiver.runtime.document=async()=>{documentReads++;return checkpointDoc};
+  const {report,manifest,objects}=decodeReportFile(file);
+  const bad={...report,signature:(report.signature[0]==='0'?'1':'0')+report.signature.slice(1)};
+  const original=receiver.rows();
+  await assert.rejects(destination.receive(target,encodeReportFile(bad,manifest,objects)),/INVALID_REPORT_SIGNATURE/);
+  await assert.rejects(destination.receive(target,file),/TOO_LARGE/);
+  assert.equal(documentReads,0);
+  assert.deepEqual(receiver.rows(),original);
+
+  seed.snapshot=new Uint8Array(1);
+  await assert.rejects(destination.receive(target,file),/CHECKPOINT_MISMATCH/);
+  assert.deepEqual(receiver.rows(),original);
+  seed.snapshot=new Uint8Array();
+  await destination.receive(target,file);
+  const {rows}=await destination.inspect(target,reviewId);
+  assert.equal(rows.find(row=>row.objectId===suspect.itemId).category,'suspect');
+  assert.deepEqual(rows.filter(row=>row.effectId==='depends').map(row=>[row.category,row.missingDependencies]),[['other',1]]);
 });
