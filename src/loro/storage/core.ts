@@ -4,7 +4,7 @@ import type {LocalKeyRecord,ReadyMasterCatalog} from './local-keys.ts';
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
 import type { ProjectionPublication, ProjectionAtomicStorage } from '../contracts/projection.ts';
-import type { RecipeCatalogBinding, RecipePublication, RuntimeStorageReader } from '../contracts/runtime-storage.ts';
+import type { RecipeCatalogBinding, RecipePublication, RuntimeStorageReader, ShoppingRecipeSourceReceipt } from '../contracts/runtime-storage.ts';
 import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
 import {isPolicyDocumentId} from '../authority/validator.mjs';
@@ -863,6 +863,46 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       });
     } catch(e) { return fail(mapError(e)); }
   }
+  private storedShoppingRecipeLink(command:LocalCommit['commands'][number]) {
+    if(command.kind!=='shopping-item-create')return null;
+    let data:any;
+    try{data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(command.payload))?.data}catch{return null}
+    return data?.recipeSource===undefined?null:data;
+  }
+  private async requireShoppingRecipeSource(
+    tx:Tx,c:LocalCommit|ImportCommit,command:LocalCommit['commands'][number],header:any,
+    receipts:Map<string,ShoppingRecipeSourceReceipt>,
+  ) {
+    const sources=new Map<string,{policyHashes:string[],incomplete:boolean}>();
+    const data=this.storedShoppingRecipeLink(command);
+    if(!data)return sources;
+    const claim=data.recipeSource,receipt=receipts.get(command.effectId);
+    if(!receipt||!object(claim)||!denseArray(claim.effectIds,validId))return conflict();
+    receipts.delete(command.effectId);
+    const {binding,recipeId,documentId}=receipt;
+    if(!this.matchesRecipeCatalog(binding,c.expectedAuthority)||binding.sourceDocumentId!==command.documentId||
+       binding.epochId!==header.epochId||binding.documentGeneration!==header.documentGeneration||
+       recipeId!==data.recipeId||documentId!==claim.documentId||!isRecipeDocumentId(documentId))return conflict();
+    const row=await tx.get(key('recipe-catalog',c.scopeId,binding.branchHead,recipeId));
+    if(!row||row.recipeId!==recipeId||row.documentId!==documentId||row.objectId!==receipt.creationObjectId||
+       JSON.stringify(projectionCanonical(row.binding))!==JSON.stringify(projectionCanonical(binding)))return conflict();
+    const child=await this.checkoutDocument(tx,c.scopeId,{head:binding.branchHead,documentId});
+    if(!child||child.revision!==receipt.revision)return conflict();
+    const verified=new Map<string,{policyHashes:string[],incomplete:boolean}>();
+    if(!denseArray(receipt.effects,effect=>validId(effect?.effectId)&&validId(effect?.objectId)))return conflict();
+    for(const {effectId,objectId} of receipt.effects){
+      const source=await this.validatedDisclosureSource(tx,c.scopeId,effectId);
+      if(!source||source.documentId!==documentId||source.objectId!==objectId||source.checkpoint!==binding.branchHead)return conflict();
+      verified.set(effectId,{policyHashes:source.policyHashes,incomplete:source.incomplete===true});
+    }
+    if(!receipt.effects.some(effect=>effect.effectId===row.effectId&&effect.objectId===row.objectId))return conflict();
+    for(const effectId of claim.effectIds){
+      const source=verified.get(effectId);
+      if(!source||!command.dependencyEffectIds.includes(effectId))return conflict();
+      sources.set(effectId,source);
+    }
+    return sources;
+  }
   /** Dependencies are scope-local and must precede their consumer in the transaction. */
   private async requireDependencies(tx:Tx,scopeId:string,commands:readonly {documentId:string;effectId:string;dependencyEffectIds:readonly string[]}[]) {
     const prior=new Set<string>();
@@ -954,7 +994,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     });}catch(error){return fail(mapError(error));}
   }
   private async disclosureDependency(tx:Tx,scope:string,documentId:string,effectId:string,visiting=new Set<string>()):Promise<{policyHashes:string[],incomplete:boolean}>{
-    if(visiting.has(effectId)||visiting.size>=256)corrupt();visiting.add(effectId);const copied=await this.ownDeviceSource(tx,scope,documentId,effectId);if(copied)return copied;const source=await this.validatedDisclosureSource(tx,scope,effectId);if(source)return {policyHashes:source.policyHashes,incomplete:source.incomplete===true};
+    if(visiting.has(effectId)||visiting.size>=256)corrupt();visiting.add(effectId);const copied=await this.ownDeviceSource(tx,scope,documentId,effectId);if(copied)return copied;const source=await this.validatedDisclosureSource(tx,scope,effectId);if(source){
+      if(source.documentId!==documentId&&!(await this.projectionLineage(tx,scope,documentId)).some(branch=>branch.documentId===source.documentId))return conflict();
+      return {policyHashes:source.policyHashes,incomplete:source.incomplete===true};
+    }
     const lineage=await this.projectionLineage(tx,scope,documentId),origin=lineage.at(-1)!;
     const old=await tx.get(key('effect',scope,effectId)),seedId=await tx.get(key('projection-seed-effect',scope,origin.documentId,effectId));if(old===undefined&&seedId===undefined)conflict();let hashes:string[]=[];
     if(old!==undefined){let parsed:any;try{parsed=JSON.parse(old)}catch{return corrupt()}const command=parsed?.[1]?.commands?.find((c:any)=>c.effectId===effectId&&lineage.some(branch=>branch.documentId===c.documentId));if(!command||await tx.get(key('command',scope,command.commandId))!==old||!denseArray(command.dependencyEffectIds,validId))return corrupt();const inherited=new Set<string>();for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,documentId,dep,new Set(visiting));for(const h of parent.policyHashes)inherited.add(h)}hashes=[...inherited].sort()}
@@ -997,13 +1040,39 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     input=snapshot(input);if(!fields(input,['expectedAuthority','expectedPolicyHash','record'])||!fields(input.record,['policy','policyHash','approvals'])||!validId(input.record.policyHash)||!(input.expectedPolicyHash===null||validId(input.expectedPolicyHash)))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{await this.requireAuthority(tx,input.expectedAuthority);const scope=input.expectedAuthority.scope.id,head=input.expectedAuthority.record?.acceptedParent;if(input.expectedAuthority.scope.kind!=='household'||input.record.policy?.scope?.id!==scope||input.record.policy?.checkpoint!==head||input.record.policy?.predecessor!==input.expectedPolicyHash)conflict();const active=(await tx.get(key('disclosure-active',scope)))??null;if(active!==input.expectedPolicyHash)conflict();const slot=key('disclosure-policy',scope,input.record.policyHash);if(await tx.get(slot)!==undefined)conflict();await tx.put(slot,input.record);this.fault?.('disclosure-policy');await tx.put(key('disclosure-active',scope),input.record.policyHash);return {ok:true as const,value:undefined}})}catch(e){return fail(mapError(e))}
   }
-  async commitLocalWithDisclosurePolicy(c:LocalCommit,policyHash:string|null,expectedActiveHash:string|null=policyHash,publication?:RecipePublication):Promise<CommitResult> {
-    const k=storageOperationKey(c,'local');if(!k.ok)return fail(k.error);if((policyHash!==null&&!validId(policyHash))||(expectedActiveHash!==null&&!validId(expectedActiveHash))||(policyHash!==null&&policyHash!==expectedActiveHash))return fail('MALFORMED');c=snapshot(c);publication=snapshot(publication);
+  async commitLocalWithDisclosurePolicy(c:LocalCommit,policyHash:string|null,expectedActiveHash:string|null=policyHash,publication?:RecipePublication,recipeSources:ShoppingRecipeSourceReceipt[]=[]):Promise<CommitResult> {
+    const k=storageOperationKey(c,'local');if(!k.ok)return fail(k.error);if((policyHash!==null&&!validId(policyHash))||(expectedActiveHash!==null&&!validId(expectedActiveHash))||(policyHash!==null&&policyHash!==expectedActiveHash))return fail('MALFORMED');c=snapshot(c);publication=snapshot(publication);recipeSources=snapshot(recipeSources);
     if(c.commands.length!==c.outbound.length)return fail('MALFORMED');
     const allowed=new Set(['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction']);if(c.expectedAuthority.scope.kind!=='household'||c.commands.some(command=>!allowed.has(command.kind)))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{const scope=c.scopeId,head=c.expectedAuthority.record?.acceptedParent;const old=await tx.get(key('local',scope,c.operationId));if(old){if(old.inputKey!==k.value)conflict();for(const command of c.commands){const source=await this.validatedDisclosureSource(tx,scope,command.effectId,policyHash);if(!source||source.commandId!==command.commandId||source.documentId!==command.documentId)conflict()}validateOutcome(old.outcome,c.documents);await this.completedLocal(tx,c,k.value);return {ok:true as const,value:{outcome:old.outcome,replayed:true}}}
       await this.requireAuthority(tx,c.expectedAuthority);if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if(expectedActiveHash!==null){const policy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!policy||policy.policyHash!==expectedActiveHash||policy.policy?.scope?.id!==scope||(policyHash!==null&&policy.policy?.checkpoint!==head))conflict()}
-      const sources=new Map<string,any>();for(const command of c.commands){const policies=new Set<string>(policyHash===null?[]:[policyHash]);let incomplete=policyHash===null;for(const dep of command.dependencyEffectIds){const parent=sources.get(dep)??await this.disclosureDependency(tx,scope,command.documentId,dep);incomplete||=parent.incomplete===true;for(const hash of parent.policyHashes)policies.add(hash)}const envelopeBytes=c.outbound[sources.size].object.bytes;let header:any;try{header=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(envelopeBytes))?.header}catch{conflict()}if(incomplete&&!(header?.version===3||header?.version===4&&header.disclosureIncomplete===true))conflict();const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,envelope:envelopeBytes,origin:'local',objectId:c.outbound[sources.size].object.id,...(header?.version===3||header?.version===4&&header.disclosureIncomplete===true?{incomplete:true}:{})};let envelope:any;try{envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(c.outbound[sources.size].object.bytes))}catch{conflict()}const h=envelope?.header;if((['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h?.version!==4)||![2,3,4].includes(h?.version)||(h.version===3&&h.disclosureIncomplete!==true||h.version===4&&typeof h.disclosureIncomplete!=='boolean')||h.disclosurePolicyHash!==policyHash||h.scopeId!==scope||h.documentId!==command.documentId||h.branchHead!==head||JSON.stringify(h.semanticEffectIds)!==JSON.stringify([command.effectId])||JSON.stringify(h.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort())||JSON.stringify(h.disclosurePolicyHashes)!==JSON.stringify(source.policyHashes))conflict();sources.set(command.effectId,source)}
+      const receipts=new Map(recipeSources.map(source=>[source.consumerEffectId,source]));
+      if(receipts.size!==recipeSources.length)conflict();
+      const sources=new Map<string,any>();
+      for(const [index,command] of c.commands.entries()){
+        const {object}=c.outbound[index];
+        let h:any;
+        try{h=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(object.bytes))?.header}catch{conflict()}
+        if((['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h?.version!==4)||
+           ![2,3,4].includes(h?.version)||(h.version===3&&h.disclosureIncomplete!==true||h.version===4&&typeof h.disclosureIncomplete!=='boolean')||
+           h.disclosurePolicyHash!==policyHash||h.scopeId!==scope||h.documentId!==command.documentId||h.branchHead!==head||
+           JSON.stringify(h.semanticEffectIds)!==JSON.stringify([command.effectId])||
+           JSON.stringify(h.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort()))conflict();
+        const linked=await this.requireShoppingRecipeSource(tx,c,command,h,receipts);
+        const policies=new Set<string>(policyHash===null?[]:[policyHash]);
+        let incomplete=policyHash===null;
+        for(const dep of command.dependencyEffectIds){
+          const parent=linked.get(dep)??sources.get(dep)??await this.disclosureDependency(tx,scope,command.documentId,dep);
+          incomplete||=parent.incomplete===true;
+          for(const hash of parent.policyHashes)policies.add(hash);
+        }
+        const signedIncomplete=h.version===3||h.version===4&&h.disclosureIncomplete===true;
+        const policyHashes=[...policies].sort();
+        if(incomplete&&!signedIncomplete||JSON.stringify(h.disclosurePolicyHashes)!==JSON.stringify(policyHashes))conflict();
+        sources.set(command.effectId,{policyHashes,checkpoint:head,documentId:command.documentId,commandId:command.commandId,
+          envelope:object.bytes,origin:'local',objectId:object.id,...(signedIncomplete?{incomplete:true}:{})});
+      }
+      if(receipts.size)conflict();
       const outcome=await this.local(tx,c,k.value);
       if(publication) {
         const object=c.outbound[0].object;
@@ -1028,7 +1097,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const allowed=new Set(['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction']);
     const scope=g.children[0].scopeId;if(g.children.some(c=>c.scopeId!==scope||c.expectedAuthority.scope.kind!=='household'||c.commands.length!==c.outbound.length||c.commands.some(x=>!allowed.has(x.kind))))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{const old=await tx.get(key('group',g.groupId));if(old!==undefined){await this.completedGroup(tx,g,old,groupKey.value);for(const c of g.children)for(const command of c.commands){const source=await this.validatedDisclosureSource(tx,scope,command.effectId,policyHash);if(!source||source.commandId!==command.commandId)conflict()}return {ok:true as const,value:{outcomes:old.outcomes,replayed:true}}}
-      const staged=new Map<string,any>();for(const c of g.children){await this.requireAuthority(tx,c.expectedAuthority);await this.identities(tx,c);const head=c.expectedAuthority.record?.acceptedParent;if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if(expectedActiveHash!==null){const policy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!policy||policy.policyHash!==expectedActiveHash||policy.policy?.scope?.id!==scope||(policyHash!==null&&policy.policy?.checkpoint!==head))conflict()}for(let i=0;i<c.commands.length;i++){const command=c.commands[i],policies=new Set<string>(policyHash===null?[]:[policyHash]);let incomplete=policyHash===null;for(const dep of command.dependencyEffectIds){const parent=staged.get(dep)??await this.disclosureDependency(tx,scope,command.documentId,dep);incomplete||=parent.incomplete===true;for(const h of parent.policyHashes)policies.add(h)}let header:any;try{header=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(c.outbound[i].object.bytes))?.header}catch{conflict()}if(incomplete&&!(header?.version===3||header?.version===4&&header.disclosureIncomplete===true))conflict();const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,envelope:c.outbound[i].object.bytes,origin:'local',objectId:c.outbound[i].object.id,...(header?.version===3||header?.version===4&&header.disclosureIncomplete===true?{incomplete:true}:{})};let envelope:any;try{envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(source.envelope))}catch{conflict()}const h=envelope?.header;if((['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h?.version!==4)||![2,3,4].includes(h?.version)||(h.version===3&&h.disclosureIncomplete!==true||h.version===4&&typeof h.disclosureIncomplete!=='boolean')||h.disclosurePolicyHash!==policyHash||h.scopeId!==scope||h.documentId!==command.documentId||h.branchHead!==head||JSON.stringify(h.semanticEffectIds)!==JSON.stringify([command.effectId])||JSON.stringify(h.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort())||JSON.stringify(h.disclosurePolicyHashes)!==JSON.stringify(source.policyHashes))conflict();staged.set(command.effectId,source)}}
+      const staged=new Map<string,any>();for(const c of g.children){await this.requireAuthority(tx,c.expectedAuthority);await this.identities(tx,c);const head=c.expectedAuthority.record?.acceptedParent;if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if(expectedActiveHash!==null){const policy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!policy||policy.policyHash!==expectedActiveHash||policy.policy?.scope?.id!==scope||(policyHash!==null&&policy.policy?.checkpoint!==head))conflict()}for(let i=0;i<c.commands.length;i++){const command=c.commands[i];if(this.storedShoppingRecipeLink(command))conflict();const policies=new Set<string>(policyHash===null?[]:[policyHash]);let incomplete=policyHash===null;for(const dep of command.dependencyEffectIds){const earlier=staged.get(dep);if(earlier&&earlier.documentId!==command.documentId)conflict();const parent=earlier??await this.disclosureDependency(tx,scope,command.documentId,dep);incomplete||=parent.incomplete===true;for(const h of parent.policyHashes)policies.add(h)}let header:any;try{header=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(c.outbound[i].object.bytes))?.header}catch{conflict()}if(incomplete&&!(header?.version===3||header?.version===4&&header.disclosureIncomplete===true))conflict();const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,envelope:c.outbound[i].object.bytes,origin:'local',objectId:c.outbound[i].object.id,...(header?.version===3||header?.version===4&&header.disclosureIncomplete===true?{incomplete:true}:{})};let envelope:any;try{envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(source.envelope))}catch{conflict()}const h=envelope?.header;if((['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h?.version!==4)||![2,3,4].includes(h?.version)||(h.version===3&&h.disclosureIncomplete!==true||h.version===4&&typeof h.disclosureIncomplete!=='boolean')||h.disclosurePolicyHash!==policyHash||h.scopeId!==scope||h.documentId!==command.documentId||h.branchHead!==head||JSON.stringify(h.semanticEffectIds)!==JSON.stringify([command.effectId])||JSON.stringify(h.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort())||JSON.stringify(h.disclosurePolicyHashes)!==JSON.stringify(source.policyHashes))conflict();staged.set(command.effectId,source)}}
       const outcomes:SavedOutcome[]=[];for(const c of g.children){const ck=storageOperationKey(c,'local');if(!ck.ok)throw new StorageFailure(ck.error);outcomes.push(await this.local(tx,c,ck.value));this.fault?.('child')}for(const [effect,source] of staged)await tx.put(key('disclosure-source',scope,effect),source);await tx.put(key('group',g.groupId),{inputKey:groupKey.value,outcomes});this.fault?.('group');return {ok:true as const,value:{outcomes,replayed:false}}})}catch(e){return fail(mapError(e))}
   }
   async commitLocalGroup(g: LocalCommitGroup): Promise<GroupCommitResult> {
@@ -1176,12 +1245,27 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:undefined};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
-  async commitImportWithDisclosurePolicy(c:ImportCommit,header:any,verified:{objectId:string,bytes:Uint8Array},expectedActiveHash:string|null=header.disclosurePolicyHash,publication?:RecipePublication):Promise<CommitResult> {
-    const k=storageOperationKey(c,'import');if(!k.ok)return fail(k.error);c=snapshot(c);header=snapshot(header);verified=snapshot(verified);publication=snapshot(publication);if(!verified||verified.objectId!==c.itemId||!(verified.bytes instanceof Uint8Array)||c.commands.length!==1||(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(c.commands[0].kind)&&header?.version!==4)||!['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction'].includes(c.commands[0].kind)||c.expectedAuthority.scope.kind!=='household'||!object(header)||![2,3,4].includes(header.version)||(header.version===3&&header.disclosureIncomplete!==true||header.version===4&&typeof header.disclosureIncomplete!=='boolean')||!(validId(header.disclosurePolicyHash)||((header.version===3||header.version===4&&header.disclosureIncomplete)&&header.disclosurePolicyHash===null))||!(expectedActiveHash===null||validId(expectedActiveHash))||!denseArray(header.disclosurePolicyHashes,validId)||!denseArray(header.sourceEffectIds,validId))return fail('MALFORMED');
+  async commitImportWithDisclosurePolicy(c:ImportCommit,header:any,verified:{objectId:string,bytes:Uint8Array},expectedActiveHash:string|null=header.disclosurePolicyHash,publication?:RecipePublication,recipeSources:ShoppingRecipeSourceReceipt[]=[]):Promise<CommitResult> {
+    const k=storageOperationKey(c,'import');if(!k.ok)return fail(k.error);c=snapshot(c);header=snapshot(header);verified=snapshot(verified);publication=snapshot(publication);recipeSources=snapshot(recipeSources);if(!verified||verified.objectId!==c.itemId||!(verified.bytes instanceof Uint8Array)||c.commands.length!==1||(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(c.commands[0].kind)&&header?.version!==4)||!['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction'].includes(c.commands[0].kind)||c.expectedAuthority.scope.kind!=='household'||!object(header)||![2,3,4].includes(header.version)||(header.version===3&&header.disclosureIncomplete!==true||header.version===4&&typeof header.disclosureIncomplete!=='boolean')||!(validId(header.disclosurePolicyHash)||((header.version===3||header.version===4&&header.disclosureIncomplete)&&header.disclosurePolicyHash===null))||!(expectedActiveHash===null||validId(expectedActiveHash))||!denseArray(header.disclosurePolicyHashes,validId)||!denseArray(header.sourceEffectIds,validId))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{const scope=c.scopeId,head=c.expectedAuthority.record?.acceptedParent,command=c.commands[0],inbox=await tx.get(key('inbox',scope,c.itemId));if(!inbox||!sameBytes(inbox.bytes,verified.bytes))conflict();let staged:any;try{staged=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(inbox.bytes))}catch{conflict()}if(JSON.stringify(staged.header)!==JSON.stringify(header))conflict();if(header.scopeId!==scope||header.documentId!==command.documentId||header.branchHead!==head||JSON.stringify(header.semanticEffectIds)!==JSON.stringify([command.effectId])||JSON.stringify(header.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort()))conflict();
       const op=key('import',scope,c.operationId),old=await tx.get(op);if(old){if(old.inputKey!==k.value||!old.outcome)conflict();await this.completedImport(tx,c,k.value);const prior=await this.validatedDisclosureSource(tx,scope,command.effectId);if(!prior||prior.commandId!==command.commandId||prior.objectId!==verified.objectId||!sameBytes(prior.envelope,verified.bytes)||JSON.stringify(prior.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();validateOutcome(old.outcome,c.documents);return {ok:true as const,value:{outcome:old.outcome,replayed:true}}}
       await this.requireAuthority(tx,c.expectedAuthority);await this.requireIncomingAuthor(tx,scope,header.authorDevice);if(await tx.get(key('applied',scope,c.itemId))!==undefined)conflict();if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if((header.version===2||header.version===4&&!header.disclosureIncomplete)&&expectedActiveHash!==header.disclosurePolicyHash)conflict();if(expectedActiveHash!==null){const activePolicy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!activePolicy||activePolicy.policyHash!==expectedActiveHash||activePolicy.policy?.scope?.id!==scope||((header.version===2||header.version===4&&!header.disclosureIncomplete)&&activePolicy.policy?.checkpoint!==head))conflict()}
-      const policies=new Set<string>(header.disclosurePolicyHash===null?[]:[header.disclosurePolicyHash]);let incomplete=header.disclosurePolicyHash===null;for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,command.documentId,dep);incomplete||=parent.incomplete===true;for(const h of parent.policyHashes)policies.add(h)}if(incomplete&&!(header.version===3||header.version===4&&header.disclosureIncomplete===true))conflict();const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,envelope:inbox.bytes,origin:'import',objectId:c.itemId,...(header.version===3||header.version===4&&header.disclosureIncomplete===true?{incomplete:true}:{})};if(JSON.stringify(source.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();
+      const receipts=new Map(recipeSources.map(source=>[source.consumerEffectId,source]));
+      if(receipts.size!==recipeSources.length)conflict();
+      const linked=await this.requireShoppingRecipeSource(tx,c,command,header,receipts);
+      if(receipts.size)conflict();
+      const policies=new Set<string>(header.disclosurePolicyHash===null?[]:[header.disclosurePolicyHash]);
+      let incomplete=header.disclosurePolicyHash===null;
+      for(const dep of command.dependencyEffectIds){
+        const parent=linked.get(dep)??await this.disclosureDependency(tx,scope,command.documentId,dep);
+        incomplete||=parent.incomplete===true;
+        for(const hash of parent.policyHashes)policies.add(hash);
+      }
+      const signedIncomplete=header.version===3||header.version===4&&header.disclosureIncomplete===true;
+      if(incomplete&&!signedIncomplete)conflict();
+      const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,
+        envelope:inbox.bytes,origin:'import',objectId:c.itemId,...(signedIncomplete?{incomplete:true}:{})};
+      if(JSON.stringify(source.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();
       if(await tx.get(key('command',scope,command.commandId))!==undefined||await tx.get(key('effect',scope,command.effectId))!==undefined)conflict();await this.requireUnusedProjectionIdentity(tx,scope,command,head);await this.requireDependencies(tx,scope,c.commands);const outcome=await this.documents(tx,scope,c.documents,head??null);
       if(publication) await this.publishRecipe(tx,publication,c,c.itemId,header);
       this.fault?.('import-documents');await tx.put(key('command',scope,command.commandId),k.value);await tx.put(key('effect',scope,command.effectId),k.value);await tx.put(key('disclosure-source',scope,command.effectId),source);await tx.put(key('applied',scope,c.itemId),c.operationId);await tx.put(op,{inputKey:k.value,outcome});this.fault?.('import');return {ok:true as const,value:{outcome,replayed:false}}})}catch(e){return fail(mapError(e))}

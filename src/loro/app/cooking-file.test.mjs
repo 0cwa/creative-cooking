@@ -19,11 +19,13 @@ import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
+import {acceptInitialPolicy,prepareInitialPolicy} from '../disclosure/setup.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {householdLocalTrust} from './household-local-trust.mjs';
 import {executeAction} from './action.mjs';
+import {planShoppingAction} from './shopping-actions.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planRecipeRestore,readRecipeHistory} from '../domain/recipe-history.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
@@ -378,6 +380,224 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.equal(staleCatalog.error?.code,'CONFLICT');
  assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.get('r').documentId,br.scope.documentId);
 });
+test('selected recipe shopping copies authenticate causal fields and commit across durable peers',async t=>{
+ const [a,b]=await household(t,{onDisk:true});
+ const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeCatalogVersion:1});
+ const at='2026-01-01T00:00:00Z',recipeId='selected',ingredientId='carrot';
+ const [ar,br,sibling]=await Promise.all([a.runtime.forRecipe(recipeId),b.runtime.forRecipe(recipeId),a.runtime.forRecipe('sibling')]);
+ let sequence=0;
+ const sequences={reserve:async()=>++sequence};
+ const save=(peer,runtime,id,commands)=>executeAction(runtime,sequences,id,commands,peer.service);
+ const objects=async(peer,id)=>(must(await peer.storage.getLocalOperation(scope.id,id))).commit.outbound.map(entry=>entry.object);
+ const send=async(from,to,id)=>{for(const object of await objects(from,id))await files(to).receive(object.bytes);};
+ const recipe=(id,name)=>({id,title:id,portions:2,ingredients:[{id:ingredientId,name,amount:'1 cup',needsShopping:true}],
+  steps:[],stepIds:[],createdAt:at,updatedAt:at});
+ const edit=async(peer,runtime,id,after)=>{
+  const {doc}=await runtime.document(),before=projectCooking(doc).recipes.find(row=>row.id===after.id)??null;
+  const commands=planRecipeAction({doc,before,after:{...before,...after},actionId:id,author:peer.deviceId,at});
+  await save(peer,runtime,id,commands);
+  return commands;
+ };
+ const shopping=async(runtime)=>projectCooking((await runtime.document()).doc).shopping;
+ const initial=await edit(a,ar,'selected-create',recipe(recipeId,'Carrot'));
+ const siblings=await edit(a,sibling,'sibling-create',recipe('sibling','Spare carrot'));
+ const legacy=await edit(a,a.runtime,'legacy-recipe',recipe('legacy','Onion'));
+ await send(a,b,'sibling-create');
+ await send(a,b,'legacy-recipe');
+
+ const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
+ const accepted=await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
+ await b.service.publish(accepted.policy,accepted.approvals);
+ const nameAmount=await edit(a,ar,'restricted-ingredient',{
+  id:recipeId,ingredients:[{id:ingredientId,name:'Purple carrot',amount:'2 cups',needsShopping:true}]
+ });
+ const [name,amount]=['name','amount'].map(field=>nameAmount.find(c=>c.data.field===field));
+ assert.ok(name&&amount);
+ const selected=await openSelectedRecipeCatalog(a.runtime);
+ const before=projectCooking(selected.parent.doc);
+ const list={id:'list',name:'Market',currentCycleId:'cycle',createdAt:at,updatedAt:at};
+ const cycle={id:'cycle',listId:list.id,startedAt:at};
+ const item=(id,recipeId,name,displayQuantity)=>({id,listId:list.id,name,recipeId,ingredientId,
+  displayQuantity,purchaseCycleId:cycle.id,checked:false,createdAt:at,updatedAt:at});
+ const copied=item('selected-item',recipeId,'Purple carrot','2 cups');
+ const sameDocument=item('legacy-item','legacy','Onion','1 cup');
+ const commands=planShoppingAction({doc:selected.parent.doc,recipeCatalog:selected,before:before.shopping,
+  after:{lists:[list],cycles:[cycle],items:[copied,sameDocument],purchases:[]},
+  pantryBefore:before.pantry,pantryAfter:before.pantry,actionId:'copy',author:a.deviceId,at});
+ const linked=commands.find(c=>c.data.itemId===copied.id);
+ const sameDoc=commands.find(c=>c.data.itemId===sameDocument.id);
+ assert.deepEqual(linked.data.recipeSource.effectIds,[...initial.map(c=>c.effectId),name.effectId,amount.effectId].sort());
+ assert.equal(linked.data.recipeSource.documentId,ar.scope.documentId);
+ assert.equal(sameDoc.data.recipeSource,undefined);
+ assert.ok(legacy.every(c=>sameDoc.dependencyEffectIds.includes(c.effectId)));
+ a.faultAt('disclosure-local');
+ await assert.rejects(()=>save(a,a.runtime,'copy',commands),/IO/);
+ assert.deepEqual(await shopping(a.runtime),before.shopping);
+ assert.equal(must(await a.storage.getLocalOperation(scope.id,'copy')),null);
+ a.faultAt(null);
+ await save(a,a.runtime,'copy',commands);
+ const [listObject,legacyObject,linkedObject,...laterObjects]=await objects(a,'copy');
+ assert.equal((await files(a).download(linkedObject.id)).length,linkedObject.bytes.length);
+ await assert.rejects(()=>b.cooking.receive(linkedObject.bytes),/UNSUPPORTED_VERSION/);
+ await files(b).receive(listObject.bytes);
+ await b.cooking.receive(legacyObject.bytes);
+ await assert.rejects(()=>files(b).receive(linkedObject.bytes),/MISSING_DEPENDENCY/);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,linkedObject.id)),null);
+ assert.deepEqual((await files(b).pending()).map(x=>x.itemId),[linkedObject.id]);
+ for(const object of laterObjects){
+  await assert.rejects(()=>files(b).receive(object.bytes),/MISSING_DEPENDENCY/);
+  assert.equal(must(await b.storage.getInboxApplication(scope.id,object.id)),null);
+ }
+ assert.deepEqual((await shopping(b.runtime)).items,[sameDocument]);
+ await send(a,b,'selected-create');
+ await assert.rejects(()=>files(b).retry(linkedObject.id),/MISSING_DEPENDENCY/);
+ await send(a,b,'restricted-ingredient');
+
+ const auth=await a.runtime.authorization(),codec=a.runtime.codec;
+ const opened=await codec.openContent(linkedObject.bytes,auth.signingKeyRefs);
+ assert.equal(opened.header.disclosureIncomplete,true);
+ assert.deepEqual(opened.header.disclosurePolicyHashes,[accepted.policyHash]);
+ const prior=(await a.runtime.document()).doc.forkAt(a.runtime.inspectUpdate(
+  Uint8Array.from(JSON.parse(new TextDecoder().decode(opened.value)).update)).frontiers);
+ const sign=async(command,overrides={})=>{
+  const doc=prior.fork();doc.setPeerId(a.runtime.scope.authorPeers[a.deviceId]);
+  const before=doc.oplogVersion();
+  apply(doc,command);
+  const update=doc.export({mode:'update',from:before});
+  const payload=new TextEncoder().encode(JSON.stringify({version:1,command,update:[...update]}));
+  return codec.sealContent({...opened.header,semanticEffectIds:[command.effectId],sourceEffectIds:[...command.dependencyEffectIds].sort(),...overrides},
+   payload,a.runtime.keyRef,auth.signingKeyRefs[a.deviceId]);
+ };
+ const forge=async(change,header,reason)=>{
+  const command=structuredClone(linked);change(command);
+  const forged=await sign(command,header);
+  await assert.rejects(()=>files(b).receive(forged.bytes),reason);
+  assert.equal(must(await b.storage.getInboxApplication(scope.id,forged.id)),null);
+ };
+ await forge(c=>{c.data.recipeSource.documentId=sibling.scope.documentId}, {}, /INVALID_RECIPE_SOURCE/);
+ await forge(c=>{c.data.recipeId='sibling'}, {}, /INVALID_RECIPE_SOURCE/);
+ await forge(c=>{c.data.displayQuantity='3 cups'}, {}, /INVALID_RECIPE_SOURCE/);
+ const badUnit=JSON.parse(new TextDecoder().decode(opened.value));
+ badUnit.command.data.displayUnit='cups';
+ const signedUnit=await codec.sealContent(opened.header,new TextEncoder().encode(JSON.stringify(badUnit)),
+  a.runtime.keyRef,auth.signingKeyRefs[a.deviceId]);
+ await assert.rejects(()=>files(b).receive(signedUnit.bytes),/MALFORMED_COMMAND/);
+ await forge(c=>{
+  c.dependencyEffectIds=c.dependencyEffectIds.filter(id=>id!==amount.effectId);
+  c.data.recipeSource.effectIds=c.data.recipeSource.effectIds.filter(id=>id!==amount.effectId);
+ }, {}, /INVALID_RECIPE_SOURCE/);
+ await forge(c=>{c.dependencyEffectIds.push(siblings[0].effectId)}, {}, /MISSING_DEPENDENCY/);
+ await forge(c=>{c.data.recipeSource.frontiers[0].counter--}, {}, /INVALID_RECIPE_SOURCE/);
+ await forge(()=>{}, {disclosurePolicyHash:null,disclosurePolicyHashes:[]}, /INVALID_SOURCE_PROOF/);
+ await forge(()=>{}, {documentGeneration:0}, /INVALID_AUTHORITY/);
+ const tampered=JSON.parse(new TextDecoder().decode(linkedObject.bytes));
+ tampered.header.disclosurePolicyHashes=[];
+ await assert.rejects(()=>files(b).receive(new TextEncoder().encode(JSON.stringify(tampered))));
+
+ const revision=(await b.runtime.document()).revision;
+ b.faultAt('import-documents');
+ await assert.rejects(()=>files(b).retry(linkedObject.id),/IO/);
+ b.faultAt(null);
+ assert.equal((await b.runtime.document()).revision,revision);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,linkedObject.id)),null);
+ assert.equal(must(await b.storage.readDisclosureSource(scope.id,linked.effectId)),null);
+ assert.deepEqual(must(await b.storage.listStagedInbox(scope.id)).find(x=>x.itemId===linkedObject.id).bytes,linkedObject.bytes);
+
+ // The recipient authors its own recipe edit before importing the delayed
+ // shopping command. A write racing the verified child read must retry.
+ const originalCommit=b.storage.commitImportWithDisclosurePolicy.bind(b.storage);
+ b.storage.commitImportWithDisclosurePolicy=async (...args)=>{
+  b.storage.commitImportWithDisclosurePolicy=originalCommit;
+  assert.equal(args[5][0].documentId,br.scope.documentId);
+  await edit(b,br,'concurrent-amount',{id:recipeId,ingredients:[{id:ingredientId,name:'Purple carrot',amount:'4 cups',needsShopping:true}]});
+  return originalCommit(...args);
+ };
+ await assert.rejects(()=>files(b).retry(linkedObject.id),/CONFLICT/);
+ assert.equal((await b.runtime.document()).revision,revision);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,linkedObject.id)),null);
+
+ b.reopen();
+ const imported=await files(b).retry(linkedObject.id);
+ assert.deepEqual((await shopping(b.runtime)).items,[sameDocument,copied]);
+ assert.equal(projectCooking((await br.document()).doc).recipes[0].ingredients[0].amount,'4 cups');
+ const source=must(await b.storage.readDisclosureSource(scope.id,linked.effectId));
+ assert.deepEqual(source.policyHashes,[accepted.policyHash]);
+ assert.equal(source.incomplete,true);
+ const context=await b.service.authority();
+ const verify=allowIncomplete=>createSourceVerifier({runtime:b.runtime,service:b.service,context,allowIncomplete});
+ assert.deepEqual((await verify(true)(linked.effectId)).policies,[accepted.policyHash]);
+ await assert.rejects(()=>verify(false)(linked.effectId),/INCOMPLETE_PROVENANCE/);
+ const {doc,storedBytes}=await b.runtime.document();
+ const replay=await replayAuthenticated({runtime:b.runtime,checkpoint:storedBytes});
+ assert.deepEqual(replay.held,[]);
+ assert.deepEqual(projectCooking(replay.doc),projectCooking(doc));
+ const withheld=await replayAuthenticated({runtime:b.runtime,checkpoint:new Uint8Array(),excludedEffectIds:[amount.effectId]});
+ assert.deepEqual(withheld.held.map(x=>[x.command.effectId,x.reason]),[[linked.effectId,'DEPENDENCY_EXCLUDED']]);
+
+ // Exchange the independently signed later recipe edit, then retry the exact
+ // original local and imported shopping commands against the changed recipe.
+ await send(b,a,'concurrent-amount');
+ a.reopen();b.reopen();
+ assert.equal((await save(a,a.runtime,'copy',commands)).replayed,true);
+ assert.deepEqual((await objects(a,'copy'))[2],linkedObject);
+ assert.deepEqual(await files(b).receive(linkedObject.bytes),{...imported,replayed:true});
+ assert.deepEqual((await shopping(a.runtime)).items,[sameDocument,copied]);
+ assert.deepEqual((await shopping(b.runtime)).items,[sameDocument,copied]);
+ assert.ok(!(await files(b).pending()).some(x=>x.itemId===linkedObject.id));
+ await forge(c=>{c.effectId='equivocated-copy';c.commandId=c.effectId}, {}, /CONFLICT/);
+
+ // Use the normal single-command entry point on a second shopping list.
+ for(const object of laterObjects)await files(b).retry(object.id);
+ const otherList={...list,id:'second-list',currentCycleId:'second-cycle',updatedAt:null};
+ const otherCycle={...cycle,id:otherList.currentCycleId,listId:otherList.id};
+ const second=await openSelectedRecipeCatalog(a.runtime);
+ const snapshot=projectCooking(second.parent.doc);
+ const secondCopy={...copied,id:'second-item',listId:otherList.id,purchaseCycleId:otherCycle.id,displayQuantity:'4 cups'};
+ const [createList,copyItem]=planShoppingAction({doc:second.parent.doc,recipeCatalog:second,before:snapshot.shopping,
+  after:{...snapshot.shopping,lists:[...snapshot.shopping.lists,otherList],cycles:[...snapshot.shopping.cycles,otherCycle],
+   items:[...snapshot.shopping.items,secondCopy]},pantryBefore:snapshot.pantry,pantryAfter:snapshot.pantry,
+  actionId:'second-copy',author:a.deviceId,at});
+ await save(a,a.runtime,'second-list',[createList]);
+ const single={operationId:'single-copy',command:copyItem,deviceSequence:++sequence};
+ const missingReceipt=a.storage.commitLocalWithDisclosurePolicy.bind(a.storage);
+ a.storage.commitLocalWithDisclosurePolicy=(commit,policy,active,publication)=>missingReceipt(commit,policy,active,publication);
+ try {
+  await assert.rejects(()=>commitCookingWithPolicy({runtime:a.runtime,service:a.service,input:single}),/CONFLICT/);
+  assert.equal(must(await a.storage.getLocalOperation(scope.id,single.operationId)),null);
+ }finally{a.storage.commitLocalWithDisclosurePolicy=missingReceipt}
+ await commitCookingWithPolicy({runtime:a.runtime,service:a.service,input:single});
+ assert.equal((await commitCookingWithPolicy({runtime:a.runtime,service:a.service,input:single})).replayed,true);
+ await send(a,b,'second-list');
+ const [incoming]=await objects(a,single.operationId);
+ const importBefore=(await b.runtime.document()).revision;
+ b.storage.commitImportWithDisclosurePolicy=async (...args)=>{
+  b.storage.commitImportWithDisclosurePolicy=originalCommit;
+  const record=must(await b.storage.readPairingAuthority(scope));
+  must(await b.storage.compareAndSwapPairingAuthority({expectedRevision:record.revision,record:{...record,revision:record.revision+1}}));
+  return originalCommit(...args);
+ };
+ await assert.rejects(()=>files(b).receive(incoming.bytes),/CONFLICT/);
+ assert.equal((await b.runtime.document()).revision,importBefore);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,incoming.id)),null);
+ assert.equal(must(await b.storage.readDisclosureSource(scope.id,copyItem.effectId)),null);
+ assert.ok((await files(b).pending()).some(x=>x.itemId===incoming.id));
+ await files(b).retry(incoming.id);
+ assert.deepEqual((await shopping(b.runtime)).items,[sameDocument,secondCopy,copied]);
+ const {doc:shoppingDoc}=await b.runtime.document();
+ const reviewed=projectCooking(shoppingDoc);
+ const checked={...copied,checked:true};
+ const [check]=planShoppingAction({doc:shoppingDoc,before:reviewed.shopping,
+  after:{...reviewed.shopping,items:[sameDocument,secondCopy,checked]},pantryBefore:reviewed.pantry,
+  pantryAfter:reviewed.pantry,actionId:'check-copied-item',author:b.deviceId,at});
+ await save(b,b.runtime,'check-copied-item',[check]);
+ await send(b,a,'check-copied-item');
+ assert.deepEqual((await shopping(a.runtime)).items,[sameDocument,secondCopy,checked]);
+ await assert.rejects(()=>verify(true)(check.effectId),/CONFLICT/);
+ const refreshedContext=await b.service.authority();
+ const verifyFollowOn=createSourceVerifier({runtime:b.runtime,service:b.service,context:refreshedContext,allowIncomplete:true});
+ assert.deepEqual((await verifyFollowOn(check.effectId)).policies,[accepted.policyHash]);
+});
+
 test('parent-format recipe children without catalog entries remain intact and require an explicit upgrade',async t=>{
  const [peer]=await household(t,{onDisk:true});
  const runtime=await peer.runtime.forRecipe('retained-child'),at='2026-01-01T00:00:00Z';

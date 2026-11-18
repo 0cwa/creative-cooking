@@ -75,6 +75,8 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  for(const row of outbound)if(row.branchHead===scope.branchHead&&row.epochId===scope.epochId)include(row.objectId,row.bytes);
  for(const item of inbox)if(required(await runtime.storage.getInboxApplication(scope.scopeId,item.itemId)))include(item.itemId,item.bytes);
  const {doc:original,storedBytes}=await runtime.document(),entries=[],identities=new Map(),effects=new Set();
+ let verifyRecipeSource;
+
  for(const object of objects) {
   const opened=await runtime.codec.openContent(object.bytes,signingKeyRefs),h=opened.header;
   if(opened.object.id!==object.id || h.scopeId!==scope.scopeId || h.documentId!==scope.documentId || h.documentGeneration!==scope.documentGeneration || h.branchHead!==scope.branchHead || h.epochId!==scope.epochId || h.suiteId!==scope.suiteId || !same(h.policyHashes,scope.policyHashes) || !scope.acceptedAuthors.includes(h.authorDevice) || h.payloadKind!=='loro-update-v1' || h.semanticEffectIds.length!==1) throw Error('INVALID_AUTHORITY');
@@ -88,7 +90,22 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
   const check=prior.forkAt(meta.frontiers),start=check.oplogVersion(),status=check.import(update);
   if(status.pending?.size)throw Error('INSUFFICIENT_EVIDENCE');
   validateOperationsForReplay(command,check.exportJsonUpdates(start,undefined,false).changes);
-  checkPreconditions(prior,command,{importing:true});
+  let linked;
+  if(command.data.recipeSource){
+   if(h.version!==4 || !same(h.sourceEffectIds,[...command.dependencyEffectIds].sort()))throw Error('INVALID_SOURCE_PROOF');
+   if(!verifyRecipeSource){
+    const {disclosureService}=await import('../disclosure/service.mjs');
+    const {createShoppingRecipeSourceVerifier}=await import('../disclosure/shopping-recipe-source.mjs');
+    const service=disclosureService({storage:runtime.storage,scope:expectedAuthority.scope,rootPin:runtime.authority.rootPin,
+     provider:runtime.authority.provider,deviceId:scope.authorDevice});
+    verifyRecipeSource=createShoppingRecipeSourceVerifier({runtime,service,context:await service.authority()});
+   }
+   linked=await verifyRecipeSource(command,expectedAuthority);
+   for(const source of linked.sources.values()){
+    if(source.incomplete&&!h.disclosureIncomplete||source.policies.some(hash=>!h.disclosurePolicyHashes.includes(hash)))throw Error('INVALID_SOURCE_PROOF');
+   }
+  }
+  checkPreconditions(prior,command,{importing:true,recipeSource:linked?.source});
   const marker=original.getMap('domain-effects').get(command.effectId);
   if(!marker?.command || !same(marker.command,command))throw Error('INSUFFICIENT_EVIDENCE');
   const old=identities.get(command.commandId);
@@ -130,7 +147,8 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  for(const entry of sourceOrder){while(peers.has(String(peer)))peer--;freshPeers.set(entry.command.effectId,String(peer--));}
  let progress=true;
  while(progress){progress=false;for(const [id,e] of pending){
-  if(e.command.dependencyEffectIds.some(dep=>!branches.has(dep)&&!seedIds.has(dep)))continue;
+  if(e.command.dependencyEffectIds.some(dep=>excluded.has(dep)||!branches.has(dep)&&
+    !seedIds.has(dep)&&!e.command.data.recipeSource?.effectIds.includes(dep)))continue;
   if([...e.prior].some(dep=>pending.has(dep)))continue;
   const branch=new runtime.LoroDoc();if(seedSnapshot)branch.import(seedSnapshot);
   for(const [ancestor,snapshot] of branches)if(e.prior.has(ancestor))branch.import(snapshot);

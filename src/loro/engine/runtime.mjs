@@ -98,8 +98,8 @@ export class OfflineRuntime {
     return {doc,revision:stored?.revision ?? null,storedBytes:stored?.bytes ?? null};
   }
   async read() { const {doc}=await this.document(); return {recipe:doc.getMap('recipe').toJSON(), purchases:doc.getMap('purchases').toJSON()}; }
-  async prepare(input) { return this.#prepareOnDocument(input,null); }
-  async #prepareOnDocument({operationId, command, deviceSequence}, staged) {
+  async prepare(input,verifyRecipeSource=undefined) { return this.#prepareOnDocument(input,null,verifyRecipeSource); }
+  async #prepareOnDocument({operationId, command, deviceSequence}, staged, verifyRecipeSource) {
     command=structuredClone(command);
     command=checkCommand(command);
     this.assertRecipeCommand(command);
@@ -117,7 +117,8 @@ export class OfflineRuntime {
     }
     if (command.data.author !== undefined && command.data.author !== this.scope.authorDevice) throw new Error('INVALID_AUTHORITY');
     doc.setPeerId(this.scope.authorPeers[this.scope.authorDevice]);
-    registry.checkPreconditions(doc,command);
+    const linked=command.data.recipeSource ? await verifyRecipeSource?.(command,expectedAuthority) : undefined;
+    registry.checkPreconditions(doc,command,{recipeSource:linked?.source});
     registry.checkShoppingCompatibility(doc,command);
     const before=doc.oplogVersion();
     apply(doc,command);
@@ -127,10 +128,10 @@ export class OfflineRuntime {
     const header={version:1,suiteId:this.scope.suiteId,scopeId:this.scope.scopeId,documentId:this.scope.documentId,documentGeneration:this.scope.documentGeneration,branchHead:this.scope.branchHead,policyHashes:this.scope.policyHashes,epochId:this.scope.epochId,authorDevice:this.scope.authorDevice,deviceSequence,predecessorRefs:meta.predecessors,semanticEffectIds:[command.effectId],payloadKind:'loro-update-v1'};
     const payload=encoder.encode(JSON.stringify({version:1,command,update:Array.from(update)}));
     const object=await this.codec.sealContent(header,payload,this.keyRef,signingKeyRefs[this.scope.authorDevice]);
-    return {commit:{scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:snapshot,expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:this.scope.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],outbound:[{object,branchHead:this.scope.branchHead,epochId:this.scope.epochId}]}};
+    return {recipeSourceReceipt:linked?.receipt,commit:{scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:snapshot,expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:this.scope.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],outbound:[{object,branchHead:this.scope.branchHead,epochId:this.scope.epochId}]}};
   }
   /** Atomically commit ordered commands against one authority-bound document. */
-  async executeBatch({operationId,items}) {
+  async executeBatch({operationId,items},verifyRecipeSource=undefined) {
     if(typeof operationId!=='string'||!operationId||!Array.isArray(items)||!items.length) throw Error('MALFORMED');
     items=structuredClone(items);
     await this.authorize();
@@ -145,16 +146,17 @@ export class OfflineRuntime {
       }
       return {outcome:saved.outcome,replayed:true};
     }
-    let staged=await this.document();const initialRevision=staged.revision,commands=[],outbound=[];let expectedAuthority;
+    let staged=await this.document();const initialRevision=staged.revision,commands=[],outbound=[],recipeSourceReceipts=[];let expectedAuthority;
     for(const item of items) {
       if(['chef-accept','chef-effect'].includes(item.command?.kind))throw Error('GROUP_REQUIRED');
-      const prepared=await this.#prepareOnDocument({...item,operationId},staged);
+      const prepared=await this.#prepareOnDocument({...item,operationId},staged,verifyRecipeSource);
       if(prepared.previous)throw Error('CONFLICT');
       if(expectedAuthority && !same(expectedAuthority,prepared.commit.expectedAuthority))throw Error('CONFLICT');
+      if(prepared.recipeSourceReceipt)recipeSourceReceipts.push(prepared.recipeSourceReceipt);
       expectedAuthority=prepared.commit.expectedAuthority;commands.push(...prepared.commit.commands);outbound.push(...prepared.commit.outbound);
       const next=new this.LoroDoc();next.import(prepared.commit.documents[0].bytes);staged={doc:next,revision:initialRevision};
     }
-    return required(await this.storage.commitLocal({scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:staged.doc.export({mode:'snapshot'}),expectedRevision:initialRevision}],commands,outbound}));
+    return required(await this.storage.commitLocal({scopeId:this.scope.scopeId,operationId,expectedAuthority,documents:[{documentId:this.scope.documentId,bytes:staged.doc.export({mode:'snapshot'}),expectedRevision:initialRevision}],commands,outbound},recipeSourceReceipts));
   }
   async execute(input) {
     if (['chef-accept','chef-effect','shopping-item-create','shopping-item-field','shopping-list-field'].includes(input?.command?.kind)) throw new Error('GROUP_REQUIRED');

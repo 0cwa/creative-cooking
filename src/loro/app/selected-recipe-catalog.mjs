@@ -43,9 +43,9 @@ export async function openSelectedRecipeCatalog(runtime, recipeId) {
     validateOperations(command,initial.exportJsonUpdates(undefined,undefined,false).changes);
     const provider=runtime.authority.provider,baseline=await policyBaseline(initial,provider);
     await verifyPolicyBaseline(doc,runtime.LoroDoc,baseline,provider);
-    children.set(entry.recipeId,{documentId,doc,revision:entry.revision});
+    children.set(entry.recipeId,{documentId,doc,revision:entry.revision,creationObjectId:entry.objectId});
   }
-  return {binding,parent,children};
+  return {binding,parent,children,expectedAuthority:auth.expectedAuthority};
 }
 
 /** Legacy recipes keep their original document and history. */

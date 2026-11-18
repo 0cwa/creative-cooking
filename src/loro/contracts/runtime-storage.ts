@@ -15,6 +15,17 @@ export type RecipePublication = {
   recipeId: Id;
 };
 
+/** Authenticated recipe evidence to be checked again inside the consumer write. */
+export type ShoppingRecipeSourceReceipt = {
+  consumerEffectId: Id;
+  binding: RecipeCatalogBinding;
+  recipeId: Id;
+  documentId: Id;
+  revision: number;
+  creationObjectId: Id;
+  effects: {effectId: Id; objectId: Id}[];
+};
+
 /** Copied durable data, always unauthenticated. These reads do not provide a transactional snapshot across calls. */
 export interface RuntimeStorageReader {
   reopenBranchDocument(expectedAuthority: AuthorityPrecondition, documentId: Id): Promise<Result<{documentId: Id; bytes: Bytes; revision: number} | null, StorageError>>;

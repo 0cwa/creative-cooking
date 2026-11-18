@@ -28,6 +28,7 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
    recipe={id:recipeId,create:command.kind==='recipe-create'};
   }
   validateCookingHeader(opened,expectedId??opened.object.id,target.scope);
+  if(recipeCatalogVersion===null && decodeCookingPayload(opened).command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
   return {target,recipe,object:{...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority}};
  }
@@ -39,7 +40,7 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
    const selected=await openSelectedRecipeCatalog(runtime,recipe.id);
    if(!selected.children.has(recipe.id))throw Error('MISSING_DEPENDENCY');
   }
-  return importCookingWithPolicy({runtime:target,service,item});
+  return importCookingWithPolicy({runtime:target,service,item,recipeCatalogVersion});
  };
  async function receive(raw){
   if(!(raw instanceof Uint8Array))throw Error('MALFORMED');

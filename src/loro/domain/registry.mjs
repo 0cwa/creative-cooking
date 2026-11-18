@@ -1,3 +1,6 @@
+import {normalizeIngredientName} from '../../domain/pantry.ts';
+import {normalizedFrontiers} from '../authority/policy-baseline.mjs';
+import {isRecipeDocumentId} from './recipe-document.mjs';
 import {isPersonalCommand,validatePersonalCommand,personalOperations,checkPersonalPreconditions} from './personal-codec.mjs';
 // Experimental package D registry. Requires the engine to validate actual imported
 // operation content against operations() before committing any remote update.
@@ -9,6 +12,16 @@ const str = v => typeof v === 'string' && v.trim().length > 0;
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join(',') === keys.sort().join(',');
 const dense = (v,predicate) => Array.isArray(v) && Array.from({length:v.length},(_,i)=>Object.hasOwn(v,i) && predicate(v[i])).every(Boolean);
 const ids = v => dense(v,str) && new Set(v).size === v.length;
+const validRecipeSource = source =>
+  exact(source,['documentId','frontiers','effectIds']) && isRecipeDocumentId(source.documentId) &&
+  dense(source.frontiers,point=>exact(point,['peer','counter']) &&
+    typeof point.peer==='string' && /^(0|[1-9][0-9]{0,19})$/.test(point.peer) &&
+    BigInt(point.peer)<=18446744073709551615n &&
+    Number.isInteger(point.counter) && point.counter>=0 && point.counter<=2147483647) &&
+  source.frontiers.length>0 && source.frontiers.length<=64 &&
+  source.frontiers.every((point,i)=>i===0 || source.frontiers[i-1].peer<point.peer) &&
+  ids(source.effectIds) && source.effectIds.length>0 && source.effectIds.length<=7 &&
+  source.effectIds.every((id,i)=>i===0 || source.effectIds[i-1]<id);
 const date = v => str(v) && Number.isFinite(Date.parse(v));
 const mutationFields={pantry:['name','preference','createdAt','updatedAt','removed'],recipe:['title','description','portions','ingredients','steps','stepIds','notes','createdAt','updatedAt','removed']};
 const jsonValue=v=>v===null || typeof v==='string' || typeof v==='boolean' || (typeof v==='number' && Number.isFinite(v)) || dense(v,jsonValue) || (v && typeof v==='object' && Object.getPrototypeOf(v)===Object.prototype && Object.values(v).every(jsonValue));
@@ -45,9 +58,17 @@ export function validate(c) {
     case 'shopping-item-put':
       if (!exact(d,['listId','cycleId','itemId','name','checked','at']) || !str(d.listId) || !str(d.cycleId) || !str(d.itemId) || !str(d.name) || typeof d.checked!=='boolean' || !date(d.at)) fail();
       break;
-    case 'shopping-item-create':
-      if(!exact(d,['listId','cycleId','itemId','name','checked','recipeId','ingredientId','displayQuantity','displayUnit','author','at'])||![d.listId,d.cycleId,d.itemId,d.name,d.author].every(str)||typeof d.checked!=='boolean'||!date(d.at)||![d.recipeId,d.ingredientId].every(x=>x===null||str(x))||![d.displayQuantity,d.displayUnit].every(x=>x===null||typeof x==='string')||(d.ingredientId!==null&&!d.recipeId))fail();
+    case 'shopping-item-create': {
+      const keys=['listId','cycleId','itemId','name','checked','recipeId','ingredientId','displayQuantity','displayUnit','author','at'];
+      const source=d?.recipeSource;
+      if(source!==undefined)keys.push('recipeSource');
+      if(!exact(d,keys)||![d.listId,d.cycleId,d.itemId,d.name,d.author].every(str)||
+         typeof d.checked!=='boolean'||!date(d.at)||![d.recipeId,d.ingredientId].every(x=>x===null||str(x))||
+         ![d.displayQuantity,d.displayUnit].every(x=>x===null||typeof x==='string')||(d.ingredientId!==null&&!d.recipeId))fail();
+      if(source!==undefined&&(!d.ingredientId||d.displayUnit!==null||!validRecipeSource(source)||
+         source.effectIds.some(id=>!c.dependencyEffectIds.includes(id))))fail();
       break;
+    }
     case 'shopping-item-field':
       if(!exact(d,['listId','cycleId','itemId','field','value','author','at'])||![d.listId,d.cycleId,d.itemId,d.author].every(str)||!date(d.at)||!['name','checked','displayQuantity','displayUnit','createdAt','removedAt','updatedAt'].includes(d.field)||(d.field==='name'?!str(d.value):d.field==='checked'?typeof d.value!=='boolean':['createdAt','removedAt','updatedAt'].includes(d.field)?!date(d.value):['recipeId','ingredientId'].includes(d.field)?!(d.value===null||str(d.value)):!(d.value===null||typeof d.value==='string')))fail();
       break;
@@ -85,6 +106,24 @@ export function validate(c) {
 export const proposalMapName = (conversationId, proposalId) => `chef-proposal:${encodeURIComponent(JSON.stringify([conversationId, proposalId]))}`;
 const mapName = (kind,id) => `${kind}:${encodeURIComponent(id)}`;
 const fieldHead=(kind,id,field)=>mapName('field-head',JSON.stringify([kind,id,field]));
+/** Derive the copy and all of its governing effects from one recipe view. */
+export function shoppingRecipeSource({documentId,doc},data) {
+  const {recipeId,ingredientId}=data;
+  if(!str(recipeId)||!str(ingredientId)||!isRecipeDocumentId(documentId))throw Error('INVALID_RECIPE_SOURCE');
+  const pair=JSON.stringify([recipeId,ingredientId]);
+  const recipe=doc.getMap('recipe-index').get(recipeId);
+  const ingredient=doc.getMap(mapName('recipe-ingredient-index',recipeId)).get(ingredientId);
+  if (!recipe || !ingredient) throw Error('INVALID_RECIPE_SOURCE');
+  const member=doc.getMap(mapName('recipe-ingredient',pair));
+  const name=member.get('name'),amount=member.get('amount');
+  if (doc.getMap(mapName('recipe',recipeId)).get('removed') || member.get('removed') ||
+      typeof name!=='string' || normalizeIngredientName(name)!==data.name ||
+      (amount||null)!==(data.displayQuantity||null) || data.displayUnit!=null) throw Error('INVALID_RECIPE_SOURCE');
+  const effects=[recipe,ingredient,doc.getMap(fieldHead('recipe',recipeId,'removed')).get('effect'),
+    ...['name','amount','needsShopping','removed'].map(field=>doc.getMap(fieldHead('ingredient',pair,field)).get('effect'))];
+  return {documentId,frontiers:normalizedFrontiers(doc),effectIds:[...new Set(effects.filter(Boolean))].sort()};
+}
+
 export function readShoppingItem(doc,itemId,cycleId){const base=doc.getMap(mapName('shopping-item',itemId)).get('value');if(!base)return null;const fields=doc.getMap(mapName('shopping-item-fields',itemId)).toJSON(),checked=fields.checked;return {...base,...fields,cycleId,checked:checked?.cycleId===cycleId?checked.value:base.cycleId===cycleId&&base.checked};}
 
 // These exact operations are the replay contract. Purchase records are immutable
@@ -163,10 +202,16 @@ export function validateOperations(c, changes) {
  * Keep a mixed-schema update in the inbox when applying it would mask another
  * device's older whole-item intent or change the baseline of a field edit. */
 export function checkShoppingCompatibility(doc,command){const c=validate(command),d=c.data;if(c.kind==='shopping-item-put'&&Object.keys(doc.getMap(mapName('shopping-item-fields',d.itemId)).toJSON()).length)throw Error('SHOPPING_SCHEMA_CONFLICT');if(['shopping-item-field','shopping-list-field'].includes(c.kind)){try{checkPreconditions(doc,c,{importing:true,shoppingCompatibility:true})}catch(e){if(['MISSING_DEPENDENCY','STALE_CYCLE'].includes(e?.message))throw Error('SHOPPING_SCHEMA_CONFLICT');throw e}}}
-export function checkPreconditions(doc, command, {importing=false,replaying=false,shoppingCompatibility=false}={}) {
+export function checkPreconditions(doc, command, {importing=false,replaying=false,shoppingCompatibility=false,recipeSource}={}) {
   const c=validate(command), d=c.data;
   if(c.kind==='chef-accept' && !importing && !doc.getMap(proposalMapName(d.conversationId,d.proposalId)).get('proposal')) throw new Error('PROPOSAL_NOT_PENDING');
-  for(const id of c.dependencyEffectIds) if(!doc.getMap('domain-effects').get(id)) throw new Error('MISSING_DEPENDENCY');
+  const external=d.recipeSource;
+  if (external && (!recipeSource || JSON.stringify(canonical(external))!==JSON.stringify(canonical(recipeSource)))) {
+    throw Error('INVALID_RECIPE_SOURCE');
+  }
+  for(const id of c.dependencyEffectIds) {
+    if(!external?.effectIds.includes(id) && !doc.getMap('domain-effects').get(id)) throw Error('MISSING_DEPENDENCY');
+  }
   if(isPersonalCommand(c.kind)) return checkPersonalPreconditions(doc,c);
   if(!replaying && ['recipe-field','pantry-field','recipe-ingredient-field','recipe-step-field'].includes(c.kind)) {
     const kind=c.kind==='recipe-field'?'recipe':c.kind==='pantry-field'?'pantry':c.kind==='recipe-ingredient-field'?'ingredient':'step';
@@ -185,7 +230,7 @@ export function checkPreconditions(doc, command, {importing=false,replaying=fals
     else if(!memberEffect || !c.dependencyEffectIds.includes(memberEffect)) throw new Error('MISSING_DEPENDENCY');
   }
   if(c.kind==='chef-effect') {for(const m of d.mutations){const effect=doc.getMap(`${m.collection}-index`).get(m.id);const creating=d.mutations.some(x=>x.collection===m.collection && x.id===m.id && x.field==='createdAt');if(creating && effect) throw new Error('CONFLICT');if(!creating && (!effect || !c.dependencyEffectIds.includes(effect))) throw new Error('MISSING_DEPENDENCY');}}
-  if(c.kind==='shopping-item-create'){const cycle=doc.getMap('shopping-cycles').get(d.cycleId),list=doc.getMap(mapName('shopping-list',d.listId));if(!cycle||cycle.listId!==d.listId||list.get('currentCycleId')!==d.cycleId||!c.dependencyEffectIds.includes(cycle.effectId))throw Error('MISSING_DEPENDENCY');if(doc.getMap(mapName('shopping-item',d.itemId)).get('value'))throw Error('CONFLICT');if(d.recipeId){const recipe=doc.getMap('recipe-index').get(d.recipeId);if(!recipe||!c.dependencyEffectIds.includes(recipe))throw Error('MISSING_DEPENDENCY');if(d.ingredientId){const ingredient=doc.getMap(mapName('recipe-ingredient-index',d.recipeId)).get(d.ingredientId),pair=JSON.stringify([d.recipeId,d.ingredientId]);if(!ingredient||!c.dependencyEffectIds.includes(ingredient)||['name','amount','needsShopping'].some(field=>{const effect=doc.getMap(fieldHead('ingredient',pair,field)).get('effect');return effect&&!c.dependencyEffectIds.includes(effect)}))throw Error('MISSING_DEPENDENCY')}}}
+  if(c.kind==='shopping-item-create'){const cycle=doc.getMap('shopping-cycles').get(d.cycleId),list=doc.getMap(mapName('shopping-list',d.listId));if(!cycle||cycle.listId!==d.listId||list.get('currentCycleId')!==d.cycleId||!c.dependencyEffectIds.includes(cycle.effectId))throw Error('MISSING_DEPENDENCY');if(doc.getMap(mapName('shopping-item',d.itemId)).get('value'))throw Error('CONFLICT');if(d.recipeId&&!external){const recipe=doc.getMap('recipe-index').get(d.recipeId);if(!recipe||!c.dependencyEffectIds.includes(recipe))throw Error('MISSING_DEPENDENCY');if(d.ingredientId){const ingredient=doc.getMap(mapName('recipe-ingredient-index',d.recipeId)).get(d.ingredientId),pair=JSON.stringify([d.recipeId,d.ingredientId]);if(!ingredient||!c.dependencyEffectIds.includes(ingredient)||['name','amount','needsShopping'].some(field=>{const effect=doc.getMap(fieldHead('ingredient',pair,field)).get('effect');return effect&&!c.dependencyEffectIds.includes(effect)}))throw Error('MISSING_DEPENDENCY')}}}
   if(['shopping-item-field','shopping-list-field'].includes(c.kind)){const cycle=doc.getMap('shopping-cycles').get(d.cycleId),list=doc.getMap(mapName('shopping-list',d.listId));if(!cycle||cycle.listId!==d.listId||list.get('currentCycleId')!==d.cycleId||!c.dependencyEffectIds.includes(cycle.effectId))throw Error('MISSING_DEPENDENCY');if(c.kind==='shopping-item-field'){const base=doc.getMap(mapName('shopping-item',d.itemId)).get('value');if(!base||base.listId!==d.listId||!c.dependencyEffectIds.includes(base.effectId))throw Error('MISSING_DEPENDENCY')}if(c.kind==='shopping-item-field'&&['recipeId','ingredientId'].includes(d.field)&&d.value!==null){const recipeId=d.field==='recipeId'?d.value:doc.getMap(mapName('shopping-item-fields',d.itemId)).get('recipeId'),recipe=doc.getMap('recipe-index').get(recipeId);if(!recipe||!c.dependencyEffectIds.includes(recipe))throw Error('MISSING_DEPENDENCY');if(d.field==='ingredientId'){const ingredient=doc.getMap(mapName('recipe-ingredient-index',recipeId)).get(d.value),pair=JSON.stringify([recipeId,d.value]);if(!ingredient||!c.dependencyEffectIds.includes(ingredient)||['name','amount','needsShopping'].some(field=>{const effect=doc.getMap(fieldHead('ingredient',pair,field)).get('effect');return effect&&!c.dependencyEffectIds.includes(effect)}))throw Error('MISSING_DEPENDENCY')}}const previous=doc.getMap(fieldHead(c.kind==='shopping-item-field'?'shopping-item':'shopping-list',c.kind==='shopping-item-field'?d.itemId:d.listId,d.field)).get('effect');if(previous&&!(shoppingCompatibility&&d.field==='updatedAt')&&!c.dependencyEffectIds.includes(previous))throw Error('MISSING_DEPENDENCY');}
   if (c.kind === 'shopping-list-create') {
     if (doc.getMap(mapName('shopping-list',d.listId)).get('currentCycleId') || doc.getMap('shopping-cycles').get(d.cycleId)) throw new Error('CONFLICT');
