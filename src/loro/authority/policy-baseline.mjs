@@ -28,12 +28,23 @@ export async function verifyPolicyBaseline(parent, LoroDoc, baseline, provider) 
   let fork;
   try { fork = baseline.frontiers.length ? parent.forkAt(baseline.frontiers) : new LoroDoc(); }
   catch { throw Error('POLICY_BASELINE_UNAVAILABLE'); }
-  const derived = await policyBaseline(fork, provider);
+  await requireExactBaseline(fork, baseline, provider);
+  return fork;
+}
+
+async function requireExactBaseline(doc, baseline, provider) {
+  const derived = await policyBaseline(doc, provider);
   if (derived.historyHash !== baseline.historyHash || derived.frontiers.length !== baseline.frontiers.length ||
       derived.frontiers.some((point, i) => point.peer !== baseline.frontiers[i].peer || point.counter !== baseline.frontiers[i].counter)) {
     throw Error('POLICY_BASELINE_UNAVAILABLE');
   }
-  return fork;
+}
+
+export async function verifyRetainedPolicyBaseline(LoroDoc, stored, baseline, provider) {
+  const doc = new LoroDoc();
+  if (doc.import(stored.bytes).pending?.size) throw Error('POLICY_BASELINE_UNAVAILABLE');
+  if (stored.revision === 0) await requireExactBaseline(doc, baseline, provider);
+  else await verifyPolicyBaseline(doc, LoroDoc, baseline, provider);
 }
 
 export async function recoverPolicyBaseline(LoroDoc, stored, baseline, provider) {

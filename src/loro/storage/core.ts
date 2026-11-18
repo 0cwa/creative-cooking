@@ -537,7 +537,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const link=await tx.get(key('household-own-device-parent',scope.id,saved.documentId));
       const document=await tx.get(key('document',scope.id,saved.documentId));
       if(!sources||!link||!document)return corrupt();
-      return {ok:true as const,value:snapshot({...saved,sources,link})};
+      return {ok:true as const,value:snapshot({...saved,sources,link,document})};
     });}catch(error){return fail(mapError(error));}
   }
   private async pairingComplete(tx: Tx, r: PairingRelease, inputKey: string) {

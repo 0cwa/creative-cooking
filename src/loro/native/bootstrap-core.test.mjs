@@ -870,6 +870,26 @@ test('own-device household release and install roll back, reopen and preserve di
   await assert.rejects(adult.householdPairing.ownDevice.acceptExisting(JSON.stringify(wrongScope),true),/INVALID/);
   assert.equal((await getNode(adultName)).head,before.head);
   await adult.householdPairing.ownDevice.acceptExisting(update,true);
+  const documentSlot=JSON.stringify(['document',scope.id,transition.event.subject.documentId]);
+  async function withPairedDocument(name,change,check){
+   const db=new DatabaseSync(join(dir,name+'.sqlite'));
+   try{
+    const read=db.prepare('SELECT value FROM loro_records WHERE key=?');
+    const write=db.prepare('UPDATE loro_records SET value=? WHERE key=?');
+    const {value}=read.get(documentSlot);
+    write.run(JSON.stringify(change(JSON.parse(value))),documentSlot);
+    try{await check()}finally{write.run(value,documentSlot)}
+   }finally{db.close()}
+  }
+  const empty={__storageBytes:Array.from(new LoroDoc().export({mode:'snapshot'}))};
+  for(const name of [sponsorName,adultName]){
+   await withPairedDocument(name,record=>({...record,bytes:empty}),async()=>{
+    await assert.rejects(getNode(name),/INVALID_AUTHORITY/);
+   });
+   await withPairedDocument(name,record=>({...record,revision:1,bytes:empty}),async()=>{
+    await assert.rejects(getNode(name),/INVALID_AUTHORITY/);
+   });
+  }
   fresh.close();fresh=await open(freshName);
   const damaged=new Uint8Array(file);damaged[damaged.length-1]^=1;
   await assert.rejects(fresh.householdPairing.ownDevice.install(damaged),/INVALID_FILE/);
@@ -922,6 +942,11 @@ test('own-device household release and install roll back, reopen and preserve di
   assert.equal(cooking.length,1);
   const bytes=await fresh.cookingFiles.download(cooking[0].objectId);
   await sponsor.cookingFiles.receive(bytes);
+  assert.deepEqual(await pantry(sponsor),['edited-basil']);
+  await withPairedDocument(sponsorName,record=>({...record,revision:0}),async()=>{
+   await assert.rejects(getNode(sponsorName),/INVALID_AUTHORITY/);
+  });
+  sponsor.close();sponsor=await open(sponsorName);
   assert.deepEqual(await pantry(sponsor),['edited-basil']);
   await addPantry(fresh,'second-edit');
   assert.deepEqual(await pantry(fresh),['edited-basil','second-edit']);

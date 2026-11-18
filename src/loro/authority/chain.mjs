@@ -1,7 +1,7 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
 import {validateSuccessor, validParent, domain, isPolicyDocumentId, isRemoval, removedDevice} from './validator.mjs';
-import {policyBranchAncestors,recoverPolicyBaseline} from './policy-baseline.mjs';
+import {policyBranchAncestors,recoverPolicyBaseline,verifyRetainedPolicyBaseline} from './policy-baseline.mjs';
 import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import {verifyRevocation, revocationPackage, verifyRevocationSeed, projectRemovalSeed} from '../compromise/revocation.mjs';
@@ -200,6 +200,10 @@ async function load(storage,scope,pin,provider) {
      await digest(provider,'household-own-device-sources',saved.value.sources)!==item.event.subject.sourcesHash)throw Error('INVALID_AUTHORITY');
   const published=JSON.parse(dec.decode(saved.value.next.authorityState));
   if(!published.events.some(event=>hex(bytes(event))===hex(bytes(item))))throw Error('INVALID_AUTHORITY');
+  try {
+   const LoroDoc=await (await import('../app/loro-document.mjs')).loadLoroDoc();
+   await verifyRetainedPolicyBaseline(LoroDoc,saved.value.document,item.event.subject.baseline,provider);
+  } catch {throw Error('INVALID_AUTHORITY');}
  }
  for(const item of state.events) if(item.admission) {
   if(recipient&&(item.event.parentHead===recipient.parent.activeHead&&await digest(provider,'event',item.event)===recipient.installation.nextAuthority.acceptedParent||publicPrefix(item)))continue;
