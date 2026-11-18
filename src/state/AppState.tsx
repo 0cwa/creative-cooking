@@ -458,7 +458,8 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
   const addShoppingItems = useCallback((listId: string, inputs: NewShoppingItem[]) => {
     if (!ensureSharedEditAllowed()) return;
     const save=content.saveShoppingCopy;
-    if (save && inputs.some(item=>item.recipeId)) {
+    const recover=content.recoverShoppingCopy;
+    if (save && recover && inputs.some(item=>item.recipeId)) {
       const key=JSON.stringify([listId,inputs.map(({recipeId,ingredientId,name,displayQuantity,displayUnit})=>
         [recipeId,ingredientId,name,displayQuantity,displayUnit])]);
       const run=async()=>{
@@ -466,7 +467,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
         try {
           await flushCurrentWorkspace();
           const prior=shoppingCopy.current;
-          if(prior){
+          if(prior?.key===key){
             try {
               await save(prior.attempt,prior.before,prior.after);
             } catch(error){
@@ -475,9 +476,14 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
               await refreshSharedCooking();
               throw error;
             }
-            shoppingCopy.current=null;
             await refreshSharedCooking();
-            if(prior.key===key)return;
+            shoppingCopy.current=null;
+            return;
+          }
+          if(prior){
+            const committed=await recover(prior.attempt);
+            if(committed)await refreshSharedCooking();
+            shoppingCopy.current=null;
           }
           const before=appStateRef.current;
           const after=appendShoppingItems(before.shopping,listId,inputs);
@@ -496,8 +502,8 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
             }
             throw error;
           }
-          shoppingCopy.current=null;
           await refreshSharedCooking();
+          shoppingCopy.current=null;
         } finally {
           release();
         }
@@ -508,7 +514,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       throw Error('Adding ingredients from this recipe is not available yet. You can add items manually.');
     }
     updateAppState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
-  }, [beginWorkspaceTransition, content.saveShoppingCopy, content.separateRecipeIds, ensureSharedEditAllowed,
+  }, [beginWorkspaceTransition, content.recoverShoppingCopy, content.saveShoppingCopy, content.separateRecipeIds, ensureSharedEditAllowed,
     flushCurrentWorkspace, refreshSharedCooking, updateAppState]);
 
   const updateShoppingItem = useCallback((id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }) => {

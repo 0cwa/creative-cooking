@@ -1,5 +1,5 @@
 import {projectCooking,projectRecipes} from '../domain/app-projection.mjs';
-import {executeAction} from './action.mjs';
+import {executeAction,recoverDisclosureAction} from './action.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
 import {openSelectedRecipeCatalog,openShoppingRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
@@ -62,7 +62,10 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
     return executeAction(target,sequences,actionId,input,disclosure);
    });
   },
-  ...(shoppingRecipeCopies?{saveShoppingCopy:(attempt,before,after)=>withCurrent(async()=>{
+  ...(shoppingRecipeCopies?{recoverShoppingCopy:(attempt)=>withCurrent(async()=>{
+   if(!attempt.commands?.length)return false;
+   return !!await recoverDisclosureAction(runtime,attempt.actionId,attempt.commands,disclosure);
+  }),saveShoppingCopy:(attempt,before,after)=>withCurrent(async()=>{
    if(!attempt.commands){
     const existing=new Set(before.shopping.items.map(item=>item.id));
     const recipes=new Set(after.items.filter(item=>!existing.has(item.id)&&item.recipeId).map(item=>item.recipeId));

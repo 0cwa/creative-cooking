@@ -87,6 +87,7 @@ export type ContentRuntimeSnapshot = {
   selectWorkspace(spaceId: string): Promise<void>;
   keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
   separateRecipeIds?: string[];
+  recoverShoppingCopy?(attempt: {actionId: string; commands: unknown[] | null}): Promise<boolean>;
   saveShoppingCopy?(attempt: {actionId: string; at: string; commands: unknown[] | null}, before: PersistedState, after: PersistedState['shopping']): Promise<void>;
   createRecipe?(actionId: string, recipe: Recipe, beforeNewCommit: () => void): Promise<void>;
   readRecipeHistory?(recipeId: string): Promise<RecipeHistoryEntry[]>;

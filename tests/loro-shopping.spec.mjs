@@ -12,16 +12,19 @@ test('shopping copies a separate recipe and purchases the linked item once',asyn
  await page.goto('./recipes');
  await page.getByLabel('Add recipe').click();
  await page.getByLabel('New recipe title').fill('Basil soup');
- await page.getByLabel('New recipe ingredients').fill('2 bunches basil');
+ await page.getByLabel('New recipe ingredients').fill('1 sprig rosemary\n2 bunches basil');
  await page.getByLabel('New recipe steps').fill('Cook');
  await page.getByLabel('Save new recipe').click();
  await page.getByLabel('Open recipe Basil soup').click();
- await page.getByRole('button',{name:'Add ingredients to shopping list (1)'}).click();
+ await page.getByRole('button',{name:'Add ingredients to shopping list (2)'}).click();
  await page.getByLabel('New shopping list name').fill('Herbs');
  await page.getByRole('button',{name:'Create shopping list'}).click();
  const saved=()=>expect(page.getByTestId('shopping-local-persistence-status')).toHaveText('Saved on this device only.');
  await saved();
  const add=page.getByRole('button',{name:'Add 1 ingredients to list'});
+ const rosemary=page.getByRole('checkbox',{name:'Select ingredient rosemary 1'});
+ const basil=page.getByRole('checkbox',{name:'Select ingredient basil 2'});
+ await basil.click();
  await expect(add).toBeEnabled();
  await page.evaluate(()=>{
   const put=IDBObjectStore.prototype.put;
@@ -38,6 +41,9 @@ test('shopping copies a separate recipe and purchases the linked item once',asyn
  await expect.poll(()=>page.evaluate(()=>window.copyWriteInterrupted)).toBe(true);
  await expect(page.getByText('IO',{exact:true})).toBeVisible();
  await expect(page.getByTestId(/^shopping-item-/)).toHaveCount(0);
+ await rosemary.click();
+ await basil.click();
+ await expect(add).toBeEnabled();
  await page.evaluate(()=>{
   const put=IDBObjectStore.prototype.put;
   IDBObjectStore.prototype.put=function(value,key){
@@ -60,6 +66,7 @@ test('shopping copies a separate recipe and purchases the linked item once',asyn
  await page.reload();
  await saved();
  await expect(page.getByTestId(/^shopping-item-/)).toHaveCount(1);
+ await expect(page.getByLabel('Check rosemary',{exact:true})).toHaveCount(0);
  await expect(page.getByLabel('Check basil', {exact:true})).toBeVisible();
  await expect(page.getByText('2 bunches',{exact:true})).toBeVisible();
  await page.getByLabel('Check basil', {exact:true}).click();

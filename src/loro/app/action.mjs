@@ -3,6 +3,25 @@ import {commitCookingBatchWithPolicy,recoverCookingBatchWithPolicy} from '../dis
 // across retries; saved commits are inspected before any allocation or sealing.
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 const queues=new WeakMap(),listeners=new WeakMap();
+function savedItems(saved,commands){
+ if(saved.commit.outbound.length!==commands.length)throw Error('CONFLICT');
+ return commands.map((command,i)=>{
+  let header;
+  try{header=JSON.parse(new TextDecoder().decode(saved.commit.outbound[i].object.bytes)).header;}
+  catch{throw Error('CORRUPT');}
+  return {command,deviceSequence:header.deviceSequence};
+ });
+}
+
+export async function recoverDisclosureAction(runtime,actionId,commands,disclosure){
+ const input=structuredClone(commands);
+ const saved=must(await runtime.storage.getLocalOperation(runtime.scope.scopeId,actionId));
+ if(!saved)return null;
+ const result=await recoverCookingBatchWithPolicy({runtime,service:disclosure,operationId:actionId,items:savedItems(saved,input)});
+ if(!result)throw Error('CONFLICT');
+ return result;
+}
+
 export function subscribeActions(runtime,listener) {
  let set=listeners.get(runtime);if(!set){set=new Set();listeners.set(runtime,set)}set.add(listener);
  return ()=>{set.delete(listener);if(!set.size)listeners.delete(runtime)};
@@ -24,8 +43,7 @@ async function execute(runtime,sequences,actionId,commands,disclosure,beforeNewC
  const saved=must(await runtime.storage.getLocalOperation(runtime.scope.scopeId,actionId));
  let items;
  if(saved) {
-  if(saved.commit.outbound.length!==commands.length)throw Error('CONFLICT');
-  items=commands.map((command,i)=>{let header;try{header=JSON.parse(new TextDecoder().decode(saved.commit.outbound[i].object.bytes)).header}catch{throw Error('CORRUPT')}return {command,deviceSequence:header.deviceSequence}});
+  items=savedItems(saved,commands);
  } else {
   await runtime.authorize();
   // Apply current draft validation before reserving a sequence for a new write.
