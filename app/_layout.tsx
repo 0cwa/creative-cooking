@@ -1,6 +1,8 @@
 import {LockedWorkspace} from '@/loro/app/LockedWorkspace';
 import {RecoveryStart} from '@/loro/app/RecoveryStart';
 import {PolicySetup} from '@/loro/disclosure/PolicySetup';
+import {AdmissionRulePicker, admissionPolicyFromDraft, type AdmissionRuleDraft} from '@/loro/app/AdmissionRulePicker';
+import {validAdmissionPolicy} from '@/loro/authority/validator.mjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Platform, ScrollView, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
@@ -86,6 +88,8 @@ export default function RootLayout() {
   const [workspace,setWorkspace]=useState<any>(null);
   const [openAttempt,setOpenAttempt]=useState(0);
   const [error,setError]=useState<string|null>(null);
+  const [admissionRule,setAdmissionRule]=useState<AdmissionRuleDraft>({kind:'allMinusOne',count:'1'});
+  const admissionPolicy=admissionPolicyFromDraft(admissionRule);
   const reopenWorkspace=useCallback(()=>{
     if(Platform.OS==='web'){
       globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL??'').replace(/\/$/,'')}/`);
@@ -129,7 +133,7 @@ export default function RootLayout() {
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
   const legacy=()=>{try{if(Platform.OS==='web')globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy')}catch{Alert.alert('Workspace choice was not saved','Your existing workspace will open for this session. This browser could not remember your selection.')}setChoice('legacy')};
-  const fresh=async()=>{setChoice('loading');setError(null);let opened:any=null,adopted=false;try{if(Platform.OS==='android'){const {nativeChoiceStore}=await import('@/loro/native/choice-store');opened=await nativeChoiceStore.create();setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;return}const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const name=`cooking-${crypto.randomUUID()}`;opened=await openLocalWorkspace(name,true);globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',name);globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true}catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}finally{if(opened&&!adopted)opened.close()}};
+  const fresh=async()=>{setChoice('loading');setError(null);let opened:any=null,adopted=false;try{if(Platform.OS==='android'){const {nativeChoiceStore}=await import('@/loro/native/choice-store');opened=await nativeChoiceStore.create(admissionPolicy);setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;return}const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const name=`cooking-${crypto.randomUUID()}`;opened=await openLocalWorkspace(name,true,admissionPolicy);globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',name);globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true}catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}finally{if(opened&&!adopted)opened.close()}};
   const returnToOriginal=async()=>{
     setChoice('loading');
     try{
@@ -144,7 +148,7 @@ export default function RootLayout() {
   if(choice==='loading')return <View><Text>Opening your cooking workspace…</Text></View>;
   if(choice==='locked')return <SafeAreaProvider><LockedWorkspace error={error} onRetry={()=>{if(Platform.OS==='web')globalThis.location.reload();else reopenWorkspace()}} onLegacy={()=>setChoice('legacy')} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
   if(choice==='policy')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text>Your household policy applies to new cooking changes. Existing items are not automatically approved for external processing.</Text><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></ScrollView></SafeAreaProvider>;
-  if(choice==='choose')return <SafeAreaProvider><View style={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Your existing workspace remains available. A fresh local preview starts empty and keeps its data separately. The preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported.</Text>{error?<Text>{error}</Text>:null}<Button title="Open existing workspace" onPress={legacy}/>{Platform.OS==='web'?<RecoveryStart/>:null}{(Platform.OS==='web'||Platform.OS==='android')?<Button title="Start fresh local preview" onPress={()=>void fresh()}/>:<Text>The fresh local preview is not available on this platform.</Text>}</View></SafeAreaProvider>;
+  if(choice==='choose')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Your existing workspace remains available. A fresh local preview starts empty and keeps its data separately. The preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported.</Text>{error?<Text>{error}</Text>:null}<Button title="Open existing workspace" onPress={legacy}/>{Platform.OS==='web'?<RecoveryStart/>:null}{(Platform.OS==='web'||Platform.OS==='android')?<><AdmissionRulePicker draft={admissionRule} onChange={setAdmissionRule} adults={1}/><Button title="Start fresh local preview" disabled={!validAdmissionPolicy(admissionPolicy,1)} onPress={()=>void fresh()}/></>:<Text>The fresh local preview is not available on this platform.</Text>}</ScrollView></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
       <AppStateProvider key={choice} localWorkspace={workspace}>

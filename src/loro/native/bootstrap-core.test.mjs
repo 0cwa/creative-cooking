@@ -16,6 +16,36 @@ function removeWorkspace(name) {
  }
 }
 
+test('the initial admission rule is validated and pinned through native reopen', async () => {
+ const name='native-admission-rule', options=args(name,true);
+ let workspace;
+ try {
+  await assert.rejects(openNativeWorkspaceWith({...options,policy:{kind:'fixed',fixedCount:2}}),/between 1 and 1/);
+  assert.equal(existsSync(join(dir,`${name}.sqlite`)),false);
+  const policy={kind:'unanimous',fixedCount:null};
+  await assert.rejects(openNativeWorkspaceWith({...options,policy,openMaster:id=>({
+   ...openMaster(id),ensure:async()=>{throw Error('interrupted after reservation')}
+  })}),/interrupted after reservation/);
+  const alternate={kind:'fixed',fixedCount:1};
+  workspace=await openNativeWorkspaceWith({...options,policy:alternate});
+  const original=await workspace.householdPairing.exportParent();
+  assert.deepEqual(original.state.root.policy,policy);
+  workspace.close();
+  workspace=await openNativeWorkspaceWith({...options,policy:alternate});
+  assert.deepEqual(await workspace.householdPairing.exportParent(),original);
+  workspace.close();workspace=undefined;
+  const db=new DatabaseSync(join(dir,`${name}.sqlite`));
+  try {
+   const master=openMaster(name),enc=new TextEncoder(),aad=enc.encode('creative-cooking/native-bootstrap/v1');
+   const {data}=db.prepare('SELECT data FROM loro_bootstrap WHERE id=1').get();
+   const reservation=JSON.parse(new TextDecoder().decode(await master.unwrap('workspace-master',data,aad)));
+   const mismatch=await master.wrap('workspace-master',enc.encode(JSON.stringify({...reservation,admissionPolicy:alternate})),aad);
+   db.prepare('UPDATE loro_bootstrap SET data=? WHERE id=1').run(mismatch);
+  } finally {db.close()}
+  await assert.rejects(openNativeWorkspaceWith(options),/INVALID_ROOT/);
+ } finally {workspace?.close();removeWorkspace(name)}
+});
+
 test('native bootstrap creates signed authorities and restores a real personal action',async()=>{const name='native-bootstrap-test';try {await assert.rejects(openNativeWorkspaceWith(args(name,false)),/MISSING_BOOTSTRAP/);let w=await openNativeWorkspaceWith(args(name,true));const device=w.deviceId;const c={version:1,kind:'personal-preference-put',commandId:'one',effectId:'one',dependencyEffectIds:[],data:{key:'systemPrompt',value:'Stockholm'}};await executeAction(w.personal,w.sequences,'action',[c]);assert.equal((await w.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');w.close();
  // An upgraded installation has its established workspace but no pairing metadata database.
  rmSync(join(dir,`${name}-pairing.sqlite`));

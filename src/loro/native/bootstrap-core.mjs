@@ -13,6 +13,7 @@ import {cookingFiles} from '../app/cooking-file.mjs';
 import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
 import {openNativeSequences} from './sequences.mjs';
+import {initialAdmissionPolicy} from '../app/admission-rule.mjs';
 const enc=new TextEncoder(),dec=new TextDecoder('utf-8',{fatal:true});
 const aad=enc.encode('creative-cooking/native-bootstrap/v1');
 const fields=['device','adult','house','personal','houseDoc','personalDoc','houseEpoch','personalEpoch'];
@@ -32,13 +33,13 @@ function serializeOpen(options) {
  current.finally(()=>{if(serial.get(name)===current)serial.delete(name)}).catch(()=>{});
  return current;
 }
-export function openNativeWorkspaceWith(options) {
- return serializeOpen({...options,returnToOriginal:false});
+export async function openNativeWorkspaceWith(options) {
+ return serializeOpen({...options,initialPolicy:initialAdmissionPolicy(options.policy),returnToOriginal:false});
 }
 export async function returnToOriginalNativeWorkspaceWith(options) {
  await serializeOpen({...options,create:false,returnToOriginal:true});
 }
-async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect,returnToOriginal}){
+async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect,returnToOriginal,initialPolicy}){
  await sodium.ready;const db=openDatabase(name);let master,sequences,pairing,joinedSequences;
  try {
   master=openMaster(name);
@@ -53,7 +54,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    let record=load();if(record)return record;
    if(!create)throw Error('MISSING_BOOTSTRAP');
    if(rows(db,'SELECT key FROM loro_records LIMIT 1').length || await master.exists('workspace-master'))throw Error('LOCKED');
-   const r={version:1};for(const key of fields)r[key]=sodium.to_hex(sodium.randombytes_buf(16));check(r);
+   const r={version:1,admissionPolicy:initialPolicy};for(const key of fields)r[key]=sodium.to_hex(sodium.randombytes_buf(16));check(r);
    exec(db,'INSERT INTO loro_bootstrap VALUES (1,?,?)',['reserved',enc.encode(JSON.stringify(r))]);return load();
   });
   if(!['reserved','sealed','ready'].includes(state.stage)||returnToOriginal&&state.stage!=='ready')throw Error('LOCKED');
@@ -71,7 +72,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   if(ready){publicKey=await keys.use(signing.operationId,signing.identity,secret=>{const pair=sodium.crypto_sign_seed_keypair(secret.slice(0,32));pair.privateKey.fill(0);return pair.publicKey});wrappingPublicKey=await keys.use(wrapping.operationId,wrapping.identity,secret=>sodium.crypto_scalarmult_base(secret));await keys.use(houseKey.operationId,houseKey.identity,()=>{});await keys.use(personalKey.operationId,personalKey.identity,()=>{});}
   else {publicKey=(await keys.generate(signing.operationId,signing.identity)).publicKey;wrappingPublicKey=(await keys.generate(wrapping.operationId,wrapping.identity)).publicKey;await keys.generate(houseKey.operationId,houseKey.identity);await keys.generate(personalKey.operationId,personalKey.identity)}
   const signingRef=sodium.to_hex(publicKey),provider=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:{[r.houseEpoch]:houseKey,[r.personalEpoch]:personalKey}});
-  const policy={kind:'allMinusOne',fixedCount:null},root={householdId:r.house,head:'',policyHash:await policyId(provider,policy),generation:1,epochId:r.houseEpoch,roster:[r.adult],devices:[{adultId:r.adult,deviceId:r.device,signingKeyRef:signingRef,active:true}],policy,runtime:{documentId:r.houseDoc,authorPeers:{[r.device]:'1'},acceptedRecipients:[r.device]}};root.head=await rootPin(provider,root);
+  const policy=initialAdmissionPolicy(r.admissionPolicy),root={householdId:r.house,head:'',policyHash:await policyId(provider,policy),generation:1,epochId:r.houseEpoch,roster:[r.adult],devices:[{adultId:r.adult,deviceId:r.device,signingKeyRef:signingRef,active:true}],policy,runtime:{documentId:r.houseDoc,authorPeers:{[r.device]:'1'},acceptedRecipients:[r.device]}};root.head=await rootPin(provider,root);
   const personalRoot={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',scopeId:r.personal,ownerId:r.adult,signerDeviceId:r.device,devices:[{deviceId:r.device,ownerId:r.adult,signingKeyRef:signingRef,peerId:'2',active:true}],documentId:r.personalDoc,generation:1,epochId:r.personalEpoch},pin=await personalRootPin(provider,personalRoot),signature=sodium.to_hex(await provider.sign(signingRef,domain('personal-root-signature',personalRoot)));
   const ensure=async(scope,initialize)=>{const old=await storage.readPairingAuthority(scope);if(!old.ok)throw Error(old.error);if(!old.value){if(ready)throw Error('MISSING_AUTHORITY');try{await initialize()}catch(e){const raced=await storage.readPairingAuthority(scope);if(!raced.ok||!raced.value)throw e}}};
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(storage,root,root.head,provider));

@@ -11,7 +11,7 @@ const nativeStorage = {
  openDatabase:(id:string)=>open({name:`loro-native-${id}.sqlite`})
 };
 
-export async function openLocalWorkspace(name:string,create=false) {
+export async function openLocalWorkspace(name:string,create=false,policy?:unknown) {
  const openDirect = NativeModules.WebRTCModule
   ? async (options:Parameters<typeof import('../native/cooking-direct').openNativeCookingDirect>[0]) => {
      const {openNativeCookingDirect} = await import('../native/cooking-direct');
@@ -19,7 +19,7 @@ export async function openLocalWorkspace(name:string,create=false) {
     }
   : undefined;
  return openNativeWorkspaceWith({
-  ...nativeStorage,name,create,randomUUID,openDirect
+  ...nativeStorage,name,create,policy,randomUUID,openDirect
  });
 }
 

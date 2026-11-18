@@ -21,6 +21,7 @@ import {openSequences} from './sequences.web.ts';
 import {cookingFiles} from './cooking-file.mjs';
 import {cookingDirect} from '../transport/cooking-direct.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
+import {initialAdmissionPolicy} from './admission-rule.mjs';
 
 const enc=new TextEncoder();
 const aad=enc.encode('creative-cooking/fresh-local-bootstrap/v1');
@@ -28,15 +29,16 @@ const request=<T,>(r:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{r.onsucce
 const validName=(s:unknown):s is string=>typeof s==='string'&&/^[a-z0-9-]{1,100}$/.test(s);
 // Each explicitly created workspace receives a new random namespace. Reopening
 // never generates replacement identity material for an existing namespace.
-export async function openLocalWorkspace(name:string,create=false) {
+export async function openLocalWorkspace(name:string,create=false,policy?:unknown) {
  if(!validName(name)||typeof create!=='boolean')throw Error('MALFORMED');
  const locks=globalThis.navigator?.locks;
  if(!locks||typeof locks.request!=='function')throw Error('LOCK_UNAVAILABLE');
- return locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode:'exclusive'},()=>openLockedWorkspace(name,create));
+ const initialPolicy=initialAdmissionPolicy(policy);
+ return locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode:'exclusive'},()=>openLockedWorkspace(name,create,initialPolicy));
 }
 // The reservation is read only after acquiring the namespace lock. A queued
 // opener therefore observes establishment before choosing any creation path.
-async function openLockedWorkspace(name:string,create:boolean) {
+async function openLockedWorkspace(name:string,create:boolean,initialPolicy:ReturnType<typeof initialAdmissionPolicy>) {
  await sodium.ready;await initLoro(new URL('./loro_wasm_bg.wasm?v=1.17.1',import.meta.url));
  const master=await openBrowserMaster(`${name}-master`);
  const db=await openIndexedDBStorage(`${name}-records`);
@@ -52,7 +54,7 @@ async function openLockedWorkspace(name:string,create:boolean) {
    if(!create)throw Error('MISSING_BOOTSTRAP');
    await master.ensure('workspace-master');
    const random=()=>crypto.randomUUID();
-   const reservation={version:1,stage:'reserved',device:random(),adult:random(),house:random(),personal:random(),houseDoc:random(),personalDoc:random(),houseEpoch:random(),personalEpoch:random()};
+   const reservation={version:1,stage:'reserved',device:random(),adult:random(),house:random(),personal:random(),houseDoc:random(),personalDoc:random(),houseEpoch:random(),personalEpoch:random(),admissionPolicy:initialPolicy};
    const candidate=await master.wrap('workspace-master',enc.encode(JSON.stringify(reservation)),aad);
    wrapped=await new Promise((resolve,reject)=>{const tx=meta.transaction('metadata','readwrite'),store=tx.objectStore('metadata'),get=store.get('reservation');let value:any;get.onsuccess=()=>{value=get.result??candidate;if(!get.result)store.put(candidate,'reservation')};tx.oncomplete=()=>resolve(value);tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}});
   }
@@ -71,7 +73,7 @@ async function openLockedWorkspace(name:string,create:boolean) {
   else {const generated=await keys.generate(signing.operationId,signing.identity);publicKey=generated.publicKey!;wrappingPublicKey=(await keys.generate(wrapping.operationId,wrapping.identity)).publicKey!;await keys.generate(houseKey.operationId,houseKey.identity);await keys.generate(personalKey.operationId,personalKey.identity);}
   const signingRef=sodium.to_hex(publicKey);
   const provider=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:{[r.houseEpoch]:houseKey,[r.personalEpoch]:personalKey}});
-  const policy={kind:'allMinusOne',fixedCount:null};
+  const policy=initialAdmissionPolicy(r.admissionPolicy);
   const root={householdId:r.house,head:'',policyHash:await policyId(provider,policy),generation:1,epochId:r.houseEpoch,roster:[r.adult],devices:[{adultId:r.adult,deviceId:r.device,signingKeyRef:signingRef,active:true}],policy,runtime:{documentId:r.houseDoc,authorPeers:{[r.device]:'1'},acceptedRecipients:[r.device]}};
   root.head=await rootPin(provider,root);
   const personalRoot={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',scopeId:r.personal,ownerId:r.adult,signerDeviceId:r.device,devices:[{deviceId:r.device,ownerId:r.adult,signingKeyRef:signingRef,peerId:'2',active:true}],documentId:r.personalDoc,generation:1,epochId:r.personalEpoch};

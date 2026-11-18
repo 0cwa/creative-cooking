@@ -12,8 +12,8 @@ const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
 const signature = s => typeof s === 'string' && /^[0-9a-f]{128}$/.test(s) ? Uint8Array.from(s.match(/../g), x => parseInt(x,16)) : null;
 const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k,canonical(v[k])])) : v;
 const domain = (purpose, value) => enc.encode(JSON.stringify(['creative-cooking/authority-candidate/v1',purpose,canonical(value)]));
-const policy = (p,n) => keys(p,['kind','fixedCount']) && (p.kind === 'fixed' ? Number.isSafeInteger(p.fixedCount) && p.fixedCount >= 1 && p.fixedCount <= n : ['allMinusOne','unanimous'].includes(p.kind) && p.fixedCount === null);
-const threshold = (p,n) => p.kind === 'fixed' ? p.fixedCount : p.kind === 'unanimous' ? n : Math.max(1,n-1);
+export const validAdmissionPolicy = (p,n) => keys(p,['kind','fixedCount']) && (p.kind === 'fixed' ? Number.isSafeInteger(p.fixedCount) && p.fixedCount >= 1 && p.fixedCount <= n : ['allMinusOne','unanimous'].includes(p.kind) && p.fixedCount === null);
+export const admissionThreshold = (p,n) => p.kind === 'fixed' ? p.fixedCount : p.kind === 'unanimous' ? n : Math.max(1,n-1);
 const deny = reason => ({status:'deny',reason});
 const pending = reason => ({status:'pending',reason});
 const validRuntime = (r,devices) => {
@@ -23,7 +23,7 @@ const validRuntime = (r,devices) => {
  const values=Object.values(r.authorPeers), validPeer=p=>typeof p==='string' && p.length<=20 && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p)<=18446744073709551615n;
  return values.every(validPeer) && new Set(values).size===values.length && r.acceptedRecipients.every(x=>active.includes(x)) && new Set(r.acceptedRecipients).size===r.acceptedRecipients.length && r.acceptedRecipients.every((v,i)=>!i || r.acceptedRecipients[i-1]<v);
 };
-export const validParent = parent => !(!keys(parent,['householdId','head','policyHash','generation','epochId','roster','devices','policy','runtime']) || ![parent.householdId,parent.head,parent.policyHash,parent.epochId].every(id) || !Number.isSafeInteger(parent.generation) || parent.generation < 0 || !ids(parent.roster) || !policy(parent.policy,parent.roster.length) || !Array.isArray(parent.devices) || parent.devices.length > 128 || !dense(parent.devices) || !parent.devices.every(d=>keys(d,['deviceId','adultId','signingKeyRef','active']) && id(d.deviceId) && id(d.signingKeyRef) && parent.roster.includes(d.adultId) && typeof d.active === 'boolean') || new Set(parent.devices.map(d=>d.deviceId)).size !== parent.devices.length || !validRuntime(parent.runtime,parent.devices));
+export const validParent = parent => !(!keys(parent,['householdId','head','policyHash','generation','epochId','roster','devices','policy','runtime']) || ![parent.householdId,parent.head,parent.policyHash,parent.epochId].every(id) || !Number.isSafeInteger(parent.generation) || parent.generation < 0 || !ids(parent.roster) || !validAdmissionPolicy(parent.policy,parent.roster.length) || !Array.isArray(parent.devices) || parent.devices.length > 128 || !dense(parent.devices) || !parent.devices.every(d=>keys(d,['deviceId','adultId','signingKeyRef','active']) && id(d.deviceId) && id(d.signingKeyRef) && parent.roster.includes(d.adultId) && typeof d.active === 'boolean') || new Set(parent.devices.map(d=>d.deviceId)).size !== parent.devices.length || !validRuntime(parent.runtime,parent.devices));
 const eventFields = ['version','suiteId','householdId','parentHead','policyHash','generation','epochId','proposalId','kind','authorDeviceId','frozenAdultRoster','subject','nextPolicy'];
 const approvalFields = ['version','householdId','eventHash','parentHead','policyHash','generation','epochId','adultId','deviceId','signature'];
 // The caller must authenticate and freeze the parent from the accepted authority record.
@@ -60,7 +60,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
    const s=event.subject;if(event.version!==2||!keys(s,['owner','deviceId','signingKeyRef','wrappingKeyRef','claimHash','bindingHash','bindingGeneration','documentId','newGeneration','newEpochId','devices'])||!parent.roster.includes(s.owner)||!id(s.deviceId)||parent.devices.some(d=>d.deviceId===s.deviceId)||typeof s.signingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(s.signingKeyRef)||typeof s.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(s.wrappingKeyRef)||![s.claimHash,s.bindingHash,s.documentId,s.newEpochId].every(id)||!Number.isSafeInteger(s.bindingGeneration)||s.bindingGeneration<0||s.documentId===parent.runtime.documentId||!Number.isSafeInteger(s.newGeneration)||s.newGeneration<=parent.generation||s.newEpochId===parent.epochId||event.nextPolicy!==null||!Array.isArray(s.devices)||!dense(s.devices)||s.devices.length>128)return deny('INVALID_INPUT');
    const expected=[...parent.devices.filter(d=>d.active).map(d=>({deviceId:d.deviceId,signingKeyRef:d.signingKeyRef})),{deviceId:s.deviceId,signingKeyRef:s.signingKeyRef}].sort((a,b)=>a.deviceId.localeCompare(b.deviceId));if(s.devices.length!==expected.length)return deny('INVALID_INPUT');const peers=new Set(Object.values(parent.runtime.authorPeers));for(let i=0;i<expected.length;i++){const d=s.devices[i];if(!keys(d,['deviceId','signingKeyRef','wrappingKeyRef','peerId'])||d.deviceId!==expected[i].deviceId||d.signingKeyRef!==expected[i].signingKeyRef||typeof d.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(d.wrappingKeyRef)||(d.deviceId===s.deviceId&&d.wrappingKeyRef!==s.wrappingKeyRef)||typeof d.peerId!=='string'||!/^(0|[1-9][0-9]*)$/.test(d.peerId)||d.peerId.length>20||BigInt(d.peerId)>18446744073709551615n||peers.has(d.peerId))return deny('INVALID_INPUT');peers.add(d.peerId)}
   }
-  if (event.kind === 'changePolicy' && (event.subject !== null || !policy(event.nextPolicy,parent.roster.length))) return deny('INVALID_INPUT');
+  if (event.kind === 'changePolicy' && (event.subject !== null || !validAdmissionPolicy(event.nextPolicy,parent.roster.length))) return deny('INVALID_INPUT');
   if (event.kind === 'pairOwnDevice' && (!keys(event.subject,['adultId','deviceId','signingKeyRef']) || event.subject.adultId !== author.adultId || !id(event.subject.deviceId) || !id(event.subject.signingKeyRef) || parent.devices.some(d=>d.deviceId === event.subject.deviceId) || event.nextPolicy !== null)) return deny('INVALID_INPUT');
   const canonical = Object.fromEntries(eventFields.map(k=>[k,event[k]]));
   const hashBytes = await provider.hash(domain('event',canonical));
@@ -80,7 +80,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
    seenDevices.add(a.deviceId); voters.add(a.adultId);
   }
   if (event.kind === 'pairOwnDevice') return pending('CEREMONY_AND_POSSESSION_REQUIRED');
-  const required = threshold(parent.policy,parent.roster.length);
+  const required = admissionThreshold(parent.policy,parent.roster.length);
   if (voters.size < required) return {...pending('QUORUM_REQUIRED'),eventHash,approvals:voters.size,required};
   if(event.kind==='recoverDevice')return {...pending('RECOVERY_DISTRIBUTION_REQUIRED'),eventHash,approvals:voters.size,required};
   if(event.kind==='revokeDevice')return {...pending('ROTATION_DISTRIBUTION_REQUIRED'),eventHash,approvals:voters.size,required};
