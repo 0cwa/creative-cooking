@@ -49,7 +49,10 @@ export function HouseholdOwnDevice(){
  </>;
  const start=async(next:Role,renew=false)=>{
   setRole(next);setProposal(null);setProgress(null);setInput('');setPeer('');setRoot('');setHead('');setCode('');setProof('');setFile(null);
-  if(next==='responder')setRequest(await service.request(renew));
+  if(next==='responder'){
+   setRequest(await service.request(renew));
+   if(renew)setInstalled(null);
+  }
   const saved=await service.resume(next);
   if(saved){setProposal(saved);setProgress(saved.progress);if(saved.installed)setInstalled(saved.installed);}
  };
@@ -89,7 +92,7 @@ export function HouseholdOwnDevice(){
    </View>:null}
    {button('Sponsor my other household device',()=>start('initiator'))}
    {button('Receive my household access',()=>start('responder'))}
-   {role==='responder'&&!installed?button('Create a fresh household pairing request',()=>start('responder',true)):null}
+   {role==='responder'?button('Create a fresh household pairing request',()=>start('responder',true)):null}
    {role==='initiator'&&proposal&&!published?button('Prepare another household pairing proposal',async()=>{
     setProposal(null);setProgress(null);setInput('');setProof('');
    }):null}

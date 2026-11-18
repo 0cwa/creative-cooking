@@ -91,7 +91,8 @@ test('same-adult household Settings verifies, resumes, installs and opens a sepa
   expect(sponsorFingerprint).not.toBe(recipientFingerprint);
   await click(receiver,'Receive my household access');
   await click(sponsor,'Sponsor my other household device');
-  await label(sponsor,'Incoming household pairing request').fill(await label(receiver,'My household pairing request').inputValue());
+  const request=await label(receiver,'My household pairing request').inputValue();
+  await label(sponsor,'Incoming household pairing request').fill(request);
   await label(sponsor,'Confirmed household peer fingerprint').fill('0'.repeat(64));
   await click(sponsor,'Prepare household pairing proposal');
   await notice(sponsor,'The confirmed household root, head, device fingerprint or transcript did not match.');
@@ -167,6 +168,13 @@ test('same-adult household Settings verifies, resumes, installs and opens a sepa
   await click(receiver,'Show device identity');
   await click(receiver,'Return to original local household');
   await notice(receiver,'Original receiver thyme');
+  await settings(receiver);
+  await click(receiver,'Receive my household access');
+  await expect(button(receiver,'Open paired household')).toBeVisible();
+  await click(receiver,'Create a fresh household pairing request');
+  await expect(button(receiver,'Open paired household')).toHaveCount(0);
+  const renewed=JSON.parse(await label(receiver,'My household pairing request').inputValue());
+  expect(renewed.request.nonce).not.toBe(JSON.parse(request).request.nonce);
  }finally{
   await sponsorContext.close();
   await receiverContext.close();

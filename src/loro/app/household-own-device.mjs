@@ -31,10 +31,18 @@ export function householdOwnDevice({
  const same=(a,b)=>sameOwnDevice(s,a,b);
  const fingerprint=participant=>digest(domain('household-own-device-fingerprint',participant));
  const requestBytes=request=>domain('household-own-device-request',request);
- const slot=key=>'household-own-device/v1:'+key;
- const read=key=>store.transaction(tx=>tx.get(slot(key)),{readOnly:true});
+ const prefix='household-own-device/v1:';
+ const slot=key=>prefix+(key==='initiator'?JSON.stringify([key,scope.id,pin]):key);
+ const belongs=proposal=>proposal?.bundle?.rootPin===pin&&same(proposal.bundle.scope,scope);
+ const savedIn=(tx,key)=>{
+  const saved=tx.get(slot(key));
+  if(saved!==undefined||key!=='initiator')return saved;
+  const legacy=tx.get(prefix+'initiator');
+  return belongs(legacy?.proposal)?legacy:undefined;
+ };
+ const read=key=>store.transaction(tx=>savedIn(tx,key),{readOnly:true});
  const write=(key,value,old)=>store.transaction(tx=>{
-  if(!same(tx.get(slot(key)),old))throw Error('CONFLICT');
+  if(!same(savedIn(tx,key),old)||(key==='responder'&&!same(tx.get(slot('request')),value.proposal.request)))throw Error('CONFLICT');
   tx.put(slot(key),value);
  });
  const participant=(role,keys,nonce)=>({role,deviceId:keys.deviceId,signingPublicKey:s.from_hex(keys.signingKey),
@@ -75,6 +83,7 @@ export function householdOwnDevice({
   if(!exact(proposal,['version','bundle','adultId','peerId','parentRevision','request','transcript','guard'])||proposal.version!==1||
      (!Number.isSafeInteger(proposal.parentRevision)||proposal.parentRevision<0)||typeof proposal.peerId!=='string'||!/^[1-9][0-9]{0,19}$/.test(proposal.peerId)||BigInt(proposal.peerId)>18446744073709551615n)throw Error('INVALID_PROOF');
   const {bundle,transcript:t,guard:g,adultId,peerId,parentRevision}=proposal;
+  if(role==='initiator'&&!belongs(proposal))throw Error('OOB_REQUIRED');
   const record=await rootRecord(bundle,bundle.rootPin,bundle.selectedHead);
   const verified=await verifyAuthority(bundle.state,bundle.rootPin,provider),parent=verified.nodes.get(bundle.selectedHead);
   const oob=checkOwnDeviceCeremony(s,bundle.rootPin,parent,t,g,adultId,peerId,parentRevision,verified.wrappingByHead.get(parent.head).get(t.initiator.deviceId));
@@ -85,11 +94,18 @@ export function householdOwnDevice({
   return {proposal,parent,record,oob,view:{text:text(proposal),code:oob.hash,rootPin:bundle.rootPin,head:bundle.selectedHead,
    adultId,peerDevice:oob.pins[other(role)].deviceId}};
  }
+ async function reusable(proposal,live){
+  if(!belongs(proposal))return false;
+  if(proposal.parentRevision===live.record.revision&&proposal.bundle.selectedHead===live.record.acceptedParent&&
+     proposal.transcript.authorizationSnapshot===live.record.authorizationSnapshot)return true;
+  const saved=must(await storage.readHouseholdOwnDeviceRelease(scope,proposal.transcript.sessionId,false));
+  return !!saved?.file&&same(saved.next,live.record);
+ }
  async function propose(incoming,confirmedFingerprint){
   const item=parse(incoming),r=await readRequest(item),old=await read('initiator');
   if(fingerprint({deviceId:r.deviceId,signingKey:r.signingKey,wrappingKey:r.wrappingKey})!==confirmedFingerprint)throw Error('OOB_REQUIRED');
-  if(old&&same(old.proposal.request,item)&&old.proposal.bundle.scope.id===scope.id)return (await inspectProposal(old.proposal,'initiator')).view;
-  const {resolved,record,state,parent}=await current();
+  const live=await current(),{resolved,record,state,parent}=live;
+  if(old&&same(old.proposal.request,item)&&await reusable(old.proposal,live))return (await inspectProposal(old.proposal,'initiator')).view;
   await runtime.authorize();
   const {doc}=await runtime.document();
   const occupied=new Set([...Object.values(parent.runtime.authorPeers),...doc.oplogVersion().toJSON().keys()]);
@@ -132,7 +148,7 @@ export function householdOwnDevice({
   const checked=await inspectProposal(saved.proposal,role);
   const {transcript,guard}=saved.proposal;
   const localStore={transaction:(apply,options)=>store.transaction(tx=>{
-   if(!same(tx.get(slot(role)),saved)||(role==='responder'&&!same(tx.get(slot('request')),saved.proposal.request)))throw Error('CONFLICT');
+   if(!same(savedIn(tx,role),saved)||(role==='responder'&&!same(tx.get(slot('request')),saved.proposal.request)))throw Error('CONFLICT');
    return apply(tx);
   },options)};
   return withSecrets(secrets=>use({...checked,secrets,session:durableSession(s,localStore,secrets,transcript,guard,role,checked.oob)}));
@@ -161,6 +177,7 @@ export function householdOwnDevice({
  async function resume(role){
   const saved=await read(role);
   if(!saved)return null;
+  if(role==='initiator'&&!await reusable(saved.proposal,await current()))return null;
   const {view}=await inspectProposal(saved.proposal,role);
   const sc=saved.proposal.bundle.scope;
   let installed=null;
@@ -279,7 +296,17 @@ export function householdOwnDevice({
      !update.item?.ownDevice||!hex64(update.head))throw Error('INVALID_OWN_DEVICE');
   const {item,selection,head}=update,live=await current(),sponsor=item.event.authorDeviceId;
   if(!live.parent.runtime.acceptedRecipients.includes(deviceId)||sponsor===deviceId||
-     item.event.subject.deviceId===deviceId||item.event.parentHead!==live.record.acceptedParent)throw Error('STALE_AUTHORITY');
+     item.event.subject.deviceId===deviceId)throw Error('STALE_AUTHORITY');
+  if(head===live.record.acceptedParent){
+   const saved=must(await storage.readHouseholdOwnDeviceRelease(scope,item.event.proposalId,false));
+   if(saved?.file===null&&saved.next.acceptedParent===head){
+    const retained=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(saved.next.authorityState));
+    if(same(item,retained.events.at(-1))&&same(selection,retained.selections.at(-1))&&
+       same(selection,live.state.selections.at(-1)))return {scope,head,replayed:true};
+   }
+   throw Error('STALE_AUTHORITY');
+  }
+  if(item.event.parentHead!==live.record.acceptedParent)throw Error('STALE_AUTHORITY');
   const nextState={...live.state,events:[...live.state.events,item],selections:[...live.state.selections,selection],activeHead:head};
   const next={scope,revision:live.record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
   const {context,proof}=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:live.record,next});

@@ -822,7 +822,28 @@ test('own-device household release and install roll back, reopen and preserve di
   await vote(before,[sponsor,adult],'validated');
 
   const initiator=sponsor.householdPairing.ownDevice,responder=fresh.householdPairing.ownDevice;
-  const proposal=await initiator.propose(await responder.request(),responder.fingerprint);
+  const request=await responder.request();
+  const selectedDraft=await adult.householdPairing.ownDevice.propose(request,responder.fingerprint);
+  await adult.householdPairing.selection.clear();
+  adult.close();adult=await open(adultName);
+  assert.equal(await adult.householdPairing.ownDevice.resume('initiator'),null);
+  await adult.householdPairing.selection.select(scope);
+  adult.close();adult=await open(adultName);
+  assert.equal((await adult.householdPairing.ownDevice.resume('initiator')).code,selectedDraft.code);
+
+  const previous=await initiator.propose(request,responder.fingerprint);
+  const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
+  const proposalDb=new DatabaseSync(join(dir,sponsorName+'.sqlite'));
+  try{
+   const write=proposalDb.prepare('UPDATE loro_records SET value=? WHERE key=?');
+   const {value}=proposalDb.prepare('SELECT value FROM loro_records WHERE key=?').get(authoritySlot);
+   const record=JSON.parse(value);
+   write.run(JSON.stringify({...record,revision:record.revision+1}),authoritySlot);
+   assert.equal(await initiator.resume('initiator'),null);
+   assert.notEqual((await initiator.propose(request,responder.fingerprint)).code,previous.code);
+   write.run(value,authoritySlot);
+  }finally{proposalDb.close()}
+  const proposal=await initiator.propose(request,responder.fingerprint);
   assert.deepEqual((await responder.inspect(proposal.text)).code,proposal.code);
   await assert.rejects(responder.confirm('responder',proposal.text,initiator.fingerprint,rootPin,'0'.repeat(64),proposal.code),/OOB_REQUIRED/);
   const start=(service,role,peer)=>service.confirm(role,proposal.text,peer.fingerprint,rootPin,before.head,proposal.code);
@@ -835,7 +856,6 @@ test('own-device household release and install roll back, reopen and preserve di
   }
   assert.ok(x.complete&&y.complete);
   const sponsorRows=rows(sponsorName),freshRows=rows(freshName);
-  const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
   const row=sponsorRows.find(row=>row.key===authoritySlot);
   const staleDb=new DatabaseSync(join(dir,sponsorName+'.sqlite'));
   try{
@@ -870,6 +890,14 @@ test('own-device household release and install roll back, reopen and preserve di
   await assert.rejects(adult.householdPairing.ownDevice.acceptExisting(JSON.stringify(wrongScope),true),/INVALID/);
   assert.equal((await getNode(adultName)).head,before.head);
   await adult.householdPairing.ownDevice.acceptExisting(update,true);
+  const adopted=rows(adultName);
+  assert.deepEqual(await adult.householdPairing.ownDevice.acceptExisting(update,true),{scope,head,replayed:true});
+  const changed=JSON.parse(update);
+  changed.selection.index++;
+  await assert.rejects(adult.householdPairing.ownDevice.acceptExisting(JSON.stringify(changed),true),/STALE_AUTHORITY/);
+  assert.deepEqual(rows(adultName),adopted);
+  assert.equal((await sponsor.householdPairing.ownDevice.resume('initiator')).code,proposal.code);
+  assert.deepEqual((await sponsor.householdPairing.ownDevice.publish(proposal.code)).file,file);
   const documentSlot=JSON.stringify(['document',scope.id,transition.event.subject.documentId]);
   async function withPairedDocument(name,change,check){
    const db=new DatabaseSync(join(dir,name+'.sqlite'));
