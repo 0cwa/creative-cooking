@@ -9,34 +9,45 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
  if(recipeCatalogVersion!==null && recipeCatalogVersion!==1)throw Error('UNSUPPORTED_VERSION');
  const {scopeId,branchHead,epochId,documentId}=runtime.scope;
  const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;
- const onRoute=header=>recipeCatalogVersion===1||header?.documentId===documentId;
+ const onRoute=(header,members)=>recipeCatalogVersion===null
+  ? header?.documentId===documentId
+  : !members||members.some(member=>member.documentId===header?.documentId);
  const decoder=new TextDecoder('utf-8',{fatal:true});
- const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(row=>
-  onBranch(row)&&(recipeCatalogVersion===1||onRoute(JSON.parse(decoder.decode(row.bytes)).header)));
+ const outbound=async members=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(row=>
+  onBranch(row)&&(recipeCatalogVersion===1&&!members||onRoute(JSON.parse(decoder.decode(row.bytes)).header,members)));
+ async function authorizedMembers(){
+  if(runtime.authority?.installedSet)return (await runtime.authorization()).members;
+  await runtime.authorize();
+ }
  const cookingSource=({source,cursor})=>source===`file:${cursor}`||source===`direct:${cursor}`;
- async function list(){await runtime.authorize();return (await outbound()).map(x=>({objectId:x.objectId}));}
- async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const row=(await outbound()).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
+ async function list(){return (await outbound(await authorizedMembers())).map(x=>({objectId:x.objectId}));}
+ async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');const row=(await outbound(await authorizedMembers())).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
  async function verifyRoute(bytes,expectedId,expectedAuthor){
   if(!(bytes instanceof Uint8Array))throw Error('MALFORMED');
   if(bytes.length>MAX_OBJECT)throw Error('TOO_LARGE');
   const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
-  let target=runtime,recipe=null;
+  let target=runtime,recipe=null,command;
   if(recipeCatalogVersion===1&&opened.header.documentId!==runtime.scope.documentId){
-   const {command}=decodeCookingPayload(opened),recipeId=commandRecipeId(command);
+   ({command}=decodeCookingPayload(opened));
+   const recipeId=commandRecipeId(command);
    if(!recipeId||command.data.author!==opened.header.authorDevice)throw Error('INVALID_RECIPE_DOCUMENT');
    target=await runtime.forRecipe(recipeId);
    recipe={id:recipeId,create:command.kind==='recipe-create'};
   }
   validateCookingHeader(opened,expectedId??opened.object.id,target.scope);
-  if(recipeCatalogVersion===null && decodeCookingPayload(opened).command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
+  if(recipeCatalogVersion===null||auth.members){
+   command??=decodeCookingPayload(opened).command;
+   if(recipeCatalogVersion===null&&command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
+   target.assertRecipeCommand(command);
+  }
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
-  return {target,recipe,object:{...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority}};
+  return {target,recipe,members:auth.members,object:{...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority}};
  }
  const verifyUnderAuthority=async(...args)=>(await verifyRoute(...args)).object;
  const applyStaged=async item=>{
   if(recipeCatalogVersion===null)return importCookingWithPolicy({runtime,service,item});
-  const {target,recipe}=await verifyRoute(item.bytes,item.itemId);
-  if(recipe&&!recipe.create){
+  const {target,recipe,members}=await verifyRoute(item.bytes,item.itemId);
+  if(recipe&&!recipe.create&&!members){
    const selected=await openSelectedRecipeCatalog(runtime,recipe.id);
    if(!selected.children.has(recipe.id))throw Error('MISSING_DEPENDENCY');
   }
@@ -52,13 +63,13 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
   return applyStaged({itemId:id,bytes});
  }
  async function pending(){
-  await runtime.authorize();
+  const members=await authorizedMembers();
   const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]);
   const reasons=new Map(must(policyPending).map(x=>[x.objectId,x.reason])),sources=new Set(must(cursors).filter(cookingSource).map(x=>x.cursor)),pending=[];
   for(const item of must(items)){
    if(!sources.has(item.itemId))continue;
    const {header}=JSON.parse(decoder.decode(item.bytes));
-   if(!onBranch(header)||!onRoute(header)||must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))continue;
+   if(!onBranch(header)||!onRoute(header,members)||must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))continue;
    const quarantined=await runtime.storage.compromise.isQuarantined(scopeId,header.authorDevice);
    pending.push({itemId:item.itemId,reason:quarantined?'QUARANTINED':reasons.get(item.itemId)??null});
   }
@@ -66,8 +77,8 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
  }
  async function retry(itemId){await runtime.authorize();const items=must(await runtime.storage.listStagedInbox(scopeId)),item=items.find(x=>x.itemId===itemId);if(!item)throw Error('MISSING_UPDATE');const sources=must(await runtime.storage.listCursors(scopeId));if(!sources.some(x=>x.cursor===itemId&&cookingSource(x)))throw Error('INVALID_AUTHORITY');return applyStaged(item);}
  async function directBatch(peerId,limit,attempts) {
-  await runtime.authorize();
-  const [rows,states]=await Promise.all([outbound(),runtime.storage.listReceiptStates(scopeId)]);
+  const members=await authorizedMembers();
+  const [rows,states]=await Promise.all([outbound(members),runtime.storage.listReceiptStates(scopeId)]);
   const receipts=new Map(must(states).filter(x=>x.destination==='peer'&&x.recipientId===peerId).map(x=>[x.objectId,x.state]));
   const pending=rows.filter(row=>receipts.get(row.objectId)!=='applied').map(row=>{
    const {header}=JSON.parse(decoder.decode(row.bytes));

@@ -1208,6 +1208,63 @@ test('selected recipe shopping copies and current-only admission survive durable
  assert.deepEqual(await installHouseholdFile(existingOptions),{replayed:true,head:eventHash});
  assert.ok(must(await b.storage.reopenDocument(scope.id,br.scope.documentId)));
 
+ const receiverRef=sodium.to_hex(newcomerSign.publicKey);
+ const receiverKeys={use:(op,identity,fn)=>op==='test-signing'
+  ?fn(newcomerSign.privateKey):newcomerCatalog.use(op,identity,fn)};
+ const receiverCodec=candidateCodec(localProvider(sodium,receiverKeys,{
+  signing:{publicKey:receiverRef,operationId:'test-signing'},content:newcomerContent,
+ }));
+ const openPeer=(storage,codec,resolved)=>{
+  const installedSet={sodium,operationId,LoroDoc};
+  const runtime=new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,
+   keyRef:resolved.scope.epochId,authority:{kind:'household',rootPin:a.root.head,provider:a.provider,
+    selectionIndex:resolved.selectionIndex,installedSet}});
+  const service=disclosureService({storage,scope,rootPin:a.root.head,provider:a.provider,
+   deviceId:runtime.scope.authorDevice,installedSet});
+  return {runtime,service,files:cookingFiles({runtime,service,recipeCatalogVersion:1})};
+ };
+ let sponsor=openPeer(a.storage,sender,sponsorAuthority);
+ let newcomer=openPeer(freshStorage,receiverCodec,newcomerAuthority);
+ const recipeRuntime=await sponsor.runtime.forRecipe(recipeId);
+ await assert.rejects(()=>sponsor.runtime.forRecipe('outside-signed-catalog'),/INVALID_RECIPE_DOCUMENT/);
+ const beforeUnsupported=a.rows(),beforeUnsupportedSequence=sequence;
+ const newRecipe='outside-signed-catalog';
+ const unsupported=planRecipeAction({doc:(await sponsor.runtime.document()).doc,before:null,
+  after:recipe(newRecipe,'Unsupported'),actionId:newRecipe,author:a.deviceId,at});
+ await assert.rejects(()=>executeAction(sponsor.runtime,sequences,newRecipe,unsupported,sponsor.service),/UNSUPPORTED_VERSION/);
+ assert.equal(sequence,beforeUnsupportedSequence);
+ assert.deepEqual(a.rows(),beforeUnsupported);
+ const originalRecipe=projectCooking((await recipeRuntime.document()).doc).recipes[0];
+ const recipeAction='installed-recipe-edit';
+ const recipeCommands=planRecipeAction({doc:(await recipeRuntime.document()).doc,before:originalRecipe,
+  after:{...originalRecipe,title:'Edited on the sponsor'},actionId:recipeAction,author:a.deviceId,at});
+ await executeAction(recipeRuntime,sequences,recipeAction,recipeCommands,sponsor.service);
+ const storedRecipeEdit=must(await a.storage.getLocalOperation(scope.id,recipeAction));
+ const recipeObjectId=storedRecipeEdit.commit.outbound[0].object.id;
+ const recipeBytes=await sponsor.files.download(recipeObjectId);
+ await newcomer.files.receive(recipeBytes);
+ assert.deepEqual(must(await freshStorage.readDisclosureSource(scope.id,recipeCommands[0].effectId)).policyHashes,
+  [accepted.policyHash]);
+
+ const rootAction='installed-pantry-edit';
+ const pantry={version:1,kind:'pantry-create',commandId:rootAction,effectId:rootAction,dependencyEffectIds:[],
+  data:{itemId:'shared-after-join',name:'Chickpeas',preference:3,at,author:newcomer.runtime.scope.authorDevice}};
+ await executeAction(newcomer.runtime,sequences,rootAction,[pantry],newcomer.service);
+ const pantryObjectId=must(await freshStorage.getLocalOperation(scope.id,rootAction)).commit.outbound[0].object.id;
+ await sponsor.files.receive(await newcomer.files.download(pantryObjectId));
+ assert.equal((await newcomer.files.receive(recipeBytes)).replayed,true);
+
+ a.reopen();reopenFresh();
+ sponsor=openPeer(a.storage,sender,await resolveInstalledSetAuthority({...sealOptions,authorDevice:a.deviceId}));
+ newcomer=openPeer(freshStorage,receiverCodec,await resolveInstalledSetAuthority({
+  ...newcomerOptions,operationId,authorDevice:newcomerContext.recipientDeviceId,
+ }));
+ for(const peer of [sponsor,newcomer]){
+  const childRuntime=await peer.runtime.forRecipe(recipeId);
+  assert.equal(projectCooking((await childRuntime.document()).doc).recipes[0].title,'Edited on the sponsor');
+  assert.ok(projectCooking((await peer.runtime.document()).doc).pantry.some(item=>item.name==='Chickpeas'));
+ }
+
 });
 
 test('parent-format recipe children without catalog entries remain intact and require an explicit upgrade',async t=>{

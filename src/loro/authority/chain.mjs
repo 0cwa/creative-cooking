@@ -367,6 +367,7 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
 
 /** Resolve only after verifying the locally installed, selected document set. */
 export async function resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice,sodium,operationId,LoroDoc}) {
+ scope=copy(scope);
  const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
  const installed=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId,LoroDoc});
  if(installed.publication.localKey.record.identity.deviceId!==authorDevice) throw Error('UNAUTHORIZED_DEVICE');

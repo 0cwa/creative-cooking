@@ -1,13 +1,22 @@
-import {readAuthority,verifyAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {readAuthority,verifyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {validatePolicyAcceptance,hash} from './policy.mjs';
 const MAX_POLICY_HISTORY=64;
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 /** Authority is always reconstructed from the pinned chain; policy input cannot
  * choose its electorate, key resolver or selected authority head. */
-export function disclosureService({storage,scope,rootPin,provider,deviceId}) {
+export function disclosureService({storage,scope,rootPin,provider,deviceId,installedSet=null}) {
  if(scope?.kind!=='household'||!scope.id||!rootPin||!deviceId)throw Error('INVALID_AUTHORITY');
- async function authority() {const current=await readAuthority(storage,scope,rootPin,provider),verified=await verifyAuthority(current.state,rootPin,provider),resolved=await resolveRuntimeAuthority(storage,scope,rootPin,provider,deviceId);if(current.activeHead!==resolved.scope.branchHead||current.revision!==resolved.expectedAuthority.record.revision)throw Error('CONFLICT');return {current,verified,resolved};}
+ async function authority() {
+  const current=await readAuthority(storage,scope,rootPin,provider);
+  const verified=await verifyAuthority(current.state,rootPin,provider);
+  const resolved=installedSet
+   ? await resolveInstalledSetAuthority({storage,scope,pin:rootPin,provider,authorDevice:deviceId,
+     operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:installedSet.LoroDoc})
+   : await resolveRuntimeAuthority(storage,scope,rootPin,provider,deviceId);
+  if(current.activeHead!==resolved.scope.branchHead||current.revision!==resolved.expectedAuthority.record.revision)throw Error('CONFLICT');
+  return {current,verified,resolved};
+ }
  async function validateStored(policyHash,context,seen=new Set()) {
   if(seen.has(policyHash)||seen.size>=MAX_POLICY_HISTORY)throw Error('INVALID_PREDECESSOR');seen.add(policyHash);
   const saved=must(await storage.readDisclosurePolicy(scope.id,policyHash))??(typeof storage.readArchivedDisclosurePolicy==='function'?must(await storage.readArchivedDisclosurePolicy(scope.id,policyHash)):null);if(!saved||saved.policyHash!==policyHash||await hash(provider,'policy',saved.policy)!==policyHash)throw Error('POLICY_UNRESOLVED');

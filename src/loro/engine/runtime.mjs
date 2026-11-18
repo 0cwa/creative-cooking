@@ -1,5 +1,5 @@
 import {assertCommandScope} from '../domain/personal-codec.mjs';
-import {resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {resolvePersonalAuthority} from '../authority/personal.mjs';
 import * as registry from '../domain/registry.mjs';
 import {commandRecipeId,recipeCatalogBinding,recipeDocumentId} from '../domain/recipe-document.mjs';
@@ -37,14 +37,16 @@ export class OfflineRuntime {
   get recipeId() { return this.#recipeId; }
   async forRecipe(recipeId) {
     if (this.#recipeId !== null || !this.authority || (this.authority.kind ?? 'household') !== 'household') throw Error('INVALID_RECIPE_DOCUMENT');
-    await this.authorize();
+    const {members}=await this.authorization();
     const documentId=await recipeDocumentId(this.scope,this.authority.rootPin,this.authority.provider,recipeId);
+    if(members&&!members.some(entry=>entry.recipeId===recipeId&&entry.documentId===documentId))throw Error('INVALID_RECIPE_DOCUMENT');
     return new OfflineRuntime({
       storage:this.storage,codec:this.codec,LoroDoc:this.LoroDoc,decodeImportBlobMeta:this.decodeImportBlobMeta,
       scope:{...this.scope,documentId},keyRef:this.keyRef,authority:this.authority,recipeId
     });
   }
   assertRecipeCommand(command) {
+    if(this.authority?.installedSet&&(command.kind==='recipe-create'||command.data?.recipeSource))throw Error('UNSUPPORTED_VERSION');
     if (this.#recipeId !== null && commandRecipeId(command) !== this.#recipeId) throw Error('INVALID_RECIPE_DOCUMENT');
   }
   async authorization() {
@@ -52,14 +54,21 @@ export class OfflineRuntime {
     if (!this.fixtureAuthority) {
       const kind=this.authority.kind ?? 'household';
       if (!['household','personal'].includes(kind)) throw new Error('INVALID_AUTHORITY_CONFIG');
+      const scope={kind,id:s.scopeId},{rootPin:pin,provider,installedSet}=this.authority;
+      if(installedSet&&kind!=='household')throw Error('INVALID_AUTHORITY_CONFIG');
       const resolver=kind==='personal' ? resolvePersonalAuthority : resolveRuntimeAuthority;
-      const resolved=await resolver(this.storage,{kind,id:s.scopeId},this.authority.rootPin,this.authority.provider,s.authorDevice);
+      const resolved=installedSet
+        ? await resolveInstalledSetAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,
+          operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:this.LoroDoc})
+        : await resolver(this.storage,scope,pin,provider,s.authorDevice);
       if (this.authority.selectionIndex!==undefined && resolved.selectionIndex!==this.authority.selectionIndex) throw new Error('INVALID_AUTHORITY');
       const expected={...resolved.scope,authorizationSnapshot:s.authorizationSnapshot};
       if (this.#recipeId !== null) expected.documentId=await recipeDocumentId(resolved.scope,this.authority.rootPin,this.authority.provider,this.#recipeId);
       if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
+      if(resolved.members&&!resolved.members.some(entry=>entry.recipeId===this.#recipeId&&entry.documentId===s.documentId))throw Error('INVALID_RECIPE_DOCUMENT');
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
-      return {expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs,sourceDocumentId:resolved.scope.documentId};
+      return {expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs,
+        sourceDocumentId:resolved.scope.documentId,...(resolved.members?{members:resolved.members}:{})};
     }
     const record=required(await this.storage.readPairingAuthority({kind:'household',id:s.scopeId}));
     if (!record || record.acceptedParent !== s.branchHead || record.authorizationSnapshot !== s.authorizationSnapshot) throw new Error('INVALID_AUTHORITY');
@@ -73,6 +82,7 @@ export class OfflineRuntime {
     this.assertRecipeCommand(command);
     const current = await this.authorization();
     if (!same(current.expectedAuthority, expectedAuthority)) throw Error('CONFLICT');
+    if(current.members)return undefined;
     const binding = recipeCatalogBinding(this.scope,this.authority.rootPin,current.sourceDocumentId);
     if (command.kind !== 'recipe-create') {
       const {entries}=required(await this.storage.readSelectedRecipeCatalog(expectedAuthority,binding,{recipeId:this.#recipeId,documentId:this.scope.documentId}));

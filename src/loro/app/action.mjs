@@ -20,6 +20,7 @@ async function execute(runtime,sequences,actionId,commands,disclosure) {
  if(typeof actionId!=='string'||!actionId||!Array.isArray(commands)||!commands.length||commands.some(c=>typeof c?.commandId!=='string'||!c.commandId)||new Set(commands.map(c=>c.commandId)).size!==commands.length)throw Error('MALFORMED');
  commands=structuredClone(commands);
  if(runtime.authority?.kind==='household'&&!disclosure)throw Error('POLICY_REQUIRED');
+ if(runtime.authority?.installedSet)for(const command of commands)runtime.assertRecipeCommand(command);
  const saved=must(await runtime.storage.getLocalOperation(runtime.scope.scopeId,actionId));
  let items;
  if(saved) {
