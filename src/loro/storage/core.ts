@@ -541,8 +541,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if (!(manifest instanceof Uint8Array) || !sameBytes(manifest,p.manifest.bytes)) return corrupt();
     for (const d of p.documents) {
       const doc=await tx.get(key('document',scope,d.documentId)), meta=await tx.get(key('projection-document',scope,d.documentId));
-      // Legacy documents can advance after publication. The candidate set remains frozen until routing is enabled.
-      if (!doc || p.documentSet&&doc.revision!==0 || await tx.get(key('document-owner',scope,d.documentId))!==p.nextAuthority.acceptedParent || !meta || meta.generation!==d.generation || meta.operationId!==p.operationId || (doc.revision===0 && !sameBytes(doc.bytes,d.bytes))) return corrupt();
+      if (!doc || await tx.get(key('document-owner',scope,d.documentId))!==p.nextAuthority.acceptedParent ||
+        !meta || meta.generation!==d.generation || meta.operationId!==p.operationId ||
+        (doc.revision===0 && !sameBytes(doc.bytes,d.bytes)) ||
+        (p.documentSet && doc.revision>0 && sameBytes(doc.bytes,d.bytes))) return corrupt();
     }
     for (const pkg of p.packages) {
       const bytes=await tx.get(key('projection-package',scope,pkg.id)), out=await tx.get(key('projection-outbox',scope,p.operationId,pkg.id));

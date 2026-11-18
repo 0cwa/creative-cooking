@@ -1074,7 +1074,9 @@ test('selected recipe shopping copies and current-only admission survive durable
  reopenFresh();
  await assert.rejects(()=>install(),/CORRUPT/);
  freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(installedCatalog,catalogSlot);
- const childSlot=JSON.stringify(['document',scope.id,newcomerSelected.documents[1].documentId]);
+ const childEntry=newcomerSelected.item.admission.manifest.entries.find(entry=>entry.recipeId===recipeId);
+ const child=newcomerSelected.documents.find(document=>document.documentId===childEntry.documentId);
+ const childSlot=JSON.stringify(['document',scope.id,child.documentId]);
  const installedChild=freshRows().find(row=>row.key===childSlot).value;
  freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({
   ...JSON.parse(installedChild),revision:1,
@@ -1083,6 +1085,42 @@ test('selected recipe shopping copies and current-only admission survive durable
  await assert.rejects(()=>install(),/CORRUPT/);
  freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(installedChild,childSlot);
  assert.deepEqual(await install(),{replayed:true,head:eventHash});
+ const originalSeed=new LoroDoc();
+ originalSeed.import(child.seed.snapshot);
+ const extendChild=doc=>{
+  doc.setPeerId(event.subject.devices[0].peerId);
+  const recipeEffect=doc.getMap('recipe-index').get(recipeId);
+  apply(doc,{version:1,kind:'recipe-field',commandId:'future-child-edit',effectId:'future-child-edit',
+   dependencyEffectIds:[recipeEffect],data:{recipeId,field:'description',value:'Edited after transfer',
+    author:newcomerOptions.recipientDevice,at}});
+  return doc.export({mode:'snapshot'});
+ };
+ const writeChild=bytes=>freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({
+  revision:1,bytes:{__storageBytes:Array.from(bytes)},
+ }),childSlot);
+ const advanced=new LoroDoc();
+ advanced.import(child.seed.snapshot);
+ const advancedBytes=extendChild(advanced);
+ writeChild(advancedBytes);
+ reopenFresh();
+ assert.deepEqual(await install(),{replayed:true,head:eventHash});
+ assert.equal((await readAuthority(freshStorage,scope,a.root.head,a.provider)).activeHead,eventHash);
+ assert.deepEqual(must(await freshStorage.reopenDocument(scope.id,child.documentId)).bytes,advancedBytes);
+ assert.deepEqual(must(await freshStorage.readRetainedProjectionSeed(scope.id,child.documentId)).snapshot,child.seed.snapshot);
+
+ const forgedChild=new LoroDoc();
+ forgedChild.setPeerId(child.seed.peerId);
+ for(const [name,values] of Object.entries(originalSeed.toJSON())){
+  for(const [key,value] of Object.entries(values)){
+   forgedChild.getMap(name).set(key,name===`recipe:${encodeURIComponent(recipeId)}`&&key==='title'?'Changed baseline':value);
+  }
+ }
+ assert.deepEqual(forgedChild.frontiers(),originalSeed.frontiers());
+ writeChild(extendChild(forgedChild));
+ reopenFresh();
+ await assert.rejects(()=>install(),/CORRUPT/);
+ await assert.rejects(()=>readAuthority(freshStorage,scope,a.root.head,a.provider),/CORRUPT/);
+ freshDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(installedChild,childSlot);
 
  assert.equal(must(await freshStorage.reopenDocument(scope.id,ar.scope.documentId)),null);
  assert.equal(must(await freshStorage.reopenDocument(scope.id,a.runtime.scope.documentId)),null);

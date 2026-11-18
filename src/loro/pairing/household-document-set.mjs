@@ -7,6 +7,7 @@ import {verifyPublicParent} from './household-recipient-proof.mjs';
 import {durableSession} from './durable-session.mjs';
 import {makeKeyPackage,verifyStoredKeyPackage,withOpenedKeyPackage} from './key-package.mjs';
 import {loadLoroDoc} from '../app/loro-document.mjs';
+import {policyBaseline,verifyRetainedPolicyBaseline} from '../authority/policy-baseline.mjs';
 
 const hex=bytes=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 const decoder=new TextDecoder('utf-8',{fatal:true});
@@ -178,6 +179,20 @@ export async function readInstalledHouseholdDocumentSet({sodium,storage,scope,pi
   if(!same(guards.sort(),publication.guardIds) || !same(checked.next,publication.nextAuthority) ||
     publication.grantHash!==checked.grantHash || publication.manifest.id!==item.admission.grant.projectionManifestHash ||
     !same(publication.manifest.bytes,authorityBytes(item.admission.manifest)))throw Error('INVALID_AUTHORITY');
+  for(const {documentId,seed} of documents){
+    const retained=must(await storage.reopenDocument(scope.id,documentId));
+    if(!retained)throw Error('CORRUPT');
+    if(retained.revision===0){
+      if(retained.bytes.length!==seed.snapshot.length||
+        retained.bytes.some((byte,index)=>byte!==seed.snapshot[index]))throw Error('CORRUPT');
+      continue;
+    }
+    const baseline=new LoroDoc();
+    baseline.import(seed.snapshot);
+    try{
+      await verifyRetainedPolicyBaseline(LoroDoc,retained,await policyBaseline(baseline,provider),provider);
+    }catch{throw Error('CORRUPT');}
+  }
   return {mode,parentState,state:nextState,documents,item,selection,publication};
 }
 
