@@ -44,6 +44,7 @@ test('v4 seed rejects invalid values even with one insert per field', () => {
     }],
     ['purchase pantry IDs', s => { s.purchases.buy.pantryItemIds = [hidden]; }],
     ['purchase author', s => { s.purchases.buy.author = hidden; }],
+    ['aliased list map', s => { s['shopping-list:%6C'] = s['shopping-list:l']; delete s['shopping-list:l']; }],
     ['duplicate cycle owner', s => { s['shopping-list:other'].currentCycleId = 'cycle'; delete s['shopping-cycles']['other-cycle']; }],
     ['missing current cycle', s => { delete s['shopping-cycles']['other-cycle']; }],
     ['cycle on another list', s => { s['shopping-cycles'].cycle.listId = 'other'; }],

@@ -101,7 +101,8 @@ export function verifyCurrentSeed({LoroDoc,snapshot,seed,schemaVersion=1,require
    let listId;
    try { listId=decodeURIComponent(name.slice('shopping-list:'.length)); }
    catch { throw Error('INVALID_SEED'); }
-   if(!nonemptyText(listId)||cycleOwners.has(cycleId)||state['shopping-cycles']?.[cycleId]?.listId!==listId)throw Error('INVALID_SEED');
+   if(!nonemptyText(listId)||name!==mapName('shopping-list',listId)||cycleOwners.has(cycleId)||
+     state['shopping-cycles']?.[cycleId]?.listId!==listId)throw Error('INVALID_SEED');
    cycleOwners.set(cycleId,listId);
   }
   cycleIds.add(cycleId);
