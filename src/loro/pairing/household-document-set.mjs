@@ -196,6 +196,25 @@ export async function readInstalledHouseholdDocumentSet({sodium,storage,scope,pi
   return {mode,parentState,state:nextState,documents,item,selection,publication};
 }
 
+/** Create a resolver only after independently verifying the installed set.
+ * Callers must separately authorize the signer and object against the current
+ * authenticated catalog before using opened content in the application. */
+export async function installedDocumentSetContent(args, keys) {
+  const checked=await readInstalledHouseholdDocumentSet(args);
+  const manifest=checked.item.admission.manifest;
+  const branchHead=checked.selection.to;
+  const records=[checked.publication.localKey.record,...checked.publication.documentSet.childKeys];
+  const entries=new Map(manifest.entries.map((entry,index)=>[entry.documentId,records[index]]));
+  const scopeId=args.scope.id, epochId=manifest.newEpochId, generation=manifest.newGeneration;
+  return (ref,fn,header)=>{
+    if(!header || ref!==epochId || header.scopeId!==scopeId || header.branchHead!==branchHead ||
+      header.epochId!==epochId || header.documentGeneration!==generation || !entries.has(header.documentId))
+      throw Error('INVALID_AUTHORITY');
+    const entry=entries.get(header.documentId);
+    return keys.use(entry.operationId,entry.identity,fn);
+  };
+}
+
 /** Explicit complete-set candidate. Binding and writing all selected documents
  * precede access to the recipient-specific file/release. */
 export async function publishHouseholdDocumentSet({storage,scope,pin,provider,sodium,sessionStore,keys,master,

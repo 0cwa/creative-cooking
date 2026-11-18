@@ -54,7 +54,7 @@ export function candidateCodec(provider) {
     if (!(value instanceof Uint8Array) || value.length > LIMIT || !id(ref)) throw Error('MALFORMED');
     const aad = domain(kind + '/header',h);
     const plaintext = new Uint8Array(value);
-    const encrypted = kind === 'content' ? await provider.encrypt(ref,plaintext,aad) : await provider.wrap(h.recipientDevice,ref,aad);
+    const encrypted = kind === 'content' ? await provider.encrypt(ref,plaintext,aad,h) : await provider.wrap(h.recipientDevice,ref,aad);
     if (!(encrypted instanceof Uint8Array) || encrypted.length < 16 || encrypted.length > LIMIT + 256) throw Error('MALFORMED');
     const unsigned = {kind,header:h,encrypted:hex(encrypted)};
     const signature = await provider.sign(signingKeyRef ?? (kind === 'content' ? h.authorDevice : h.senderDevice),domain(kind + '/signature',unsigned));

@@ -15,7 +15,8 @@ import sodium from 'libsodium-wrappers';
 import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
-import {candidateCodec} from '../crypto/candidate.mjs';
+import {candidateCodec,SUITE} from '../crypto/candidate.mjs';
+import {localProvider} from './local-provider.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
@@ -37,7 +38,7 @@ import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
 import {prepareCurrentDocumentSet,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
-import {householdDocumentSetRelease,publishHouseholdDocumentSet,readInstalledHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
+import {householdDocumentSetRelease,publishHouseholdDocumentSet,readInstalledHouseholdDocumentSet,installedDocumentSetContent} from '../pairing/household-document-set.mjs';
 import {encodeHouseholdDocumentSetFile,installHouseholdFile,sealHouseholdFile} from '../pairing/household-file.mjs';
 import {durableSession,householdSessionContextBytes} from '../pairing/durable-session.mjs';
 import {ceremonyBytes} from '../pairing/candidate-v2.mjs';
@@ -1046,6 +1047,35 @@ test('selected recipe shopping copies and current-only admission survive durable
  const sponsorSelected=await readInstalledHouseholdDocumentSet(sealOptions);
  const newcomerSelected=await readInstalledHouseholdDocumentSet({...newcomerOptions,operationId});
  assert.deepEqual(newcomerSelected.documents,sponsorSelected.documents);
+ // Exercise the production codec against the independently installed catalogs.
+ const sponsorCatalog=a.storage.localKeys(sponsorMaster,sodium);
+ const newcomerCatalog=freshStorage.localKeys(newcomerMaster,sodium);
+ const sponsorContent=await installedDocumentSetContent(sealOptions,sponsorCatalog);
+ const newcomerContent=await installedDocumentSetContent({...newcomerOptions,operationId},newcomerCatalog);
+ const signingRef=sodium.to_hex(a.signingTestKey.publicKey);
+ const signerKeys={use:(op,identity,fn)=>op==='test-signing'?fn(a.signingTestKey.privateKey):sponsorCatalog.use(op,identity,fn)};
+ const sender=candidateCodec(localProvider(sodium,signerKeys,{signing:{publicKey:signingRef,operationId:'test-signing'},content:sponsorContent}));
+ const receiver=candidateCodec(localProvider(sodium,newcomerCatalog,{signing:{publicKey:''},content:newcomerContent}));
+ const routingManifest=sponsorSelected.item.admission.manifest;
+ const header={version:1,suiteId:SUITE,scopeId:scope.id,documentId:routingManifest.newDocumentId,
+  documentGeneration:routingManifest.newGeneration,branchHead:eventHash,policyHashes:[],epochId:routingManifest.newEpochId,
+  authorDevice:signingRef,deviceSequence:1,predecessorRefs:[],semanticEffectIds:[],payloadKind:'snapshot'};
+ const payload=new Uint8Array([1,2,3]);
+ for(const documentId of [routingManifest.newDocumentId,routingManifest.entries[1].documentId]){
+  const h={...header,documentId};
+  const object=await sender.sealContent(h,payload,h.epochId);
+  assert.deepEqual((await receiver.openContent(object.bytes)).value,payload);
+  for(const bad of [{scopeId:'wrong'},{branchHead:'wrong'},{epochId:'wrong'}, {documentGeneration:h.documentGeneration+1},{documentId:'wrong'}])
+   await assert.rejects(()=>sender.sealContent({...h,...bad},payload,h.epochId),/INVALID_AUTHORITY/);
+ }
+ // A validly signed child envelope encrypted with the root key must not open.
+ const rootOnly=(ref,fn)=>sponsorCatalog.use(sponsorSelected.publication.localKey.record.operationId,sponsorSelected.publication.localKey.record.identity,fn);
+ const wrongSender=candidateCodec(localProvider(sodium,signerKeys,{signing:{publicKey:signingRef,operationId:'test-signing'},content:rootOnly}));
+ const wrongObject=await wrongSender.sealContent({...header,documentId:routingManifest.entries[1].documentId},payload,header.epochId);
+ await assert.rejects(()=>receiver.openContent(wrongObject.bytes));
+ const wrongScope=await wrongSender.sealContent({...header,scopeId:'wrong'},payload,header.epochId);
+ await assert.rejects(()=>receiver.openContent(wrongScope.bytes),/INVALID_AUTHORITY/);
+
  assert.equal((await readAuthority(freshStorage,scope,a.root.head,a.provider)).activeHead,eventHash);
  assert.equal(newcomerSelected.publication.documentSet.catalog.length,3);
  const beforeReplay=freshRows();
