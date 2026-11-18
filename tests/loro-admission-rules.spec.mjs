@@ -87,6 +87,32 @@ test('fresh setup bounds fixed quorum by the actual electorate and preserves the
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Fixed quorum of 1. Requires 1 of 1 existing adults.');
 });
 
+test('fresh setup resumes one reserved workspace after a failed ready write', async ({page}) => {
+  const key='creative-cooking-storage-choice-v1';
+  await page.goto('./');
+  await page.getByRole('radio', {name:/Every adult/}).click();
+  await page.evaluate(key=>{
+    const save=Storage.prototype.setItem;
+    Storage.prototype.setItem=function(name,value){
+      if(name===key&&value.startsWith('local:'))throw Error('test: ready write failed');
+      return save.call(this,name,value);
+    };
+  },key);
+  await button(page,'Start fresh local preview').click();
+  await expect(page.getByText('test: ready write failed')).toBeVisible();
+  const saved=await page.evaluate(key=>localStorage.getItem(key),key);
+  expect(saved).toMatch(/^pending:/);
+  const {name,policy}=JSON.parse(saved.slice('pending:'.length));
+  expect(policy).toEqual({kind:'unanimous',fixedCount:null});
+  await page.reload();
+  await button(page,'Review household policy').click();
+  await button(page,'Accept this household policy').click();
+  expect(await page.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
+  await button(page,'Open settings').click();
+  await button(page,'Manage adult admission rules').click();
+  await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 1 of 1 existing adults.');
+});
+
 test('two adults review, sign and retain alternative rules without changing the open household', async ({browser, baseURL}) => {
   test.setTimeout(120_000);
   const contexts = await Promise.all([0, 1].map(() => browser.newContext({baseURL, acceptDownloads:true})));

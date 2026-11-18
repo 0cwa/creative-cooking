@@ -3,6 +3,7 @@ import {RecoveryStart} from '@/loro/app/RecoveryStart';
 import {PolicySetup} from '@/loro/disclosure/PolicySetup';
 import {AdmissionRulePicker, admissionPolicyFromDraft, type AdmissionRuleDraft} from '@/loro/app/AdmissionRulePicker';
 import {validAdmissionPolicy} from '@/loro/authority/validator.mjs';
+import {initialAdmissionPolicy} from '@/loro/app/admission-rule.mjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Platform, ScrollView, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
@@ -83,6 +84,18 @@ function AccountWorkspaceBootstrap() {
   return null;
 }
 
+const webChoiceKey = 'creative-cooking-storage-choice-v1';
+const webWorkspaceKey = 'creative-cooking-local-workspace-v1';
+const pendingPrefix = 'pending:';
+
+function readPendingWebChoice(mode: string) {
+  const record = JSON.parse(mode.slice(pendingPrefix.length));
+  if (!record || Object.keys(record).sort().join(',') !== 'name,policy,version' ||
+    record.version !== 1 || typeof record.name !== 'string' ||
+    !/^cooking-[a-f0-9-]{36}$/.test(record.name) || !validAdmissionPolicy(record.policy,1)) throw Error('Invalid pending workspace');
+  return {name:record.name as string,policy:initialAdmissionPolicy(record.policy)};
+}
+
 export default function RootLayout() {
   const [choice,setChoice]=useState<'loading'|'choose'|'locked'|'legacy'|'local'|'policy'>('loading');
   const [workspace,setWorkspace]=useState<any>(null);
@@ -117,13 +130,18 @@ export default function RootLayout() {
     if(Platform.OS!=='web'){if(active)setChoice('choose');return;}
     let opened:any=null,adopted=false;
     try{
-      const mode=globalThis.localStorage.getItem('creative-cooking-storage-choice-v1');
+      const mode=globalThis.localStorage.getItem(webChoiceKey);
       if(mode==='legacy'){if(active)setChoice('legacy');return;}
-      if(mode?.startsWith('local:')){
+      if(mode&&(mode.startsWith('local:')||mode.startsWith(pendingPrefix))){
+        const pending=mode.startsWith(pendingPrefix)?readPendingWebChoice(mode):null;
+        const name=pending?.name??mode.slice(6);
         const {openLocalWorkspace}=await import('@/loro/app/bootstrap');
-        opened=await openLocalWorkspace(mode.slice(6));
+        opened=pending?await openLocalWorkspace(name,true,pending.policy):await openLocalWorkspace(name);
         if(active){
-          globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',mode.slice(6));
+          const ready=`local:${name}`,current=globalThis.localStorage.getItem(webChoiceKey);
+          if(current!==mode&&current!==ready)throw Error('Workspace choice changed while opening.');
+          globalThis.localStorage.setItem(webWorkspaceKey,name);
+          if(pending&&current!==ready)globalThis.localStorage.setItem(webChoiceKey,ready);
           setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;
         }
         return;
@@ -133,7 +151,27 @@ export default function RootLayout() {
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
   const legacy=()=>{try{if(Platform.OS==='web')globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy')}catch{Alert.alert('Workspace choice was not saved','Your existing workspace will open for this session. This browser could not remember your selection.')}setChoice('legacy')};
-  const fresh=async()=>{setChoice('loading');setError(null);let opened:any=null,adopted=false;try{if(Platform.OS==='android'){const {nativeChoiceStore}=await import('@/loro/native/choice-store');opened=await nativeChoiceStore.create(admissionPolicy);setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;return}const {openLocalWorkspace}=await import('@/loro/app/bootstrap');const name=`cooking-${crypto.randomUUID()}`;opened=await openLocalWorkspace(name,true,admissionPolicy);globalThis.localStorage.setItem('creative-cooking-local-workspace-v1',name);globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true}catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}finally{if(opened&&!adopted)opened.close()}};
+  const fresh=async()=>{
+    setChoice('loading');setError(null);
+    try{
+      if(Platform.OS==='android'){
+        const {nativeChoiceStore}=await import('@/loro/native/choice-store');
+        const opened=await nativeChoiceStore.create(admissionPolicy);
+        setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');
+        return;
+      }
+      const policy=initialAdmissionPolicy(admissionPolicy);
+      const locks=globalThis.navigator?.locks;
+      if(!locks)throw Error('LOCK_UNAVAILABLE');
+      await locks.request('creative-cooking/web-workspace-choice/v1',()=>{
+        const mode=globalThis.localStorage.getItem(webChoiceKey);
+        if(mode?.startsWith(pendingPrefix)||mode?.startsWith('local:'))return;
+        const record={version:1,name:`cooking-${crypto.randomUUID()}`,policy};
+        globalThis.localStorage.setItem(webChoiceKey,pendingPrefix+JSON.stringify(record));
+      });
+      setOpenAttempt(attempt=>attempt+1);
+    }catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}
+  };
   const returnToOriginal=async()=>{
     setChoice('loading');
     try{
