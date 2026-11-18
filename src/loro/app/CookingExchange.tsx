@@ -32,6 +32,7 @@ export function CookingExchange() {
     const {selection,selectedHousehold} = workspace.householdPairing;
     const update = async () => {
       const release = app.beginWorkspaceTransition();
+      let reloadRequested = false;
       try {
         if (app.localPersistenceStatus === 'error') throw Error('Retry local saving before receiving an update');
         await app.flushCurrentWorkspace();
@@ -41,17 +42,24 @@ export function CookingExchange() {
           return;
         }
         if (web) {
-          globalThis.location.reload();
+          try {
+            globalThis.location.reload();
+            reloadRequested = true;
+          } catch {
+            setStatus('The encrypted update was applied. Reload to update this view.');
+          }
           return;
         }
+        let message = 'The encrypted update was applied.';
         try {
           await app.refreshSharedCooking?.();
-          setStatus('The encrypted update was applied.');
         } catch {
-          setStatus('The encrypted update was applied. Retry cooking refresh to update this view.');
+          message += ' Retry cooking refresh to update this view.';
         }
-        await refresh();
-      } finally { release(); }
+        setStatus(message);
+        try { await refresh(); }
+        catch { setStatus(`${message} Refresh the update list to try again.`); }
+      } finally { if (!reloadRequested) release(); }
     };
     if (web) await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, update);
     else await update(); // Native file operations hold their own selection lock after local saves drain.
