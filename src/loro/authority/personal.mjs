@@ -51,6 +51,7 @@ const same=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 const snapshotHash=(provider,state)=>digest(provider,'personal-authority-state',state);
 export const personalDataCommitment=(provider,purpose,data)=>digest(provider,`personal-rotation-${purpose}`,hex(data));
 const maximumHistory=1048576;
+const maximumDevices=128;
 const usablePeer=p=>validPeer(p)&&p!=='18446744073709551615';
 const rotationFields=['version','scopeId','ownerId','parentSnapshot','sponsorDeviceId','operationId',
  'sourceDocumentId','sourceRevision','sourceHash','documentId','generation','epochId','snapshotHash','keyHash',
@@ -74,7 +75,8 @@ async function replayAdmission(root,scope,provider,previous,item){
  if(!exact(item,['admission','signature']))throw Error('MALFORMED');
  const a=item.admission,payload=personalAdmissionBytes(a),signer=root.devices.find(x=>x.active&&x.deviceId===a.sponsorDeviceId),signature=sig(item.signature);
  if(!signer||!signature||a.scopeId!==scope.id||a.ownerId!==root.ownerId||
-  a.parentSnapshot!==await snapshotHash(provider,previous)||(previous.version===3&&(!usablePeer(a.peerId)||a.peerId===root.rotation.seedPeerId))||
+  a.parentSnapshot!==await snapshotHash(provider,previous)||(previous.version===3&&
+    (root.devices.length>=maximumDevices||!usablePeer(a.peerId)||a.peerId===root.rotation.seedPeerId))||
   root.devices.some(x=>x.deviceId===a.recipientDeviceId||x.peerId===a.peerId||
     (previous.version===3&&x.signingKeyRef===a.recipientSigningKeyRef))||
   !await provider.verify(signer.signingKeyRef,payload,signature))throw Error('INVALID_PROOF');
@@ -98,7 +100,7 @@ async function replayRotation(root,scope,provider,previous,item,usedDocuments,us
  for(const d of r.recipients){
   const prior=root.devices.find(x=>x.deviceId===d.deviceId);
   if(prior){if(!prior.active||prior.signingKeyRef!==d.signingKey||prior.peerId!==d.peerId)throw Error('INVALID_RECIPIENTS');continue}
-  if(root.devices.length>=128||root.devices.some(x=>x.peerId===d.peerId||x.signingKeyRef===d.signingKey))throw Error('INVALID_RECIPIENTS');
+  if(root.devices.length>=maximumDevices||root.devices.some(x=>x.peerId===d.peerId||x.signingKeyRef===d.signingKey))throw Error('INVALID_RECIPIENTS');
   root.devices.push({deviceId:d.deviceId,ownerId:root.ownerId,signingKeyRef:d.signingKey,peerId:d.peerId,active:true});
  }
  const retiredKeys=new Set(root.devices.filter(d=>r.retiredDevices.includes(d.deviceId)).map(d=>d.signingKeyRef));

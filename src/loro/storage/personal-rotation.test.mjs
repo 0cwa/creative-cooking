@@ -8,7 +8,7 @@ import sodium from 'libsodium-wrappers';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import {openSQLiteStorage} from './sqlite.ts';
 import {domain} from '../authority/validator.mjs';
-import {initializePersonalAuthority,personalRootPin,preparePersonalAdmission,personalAdmissionBytes,
+import {initializePersonalAuthority,personalRootPin,preparePersonalAdmission,personalAdmissionBytes,preparePersonalRotation,personalRotationBytes,
  resolvePersonalAuthority} from '../authority/personal.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -82,6 +82,39 @@ async function makeDevice(deviceId,path){
  device.setProvider();
  return device;
 }
+
+test('v3 admissions stop at 128 devices and legacy v2 histories still replay',async t=>{
+ const sponsor=await makeDevice('sponsor',':memory:');
+ t.after(()=>sponsor.close());
+ const signingRef=i=>i.toString(16).padStart(64,'0');
+ const ownerId='owner';
+ const devices=[{deviceId:sponsor.deviceId,ownerId,signingKeyRef:sponsor.signingKey,peerId:'1',active:true},
+  ...Array.from({length:127},(_,i)=>({deviceId:`device-${String(i).padStart(3,'0')}`,ownerId,
+   signingKeyRef:signingRef(i+2),peerId:String(i+2),active:true}))];
+ const root={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',scopeId:scope.id,ownerId,
+  signerDeviceId:sponsor.deviceId,devices,documentId:'doc',generation:1,epochId:epoch};
+ const pin=await personalRootPin(sponsor.provider,root);
+ const sign=async bytes=>sodium.to_hex(await sponsor.provider.sign(sponsor.signingKey,bytes));
+ await initializePersonalAuthority(sponsor.storage,scope,pin,sponsor.provider,
+  {version:1,root,signature:await sign(domain('personal-root-signature',root))});
+ const parent=value(await sponsor.storage.readPairingAuthority(scope));
+ const admissionFor=async record=>{
+  const admission={version:1,scopeId:scope.id,ownerId,parentSnapshot:record.authorizationSnapshot,sponsorDeviceId:sponsor.deviceId,
+   recipientDeviceId:'extra',recipientSigningKeyRef:signingRef(129),recipientWrappingKeyRef:signingRef(130),
+   recipientSigningKey:signingRef(129),recipientWrappingKey:signingRef(130),peerId:'129',transcriptHash:'a'.repeat(64),guardId:'guard'};
+  return {admission,signature:await sign(personalAdmissionBytes(admission))};
+ };
+ const legacy=await preparePersonalAdmission(sponsor.storage,scope,pin,sponsor.provider,await admissionFor(parent));
+ const rotation={version:1,scopeId:scope.id,ownerId,parentSnapshot:parent.authorizationSnapshot,sponsorDeviceId:sponsor.deviceId,
+  operationId:'rotation',sourceDocumentId:root.documentId,sourceRevision:null,sourceHash:null,documentId:'new-doc',generation:2,
+  epochId:'new-epoch',snapshotHash:'a'.repeat(64),keyHash:'b'.repeat(64),retiredDevices:[],seedPeerId:'130',
+  recipients:devices.slice(1).map(d=>({deviceId:d.deviceId,signingKey:d.signingKeyRef,wrappingKey:d.signingKeyRef,peerId:d.peerId,requestHash:'c'.repeat(64)}))};
+ const next=await preparePersonalRotation(parent,pin,sponsor.provider,{rotation,signature:await sign(personalRotationBytes(rotation))});
+ const store=record=>({readPairingAuthority:async()=>({ok:true,value:record})});
+ assert.equal((await resolvePersonalAuthority(store(legacy.next),scope,pin,sponsor.provider,sponsor.deviceId)).devices.length,129);
+ assert.equal((await resolvePersonalAuthority(store(next),scope,pin,sponsor.provider,sponsor.deviceId)).devices.length,128);
+ await assert.rejects(async()=>preparePersonalAdmission(store(next),scope,pin,sponsor.provider,await admissionFor(next)),/INVALID_PROOF/);
+});
 
 test('signed rotation guards the exact reviewed source and authority and atomically publishes and installs across disk reopen',async t=>{
  const dir=mkdtempSync(join(process.env.RECOVERY_TEST_DIR??homedir(),'cc-rotation-'));
@@ -173,7 +206,20 @@ test('signed rotation guards the exact reviewed source and authority and atomica
   assert.equal(value(await sponsor.storage.listRecords('document',scope.id)).length,1);
  }
  sponsor.failAt(0);
- const result=await service.publish(review,[lost.deviceId],requests);
+ let waiting=0,release;
+ const ready=new Promise(resolve=>{release=resolve;});
+ const overlapping=await sponsor.service(pin,{storage:race(async()=>{
+  if(++waiting===2)release();
+  await ready;
+ })});
+ const results=await Promise.all([
+  overlapping.publish(review,[lost.deviceId],requests),
+  overlapping.publish(review,[lost.deviceId],requests)
+ ]);
+ const result=results.find(entry=>!entry.replayed);
+ assert.ok(result);
+ assert.deepEqual(results.find(entry=>entry.replayed),{...result,replayed:true});
+ await assert.rejects(()=>service.publish(review,[lost.deviceId],requests.toReversed()),/CONFLICT/);
  assert.equal(result.replayed,false);
  assert.notEqual(result.head,pin);
  const newAuthority=value(await sponsor.storage.readPairingAuthority(scope));

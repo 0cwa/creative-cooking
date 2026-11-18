@@ -120,11 +120,25 @@ export function personalRotation({sodium,storage,keys,provider,LoroDoc,deviceId,
   if(!id(review?.operationId)||!review.source||!Array.isArray(retiredDevices)||!Array.isArray(requests)||requests.length>127)throw Error('INVALID_INPUT');
   retiredDevices.sort();
   const requestHash=recoveryHash(sodium,[review,retiredDevices,requests]);
-  const saved=must(await storage.readPersonalRotation(selected.scopeId,review.operationId));
-  if(saved){
+  async function completed(){
+   const saved=must(await storage.readPersonalRotation(selected.scopeId,review.operationId));
+   if(!saved)return null;
    if(saved.requestHash!==requestHash)throw Error('CONFLICT');
    return {transfer:saved.transfer,head:saved.head,scopeId:selected.scopeId,replayed:true};
   }
+  const saved=await completed();
+  if(saved)return saved;
+  try{return await publishNew(review,retiredDevices,requests,requestHash);}
+  catch(error){
+   // A competing publication can advance authority or claim the key operation.
+   if(error?.message==='CONFLICT'||error?.message==='LOCKED'){
+    const saved=await completed();
+    if(saved)return saved;
+   }
+   throw error;
+  }
+ }
+ async function publishNew(review,retiredDevices,requests,requestHash){
   const {resolved,expected}=await exactParent();
   if(review.pin!==pin||review.parent!==expected.authorizationSnapshot||
     review.authorityRevision!==expected.revision||review.source.documentId!==resolved.scope.documentId)throw Error('CONFLICT');
