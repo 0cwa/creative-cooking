@@ -3,6 +3,10 @@ import sodium from 'libsodium-wrappers';
 import {joinedHouseholdAuthority} from './joined-household-authority.mjs';
 import {openSequences} from './sequences.web.ts';
 
+const request=<T,>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{
+ req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+});
+
 // The recipient receipt and selected authority are authenticated before the
 // separate counter is made available. A pending counter has never been handed
 // to a runtime, so interrupted initialization can safely resume; an active
@@ -21,19 +25,46 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    await joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value});
   if(mode!=='prepare'&&!verified)throw Error('MISSING_ADMISSION');
   const db=await new Promise<IDBDatabase>((resolve,reject)=>{const q=indexedDB.open(`${name}-joined`,1);q.onupgradeneeded=()=>q.result.createObjectStore('enrollments');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
-  const get=()=>new Promise<any>((resolve,reject)=>{const tx=db.transaction('enrollments','readonly'),q=tx.objectStore('enrollments').get(scope.id);q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
-  const put=(value:any)=>new Promise<void>((resolve,reject)=>{const tx=db.transaction('enrollments','readwrite');tx.objectStore('enrollments').put(value,scope.id);tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}});
+  const bindingKey=[scope.id,'counter-binding'];
+  const put=(value:any)=>new Promise<void>((resolve,reject)=>{
+   const tx=db.transaction('enrollments','readwrite'),store=tx.objectStore('enrollments');
+   tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error??Error('ENROLLMENT_WRITE_FAILED'));tx.onerror=()=>{};
+   try{
+    store.put(value,scope.id);
+    if(value.version===2)store.put(binding,bindingKey);
+   }catch(error){tx.abort();reject(error);}
+  });
   let sequences:Awaited<ReturnType<typeof openSequences>>|undefined;
   try {
-   let enrollment=await get();
-   if(!enrollment){if(mode!=='prepare'||found.value||verified)throw Error('MISSING_ENROLLMENT');const established=await storage.householdRecipient.hasDevice(scope.id,deviceId);if(!established.ok||established.value)throw Error('MISSING_ENROLLMENT');enrollment={version:2,stage:'pending',scopeId:scope.id,pin,deviceId,operationId,sequenceName};await put(enrollment)}
-   const legacyName=enrollment.version===1&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
-   const boundName=enrollment.version===2&&enrollment.sequenceName===sequenceName;
-   if(!(boundName||legacyName&&!(verified?.installedSet&&!found.value))||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId)throw Error('ENROLLMENT_CONFLICT');
-   if(mode==='prepare'){if(enrollment.stage!=='pending'&&!found.value&&!verified)throw Error('ENROLLMENT_CONFLICT');return null;}
+   const store=db.transaction('enrollments','readonly').objectStore('enrollments');
+   const [saved,savedBinding]=await Promise.all([request(store.get(scope.id)),request(store.get(bindingKey))]);
+   let enrollment=saved;
+   const pending={version:2,stage:'pending',scopeId:scope.id,pin,deviceId,operationId,sequenceName};
+   if(enrollment===undefined){
+    if(mode!=='prepare'||savedBinding!==undefined||found.value||verified)throw Error('MISSING_ENROLLMENT');
+    const established=await storage.householdRecipient.hasDevice(scope.id,deviceId);
+    if(!established.ok||established.value)throw Error('MISSING_ENROLLMENT');
+    await put(pending);
+    return null;
+   }
+   const legacyName=savedBinding===undefined&&enrollment?.version===1&&typeof enrollment.sequenceName==='string'&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
+   const boundName=enrollment?.version===2&&enrollment.sequenceName===sequenceName&&(savedBinding===undefined||savedBinding===binding);
+   if(!(boundName||legacyName)||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId)throw Error('ENROLLMENT_CONFLICT');
+   if(mode==='prepare'){
+    if(enrollment.stage!=='pending'&&!found.value&&!verified)throw Error('ENROLLMENT_CONFLICT');
+    if(boundName&&savedBinding===undefined)await put(enrollment);
+    return null;
+   }
    if(mode==='open'&&enrollment.stage!=='active')throw Error('INCOMPLETE_ENROLLMENT');
-   sequences=await openSequences(enrollment.sequenceName,[scope.id],mode==='finalize'&&enrollment.stage==='pending',boundName?binding:null);
-   if(mode==='finalize'&&enrollment.stage==='pending')await put({...enrollment,stage:'active'});
+   // A legacy pending counter has never been exposed. Save its new identity
+   // before opening it so a retry can only initialize the same bound counter.
+   if(legacyName&&enrollment.stage==='pending'){
+    await put(pending);
+    enrollment=pending;
+   }
+   const finalize=mode==='finalize'&&enrollment.stage==='pending';
+   sequences=await openSequences(enrollment.sequenceName,[scope.id],finalize,enrollment.version===2?binding:null);
+   if(finalize||boundName&&savedBinding===undefined)await put({...enrollment,stage:'active'});
    return {sequences,...verified!};
   } catch(e) {sequences?.close();throw e} finally {db.close()}
  });
