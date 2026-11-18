@@ -742,7 +742,7 @@ async function routedReadmission(a,b,lost,context,setup,scope,kits){
  await expect(fresh.getByText(/^Send this proof of the new device/)).toBeVisible();
  const response=JSON.parse(await recoveryOutput(fresh).textContent());
  await recoverSend(b,response,'Prepare readmission decision');
- await expect(b.getByText('INVALID_SPONSOR',{exact:true})).toBeVisible();
+ await expect(b.getByText(/^Use the signed parent export from the sponsoring device/)).toBeVisible();
  await recoveryButton(b,'Show readmission recipient binding').click();
  await expect(recoveryOutput(b)).toBeVisible();
  const memberBinding=await recoveryOutput(b).textContent();
