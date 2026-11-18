@@ -1,5 +1,6 @@
 import {readLocalQuarantine, REVIEW_LIMITS} from '../compromise/review.mjs';
 import {readContinuityHead} from './continuity-head.ts';
+import type {LocalKeyRecord,ReadyMasterCatalog} from './local-keys.ts';
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
 import type { ProjectionPublication, ProjectionAtomicStorage } from '../contracts/projection.ts';
@@ -13,6 +14,24 @@ type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promis
 type RotationSourceGuard = {
   source:{documentId:string;bytes:Uint8Array;revision:number}|null;
 } & ({} | {reviewId:string;review:unknown;original:{checkpoint:Uint8Array;objects:Uint8Array[]}});
+type PersonalSelection = {scopeId:string;pin:string};
+type PersonalRotationReceipt = {
+  requestHash:string;
+  transfer:null|{parent:string;item:unknown;senderWrappingKey:string;sealedSnapshot:string;packages:Record<string,string>};
+};
+type PersonalRotationWrite = {
+  deviceId:string;
+  operationId:string;
+  selection:{expected:PersonalSelection|null;next:PersonalSelection|null};
+  expected:PairingAuthorityRecord|null;
+  next:PairingAuthorityRecord;
+  source?:{documentId:string;revision:number|null;bytes:Uint8Array|null};
+  document:{id:string;bytes:Uint8Array};
+  epochId:string;
+  localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog};
+  identities:{commandId:string;effectId:string}[];
+  receipt:PersonalRotationReceipt;
+};
 type AuthorityExpectation = LocalCommit['expectedAuthority'];
 type HouseholdReadmissionRequest = {
   claim: {householdId:string;checkpoint:string;deviceId:string;nonce:string};
@@ -59,6 +78,17 @@ export const denseArray = (v: unknown, check: (item: any) => boolean): v is any[
 const decodeKeyBytes = (x: unknown): Uint8Array => { if (!denseArray(x,n=>Number.isInteger(n) && n>=0 && n<=255)) return corrupt(); return new Uint8Array(x); };
 const revision = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
 const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && denseArray(v.revisions, (x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision)) && v.revisions.length > 0;
+const validPersonalSelection = (value:unknown): value is PersonalSelection =>
+  fields(value,['scopeId','pin']) && validId(value.scopeId) && hexOf(value.pin,64);
+const sameRecord = (a:unknown,b:unknown) => JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
+const validPersonalReceipt = (value:unknown): value is PersonalRotationReceipt =>
+  fields(value,['requestHash','transfer']) && hexOf(value.requestHash,64) &&
+  (value.transfer===null || (fields(value.transfer,['parent','item','senderWrappingKey','sealedSnapshot','packages']) &&
+    typeof value.transfer.parent==='string' && value.transfer.parent.length<=2_200_000 && object(value.transfer.item) &&
+    hexOf(value.transfer.senderWrappingKey,64) && typeof value.transfer.sealedSnapshot==='string' &&
+    value.transfer.sealedSnapshot.length<=4_200_000 && object(value.transfer.packages) &&
+    Object.keys(value.transfer.packages).length<=127 &&
+    Object.values(value.transfer.packages).every(v=>typeof v==='string' && v.length<=32768)));
 const validateRecord = (k: string, v: any) => {
   if (v === undefined) return;
   const parts=JSON.parse(k),namespace=parts[0];
@@ -93,6 +123,8 @@ const validateRecord = (k: string, v: any) => {
     case 'projection-outbox': valid = fields(v,['packageId','recipientDevice']) && typeof v.packageId==='string' && typeof v.recipientDevice==='string'; break;
     case 'projection-pending': valid = typeof v==='string'; break;
     case 'projection-document': valid = fields(v,['generation','operationId']) && revision(v.generation) && typeof v.operationId==='string'; break;
+    case 'personal-selection': valid = validPersonalSelection(v); break;
+    case 'personal-rotation': valid = fields(v,['receipt','epochId','documentId','head']) && validPersonalReceipt(v.receipt) && [v.epochId,v.documentId,v.head].every(validId); break;
     case 'pairing-authority': valid = validatePairingAuthority(v).ok; break;
     case 'pairing-release': { const parsed = fields(v,['inputKey','release']) ? pairingReleaseKey(v.release) : null; valid = !!parsed && parsed.ok && parsed.value === v.inputKey; break; }
     case 'pairing-guard': case 'pairing-packet': case 'pairing-outbox': case 'personal-admission-release': valid = typeof v === 'string' && v.length > 0; break;
@@ -472,6 +504,89 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       for(const [k,v] of [[guard,checked.value],[packet,checked.value],[outbox,checked.value],[op,{inputKey:checked.value,release:r}],[transition,binding],[authorityKey,next]] as const){await tx.put(k,v);this.fault?.('personal-admission-release');}return {ok:true,value:{release:snapshot(r),replayed:false}};
     });}catch(e){return fail(mapError(e))}
   }
+  async readPersonalSelection(deviceId:string):Promise<Result<PersonalSelection|null,StorageError>> {
+    if(!validId(deviceId)) return {ok:false,error:'MALFORMED'};
+    try {
+      return await this.run(false,async tx=>({ok:true,value:snapshot(await tx.get(key('personal-selection',deviceId)))??null}));
+    } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+
+  async readPersonalRotation(scopeId:string,operationId:string):Promise<Result<(PersonalRotationReceipt&{head:string})|null,StorageError>> {
+    if(![scopeId,operationId].every(validId)) return {ok:false,error:'MALFORMED'};
+    try {
+      return await this.run(false,async tx=>{
+        const entry=await tx.get(key('personal-rotation',scopeId,operationId));
+        if(!entry)return {ok:true,value:null};
+        const doc=await tx.get(key('document',scopeId,entry.documentId));
+        if(!doc||await tx.get(key('document-owner',scopeId,entry.documentId))!==entry.head) return corrupt();
+        return {ok:true,value:snapshot({...entry.receipt,head:entry.head})};
+      });
+    } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+
+  /** The caller verifies the pinned personal signatures and key/snapshot commitments before publication. */
+  async commitPersonalRotation(input:PersonalRotationWrite):Promise<Result<{replayed:boolean},StorageError>> {
+    const {expected,next,localKey,source,document,selection,identities,receipt,epochId,operationId,deviceId}=input;
+    const scope=next?.scope?.id;
+    if(![deviceId,operationId,epochId,scope,document?.id].every(validId) || !validatePairingAuthority(next).ok ||
+      next.scope.kind!=='personal' || (expected!==null&&(!validatePairingAuthority(expected).ok||
+        expected.scope.id!==scope||expected.scope.kind!=='personal'||next.revision!==expected.revision+1||
+        next.acceptedParent===expected.acceptedParent)) ||
+      !validLocalRecord(localKey?.record)||!validMasterCatalog(localKey.catalog)||
+      !sameRecord(localKey.record.identity,{version:1,scope:next.scope,deviceId,purpose:'data',epochId})||
+      !(document.bytes instanceof Uint8Array)||document.bytes.length===0||document.bytes.length>2_097_152||
+      !validPersonalReceipt(receipt)||!selection||
+      (selection.expected!==null&&!validPersonalSelection(selection.expected))||
+      (selection.next!==null&&(!validPersonalSelection(selection.next)||selection.next.scopeId!==scope))||
+      !denseArray(identities,x=>fields(x,['commandId','effectId'])&&validId(x.commandId)&&validId(x.effectId))||
+      identities.length>4096||new Set(identities.map(x=>x.commandId)).size!==identities.length||
+      new Set(identities.map(x=>x.effectId)).size!==identities.length||
+      (source?(!expected||!validId(source.documentId)||source.documentId===document.id||
+        !(source.revision===null?source.bytes===null:revision(source.revision)&&source.bytes instanceof Uint8Array&&source.bytes.length<=2_097_152)):
+        selection.next===null)) return {ok:false,error:'MALFORMED'};
+    input=snapshot(input);
+    try {
+      return await this.run(true,async tx=>{
+        const {expected,next,localKey,source,document,selection,identities,receipt}=input;
+        const operationKey=key('personal-rotation',scope,operationId), authorityKey=key('pairing-authority','personal',scope);
+        const selectionKey=key('personal-selection',deviceId);
+        const documentKey=key('document',scope,document.id), ownerKey=key('document-owner',scope,document.id);
+        const old=await tx.get(operationKey);
+        if(old){
+          if(!sameRecord(old.receipt,receipt)||old.epochId!==epochId||
+            old.documentId!==document.id||old.head!==next.acceptedParent) conflict();
+          const durable=await findLocalKey(tx,localKey.record.operationId,localKey.record.identity);
+          if(!durable||!await tx.get(documentKey)||await tx.get(ownerKey)!==next.acceptedParent) corrupt();
+          return {ok:true,value:{replayed:true}};
+        }
+        if(!sameRecord(await tx.get(authorityKey)??null,expected)||
+          !sameRecord(await tx.get(selectionKey)??null,selection.expected)) conflict();
+        if(source&&expected){
+          const stored=await tx.get(key('document',scope,source.documentId));
+          const owner=await tx.get(key('document-owner',scope,source.documentId));
+          if(source.bytes ? stored?.revision!==source.revision||owner!==expected.acceptedParent||
+            !sameBytes(stored.bytes,source.bytes) : stored!==undefined||owner!==undefined) conflict();
+        }
+        if(await tx.get(documentKey)!==undefined||await tx.get(ownerKey)!==undefined) conflict();
+        const installed=await installLocalKey(tx,localKey.record,localKey.catalog);
+        if(!sameRecord(installed.record,localKey.record)) conflict();
+        for(const {effectId,commandId} of identities){
+          const command=key('projection-seed-command',scope,document.id,commandId);
+          const effect=key('projection-seed-effect',scope,document.id,effectId);
+          if(await tx.get(command)!==undefined||await tx.get(effect)!==undefined) conflict();
+          await tx.put(command,operationId);
+          await tx.put(effect,operationId);
+        }
+        await tx.put(documentKey,{bytes:document.bytes,revision:0});
+        await tx.put(ownerKey,next.acceptedParent);
+        await tx.put(authorityKey,next);
+        if(selection.next) await tx.put(selectionKey,selection.next);
+        await tx.put(operationKey,{receipt,epochId,documentId:document.id,head:next.acceptedParent});
+        return {ok:true,value:{replayed:false}};
+      });
+    } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+
   private async requireIncomingAuthor(tx: Tx, scopeId: string, authorDevice: string) {
     if (!validId(authorDevice)) throw new StorageFailure('MALFORMED');
     if (await readLocalQuarantine(tx,scopeId,authorDevice)) throw new StorageFailure('QUARANTINED');

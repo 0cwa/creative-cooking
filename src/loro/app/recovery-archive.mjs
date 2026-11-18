@@ -25,6 +25,8 @@ async function validate(s,body){
   if(!exact(b,['ref','operationId','identity'])||!id(b.ref)||!id(b.operationId)||b.ref!==body.catalog.keyRefs[i]||!validLocalIdentity(b.identity)||b.identity.scope.kind!=='personal'||b.identity.scope.id!==body.scopeId||b.identity.purpose!=='data'||b.identity.deviceId!==body.deviceId||refs.has(b.ref)||ops.has(b.operationId)||identities.has(JSON.stringify(b.identity)))throw Error('INVALID_ARCHIVE');
   refs.add(b.ref);ops.add(b.operationId);identities.add(JSON.stringify(b.identity));
  }
+ if(resolved.rotation&&(body.catalog.keyRefs.length!==1||body.catalog.keyRefs[0]!==resolved.scope.epochId||
+    body.catalog.trustedCheckpoints?.length!==1||body.catalog.trustedCheckpoints[0]!==resolved.scope.branchHead))throw Error('INVALID_ARCHIVE');
  if(!body.bindings.some(b=>b.identity.epochId===resolved.scope.epochId))throw Error('INVALID_ARCHIVE');
  if(body.snapshot!==null&&(!exact(body.snapshot,['documentId','bytes'])||body.snapshot.documentId!==resolved.scope.documentId||typeof body.snapshot.bytes!=='string'||body.snapshot.bytes.length>8*1024*1024||body.snapshot.bytes.length%2||!/^[0-9a-f]+$/.test(body.snapshot.bytes)))throw Error('INVALID_ARCHIVE');
  const epochs=new Set(body.bindings.map(b=>b.identity.epochId));
