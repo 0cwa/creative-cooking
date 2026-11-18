@@ -1,5 +1,5 @@
 // Host contract test only; native Android/Hermes proof must run separately.
-import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {readdirSync,rmSync} from 'node:fs';import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';import {openNativeWorkspaceWith,returnToOriginalNativeWorkspaceWith} from './bootstrap-core.mjs';import {executeAction} from '../app/action.mjs';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {copyFileSync,existsSync,readdirSync,rmSync} from 'node:fs';import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';import {openNativeWorkspaceWith,returnToOriginalNativeWorkspaceWith} from './bootstrap-core.mjs';import {executeAction} from '../app/action.mjs';
 import {prepareInitialPolicy,acceptInitialPolicy} from '../disclosure/setup.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {domain} from '../authority/validator.mjs';
@@ -142,6 +142,10 @@ test('fresh native workspaces use signed admission, durable selection and guarde
    existingCeremonies:[],selection
   });
   const bytes = await sponsor.transfer.seal({operationId,recipientDevice:recipient.deviceId});
+  const beforeAdmissionPath = join(dir,`${recipientName}-before-admission.sqlite`);
+  const beforeAdmission = new DatabaseSync(recipientPath);
+  try { beforeAdmission.prepare('VACUUM INTO ?').run(beforeAdmissionPath); }
+  finally { beforeAdmission.close(); }
   assert.ok(bytes.length > 48);
   const damaged = new Uint8Array(bytes);
   damaged[damaged.length-1] ^= 1;
@@ -304,6 +308,23 @@ test('fresh native workspaces use signed admission, durable selection and guarde
   const counter = new DatabaseSync(counterPath);
   assert.deepEqual(counter.prepare("SELECT name FROM sqlite_master WHERE type='table'").all(),[]);
   counter.close();
+
+  // Roll back the main database past the receipt, retaining the legacy active marker.
+  recipient.close();
+  recipient = null;
+  copyFileSync(beforeAdmissionPath,recipientPath);
+  rmSync(counterPath);
+  const legacy = new DatabaseSync(pairingPath);
+  try {
+   legacy.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,JSON.stringify(['enrollment',scope.id]));
+  } finally { legacy.close(); }
+  await returnToOriginalNativeWorkspaceWith(args(recipientName,false));
+  recipient = await openRecipient(false);
+  await assert.rejects(recipient.householdPairing.transfer.install({scope,bytes}),/MISSING_ADMISSION/);
+  assert.equal(existsSync(counterPath),false);
+  const rolledBack = new DatabaseSync(recipientPath);
+  try { assert.equal(rolledBack.prepare('SELECT value FROM loro_records WHERE key=?').get(enrollmentKey),undefined); }
+  finally { rolledBack.close(); }
 
  } finally {
   organizer?.close();

@@ -90,7 +90,7 @@ export function CookingDirect() {
     }, prepareImport:async () => {
       const current = latestApp.current;
       const release = current.beginWorkspaceTransition();
-      try { await current.flushCurrentWorkspace(); }
+      try { await withVisibleSelection(() => current.flushCurrentWorkspace()); }
       catch (error) { release(); throw error; }
       return {release, refresh:async () => {
         try { await withVisibleSelection(async () => { await current.refreshSharedCooking?.(); }); }

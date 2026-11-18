@@ -182,8 +182,17 @@ test('admitted browser devices independently verify their direct connection, ret
     // import may refresh the projection only after that same local action saves.
     await b.evaluate(() => {
       const put = IDBObjectStore.prototype.put;
+      const name = localStorage.getItem('creative-cooking-local-workspace-v1');
+      globalThis.observeDirectFlush = false;
+      globalThis.directFlushSelectionLocks = [];
       IDBObjectStore.prototype.put = function(value, key) {
-        if (typeof key === 'string' && key.startsWith('["document",')) throw Error('Injected local save failure');
+        if (typeof key === 'string' && key.startsWith('["document",')) {
+          if (globalThis.observeDirectFlush) {
+            globalThis.directFlushSelectionLocks.push(navigator.locks.query().then(({held}) =>
+              held.some(lock => lock.name === `creative-cooking/bootstrap/v1/${name}` && lock.mode === 'shared')));
+          }
+          throw Error('Injected local save failure');
+        }
         return put.call(this, value, key);
       };
       globalThis.restoreLocalWrite = () => { IDBObjectStore.prototype.put = put; };
@@ -258,11 +267,13 @@ test('admitted browser devices independently verify their direct connection, ret
         return put.call(this, value, key);
       };
     });
+    await b.evaluate(() => { globalThis.observeDirectFlush = true; });
     await button(a,'Send cooking updates').click();
     await visible(a,'1 update still waiting for the other device to apply. You can retry this batch.');
     await visible(a,'Peer receipts for this connection: 1 stored, 0 applied.');
     await visible(b,'Received here: 0 applied, 1 retained without applying.');
     expect(await durable(b,bHousehold)).toEqual({inbox:1, applied:0, 'receipt-state':0, receipt:0});
+    expect(await b.evaluate(() => Promise.all(globalThis.directFlushSelectionLocks))).toEqual([true]);
     await b.evaluate(() => {
       globalThis.restoreLocalWrite();
       const put = IDBObjectStore.prototype.put;
@@ -279,16 +290,20 @@ test('admitted browser devices independently verify their direct connection, ret
     await visible(a,'Peer receipts for this connection: 1 stored, 0 applied.');
     expect(await durable(b,bHousehold)).toEqual({inbox:1, applied:0, 'receipt-state':0, receipt:0});
     await b.evaluate(() => {
-      const put = IDBObjectStore.prototype.put;
+      const send = RTCDataChannel.prototype.send;
       const get = IDBObjectStore.prototype.get;
-      let appliedWritten = false;
-      IDBObjectStore.prototype.put = function(value, key) {
-        if (typeof key === 'string' && key.startsWith('["applied",')) appliedWritten = true;
-        return put.call(this, value, key);
+      let appliedSent = false;
+      RTCDataChannel.prototype.send = function(data) {
+        const result = send.call(this, data);
+        const message = data instanceof Uint8Array ? JSON.parse(new TextDecoder().decode(data)) : null;
+        if (message?.kind === 'receipt' && message.claims?.state === 'applied') {
+          appliedSent = true;
+          RTCDataChannel.prototype.send = send;
+        }
+        return result;
       };
       IDBObjectStore.prototype.get = function(key) {
-        if (appliedWritten && this.transaction.mode === 'readonly' && typeof key === 'string' && key.startsWith('["document",')) {
-          IDBObjectStore.prototype.put = put;
+        if (appliedSent && this.transaction.mode === 'readonly' && typeof key === 'string' && key.startsWith('["document",')) {
           IDBObjectStore.prototype.get = get;
           throw Error('Injected projection refresh failure after import');
         }

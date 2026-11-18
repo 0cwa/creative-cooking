@@ -109,12 +109,19 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         const key = enrollmentKey(scope.id);
         const enrollment = await workspaceRun(false, tx => tx.get(key));
         const identity = {version:1, scopeId:scope.id, pin, deviceId, operationId};
-        if (enrollment !== undefined && (!enrollment || !['pending', 'active'].includes(enrollment.stage) ||
-          Object.keys(enrollment).length !== Object.keys(identity).length + 1 ||
-          !Object.entries(identity).every(([field, value]) => enrollment[field] === value))) throw Error('ENROLLMENT_CONFLICT');
+        function checkEnrollment(record) {
+          if (record !== undefined && (!record || !['pending', 'active'].includes(record.stage) ||
+            Object.keys(record).length !== Object.keys(identity).length + 1 ||
+            !Object.entries(identity).every(([field, value]) => record[field] === value))) throw Error('ENROLLMENT_CONFLICT');
+        }
+        checkEnrollment(enrollment);
+        const legacy = enrollment?.stage === 'active' ? undefined :
+          await run(false, tx => tx.get(JSON.stringify(['enrollment', scope.id])));
+        checkEnrollment(legacy);
+        const alreadyActive = enrollment?.stage === 'active' || legacy?.stage === 'active';
         if (mode === 'prepare') {
           if (found.value) return null;
-          if (enrollment?.stage === 'active') throw Error('MISSING_ADMISSION');
+          if (alreadyActive) throw Error('MISSING_ADMISSION');
           const established = await storage.householdRecipient.hasDevice(scope.id, deviceId);
           if (!established.ok || established.value) throw Error('MISSING_ENROLLMENT');
           if (!enrollment) await workspaceRun(true, tx => tx.put(key, {...identity, stage:'pending'}));
@@ -128,7 +135,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
           receipt.scopeId !== scope.id) throw Error('INVALID_ADMISSION');
         const counters = openDatabase(`${name}-${operationId}`);
         try {
-          const initialize = mode === 'finalize' && enrollment?.stage === 'pending';
+          const initialize = mode === 'finalize' && enrollment?.stage === 'pending' && !alreadyActive;
           const sequences = openNativeSequences(counters, [scope.id], initialize);
           if (enrollment?.stage !== 'active') {
             await workspaceRun(true, tx => tx.put(key, {...identity, stage:'active'}));
