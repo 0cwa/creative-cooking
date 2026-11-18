@@ -112,7 +112,14 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
     const original = await reviews.inspectOriginal(scope.scopeId,reviewId,sha256);
     const {report,manifest,objects,missing} = original;
     if(await verifyReport({runtime,report,manifest,context:saved.context,reviewId,sha256})!==saved.reportHash)throw Error('INVALID_REPORT');
-    const path = await lineage(authority);
+    let path, legacyLineage = false;
+    try {path=await lineage(authority);}
+    catch(error){
+      if(error.message!=='UNSUPPORTED_POLICY_LINEAGE')throw error;
+      if(report.payload.head!==scope.branchHead)throw Error('REPORT_BRANCH_UNAVAILABLE');
+      legacyLineage=true;
+      path=[{authority}];
+    }
     const authorities = byHead(path);
     let checkpoint = null;
     if(original.checkpointBytes!==null){
@@ -133,13 +140,14 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
     const {boundary,suspectDeviceIds,reporterDevice} = report.payload;
     const pathSeed = path.length>1 && (!checkpoint || !checkpoint.bytes.length) ?
       must(await runtime.storage.readProjectionSeed(authority.expectedAuthority,scope.documentId)) : null;
-    const unsupported = !!checkpoint && !checkpoint.bytes.length && path.length===1 &&
-      path[0].authority.scope.branchHead!==runtime.authority.rootPin;
+    const unsupported = legacyLineage || (!!checkpoint && !checkpoint.bytes.length && path.length===1 &&
+      path[0].authority.scope.branchHead!==runtime.authority.rootPin);
     const checkpointEffects = pathSeed ? new Set(pathSeed.seed.identities.map(row=>row.effectId)) : checkpoint?.effects;
     const canSave = saved.status==='frozen'&&!checkpointUnavailable&&!missing.length&&!unsupported;
     const view = {reviewId,reporterDevice,suspectDeviceIds,boundary,checkpointLabel:checkpoint?.label,checkpointUnavailable,canSave,
-      rows:classify(entries,suspectDeviceIds,checkpointUnavailable?new Set():checkpointEffects??new Set(),boundary),
-      missing,count:manifest.length,unsupported,draft:draftView(saved.draft)};
+      rows:classify(entries,suspectDeviceIds,checkpointUnavailable?new Set():checkpointEffects??new Set(),boundary)
+        .map(row=>legacyLineage?{...row,selectable:false}:row),
+      missing,count:manifest.length,unsupported,legacyLineage,draft:draftView(saved.draft)};
     if(canSave) {
       const document=must(await runtime.storage.reopenBranchDocument(authority.expectedAuthority,scope.documentId));
       draftReviews.set(view,{saved,original,documentRevision:document?.revision??null,

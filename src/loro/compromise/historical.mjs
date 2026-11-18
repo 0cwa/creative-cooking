@@ -18,7 +18,27 @@ export async function householdReportLineage(runtime,head,expectedAuthority) {
  return lineage;
 }
 
-function appendStage(runtime,source,objects,inherited,seedIds,held) {
+function withinPolicyFrontier(source,objects,baseline,held) {
+ // Walk backward from the signed frontier over complete original envelopes.
+ // An envelope ending after a required operation cannot supply just its prefix.
+ const inherited=source.oplogVersion().toJSON();
+ const points=[...baseline.frontiers],seen=new Set(),eligible=new Set();
+ for(const {peer,counter} of points){
+  const id=`${peer}:${counter}`;
+  if(seen.has(id)||(inherited.get(peer)??0)>counter)continue;
+  seen.add(id);
+  for(const e of objects){
+   if(e.meta.peer!==peer||e.endCounter!==counter+1||eligible.has(e))continue;
+   eligible.add(e);
+   points.push(...e.meta.frontiers);
+   if(e.startCounter>0)points.push({peer,counter:e.startCounter-1});
+  }
+ }
+ for(const e of objects)if(!eligible.has(e))held.push({...evidenceRow(e),reason:'OUTSIDE_POLICY_FRONTIER'});
+ return [...eligible];
+}
+
+function appendStage(source,objects,inherited,seedIds,held) {
  const commands=new Set([...seedIds.values(),...inherited.map(e=>e.command.commandId)]);
  const effects=new Set([...seedIds.keys(),...inherited.map(e=>e.command.effectId)]);
  const conflicts=new Set();
@@ -124,20 +144,15 @@ async function historicalSource({runtime,review,objects,checkpoint,total,current
  let source=new runtime.LoroDoc(),entries=[];
  if(retainedSeed)source.import(retainedSeed.snapshot);
  for(const edge of scoped?policy:[{authority:{scope:location},upperBound:null}]){
-  const stage=all.filter(e=>e.sourceHead===edge.authority.scope.branchHead);
-  const appended=appendStage(runtime,source,stage,entries,seedIds,held);
-  if(!edge.upperBound){entries.push(...appended);continue}
+  let stage=all.filter(e=>e.sourceHead===edge.authority.scope.branchHead);
+  if(edge.upperBound)stage=withinPolicyFrontier(source,stage,edge.upperBound,held);
+  entries.push(...appendStage(source,stage,entries,seedIds,held));
+  if(!edge.upperBound)continue;
 
   // Recompute the signed history from frozen authenticated operations. A
   // matching live counter alone cannot distinguish a sibling branch's edit.
   source=await verifyPolicyBaseline(source,runtime.LoroDoc,edge.upperBound,runtime.authority.provider);
   const frontier=source.oplogVersion().toJSON();
-  for(const e of appended){
-   const end=frontier.get(e.meta.peer)??0;
-   if(end>=e.endCounter)entries.push(e);
-   else if(end>e.startCounter)throw Error('POLICY_BASELINE_UNAVAILABLE');
-   else held.push({...evidenceRow(e),reason:'OUTSIDE_POLICY_FRONTIER'});
-  }
   if(entries.some(e=>(frontier.get(e.meta.peer)??0)<e.endCounter)||
      seedDoc&&[...seedDoc.oplogVersion().toJSON()].some(([peer,end])=>(frontier.get(peer)??0)<end))throw Error('POLICY_BASELINE_UNAVAILABLE');
  }

@@ -20,6 +20,7 @@ type Review = {
   missing:{objectId:string}[];
   count:number;
   unsupported:boolean;
+  legacyLineage:boolean;
   canSave:boolean;
   draft:null|{documentId:string;included:Outcome[];excluded:Outcome[];held:Outcome[];pantry:string[];recipes:string[];shopping:string[]};
 };

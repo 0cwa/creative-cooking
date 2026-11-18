@@ -197,7 +197,8 @@ export function HouseholdCompromise() {
         <Text selectable>{review.boundary.kind==='checkpoint'?(review.checkpointLabel??'Signed checkpoint'):`Selected operation ${review.boundary.ref}`}</Text>
         {review.checkpointUnavailable&&<Text>The frozen checkpoint is unavailable.</Text>}
         <Text>Evidence may be incomplete. Inherited operations must match each signed policy checkout boundary.</Text>
-        {review.unsupported&&<Text>{errors.UNSUPPORTED_SEED_BOUNDARY}</Text>}
+        {review.unsupported&&<Text>{review.legacyLineage ?
+          'This older policy branch supports evidence inspection only.' : errors.UNSUPPORTED_SEED_BOUNDARY}</Text>}
         {review.canSave&&
           <Text>Choose operations to retain in a separate local draft. A verified projection checkpoint is carried forward as a whole.</Text>}
         {review.rows.map(row=><View key={row.objectId}>

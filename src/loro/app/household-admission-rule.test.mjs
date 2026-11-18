@@ -19,6 +19,7 @@ import {disclosureService} from '../disclosure/service.mjs';
 import {acceptInitialPolicy, prepareInitialPolicy} from '../disclosure/setup.mjs';
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
 import {cookingFiles} from './cooking-file.mjs';
+import {evidenceSha256, manifestDigest, reportMessage} from '../compromise/report.mjs';
 
 await sodium.ready;
 
@@ -203,6 +204,9 @@ test('checkout verifies inherited source envelopes only inside the signed causal
     const event = {...proposed.event,version:1,subject:null,proposalId:'legacy-proposal'};
     const historical = await approveAndRetain({event,authorSignature:sodium.to_hex(await provider.sign(deviceId,domain('event-signature',event))),approvals:[]});
     await commitCookingWithPolicy({runtime:parent,service,input:create('outside',3)});
+    const duplicate = create('post-cutoff',6);
+    duplicate.command.effectId = 'inside';
+    const laterDuplicate = (await parent.prepare(duplicate)).commit.outbound[0].object;
     const laterHistory=await parent.document();
     const outsideEnvelope=(await storage.readDisclosureSource(scope.id,'outside')).value.envelope;
     const status = await householdAdmissionRule(member);
@@ -221,6 +225,30 @@ test('checkout verifies inherited source envelopes only inside the signed causal
     assert.deepEqual(await storage.listCursors(scope.id),cursors);
     assert.deepEqual(await storage.listStagedInbox(scope.id),inbox);
     const branch = await open();
+    const reviews = storage.compromise;
+    const originals = (await storage.listOutboundObjects(scope.id)).value;
+    const evidence = [...originals, {objectId:laterDuplicate.id,bytes:laterDuplicate.bytes}]
+      .map(({objectId,bytes})=>({sourceId:'outbound',objectId,bytes}));
+    const checkpoint = new Uint8Array(), checkpointHash = await evidenceSha256(checkpoint);
+    const reportId = randomUUID();
+    const manifest = await Promise.all(evidence.map(async ({sourceId,objectId,bytes})=>
+      ({sourceId,objectId,bytes:bytes.length,hash:await evidenceSha256(bytes)})));
+    const authority = await branch.authorize();
+    const reportContext = {kind:scope.kind,scopeId:scope.id,authorityHead:authority.record.acceptedParent,
+      authorityRevision:authority.record.revision,authoritySnapshot:authority.record.authorizationSnapshot,checkpointHash};
+    const payload = {version:1,reportId,reviewId:reportId,scopeId:scope.id,scopeKind:scope.kind,head:branch.scope.branchHead,
+      reporterDevice:deviceId,suspectDeviceIds:[],checkpointHash,manifestHash:await manifestDigest(manifest),
+      boundary:{kind:'checkpoint',ref:checkpointHash}};
+    const report = {payload,signature:sodium.to_hex(await provider.sign(deviceId,reportMessage(payload)))};
+    const {review} = await reviews.freeze({reviewId:reportId,context:reportContext,report,runtime:branch,objects:evidence,
+      checkpointBytes:checkpoint,isolated:true,requireStored:false});
+    const draft = await reviews.finalizeHistorical({runtime:branch,reviews,scopeId:scope.id,reviewId:reportId,
+      objects:evidence,checkpoint,expected:review,expectedDocumentRevision:(await branch.document()).revision,
+      selectedEffectIds:['legacy','inside']});
+    assert.deepEqual(draft.included.map(entry=>entry.effectId),['legacy','inside']);
+    assert.deepEqual(draft.held.map(({objectId,reason})=>[objectId,reason]).sort(),
+      [[originals.find(entry=>Buffer.from(entry.bytes).equals(outsideEnvelope)).objectId,'OUTSIDE_POLICY_FRONTIER'],
+        [laterDuplicate.id,'OUTSIDE_POLICY_FRONTIER']].sort());
     // On this branch, the new change can claim the same Loro peer counters
     // as the later change retained on the parent.
     await commitCookingWithPolicy({runtime:branch,service,input:create('branch-own',4)});

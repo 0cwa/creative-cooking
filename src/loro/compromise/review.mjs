@@ -198,19 +198,27 @@ export class CompromiseReviews {
  }
  async finalizeHistorical(input) {
   if(input.reviews!==this)throw Error('MALFORMED');
-  const {runtime,scopeId,reviewId,expected,expectedDocumentRevision}=input;
+  const {runtime,scopeId,reviewId,expectedDocumentRevision}=input;
+  const expected=clone(input.expected);
   const selectedEffectIds=clone(input.selectedEffectIds);
   const before=await this.get(scopeId,reviewId);
   if(!before||!bounded(selectedEffectIds,MAX_OBJECTS))throw Error('INVALID_SELECTION');
   const authority=await runtime.authorize();
-  if(before.status==='local-draft'&&before.isolated&&expected){
-   const c=before.context;
-   if(authority.record.acceptedParent!==c.authorityHead||authority.record.revision!==c.authorityRevision||
+  if(before.status==='local-draft'&&before.isolated&&expected)return this.run(false,async tx=>{
+   const saved=checked(await tx.get(reviewKey(scopeId,reviewId)));
+   if(!same(saved,before)||!same(saved.selection,{effects:selectedEffectIds,context:expected.context,manifest:expected.manifest}))throw Error('STALE_REVIEW');
+   const c=saved.context,baseId=runtime.scope.documentId;
+   if(authority.scope.kind!==c.kind||authority.scope.id!==c.scopeId||
+      authority.record.acceptedParent!==c.authorityHead||authority.record.revision!==c.authorityRevision||
       authority.record.authorizationSnapshot!==c.authoritySnapshot)throw Error('STALE_AUTHORITY');
-   if(!same(before.selection?.effects,selectedEffectIds))throw Error('STALE_REVIEW');
-   const {documentId,included,excluded,held}=before.draft;
-   return {documentId,status:before.status,included,excluded,held};
-  }
+   await currentAuthority(tx,c);
+   const current=await tx.get(key('document',scopeId,baseId));
+   const owner=await tx.get(key('document-owner',scopeId,baseId));
+   if(saved.draft.publicationBaseDocumentId!==baseId||(current?.revision??null)!==expectedDocumentRevision||
+      (current?owner!==c.authorityHead:owner!==undefined))throw Error('STALE_DOCUMENT');
+   const {documentId,included,excluded,held}=saved.draft;
+   return clone({documentId,status:saved.status,included,excluded,held});
+  });
   if(expected&&(!before.isolated||before.status!=='frozen'||!same(before,expected)))throw Error('STALE_REVIEW');
   let base;
   if(expected){

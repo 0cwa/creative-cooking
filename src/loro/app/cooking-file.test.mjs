@@ -1,7 +1,7 @@
 import {householdCompromise} from './household-compromise.mjs';
 import {CompromiseReviews,REVIEW_LIMITS} from '../compromise/review.mjs';
 import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
-import {evidenceSha256} from '../compromise/report.mjs';
+import {evidenceSha256,manifestDigest,reportMessage} from '../compromise/report.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {cookingFiles} from './cooking-file.mjs';
@@ -9,7 +9,9 @@ import {MAX_OBJECT} from '../transport/adapter.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
-import {initializeAuthority,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {initializeAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
+import {domain} from '../authority/validator.mjs';
+import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
@@ -369,6 +371,57 @@ test('clean draft rechecks the selected document and exact frozen bytes before a
   assert.deepEqual(await api.saveCleanDraft(fresh,['original saffron']),result);
   await assert.rejects(api.saveCleanDraft(fresh,[]),/STALE_REVIEW/);
   assert.deepEqual(author.rows(),saved);
+  await author.edit('after saved draft',2);
+  const changedDocument=author.rows();
+  await assert.rejects(api.saveCleanDraft(fresh,['original saffron']),/STALE_DOCUMENT/);
+  assert.deepEqual(author.rows(),changedDocument);
+  assert.deepEqual((await api.inspect(token,id)).draft,result.draft);
+});
+
+test('saved reports at a legacy policy head remain readable without enabling reconstruction',async t=>{
+  const [author,suspect]=await household(t);
+  const original=await suspect.edit('legacy saffron',1,{legacy:true});
+  const {runtime:parent,storage,deviceId}=author;
+  const {provider,rootPin:pin}=parent.authority;
+  const {signingKeyRefs}=await parent.authorization();
+  const event={version:1,kind:'changePolicy',householdId:scope.id,parentHead:pin,proposalId:'legacy-rule',
+    authorDeviceId:deviceId,policyHash:parent.scope.policyHashes[0],nextPolicy:{kind:'fixed',fixedCount:1},subject:null,
+    suiteId:parent.scope.suiteId,generation:1,epochId:parent.scope.epochId,frozenAdultRoster:['adult']};
+  const signature=(label,value)=>provider.sign(signingKeyRefs[deviceId],domain(label,value)).then(sodium.to_hex);
+  const eventHash=sodium.to_hex(await provider.hash(domain('event',event)));
+  const approval={version:1,householdId:scope.id,eventHash,parentHead:pin,policyHash:event.policyHash,
+    generation:event.generation,epochId:event.epochId,adultId:'adult',deviceId};
+  const approvals=[{...approval,signature:await signature('approval-signature',approval)}];
+  const head=await observeSuccessor(storage,scope,pin,provider,{event,authorSignature:await signature('event-signature',event),approvals});
+  const selection={from:pin,to:head,deviceId,index:0};
+  await writeFixtureSelection(storage,scope,pin,provider,{...selection,
+    signature:await signature('select-head',{root:pin,householdId:scope.id,...selection})});
+  const resolved=await resolveRuntimeAuthority(storage,scope,pin,provider,deviceId);
+  const runtime=new OfflineRuntime({storage,codec:parent.codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,
+    keyRef:parent.keyRef,authority:{...parent.authority,selectionIndex:resolved.selectionIndex}});
+  const {header,value}=await parent.codec.openContent(original.bytes,signingKeyRefs);
+  const object=await parent.codec.sealContent({...header,branchHead:head,policyHashes:runtime.scope.policyHashes,
+    documentId:runtime.scope.documentId},value,runtime.keyRef,signingKeyRefs[suspect.deviceId]);
+  const reviewId=crypto.randomUUID(),checkpoint=new Uint8Array(),checkpointHash=await evidenceSha256(checkpoint);
+  const objects=[{sourceId:'inbox',objectId:object.id,bytes:object.bytes}];
+  const manifest=[{sourceId:'inbox',objectId:object.id,bytes:object.bytes.length,hash:await evidenceSha256(object.bytes)}];
+  const authority=await runtime.authorize();
+  const context={kind:'household',scopeId:scope.id,authorityHead:head,authorityRevision:authority.record.revision,
+    authoritySnapshot:authority.record.authorizationSnapshot,checkpointHash};
+  const payload={version:1,reportId:reviewId,reviewId,scopeId:scope.id,scopeKind:'household',head,
+    reporterDevice:deviceId,suspectDeviceIds:[suspect.deviceId],checkpointHash,manifestHash:await manifestDigest(manifest),
+    boundary:{kind:'operation',ref:object.id}};
+  const report={payload,signature:sodium.to_hex(await provider.sign(signingKeyRefs[deviceId],reportMessage(payload)))};
+  await storage.compromise.freeze({reviewId,runtime,context,report,objects,checkpointBytes:checkpoint,isolated:true,requireStored:false});
+  const api=householdCompromise({runtime,withCurrent:use=>use(0)}),token=(await api.open()).confirmation;
+  const before=author.rows(),view=await api.inspect(token,reviewId);
+  assert.equal(view.unsupported,true);
+  assert.equal(view.canSave,false);
+  assert.equal(view.checkpointUnavailable,false);
+  assert.deepEqual(view.missing,[]);
+  assert.deepEqual(view.rows.map(row=>[row.effectId,row.category,row.selectable]),[['legacy saffron','suspect',false]]);
+  await assert.rejects(api.saveCleanDraft(view,['legacy saffron']),/STALE_REVIEW/);
+  assert.deepEqual(author.rows(),before);
 });
 
 test('checkpoint report authentication and limits precede document reads, and overlapping effects stay ambiguous',async t=>{
