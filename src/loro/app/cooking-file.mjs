@@ -1,24 +1,39 @@
 import {MAX_OBJECT} from '../transport/adapter.mjs';
 import {importCookingWithPolicy,validateCookingHeader} from '../disclosure/cooking.mjs';
+import {commandRecipeId} from '../domain/recipe-document.mjs';
+import {validate} from '../domain/registry.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 /** A user-selected encrypted object is staged durably before the authorized
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
-export function cookingFiles({runtime,service}){
+export function cookingFiles({runtime,service,recipeDocuments=false}){
  const {scopeId,branchHead,epochId}=runtime.scope;
  const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;
  const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(onBranch);
  const cookingSource=({source,cursor})=>source===`file:${cursor}`||source===`direct:${cursor}`;
  async function list(){await runtime.authorize();return (await outbound()).map(x=>({objectId:x.objectId}));}
  async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const row=(await outbound()).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
- async function verifyUnderAuthority(bytes,expectedId,expectedAuthor){
+ async function verifyRoute(bytes,expectedId,expectedAuthor){
   if(!(bytes instanceof Uint8Array))throw Error('MALFORMED');
   if(bytes.length>MAX_OBJECT)throw Error('TOO_LARGE');
   const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
-  validateCookingHeader(opened,expectedId??opened.object.id,runtime.scope);
+  let target=runtime;
+  if(recipeDocuments&&opened.header.documentId!==runtime.scope.documentId){
+   let payload;
+   try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value));}
+   catch{throw Error('MALFORMED_UPDATE');}
+   const command=validate(payload?.command),recipeId=commandRecipeId(command);
+   if(payload.version!==1||!recipeId||command.data.author!==opened.header.authorDevice)throw Error('INVALID_RECIPE_DOCUMENT');
+   target=await runtime.forRecipe(recipeId);
+  }
+  validateCookingHeader(opened,expectedId??opened.object.id,target.scope);
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
-  return {...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority};
+  return {target,object:{...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority}};
  }
- const applyStaged=item=>importCookingWithPolicy({runtime,service,item});
+ const verifyUnderAuthority=async(...args)=>(await verifyRoute(...args)).object;
+ const applyStaged=async item=>{
+  const target=recipeDocuments?(await verifyRoute(item.bytes,item.itemId)).target:runtime;
+  return importCookingWithPolicy({runtime:target,service,item});
+ };
  async function receive(raw){
   if(!(raw instanceof Uint8Array))throw Error('MALFORMED');
   if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');

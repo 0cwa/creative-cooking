@@ -2,6 +2,7 @@ import {assertCommandScope} from '../domain/personal-codec.mjs';
 import {resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {resolvePersonalAuthority} from '../authority/personal.mjs';
 import * as registry from '../domain/registry.mjs';
+import {commandRecipeId,recipeDocumentId} from '../domain/recipe-document.mjs';
 // Minimal offline engine. The caller supplies a LoroDoc constructor and an explicitly
 // preaccepted scope; product pairing and authority management are not implemented here.
 const FIXTURE=Symbol('fixture authority');
@@ -19,16 +20,32 @@ const apply = registry.apply;
  * The candidate codec is the actual K2 throwing API, not C0's Result API.
  */
 export class OfflineRuntime {
-  constructor({storage, codec, LoroDoc, decodeImportBlobMeta, scope, keyRef, authority}, fixtureToken) {
+  #recipeId;
+  constructor({storage, codec, LoroDoc, decodeImportBlobMeta, scope, keyRef, authority, recipeId = null}, fixtureToken) {
     const fixtureAuthority=fixtureToken===FIXTURE;
     if ((!authority || typeof authority.rootPin!=='string' || !authority.provider) && fixtureAuthority!==true) throw new Error('INVALID_AUTHORITY_CONFIG');
     if (authority && fixtureAuthority) throw new Error('INVALID_AUTHORITY_CONFIG');
+    if (recipeId !== null && (!authority || (authority.kind ?? 'household') !== 'household')) throw Error('INVALID_AUTHORITY_CONFIG');
+    this.#recipeId=recipeId;
     this.authority=authority; this.fixtureAuthority=fixtureAuthority;
     this.storage=storage; this.codec=codec; this.LoroDoc=LoroDoc; this.decodeImportBlobMeta=decodeImportBlobMeta; this.scope=structuredClone(scope); this.keyRef=keyRef;
     const peers=scope.authorPeers && Object.values(scope.authorPeers);
     const validPeer=p=>typeof p==='string' && p.length <= 20 && /^(0|[1-9][0-9]*)$/.test(p) && BigInt(p) <= 18446744073709551615n;
     if (!peers || !peers.every(validPeer) || new Set(peers).size !== peers.length || Object.keys(scope.authorPeers).length !== scope.acceptedAuthors?.length || !scope.acceptedAuthors.every(a=>Object.hasOwn(scope.authorPeers,a))) throw new Error('MALFORMED_SCOPE');
     if (!scope.scopeId || !scope.documentId || !scope.branchHead || !scope.epochId || !scope.authorDevice || !scope.suiteId || !Array.isArray(scope.policyHashes) || !Array.isArray(scope.acceptedAuthors) || !scope.acceptedAuthors.includes(scope.authorDevice)) throw new Error('MALFORMED_SCOPE');
+  }
+  get recipeId() { return this.#recipeId; }
+  async forRecipe(recipeId) {
+    if (this.#recipeId !== null || !this.authority || (this.authority.kind ?? 'household') !== 'household') throw Error('INVALID_RECIPE_DOCUMENT');
+    await this.authorize();
+    const documentId=await recipeDocumentId(this.scope,this.authority.rootPin,this.authority.provider,recipeId);
+    return new OfflineRuntime({
+      storage:this.storage,codec:this.codec,LoroDoc:this.LoroDoc,decodeImportBlobMeta:this.decodeImportBlobMeta,
+      scope:{...this.scope,documentId},keyRef:this.keyRef,authority:this.authority,recipeId
+    });
+  }
+  assertRecipeCommand(command) {
+    if (this.#recipeId !== null && commandRecipeId(command) !== this.#recipeId) throw Error('INVALID_RECIPE_DOCUMENT');
   }
   async authorization() {
     const s=this.scope;
@@ -39,6 +56,7 @@ export class OfflineRuntime {
       const resolved=await resolver(this.storage,{kind,id:s.scopeId},this.authority.rootPin,this.authority.provider,s.authorDevice);
       if (this.authority.selectionIndex!==undefined && resolved.selectionIndex!==this.authority.selectionIndex) throw new Error('INVALID_AUTHORITY');
       const expected={...resolved.scope,authorizationSnapshot:s.authorizationSnapshot};
+      if (this.#recipeId !== null) expected.documentId=await recipeDocumentId(resolved.scope,this.authority.rootPin,this.authority.provider,this.#recipeId);
       if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
       return {expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs};
@@ -63,6 +81,7 @@ export class OfflineRuntime {
   async #prepareOnDocument({operationId, command, deviceSequence}, staged) {
     command=structuredClone(command);
     command=checkCommand(command);
+    this.assertRecipeCommand(command);
     assertCommandScope(command.kind,this.authority?.kind ?? 'household');
     const {expectedAuthority,signingKeyRefs}=await this.authorization();
     if (!operationId || !Number.isSafeInteger(deviceSequence) || deviceSequence < 0) throw new Error('MALFORMED');
@@ -99,7 +118,7 @@ export class OfflineRuntime {
       const commit=saved.commit;
       if(commit.commands.length!==items.length||commit.outbound.length!==items.length||commit.documents.length!==1)throw Error('CONFLICT');
       for(let i=0;i<items.length;i++) {
-        const item=items[i],cmd=checkCommand(item.command),c=commit.commands[i];assertCommandScope(cmd.kind,this.authority?.kind ?? 'household');
+        const item=items[i],cmd=checkCommand(item.command),c=commit.commands[i];this.assertRecipeCommand(cmd);assertCommandScope(cmd.kind,this.authority?.kind ?? 'household');
         let h;try{h=JSON.parse(new TextDecoder().decode(commit.outbound[i].object.bytes)).header}catch{throw Error('CORRUPT')}
         if(c.documentId!==this.scope.documentId||c.commandId!==cmd.commandId||c.effectId!==cmd.effectId||!same(Array.from(c.payload),Array.from(commandBytes(cmd)))||h.deviceSequence!==item.deviceSequence||h.authorDevice!==this.scope.authorDevice||h.scopeId!==this.scope.scopeId||h.documentId!==this.scope.documentId||h.documentGeneration!==this.scope.documentGeneration||h.branchHead!==this.scope.branchHead||h.epochId!==this.scope.epochId||h.suiteId!==this.scope.suiteId||!same(h.policyHashes,this.scope.policyHashes))throw Error('CONFLICT');
       }
@@ -145,6 +164,7 @@ export class OfflineRuntime {
     let payload; try { payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value)); } catch { throw new Error('MALFORMED_UPDATE'); }
     if (!payload || Object.keys(payload).sort().join(',') !== 'command,update,version' || payload.version !== 1 || !Array.isArray(payload.update) || !payload.update.every(x=>Number.isInteger(x) && x>=0 && x<=255)) throw new Error('MALFORMED_UPDATE');
     checkCommand(payload.command);
+    this.assertRecipeCommand(payload.command);
     assertCommandScope(payload.command.kind,this.authority?.kind ?? 'household');
     if (payload.command.data.author !== undefined && payload.command.data.author !== h.authorDevice) throw new Error('INVALID_AUTHORITY');
     if (payload.command.effectId !== h.semanticEffectIds[0]) throw new Error('MALFORMED_UPDATE');

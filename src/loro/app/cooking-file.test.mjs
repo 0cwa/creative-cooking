@@ -19,6 +19,13 @@ import {disclosureService} from '../disclosure/service.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {householdLocalTrust} from './household-local-trust.mjs';
+import {executeAction} from './action.mjs';
+import {planRecipeAction} from './recipe-actions.mjs';
+import {planRecipeRestore,readRecipeHistory} from '../domain/recipe-history.mjs';
+import {projectCooking} from '../domain/app-projection.mjs';
+import {projectCurrentSeed} from '../compromise/current-seed.mjs';
+import {recipeDocumentId} from '../domain/recipe-document.mjs';
+import {replayAuthenticated} from '../domain/replay.mjs';
 test('retained updates distinguish policy evidence and other retry reasons',async()=>{
  const ok=value=>({ok:true,value});
  const header=(branchHead,epochId='epoch')=>new TextEncoder().encode(JSON.stringify({header:{branchHead,epochId,authorDevice:'peer'}}));
@@ -60,10 +67,11 @@ async function household(t) {
   return Promise.all(signing.map(async (_pair,index) => {
     const db = new DatabaseSync(':memory:');
     t.after(() => db.close());
+    let fault;
     const storage = openSQLiteStorage({executeSync(sql,params = []) {
       const statement = db.prepare(sql);
       return {rows:sql.startsWith('SELECT') ? statement.all(...params) : (statement.run(...params),[])};
-    }});
+    }}, boundary => {if (boundary === fault) throw Error('injected failure');});
     const deviceId = `device-${index}`;
     await initializeAuthority(storage,root,root.head,provider);
     const resolved = await resolveRuntimeAuthority(storage,scope,root.head,provider,deviceId);
@@ -73,7 +81,8 @@ async function household(t) {
     const cooking = cookingFiles({runtime,service});
     const trust = householdLocalTrust({runtime,withCurrent:use => use(0)});
     return {
-      deviceId,storage,runtime,trust,cooking,
+      deviceId,storage,runtime,trust,cooking,service,root,provider,
+      faultAt: boundary => {fault=boundary;},
       rows:() => db.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),
       async edit(name,sequence,{legacy = false,preview = false} = {}) {
         const input = {operationId:name,deviceSequence:sequence,command:{
@@ -100,6 +109,137 @@ async function household(t) {
     };
   }));
 }
+
+test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{
+ const [a,b]=await household(t);
+ const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeDocuments:true});
+ const recipes=(runtime)=>runtime.document().then(({doc})=>projectCooking(doc).recipes);
+ const at='2026-01-01T00:00:00Z';
+ const makeRecipe=(id,title)=>({id,title,portions:2,ingredients:[{id:'i',name:'Carrot'}],steps:['Slice'],stepIds:['s'],createdAt:at,updatedAt:at});
+ const change=async(peer,runtime,actionId,patch)=>{
+  const {doc}=await runtime.document(),before=projectCooking(doc).recipes.find(x=>x.id===patch.id)??null;
+  return planRecipeAction({doc,before,after:{...before,...patch},actionId,author:peer.deviceId,at});
+ };
+ const execute=(peer,runtime,id,commands)=>executeAction(runtime,{reserve:async(_scope,key)=>sequences.get(key)??sequences.set(key,++sequence).get(key)},id,commands,peer.service);
+ let sequence=0;
+ const sequences=new Map();
+ const exported=async(peer,id)=>{
+  const saved=must(await peer.storage.getLocalOperation(scope.id,id));
+  return Promise.all(saved.commit.outbound.map(row=>files(peer).download(row.object.id)));
+ };
+ const [ar,br,other]=await Promise.all([a.runtime.forRecipe('r'),b.runtime.forRecipe('r'),a.runtime.forRecipe('unrelated')]);
+ assert.equal(ar.scope.documentId,br.scope.documentId);
+ assert.notEqual(ar.scope.documentId,other.scope.documentId);
+ for (const overrides of [{scopeId:'another-household'},{branchHead:'another'},{documentId:'another-parent'},{documentGeneration:2},{epochId:'fresh-epoch'}]){
+  assert.notEqual(await recipeDocumentId({...a.runtime.scope,...overrides},a.root.head,a.provider,'r'),ar.scope.documentId);
+ }
+ const legacy=await change(a,a.runtime,'legacy',makeRecipe('legacy','Legacy soup'));
+ await execute(a,a.runtime,'legacy',legacy);
+ for(const bytes of await exported(a,'legacy')) await files(b).receive(bytes);
+ assert.equal((await recipes(b.runtime))[0].title,'Legacy soup');
+ const legacyBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),b.runtime.scope.documentId));
+ const anotherLegacy=await change(a,a.runtime,'legacy-second',makeRecipe('legacy-second','Legacy second soup'));
+ await execute(a,a.runtime,'legacy-second',anotherLegacy);
+ await execute(a,a.runtime,'legacy-rename',await change(a,a.runtime,'legacy-rename',{id:'legacy',title:'Renamed legacy soup',updatedAt:'2026-01-02T00:00:00Z'}));
+ const legacySource=must(await a.storage.reopenBranchDocument(await a.runtime.authorize(),a.runtime.scope.documentId));
+ const reconstructed=await replayAuthenticated({runtime:a.runtime,checkpoint:legacySource.bytes});
+ assert.deepEqual(reconstructed.held,[]);
+ assert.deepEqual(projectCooking(reconstructed.doc),projectCooking((await a.runtime.document()).doc));
+ const {doc:realSource}=await a.runtime.document();
+ const [{peer,counter}]=realSource.frontiers();
+ const substitute=realSource.forkAt([{peer,counter:counter-1}]);
+ substitute.setPeerId(peer);
+ substitute.getMap('recipe:legacy').set('title','Substituted checkpoint');
+ assert.deepEqual(substitute.frontiers(),realSource.frontiers());
+ await assert.rejects(()=>replayAuthenticated({runtime:a.runtime,checkpoint:substitute.export({mode:'snapshot'})}),/INSUFFICIENT_EVIDENCE/);
+
+ const create=await change(a,ar,'create',makeRecipe('r','Soup'));
+ await assert.rejects(()=>execute(a,other,'wrong-recipe',create),/INVALID_RECIPE_DOCUMENT/);
+ const beforeCreate=a.rows();
+ a.faultAt('disclosure-local');
+ await assert.rejects(()=>execute(a,ar,'create',create),/IO/);
+ assert.equal((await ar.document()).revision,null);
+ assert.equal(must(await a.storage.getLocalOperation(scope.id,'create')),null);
+ assert.deepEqual(a.rows(),beforeCreate);
+ a.faultAt(null);
+ await execute(a,ar,'create',create);
+ const [initial]=await exported(a,'create');
+ await assert.rejects(()=>b.cooking.receive(initial),/INVALID_AUTHORITY/);
+ await files(b).receive(initial);
+ const unrelated=await change(a,other,'unrelated',makeRecipe('unrelated','Unrelated canary'));
+ await execute(a,other,'unrelated',unrelated);
+ const [unrelatedBytes]=await exported(a,'unrelated');
+ await files(b).receive(unrelatedBytes);
+ const otherB=await b.runtime.forRecipe('unrelated');
+ const unrelatedBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),otherB.scope.documentId));
+ const [dependent]=await change(a,ar,'cross-recipe-dependency',{id:'r',title:'Cross-recipe write'});
+ await assert.rejects(()=>execute(a,ar,'cross-recipe-dependency',[{
+  ...dependent,dependencyEffectIds:[...dependent.dependencyEffectIds,unrelated[0].effectId],
+ }]),/MISSING_DEPENDENCY/);
+
+ await execute(a,ar,'a-edit',await change(a,ar,'a-edit',{id:'r',title:'Alternative A'}));
+ await execute(b,br,'b-edit',await change(b,br,'b-edit',{id:'r',title:'Alternative B',description:'Independent field'}));
+ const [editA]=await exported(a,'a-edit'),[editB,descriptionB]=await exported(b,'b-edit');
+ assert.equal((await recipes(ar))[0].title,'Alternative A');
+ assert.equal((await recipes(br))[0].title,'Alternative B');
+ assert.equal(new TextDecoder().decode(editA).includes('Alternative A'),false);
+ const beforeForgery=b.rows();
+ const auth=await ar.authorization(),opened=await ar.codec.openContent(editA,auth.signingKeyRefs),signing=auth.signingKeyRefs[a.deviceId];
+ const unsigned=JSON.parse(new TextDecoder().decode(editA));
+ unsigned.header.documentId=other.scope.documentId;
+ await assert.rejects(()=>files(b).receive(new TextEncoder().encode(JSON.stringify(unsigned))));
+ for(const header of [
+  {...opened.header,documentId:other.scope.documentId},
+  {...opened.header,documentGeneration:0},
+  {...opened.header,epochId:'old-epoch'},
+ ]){
+  const forged=await ar.codec.sealContent(header,opened.value,ar.keyRef,signing);
+  await assert.rejects(()=>files(b).receive(forged.bytes),/INVALID_AUTHORITY|INVALID_RECIPE_DOCUMENT/);
+ }
+ assert.deepEqual(b.rows(),beforeForgery);
+
+ const beforeImport=(await br.document()).revision;
+ b.faultAt('import-documents');
+ await assert.rejects(()=>files(b).receive(editA),/IO/);
+ assert.equal((await br.document()).revision,beforeImport);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,opened.object.id)),null);
+ assert.deepEqual(must(await b.storage.listStagedInbox(scope.id)).find(row=>row.itemId===opened.object.id)?.bytes,editA);
+ b.faultAt(null);
+ const imported=await files(b).retry(opened.object.id);
+ assert.deepEqual(await files(b).receive(editA),{...imported,replayed:true});
+ const pendingA=await ar.codec.openContent(descriptionB,auth.signingKeyRefs);
+ await assert.rejects(()=>files(a).receive(descriptionB),/MISSING_DEPENDENCY/);
+ await files(a).receive(editB);
+ await files(a).retry(pendingA.object.id);
+ assert.deepEqual(await recipes(ar),await recipes(br));
+ assert.equal((await recipes(br))[0].description,'Independent field');
+ assert.deepEqual(must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),b.runtime.scope.documentId)),legacyBefore);
+ assert.deepEqual(must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),otherB.scope.documentId)),unrelatedBefore);
+ assert.ok(must(await a.storage.listBranchLocalOperations(await ar.authorize())).some(row=>row.operationId==='a-edit'));
+
+ const {doc}=await (await b.runtime.forRecipe('r')).document();
+ const history=readRecipeHistory(doc,'r');
+ const loser=history.find(row=>row.field==='title'&&row.status==='competing');
+ assert.ok(loser);
+ assert.throws(()=>planRecipeRestore({doc,recipeId:'r',effectId:loser.effectId,expectedHead:'stale'}),/history changed/);
+ const restore=planRecipeRestore({doc,recipeId:'r',effectId:loser.effectId,expectedHead:loser.head,actionId:'restore',author:b.deviceId,at});
+ await execute(b,br,'restore',[restore]);
+ for(const bytes of await exported(b,'restore')) await files(a).receive(bytes);
+ assert.equal((await recipes(await a.runtime.forRecipe('r')))[0].title,loser.value);
+ assert.equal((await recipes(br))[0].title,loser.value);
+
+ // The existing live-state codec can redact an isolated source. This checks
+ // the bytes, independently of the future multi-document publication format.
+ const {doc:restored}=await br.document();
+ const seed=projectCurrentSeed({LoroDoc,source:restored.export({mode:'snapshot'}),seedId:'newcomer',peerId:'900'});
+ const fresh=new LoroDoc();
+ fresh.import(seed.snapshot);
+ assert.equal(fresh.getMap('recipe:r').get('title'),loser.value);
+ assert.deepEqual(readRecipeHistory(fresh,'r'),[]);
+ const currentBytes=JSON.stringify(fresh.exportJsonUpdates(undefined,undefined,false));
+ for(const secret of ['Legacy soup','Unrelated canary',history.find(row=>row.field==='title'&&row.status==='current').value])
+  assert.equal(currentBytes.includes(secret),false,secret);
+});
 async function confirmation(receiver,deviceId) {
   const row = (await receiver.trust.list()).find(item => item.deviceId === deviceId);
   assert.ok(row);
