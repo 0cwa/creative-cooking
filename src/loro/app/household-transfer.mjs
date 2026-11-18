@@ -63,7 +63,8 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
    if(documentSet){
     const result=await publishHouseholdDocumentSet({storage,scope:ownScope,pin,provider,sodium,sessionStore,keys:secret,
      master,runtime,service,item:data.item,grant:data.grant,manifest:data.manifest,documents:data.documents,selection,
-     localDeviceId:deviceId,ceremonies:data.ceremonies,existingCeremonies:data.existingCeremonies,keyOperationId:`admission-key:${operationId}`});
+     localDeviceId:deviceId,ceremonies:data.ceremonies,existingCeremonies:data.existingCeremonies,keyOperationId:`admission-key:${operationId}`})
+     .catch(error=>{if(error?.message==='SOURCE_CHANGED')throw Error('STALE_DOCUMENT_SET_DRAFT');throw error;});
     return {replayed:result.replayed,operationId};
    }
    const result=await publishHouseholdAdmission({storage,scope:ownScope,pin,provider,master,operationId,keyOperationId:`admission-key:${operationId}`,localDeviceId:deviceId,signingSecret:secret.signingSecret,item:data.item,grant:data.grant,manifest:data.manifest,snapshot:data.seed.snapshot,ceremonies:data.ceremonies,existingCeremonies:data.existingCeremonies,selection,pendingEdits,sourceRuntime:runtime,policyBundle:data.policyBundle,disclosureService:service});
@@ -86,7 +87,8 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   const {operationId}=item.admission,result=await storage.getProjectionPublication(ownScope.id,operationId);
   if(!result.ok||!result.value)throw Error('MISSING_PUBLICATION');
   if(!!result.value.documentSet!==(item.admission.manifest.version===5))throw Error('UNSUPPORTED_VERSION');
-  return {operationId,generation:item.event.subject.newGeneration,recipients:result.value.packages.map(({recipientDevice})=>({recipientDevice,joining:item.admission.grant.recipientDevices.includes(recipientDevice)}))};
+  const recipients=[...new Set(result.value.packages.map(({recipientDevice})=>recipientDevice))];
+  return {operationId,generation:item.event.subject.newGeneration,recipients:recipients.map(recipientDevice=>({recipientDevice,joining:item.admission.grant.recipientDevices.includes(recipientDevice)}))};
  }
  function checkedBytes(bytes){
   if(!(bytes instanceof Uint8Array)||bytes.length<48||bytes.length>16*1024*1024+48)throw Error('MALFORMED');

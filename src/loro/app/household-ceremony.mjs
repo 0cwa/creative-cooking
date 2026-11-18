@@ -41,6 +41,28 @@ export async function prepareHouseholdCeremony({storage,scope,pin,provider,store
  if(documentSet&&parent.runtime.acceptedRecipients.some(device=>device!==deviceId))throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
  const subject=eventItem.event.subject;if(JSON.stringify(g.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId))||g.newDocumentGeneration!==subject.newGeneration||g.newEpochId!==subject.newEpochId||m.newDocumentId!==subject.documentId)throw Error('CONTEXT_MISMATCH');
  const context={version:1,householdId:sc.id,parentHead:current.activeHead,admissionEventHash:checked.admissionEventHash,sponsorAdult:adultId,recipientAdult:eventItem.event.subject.adultId,sponsorDeviceId:deviceId,sponsorSigningKeyRef:sender.signingKeyRef,sponsorWrappingKeyRef:wrappingPublicKey,recipientDeviceId:recipient[0].deviceId,recipientSigningKeyRef:recipient[0].signingKeyRef,recipientWrappingKeyRef:recipient[0].wrappingKeyRef},binding=JSON.stringify([sc.kind,sc.id,pin,current.activeHead,checked.authorizationSnapshot,checked.admissionEventHash,checked.grantHash,deviceId,wrappingPublicKey]);
- const saved=await store.transaction(tx=>{const slot=`household-ceremony-draft:${current.activeHead}:${recipient[0].deviceId}`,legacy=tx.get('household-ceremony-draft'),old=tx.get(slot);if(old){if(old.binding!==binding)throw Error('DRAFT_CONFLICT');return old}if(legacy){let prior;try{prior=JSON.parse(legacy.binding)}catch{throw Error('CORRUPT_DRAFT')}if(!Array.isArray(prior)||prior.length!==9)throw Error('CORRUPT_DRAFT');if(prior[3]===current.activeHead){if(legacy.binding!==binding)throw Error('DRAFT_CONFLICT');return legacy}}const participant=(role,id,sign,wrap)=>({role,deviceId:id,signingPublicKey:publicKey(sodium,sign),wrappingPublicKey:publicKey(sodium,wrap),nonce:sodium.randombytes_buf(32)}),transcript={version:1,sessionId:randomUUID(),action:'inviteAdult',scope:sc,purpose:'data',acceptedParent:current.activeHead,authorizationSnapshot:checked.authorizationSnapshot,initiator:participant('initiator',deviceId,sender.signingKeyRef,wrappingPublicKey),responder:participant('responder',recipient[0].deviceId,recipient[0].signingKeyRef,recipient[0].wrappingKeyRef),signaling:invitationSignaling(context,m.version,checked.grantHash)},guard={version:1,guardId:randomUUID(),scope:sc,direction:'initiator-to-responder',purpose:'data'},draft={version:1,binding,transcript,guard,context};tx.put(slot,draft);return draft});
+ const saved=await store.transaction(tx=>{
+  const recipientSlot=`household-ceremony-draft:${current.activeHead}:${recipient[0].deviceId}`;
+  const slot=documentSet?`${recipientSlot}:${checked.grantHash}`:recipientSlot;
+  const old=tx.get(slot);
+  if(old){if(old.binding!==binding)throw Error('DRAFT_CONFLICT');return old;}
+  if(documentSet){
+   const previous=tx.get(recipientSlot);
+   if(previous?.binding===binding)return previous;
+  }
+  const legacy=tx.get('household-ceremony-draft');
+  if(legacy){
+   let prior;
+   try{prior=JSON.parse(legacy.binding)}catch{throw Error('CORRUPT_DRAFT');}
+   if(!Array.isArray(prior)||prior.length!==9)throw Error('CORRUPT_DRAFT');
+   if(prior[3]===current.activeHead){
+    if(legacy.binding===binding)return legacy;
+    if(!documentSet)throw Error('DRAFT_CONFLICT');
+   }
+  }
+  const participant=(role,id,sign,wrap)=>({role,deviceId:id,signingPublicKey:publicKey(sodium,sign),wrappingPublicKey:publicKey(sodium,wrap),nonce:sodium.randombytes_buf(32)}),transcript={version:1,sessionId:randomUUID(),action:'inviteAdult',scope:sc,purpose:'data',acceptedParent:current.activeHead,authorizationSnapshot:checked.authorizationSnapshot,initiator:participant('initiator',deviceId,sender.signingKeyRef,wrappingPublicKey),responder:participant('responder',recipient[0].deviceId,recipient[0].signingKeyRef,recipient[0].wrappingKeyRef),signaling:invitationSignaling(context,m.version,checked.grantHash)},guard={version:1,guardId:randomUUID(),scope:sc,direction:'initiator-to-responder',purpose:'data'},draft={version:1,binding,transcript,guard,context};
+  tx.put(slot,draft);
+  return draft;
+ });
  if(!saved||saved.version!==1||saved.binding!==binding||JSON.stringify(saved.context)!==JSON.stringify(context))throw Error('CORRUPT_DRAFT');if(saved.guard?.direction!=='initiator-to-responder'||saved.guard.purpose!=='data')throw Error('CORRUPT_DRAFT');const t=saved.transcript;if(t?.action!=='inviteAdult'||t.purpose!=='data'||t.scope?.kind!==sc.kind||t.scope?.id!==sc.id||t.acceptedParent!==current.activeHead||t.authorizationSnapshot!==checked.authorizationSnapshot||t.initiator?.deviceId!==deviceId||t.responder?.deviceId!==recipient[0].deviceId||hex(t.initiator?.signingPublicKey??[])!==sender.signingKeyRef||hex(t.initiator?.wrappingPublicKey??[])!==wrappingPublicKey||hex(t.responder?.signingPublicKey??[])!==recipient[0].signingKeyRef||hex(t.responder?.wrappingPublicKey??[])!==recipient[0].wrappingKeyRef||!matchesInvitationSignaling(t,context,m.version,checked.grantHash))throw Error('CORRUPT_DRAFT');const digest=hex(sodium.crypto_generichash(32,ceremonyBytes(saved.transcript,saved.guard))),pins=Object.fromEntries(['initiator','responder'].map(role=>[role,{deviceId:saved.transcript[role].deviceId,signingKey:hex(saved.transcript[role].signingPublicKey),wrappingKey:hex(saved.transcript[role].wrappingPublicKey)}]));return {version:1,transcript:structuredClone(saved.transcript),guard:structuredClone(saved.guard),context:structuredClone(context),oob:{hash:digest,pins},status:'independent-confirmation-required'};
 }

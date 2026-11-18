@@ -19,6 +19,7 @@ export function HouseholdInvitation(){
  const [grantText,setGrantText]=useState(''),[existingText,setExistingText]=useState('');
  const [existingEvidence,setExistingEvidence]=useState<Record<string,any>>({});
  const [files,setFiles]=useState<PublishedFiles|null>(null);
+ const [restartAvailable,setRestartAvailable]=useState(false);
  const expectedExisting:string[]=workspace.household.scope.acceptedRecipients.filter((device:string)=>device!==workspace.deviceId);
  useEffect(()=>{
   if(!open||role!=='organizer')return;
@@ -28,6 +29,11 @@ export function HouseholdInvitation(){
  },[open,role,workspace]);
  const run=async(fn:()=>Promise<void>)=>{if(inFlight.current)return;inFlight.current=true;setBusy(true);setStatus('');try{await fn()}catch(e){
   const message=e instanceof Error?e.message:'The invitation step failed.';
+  if(message==='STALE_DOCUMENT_SET_DRAFT'){
+   draft.current=null;clearVerification();setOfferText('');setCode('');setRestartAvailable(true);
+   setStatus('Cooking changed after this invitation was prepared. Restart it and compare a new verification code.');
+   return;
+  }
   setStatus(message==='DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED'?
    'Invitations for households with separate recipe documents currently require a single existing device.':message);
  }finally{inFlight.current=false;setBusy(false)}};
@@ -46,16 +52,21 @@ export function HouseholdInvitation(){
   offer.current={scope,item,grant:prepared.grant,ceremony,...(documentSet?{manifestVersion:5}:{})};
   draft.current={item,prepared,ceremony,offer:offer.current};
   session.current=null;
+  setRestartAvailable(false);
   setOfferText(encode(offer.current));setCode('');setPhase('');setOutput('');setPeer('');setExistingEvidence({});setExistingText('');
   setStatus('Share the latest public authority first. Compare its root and head independently, then share the invitation and compare the verification code separately.');
  };
- const prepare=async()=>{
+ const prepare=async(restartStale=false)=>{
   if(expectedExisting.length)throw Error('Use the collected cooking grant to prepare an invitation for this household.');
   const recipient=decode(identityText),delegation=await workspace.householdPairing.prepareDelegation({explicit:true});
   if(delegation.requiredAdults.length!==1)throw Error('Collect signatures for the current-cooking agreement first.');
   const {item}=await workspace.householdPairing.prepareInvite({recipient,explicit:true});
   await workspace.householdPairing.acceptDelegation({agreement:{...delegation.agreement,acceptances:[delegation.acceptance]},explicit:true});
-  await prepareOffer(item,await workspace.householdPairing.prepareGrant({item,explicit:true}));
+  await prepareOffer(item,await workspace.householdPairing.prepareGrant({item,explicit:true,restartStale}));
+ };
+ const restart=async()=>{
+  const release=app.beginWorkspaceTransition();
+  try{await app.flushCurrentWorkspace();await prepare(true);}finally{release();}
  };
  const prepareCollected=async()=>{
   const {item,prepared}=decode(grantText,grantLimit);
@@ -140,6 +151,7 @@ export function HouseholdInvitation(){
      <TextInput accessibilityLabel="Recipient public identity" multiline maxLength={limit} value={identityText} onChangeText={v=>bounded(v,setIdentityText)} style={{borderWidth:1,padding:8}}/>
      <PublicMessageFile label="device identity" limit={limit} onRead={setIdentityText} run={run} disabled={busy}/>
      <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(prepare)}><Text>Prepare current-cooking invitation</Text></Pressable>
+     {restartAvailable?<Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(restart)}><Text>Restart invitation with current cooking</Text></Pressable>:null}
     </>}
     {draft.current?<><Text>Verification code to compare separately</Text>
      <Text selectable accessibilityLabel="Invitation verification code">{draft.current.ceremony.oob.hash}</Text>

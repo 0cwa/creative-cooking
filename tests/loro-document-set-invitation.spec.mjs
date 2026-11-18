@@ -6,6 +6,7 @@ const recipeTitle='Current market soup';
 const originalTitle='Superseded market soup';
 const editedTitle='Newcomer market soup';
 const originalPantry='Original workspace basil';
+const changedPantry='Fresh invitation thyme';
 const shoppingList='Invitation market';
 const shoppingName='Invitation market carrots';
 const button=(page,name)=>page.getByRole('button',{name,exact:true});
@@ -95,10 +96,10 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
    console.error('Preparation status',await sponsor.getByRole('alert').allTextContents());
    throw error;
   });
-  const offer=await text(sponsor,'Public invitation message');
+  let offer=await text(sponsor,'Public invitation message');
   expect(JSON.parse(offer).manifestVersion).toBe(5);
   for(const value of [recipeTitle,originalTitle,shoppingName])expect(offer).not.toContain(value);
-  const code=await text(sponsor,'Invitation verification code');
+  let code=await text(sponsor,'Invitation verification code');
   await button(sponsor,'Show public household authority').click();
   await label(newcomer,'Household authority bundle').fill(await text(sponsor,'Public household authority'));
   await label(newcomer,'Confirmed household root').fill(await text(sponsor,'Household root to compare'));
@@ -122,33 +123,63 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
   await label(newcomer,'Public invitation message input').fill(JSON.stringify(downgraded));
   await resume(newcomer,code);
   await expect(newcomer.getByText('INVALID_PROOF',{exact:true})).toBeVisible();
+  const finishVerification=async(reopenOrganizer=false)=>{
+   await label(newcomer,'Public invitation message input').fill(offer);
+   await resume(newcomer,code);
+   await resume(sponsor,code);
+   for(const state of ['Exchange your response with the other device.',
+    'Exchange your acknowledgement with the other device.','Both devices have completed verification.']){
+    const [left,right]=await Promise.all([text(sponsor,'Your verification message'),text(newcomer,'Your verification message')]);
+    await label(sponsor,'Other device verification message').fill(right);
+    await label(newcomer,'Other device verification message').fill(left);
+    for(const page of [sponsor,newcomer]){
+     await button(page,'Continue device verification').click();
+     await expect(page.getByText(state,{exact:true})).toBeVisible();
+    }
+    if(reopenOrganizer&&state.startsWith('Exchange your response')){
+     await settings(sponsor);
+     await label(sponsor,'Recipient public identity').fill(identity);
+     await button(sponsor,'Prepare current-cooking invitation').click();
+     await expect(label(sponsor,'Public invitation message')).toHaveText(offer);
+     await resume(sponsor,code);
+     await expect(sponsor.getByText(state,{exact:true})).toBeVisible();
+    }
+   }
+  };
+  await finishVerification(true);
+  const editor=await sponsorContext.newPage();
+  try{
+   await editor.goto(app);
+   await expect(editor.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+   await label(editor,'Ingredient and details').fill(changedPantry);
+   await label(editor,'Add ingredient').click();
+   await expect(editor.getByText(changedPantry,{exact:true})).toBeVisible();
+   await expect(editor.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+  }finally{await editor.close();}
+  await button(sponsor,'Admit and download encrypted household file').click();
+  await expect(sponsor.getByText('Cooking changed after this invitation was prepared. Restart it and compare a new verification code.')).toBeVisible();
+  await expect(button(sponsor,'Admit and download encrypted household file')).toHaveCount(0);
+  await expect(sponsor.getByText(/^Encrypted files for household generation/)).toHaveCount(0);
+  const previous=JSON.parse(offer),oldCode=code;
+  await button(sponsor,'Restart invitation with current cooking').click();
+  await expect(label(sponsor,'Public invitation message')).toBeVisible();
+  offer=await text(sponsor,'Public invitation message');
+  code=await text(sponsor,'Invitation verification code');
+  expect(code).not.toBe(oldCode);
+  expect(JSON.parse(offer).grant.keyEnvelopeRefs).not.toEqual(previous.grant.keyEnvelopeRefs);
+  expect(JSON.parse(offer).item.event.proposalId).toBe(previous.item.event.proposalId);
   await label(newcomer,'Public invitation message input').fill(offer);
-  await resume(newcomer,code);
-  await resume(sponsor,code);
-  for(const state of ['Exchange your response with the other device.',
-   'Exchange your acknowledgement with the other device.','Both devices have completed verification.']){
-   const [left,right]=await Promise.all([text(sponsor,'Your verification message'),text(newcomer,'Your verification message')]);
-   await label(sponsor,'Other device verification message').fill(right);
-   await label(newcomer,'Other device verification message').fill(left);
-   for(const page of [sponsor,newcomer]){
-    await button(page,'Continue device verification').click();
-    await expect(page.getByText(state,{exact:true})).toBeVisible();
-   }
-   if(state.startsWith('Exchange your response')){
-    await settings(sponsor);
-    await label(sponsor,'Recipient public identity').fill(identity);
-    await button(sponsor,'Prepare current-cooking invitation').click();
-    await expect(label(sponsor,'Public invitation message')).toHaveText(offer);
-    await resume(sponsor,code);
-    await expect(sponsor.getByText(state,{exact:true})).toBeVisible();
-   }
-  }
+  await resume(newcomer,oldCode);
+  await expect(newcomer.getByText('CONFIRMATION_REQUIRED',{exact:true})).toBeVisible();
+  await finishVerification();
   const download=async (name)=>{
    const pending=sponsor.waitForEvent('download',{timeout:12_000});
    await button(sponsor,name).click();
    return readFile(await (await pending).path());
   };
   const file=await download('Admit and download encrypted household file');
+  const recipient=JSON.parse(identity).deviceId;
+  await expect(button(sponsor,`Download encrypted file for new device ${recipient}`)).toHaveCount(1);
   await settings(sponsor);
   await label(sponsor,'Previously prepared invitation message').fill(offer);
   expect(await download('Download an already admitted household file')).toEqual(file);
@@ -163,6 +194,15 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
   await install(corrupted);
   await expect(newcomer.getByText('INVALID_FILE',{exact:true})).toBeVisible();
   await expect(button(newcomer,'Open this shared household')).toHaveCount(0);
+  await label(newcomer,'Public invitation message input').fill(JSON.stringify(previous));
+  await resume(newcomer,oldCode);
+  await expect(newcomer.getByText('Both devices have completed verification.')).toBeVisible();
+  await install();
+  await expect(newcomer.getByText('INVALID_PROOF',{exact:true})).toBeVisible();
+  await expect(button(newcomer,'Open this shared household')).toHaveCount(0);
+  await label(newcomer,'Public invitation message input').fill(offer);
+  await resume(newcomer,code);
+  await expect(newcomer.getByText('Both devices have completed verification.')).toBeVisible();
   await install();
   await expect(newcomer.getByText(/^Household installed\./)).toBeVisible();
   await expect(label(newcomer,'Open household')).toContainText('Original local household');
@@ -174,6 +214,7 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
   await expect(newcomer.getByText(/^This household was already installed\./)).toBeVisible();
   await button(newcomer,'Open this shared household').click();
   await expect(newcomer.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+  await expect(newcomer.getByText(changedPantry,{exact:true})).toBeVisible();
 
   const checkCooking=async (page,title)=>{
    await page.goto(app+'recipes');

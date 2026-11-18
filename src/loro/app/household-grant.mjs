@@ -28,7 +28,7 @@ async function signedGrant({provider,scope,parent,eventHash,subject,delegation,m
 }
 
 async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,runtime,service,
- adultId,deviceId,item,parent,author,delegation,eventHash,binding,randomUUID}){
+ adultId,deviceId,item,parent,author,delegation,eventHash,binding,restartStale,randomUUID}){
  if(parent.runtime.acceptedRecipients.some(device=>device!==deviceId))throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
  const slot=`household-grant-draft:${parent.head}`;
  const setBinding=JSON.stringify([...JSON.parse(binding),5]);
@@ -41,13 +41,38 @@ async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,
   if(legacy&&JSON.parse(legacy.binding)[3]===parent.head)throw Error('DRAFT_CONFLICT');
   return draft;
  };
- const draft=await store.transaction(tx=>{
+ const fresh=()=>({version:2,binding:setBinding,packageId:randomUUID(),allocations:[]});
+ let draft=await store.transaction(tx=>{
   const saved=read(tx);
   if(saved)return saved;
-  const next={version:2,binding:setBinding,packageId:randomUUID(),allocations:[]};
+  if(restartStale)throw Error('NO_STALE_INVITATION');
+  const next=fresh();
   tx.put(slot,next);
   return next;
  });
+ const verifyGrant=async retained=>{
+  if(retained.version!==2||retained.status!=='ceremony-and-source-required'||retained.grant?.keyEnvelopeRefs?.[0]!==draft.packageId||
+     retained.grant?.delegationHash!==delegation)throw Error('CORRUPT_DRAFT');
+  const {manifest,documents,grant}=retained;
+  await verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc:runtime.LoroDoc});
+  try{await verifyCurrentDocumentSetSource({runtime,service,item,manifest,documents});}
+  catch(error){if(error?.message==='SOURCE_CHANGED')throw Error('STALE_DOCUMENT_SET_DRAFT');throw error;}
+ };
+ if(restartStale){
+  if(!draft.result)throw Error('NO_STALE_INVITATION');
+  let stale=false;
+  try{await verifyGrant(draft.result)}catch(error){if(error?.message!=='STALE_DOCUMENT_SET_DRAFT')throw error;stale=true;}
+  if(!stale)throw Error('NO_STALE_INVITATION');
+  const published=await storage.getProjectionPublication(scope.id,item.event.proposalId);
+  if(!published.ok)throw Error(published.error);
+  if(published.value)throw Error('INVITATION_ALREADY_PUBLISHED');
+  draft=await store.transaction(tx=>{
+   if(read(tx)?.packageId!==draft.packageId)throw Error('DRAFT_CONFLICT');
+   const next=fresh();
+   tx.put(slot,next);
+   return next;
+  });
+ }
  const allocateSeed=documentId=>store.transaction(tx=>{
   const current=read(tx);
   if(!current||current.packageId!==draft.packageId)throw Error('DRAFT_CONFLICT');
@@ -73,17 +98,13 @@ async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,
    return result;
   });
  }
- if(retained.version!==2||retained.status!=='ceremony-and-source-required'||retained.grant?.keyEnvelopeRefs?.[0]!==draft.packageId||
-    retained.grant?.delegationHash!==delegation)throw Error('CORRUPT_DRAFT');
- const {manifest,documents,grant}=retained;
- await verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc:runtime.LoroDoc});
- await verifyCurrentDocumentSetSource({runtime,service,item,manifest,documents});
+ await verifyGrant(retained);
  return structuredClone(retained);
 }
 
 /** Prepare a source-bound grant. Current-cooking delegation must already be
  * explicitly accepted by every adult; the projection stays on this device. */
-export async function prepareHouseholdGrant({storage,scope,pin,provider,store,sodium,runtime,service,adultId,deviceId,item,explicit,randomUUID=()=>crypto.randomUUID()}){
+export async function prepareHouseholdGrant({storage,scope,pin,provider,store,sodium,runtime,service,adultId,deviceId,item,explicit,restartStale=false,randomUUID=()=>crypto.randomUUID()}){
  const sc=structuredClone(scope),proposal=structuredClone(item);if(explicit!==true||!proposal?.event||!Array.isArray(proposal.approvals))throw Error('MALFORMED');
  const authority=await readAuthority(storage,sc,pin,provider),verified=await verifyAuthority(authority.state,pin,provider),parent=verified.nodes.get(authority.activeHead),author=parent?.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId);if(!author||proposal.event.parentHead!==authority.activeHead||proposal.event.kind!=='inviteAdult')throw Error('INVALID_AUTHORITY');
  const successor=await validateSuccessor(parent,proposal.event,proposal.authorSignature,proposal.approvals,provider);if(successor.reason!=='ADMISSION_AND_PROJECTION_REQUIRED')throw Error(successor.reason||'INVALID_PROOF');
@@ -94,7 +115,8 @@ export async function prepareHouseholdGrant({storage,scope,pin,provider,store,so
  const catalog=await storage.hasSelectedRecipeCatalog(expectedAuthority);
  if(!catalog.ok)throw Error(catalog.error.code);
  if(catalog.value)return prepareDocumentSetGrant({storage,scope:sc,pin,provider,store,sodium,runtime,service,
-  adultId,deviceId,item:proposal,parent,author,delegation,eventHash,binding,randomUUID});
+  adultId,deviceId,item:proposal,parent,author,delegation,eventHash,binding,restartStale,randomUUID});
+ if(restartStale)throw Error('NO_STALE_INVITATION');
  const ids=await store.transaction(tx=>{const slot=`household-grant-draft:${parent.head}`,legacy=tx.get('household-grant-draft'),old=tx.get(slot);if(old){if(old.binding!==binding)throw Error('DRAFT_CONFLICT');return old}if(legacy){let prior;try{prior=JSON.parse(legacy.binding)}catch{throw Error('CORRUPT_DRAFT')}if(!Array.isArray(prior)||prior.length!==7)throw Error('CORRUPT_DRAFT');if(prior[3]===parent.head){if(legacy.binding!==binding)throw Error('DRAFT_CONFLICT');return legacy}}const used=new Set([...Object.values(parent.runtime.authorPeers),...proposal.event.subject.devices.map(d=>d.peerId)]);const peer=allocatePeer(sodium,used);const next={version:1,binding,seedId:randomUUID(),peerId:peer,packageId:randomUUID()};tx.put(slot,next);return next});
  if(ids.version!==1||ids.binding!==binding||typeof ids.seedId!=='string'||!/^[0-9a-f-]{36}$/.test(ids.seedId)||typeof ids.packageId!=='string'||!/^[0-9a-f-]{36}$/.test(ids.packageId)||typeof ids.peerId!=='string'||!/^[1-9][0-9]{0,19}$/.test(ids.peerId)||BigInt(ids.peerId)>18446744073709551615n||Object.values(parent.runtime.authorPeers).includes(ids.peerId)||proposal.event.subject.devices.some(d=>d.peerId===ids.peerId))throw Error('CORRUPT_DRAFT');
  // Publication authenticates the stored checkpoint bytes. Loro can encode the
