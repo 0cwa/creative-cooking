@@ -88,6 +88,13 @@ test('policy approval uses the selected frozen electorate and retains independen
     const selection = {from:root.head, to:complete.eventHash, deviceId:a.deviceId, index:0};
     const signature = sodium.to_hex(sign(a.deviceId, domain('select-head', {root:root.head, householdId:scope.id, ...selection})));
     await selectHead(storage, scope, root.head, provider, {...selection, signature});
+    const afterSelection = await readAuthority(storage, scope, root.head, provider);
+    assert.deepEqual(await retain(a, complete), {eventHash:complete.eventHash, replayed:true});
+    assert.deepEqual(await readAuthority(storage, scope, root.head, provider), afterSelection);
+    const variant = {...complete, item:{...complete.item,
+      approvals:[secondDevice.item.approvals[0], complete.item.approvals.find(approval=>approval.adultId===b.adultId)]}};
+    await assert.rejects(retain(a, variant), /CONFLICT/);
+    await assert.rejects(reviewHouseholdAdmissionRule({...a, item:complete.item}), /different household head/);
     const selected = await householdAdmissionRule(b);
     assert.equal(selected.required, 1);
     assert.deepEqual(selected.policy, next);

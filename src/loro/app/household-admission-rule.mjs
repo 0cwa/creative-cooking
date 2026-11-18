@@ -11,7 +11,7 @@ async function context({storage, scope, pin, provider, adultId, deviceId}) {
   const parent = nodes.get(activeHead);
   const device = parent.devices.find(d => d.active && d.adultId === adultId && d.deviceId === deviceId);
   if (!device) throw Error('INVALID_AUTHORITY');
-  return {state, parent, device};
+  return {state, nodes, parent, device};
 }
 
 export async function householdAdmissionRule(args) {
@@ -51,16 +51,21 @@ export async function proposeHouseholdAdmissionRule(args) {
   return {event, authorSignature, approvals: []};
 }
 
-export async function reviewHouseholdAdmissionRule(args) {
+async function verifyRuleProposal(args, allowHistoricalParent) {
   const item = structuredClone(args.item);
-  const {parent} = await context(args);
+  const {parent: activeParent, nodes} = await context(args);
   if (item?.event?.kind !== 'changePolicy' || Object.keys(item).sort().join(',') !== 'approvals,authorSignature,event') throw Error('INVALID_INPUT');
-  if (item.event.parentHead !== parent.head) throw Error('The proposal uses a different household head.');
+  const parent = allowHistoricalParent ? nodes.get(item.event.parentHead) : activeParent;
+  if (!parent || item.event.parentHead !== parent.head) throw Error('The proposal uses a different household head.');
   const check = await validateSuccessor(parent, item.event, item.authorSignature, item.approvals, args.provider);
   if (check.status !== 'validated' && check.reason !== 'QUORUM_REQUIRED') throw Error(check.reason);
   return {item, parent, eventHash: check.eventHash, approvals: check.approvals, required: check.required,
     canApprove: !item.approvals.some(approval => approval.adultId === args.adultId),
     complete: check.status === 'validated'};
+}
+
+export function reviewHouseholdAdmissionRule(args) {
+  return verifyRuleProposal(args, false);
 }
 
 export async function approveHouseholdAdmissionRule(args) {
@@ -79,7 +84,7 @@ export async function approveHouseholdAdmissionRule(args) {
 export async function retainHouseholdAdmissionRule(args) {
   const {storage, scope, pin, provider, explicit, confirmedEventHash} = args;
   if (explicit !== true) throw Error('CONFIRMATION_REQUIRED');
-  const {item, eventHash, complete} = await reviewHouseholdAdmissionRule(args);
+  const {item, eventHash, complete} = await verifyRuleProposal(args, true);
   if (eventHash !== confirmedEventHash) throw Error('REVIEW_CHANGED');
   if (!complete) throw Error('QUORUM_REQUIRED');
   return observeSuccessorWithOutcome(storage, scope, pin, provider, {...item, approvals: ordered(item.approvals)}, item.event.parentHead);
