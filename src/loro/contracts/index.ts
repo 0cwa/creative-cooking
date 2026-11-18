@@ -40,7 +40,7 @@ export interface AtomicStorage {
   commitLocalGroup(group: LocalCommitGroup): Promise<GroupCommitResult>;
   reopenDocument(scopeId: Id, documentId: Id): Promise<Result<(DocumentOutput & { revision: number }) | null, StorageError>>;
   /** Atomically stage immutable bytes and compare-and-swap the opaque per-scope/source cursor. */
-  stageInbox(item: InboxItem): Promise<Result<void, StorageError>>;
+  stageInbox(item: InboxItem, expectedAuthority?: LocalCommit['expectedAuthority']): Promise<Result<void, StorageError>>;
   /** Atomically commit all outputs, effects and applied outcome; failure retains staged bytes. */
   commitImport(commit: ImportCommit): Promise<CommitResult>;
   /** Persist a receipt idempotently; conflicting reuse fails. Never erase objects, effects or retry history.

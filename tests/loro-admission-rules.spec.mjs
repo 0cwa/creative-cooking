@@ -299,7 +299,22 @@ test('two adults retain competing rules and open isolated cooking branches expli
     await expect(notice(first, 'Could not save the branch switch')).toBeVisible();
     expect(await retainedBranchState(first, scopeId)).toEqual(beforeFault);
 
-    await confirmBranch(first);
+    const choiceKey='creative-cooking-storage-choice-v1';
+    const savedChoice=await stale.evaluate(key=>localStorage.getItem(key),choiceKey);
+    await first.evaluate(choiceKey=>{
+      const save=Storage.prototype.setItem;
+      Storage.prototype.setItem=function(key,value){
+        save.call(this,key,value);
+        if(this===sessionStorage&&key==='creative-cooking-branch-reopen-v1')save.call(localStorage,choiceKey,'legacy');
+      };
+    },choiceKey);
+    const reopening=first.waitForURL(url=>url.pathname.endsWith('/creative-cooking/'));
+    await button(first,'Open this cooking branch').click();
+    await reopening;
+    await expect(first.getByText('The household branch changed before it could reopen. Retry to review the current workspace.')).toBeVisible();
+    await expect(first.getByText('Signed frontier thyme',{exact:true})).toHaveCount(0);
+    await stale.evaluate(({key,value})=>localStorage.setItem(key,value),{key:choiceKey,value:savedChoice});
+    await first.reload();
     await openRules(second);
     await reviewBranch(second, firstProposal.head);
     await confirmBranch(second);

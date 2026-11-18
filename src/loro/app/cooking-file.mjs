@@ -10,16 +10,17 @@ export function cookingFiles({runtime,service}){
  const cookingSource=({source,cursor})=>source===`file:${cursor}`||source===`direct:${cursor}`;
  async function list(){await runtime.authorize();return (await outbound()).map(x=>({objectId:x.objectId}));}
  async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const row=(await outbound()).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
- async function verify(bytes,expectedId,expectedAuthor){
+ async function verifyUnderAuthority(bytes,expectedId,expectedAuthor){
   if(!(bytes instanceof Uint8Array))throw Error('MALFORMED');
   if(bytes.length>MAX_OBJECT)throw Error('TOO_LARGE');
   const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
   validateCookingHeader(opened,expectedId??opened.object.id,runtime.scope);
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
-  return opened.object;
+  return {object:opened.object,expectedAuthority:auth.expectedAuthority};
  }
+ async function verify(bytes,expectedId,expectedAuthor){return (await verifyUnderAuthority(bytes,expectedId,expectedAuthor)).object;}
  const applyStaged=item=>importCookingWithPolicy({runtime,service,item});
- async function receive(raw){if(!(raw instanceof Uint8Array))throw Error('MALFORMED');if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');const bytes=new Uint8Array(raw),{id}=await verify(bytes),source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId)),expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id}));return applyStaged({itemId:id,bytes});}
+ async function receive(raw){if(!(raw instanceof Uint8Array))throw Error('MALFORMED');if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');const bytes=new Uint8Array(raw),{object:{id},expectedAuthority}=await verifyUnderAuthority(bytes),source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId)),expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id},expectedAuthority));return applyStaged({itemId:id,bytes});}
  async function pending(){
   await runtime.authorize();
   const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]);

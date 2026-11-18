@@ -56,8 +56,9 @@ export function HouseholdAdmissionRule() {
     const release = app.beginWorkspaceTransition();
     try {
       await app.flushCurrentWorkspace();
-      await rule.checkout({...choice, explicit:true});
-      workspace.reopen();
+      const scopeId=workspace.household.scope.scopeId;
+      const {head}=await rule.checkout({...choice, explicit:true});
+      workspace.reopen({scopeId,head});
     } catch (error) {
       release();
       if (error instanceof Error && error.message === 'IO') throw Error('Could not save the branch switch. Your current cooking branch is still open.');

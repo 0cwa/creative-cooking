@@ -18,6 +18,7 @@ import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {acceptInitialPolicy, prepareInitialPolicy} from '../disclosure/setup.mjs';
 import {createSourceVerifier} from '../disclosure/source-proof.mjs';
+import {cookingFiles} from './cooking-file.mjs';
 
 await sodium.ready;
 
@@ -202,16 +203,31 @@ test('checkout verifies inherited source envelopes only inside the signed causal
     const event = {...proposed.event,version:1,subject:null,proposalId:'legacy-proposal'};
     const historical = await approveAndRetain({event,authorSignature:sodium.to_hex(await provider.sign(deviceId,domain('event-signature',event))),approvals:[]});
     await commitCookingWithPolicy({runtime:parent,service,input:create('outside',3)});
+    const laterHistory=await parent.document();
+    const outsideEnvelope=(await storage.readDisclosureSource(scope.id,'outside')).value.envelope;
     const status = await householdAdmissionRule(member);
     assert.equal(status.successors.find(item=>item.eventHash===historical.eventHash).legacy,true);
     assert.equal(status.checkout.some(item=>item.head===historical.eventHash),false);
     await assert.rejects(checkoutPolicyHead({...member,LoroDoc,expectedHead:pin,expectedRevision:status.revision,targetHead:historical.eventHash,explicit:true}), /INVALID_POLICY_CHECKOUT/);
-    await checkoutPolicyHead({...member,LoroDoc,expectedHead:pin,expectedRevision:status.revision,targetHead:approved.eventHash,explicit:true});
+    const cursors=await storage.listCursors(scope.id),inbox=await storage.listStagedInbox(scope.id);
+    const listCursors=storage.listCursors;
+    storage.listCursors=async function(...args){
+      await checkoutPolicyHead({...member,LoroDoc,expectedHead:pin,expectedRevision:status.revision,targetHead:approved.eventHash,explicit:true});
+      return listCursors.call(this,...args);
+    };
+    try {
+      await assert.rejects(cookingFiles({runtime:parent,service}).receive(outsideEnvelope),/CONFLICT/);
+    } finally { storage.listCursors=listCursors; }
+    assert.deepEqual(await storage.listCursors(scope.id),cursors);
+    assert.deepEqual(await storage.listStagedInbox(scope.id),inbox);
     const branch = await open();
     // On this branch, the new change can claim the same Loro peer counters
     // as the later change retained on the parent.
     await commitCookingWithPolicy({runtime:branch,service,input:create('branch-own',4)});
     const context = await service.authority();
+    const repeatedHistory=Object.create(branch);
+    repeatedHistory.document=async()=>laterHistory;
+    await assert.rejects(createSourceVerifier({runtime:repeatedHistory,service,context,allowIncomplete:true})('outside'), /INVALID_SOURCE_PROOF|SOURCE_PROVENANCE_REQUIRED/);
     const verify = createSourceVerifier({runtime:branch,service,context,allowIncomplete:true});
     assert.deepEqual((await verify('inside')).policies,[accepted.policyHash]);
     assert.equal((await verify('legacy')).incomplete,true);

@@ -1,11 +1,11 @@
 import {validate as validateCommand,validateOperations,checkPreconditions} from '../domain/registry.mjs';
-import {policyBaseline,policyBranchAncestors} from '../authority/policy-baseline.mjs';
+import {policyBaseline,policyBranchAncestors,verifyPolicyBaseline} from '../authority/policy-baseline.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 /** Reverify retained signed envelopes and recursively reconstruct source policy ancestry. */
 export function createSourceVerifier({runtime,service,context,allowIncomplete=false}) {
- const verified=new Map(),visiting=new Set();let replayChecked=null;
+ const verified=new Map(),visiting=new Set(),baselines=new Map();let replayChecked=null;
  const scope=runtime.scope;
  const ancestors=context.verified?.nodes ? policyBranchAncestors(context.verified,scope.branchHead) : [];
  async function authenticateSeed(effect) {
@@ -41,12 +41,20 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
    let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value))}catch{throw Error('INVALID_SOURCE_PROOF')};const command=validateCommand(payload?.command);if(payload.version!==1||!Array.isArray(payload.update)||command.effectId!==effect||command.commandId!==source.commandId||!legacy&&!equal([...command.dependencyEffectIds].sort(),h.sourceEffectIds)||(command.data.author!==undefined&&command.data.author!==h.authorDevice))throw Error('INVALID_SOURCE_PROOF');
    if(!payload.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))throw Error('INVALID_SOURCE_PROOF');const update=Uint8Array.from(payload.update),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!equal(meta.predecessors,h.predecessorRefs))throw Error('INVALID_SOURCE_PROOF');const {doc}=await runtime.document();let prior;try{prior=doc.forkAt(meta.frontiers)}catch{throw Error('SOURCE_PROVENANCE_REQUIRED')}const verifier=prior.forkAt(meta.frontiers),start=verifier.oplogVersion(),checked=verifier.import(update);if(checked.pending?.size)throw Error('SOURCE_PROVENANCE_REQUIRED');validateOperations(command,verifier.exportJsonUpdates(start,undefined,false).changes);checkPreconditions(prior,command,{importing:true});
    if(inherited){
-    // A sibling can contain different operations at the same peer counters.
-    // Verify the retained signed operations against this branch's own history.
-    let committed;
-    try{committed=doc.forkAt(verifier.frontiers());}catch{throw Error('SOURCE_PROVENANCE_REQUIRED');}
     const provider=runtime.authority.provider;
-    if((await policyBaseline(committed,provider)).historyHash!==(await policyBaseline(verifier,provider)).historyHash)throw Error('INVALID_SOURCE_PROOF');
+    const {historyHash}=await policyBaseline(verifier,provider);
+    for(const child of ancestors.slice(0,ancestors.indexOf(ancestor))){
+     const edge=context.verified.policyParents.get(child.head);
+     if(!edge)throw Error('SOURCE_PROVENANCE_REQUIRED');
+     let baseline=baselines.get(child.head);
+     if(!baseline){
+      baseline=await verifyPolicyBaseline(doc,runtime.LoroDoc,edge.baseline,provider);
+      baselines.set(child.head,baseline);
+     }
+     let committed;
+     try{committed=baseline.forkAt(verifier.frontiers());}catch{throw Error('SOURCE_PROVENANCE_REQUIRED');}
+     if((await policyBaseline(committed,provider)).historyHash!==historyHash)throw Error('INVALID_SOURCE_PROOF');
+    }
    }
    const governing=legacy ? null : h.disclosurePolicyHash;
    const ancestry=new Set(governing===null?[]:[governing]);

@@ -635,9 +635,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {
     try { return await this.run(false,async tx => { const d = await tx.get(key('document',scopeId,documentId)); return {ok:true,value:d === undefined ? null : {documentId,bytes:copy(d.bytes),revision:d.revision}}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
-  async stageInbox(item: InboxItem): Promise<Result<void,StorageError>> {
+  async stageInbox(item: InboxItem, expectedAuthority?:AuthorityExpectation): Promise<Result<void,StorageError>> {
     const valid = validateInboxItem(item); if (!valid.ok) return valid; item = snapshot(item);
+    if(expectedAuthority!==undefined&&(!validPairingScope(expectedAuthority?.scope)||expectedAuthority.scope.id!==item.scopeId||!expectedAuthority.record))return {ok:false,error:'MALFORMED'};
+    expectedAuthority=snapshot(expectedAuthority);
     try { return await this.run(true,async tx => {
+      if(expectedAuthority)await this.requireAuthority(tx,expectedAuthority);
       const cursorKey = key('cursor',item.scopeId,item.source), itemKey = key('inbox',item.scopeId,item.object.id);
       const cursor = await tx.get(cursorKey), old = await tx.get(itemKey);
       if ((cursor === undefined ? null : cursor) !== item.expectedCursor || (old !== undefined && !sameBytes(old.bytes,item.object.bytes))) conflict();

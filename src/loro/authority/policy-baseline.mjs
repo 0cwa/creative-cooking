@@ -24,9 +24,7 @@ export async function policyBaseline(doc, provider) {
   return {frontiers:normalizedFrontiers(doc), historyHash:Array.from(hash, byte => byte.toString(16).padStart(2, '0')).join('')};
 }
 
-export async function recoverPolicyBaseline(LoroDoc, stored, baseline, provider) {
-  const parent = new LoroDoc();
-  if (stored) parent.import(stored.bytes);
+export async function verifyPolicyBaseline(parent, LoroDoc, baseline, provider) {
   let fork;
   try { fork = baseline.frontiers.length ? parent.forkAt(baseline.frontiers) : new LoroDoc(); }
   catch { throw Error('POLICY_BASELINE_UNAVAILABLE'); }
@@ -35,5 +33,11 @@ export async function recoverPolicyBaseline(LoroDoc, stored, baseline, provider)
       derived.frontiers.some((point, i) => point.peer !== baseline.frontiers[i].peer || point.counter !== baseline.frontiers[i].counter)) {
     throw Error('POLICY_BASELINE_UNAVAILABLE');
   }
-  return fork.export({mode:'snapshot'});
+  return fork;
+}
+
+export async function recoverPolicyBaseline(LoroDoc, stored, baseline, provider) {
+  const parent = new LoroDoc();
+  if (stored) parent.import(stored.bytes);
+  return (await verifyPolicyBaseline(parent,LoroDoc,baseline,provider)).export({mode:'snapshot'});
 }
