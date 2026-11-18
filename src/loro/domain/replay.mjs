@@ -64,7 +64,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  if(seed && checkpoint.length+seed.snapshot.length+[...outbound,...inbox].reduce((n,x)=>n+x.bytes.length,0)>MAX_BYTES)throw Error('TOO_LARGE');
  const objects=outbound.filter(x=>x.branchHead===scope.branchHead&&x.epochId===scope.epochId).map(x=>({id:x.objectId,bytes:x.bytes}));
  for(const item of inbox) if(required(await runtime.storage.getInboxApplication(scope.scopeId,item.itemId))){let h;try{h=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(item.bytes)).header}catch{throw Error('MALFORMED_UPDATE')}if(h?.branchHead===scope.branchHead&&h?.epochId===scope.epochId)objects.push({id:item.itemId,bytes:item.bytes})}
- const {doc:original}=await runtime.document(),entries=[],identities=new Map(),effects=new Set();
+ const {doc:original,storedBytes}=await runtime.document(),entries=[],identities=new Map(),effects=new Set();
  for(const object of objects) {
   const opened=await runtime.codec.openContent(object.bytes,signingKeyRefs),h=opened.header;
   if(opened.object.id!==object.id || h.scopeId!==scope.scopeId || h.documentId!==scope.documentId || h.documentGeneration!==scope.documentGeneration || h.branchHead!==scope.branchHead || h.epochId!==scope.epochId || h.suiteId!==scope.suiteId || !same(h.policyHashes,scope.policyHashes) || !scope.acceptedAuthors.includes(h.authorDevice) || h.payloadKind!=='loro-update-v1' || h.semanticEffectIds.length!==1) throw Error('INVALID_AUTHORITY');
@@ -86,7 +86,18 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
   entries.push({authorDevice:h.authorDevice,command,sourcePeer:meta.peer,sourceCounter:runtime.decodeImportBlobMeta(update,true).partialStartVersionVector.toJSON().get(meta.peer)??0,prior:new Set(Object.keys(prior.getMap('domain-effects').toJSON()))});
  }
  const seedDoc=new runtime.LoroDoc(),seedIds=new Map();if(seed){seedDoc.import(seed.snapshot);for(const x of seed.seed.identities)seedIds.set(x.effectId,x.commandId)}
- const base=new runtime.LoroDoc();if(checkpoint.length){base.import(checkpoint);let originalFrontier;try{originalFrontier=original.forkAt(base.frontiers())}catch{throw Error('INSUFFICIENT_EVIDENCE')}if(!same(base.exportJsonUpdates(undefined,undefined,false),originalFrontier.exportJsonUpdates(undefined,undefined,false)))throw Error('INSUFFICIENT_EVIDENCE')}
+ const base=new runtime.LoroDoc();
+ if(checkpoint.length){
+  base.import(checkpoint);
+  // forkAt may merge adjacent Loro changes. The exact snapshot read by this
+  // runtime already pins the checkpoint without comparing those change groups.
+  const isStored=storedBytes?.length===checkpoint.length && checkpoint.every((byte,index)=>byte===storedBytes[index]);
+  if(!isStored){
+   let originalFrontier;
+   try{originalFrontier=original.forkAt(base.frontiers())}catch{throw Error('INSUFFICIENT_EVIDENCE')}
+   if(!same(base.exportJsonUpdates(undefined,undefined,false),originalFrontier.exportJsonUpdates(undefined,undefined,false)))throw Error('INSUFFICIENT_EVIDENCE');
+  }
+ }
  if(seed&&checkpoint.length){let checked;try{checked=base.forkAt(seedDoc.frontiers())}catch{throw Error('INSUFFICIENT_EVIDENCE')}if(!same(checked.exportJsonUpdates(undefined,undefined,false),seedDoc.exportJsonUpdates(undefined,undefined,false)))throw Error('INSUFFICIENT_EVIDENCE')}
  const markers=base.getMap('domain-effects').toJSON(),checkpointIds=new Map();
  for(const [id,marker] of Object.entries(markers)){if(marker?.version===3){if(!seed||marker.seedId!==seed.seed.seedId||marker.effectId!==id||marker.commandId!==seedIds.get(id))throw Error('INSUFFICIENT_EVIDENCE');continue}if(marker?.version!==2 || !marker?.command || marker.command.effectId!==id)throw Error('INSUFFICIENT_EVIDENCE');const command=validate(marker.command);if(checkpointIds.has(command.commandId))throw Error('CONFLICT');checkpointIds.set(command.commandId,command);}
