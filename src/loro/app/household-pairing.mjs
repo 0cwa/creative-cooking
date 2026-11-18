@@ -27,6 +27,10 @@ export function householdPairing({
     const input = structuredClone(args);
     return withCurrent(() => method(...input));
   };
+  const legacy = method => active((...args)=>{
+    if(runtime.authority?.installedSet)throw Error('UNSUPPORTED_VERSION');
+    return method(...args);
+  });
   const authority = {storage, scope, pin, provider};
   const member = {...authority, adultId, deviceId};
   const cooking = {...member, runtime, service};
@@ -46,9 +50,9 @@ export function householdPairing({
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
-    ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value==='function'?active(value):value])),
-    readmission:readmission&&Object.fromEntries(Object.entries(readmission).map(([name,method])=>[name,active(method)])),
-    revocation:Object.fromEntries(Object.entries(revocation).map(([name,method])=>[name,active((first,...args)=>{
+    ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value==='function'?legacy(value):value])),
+    readmission:readmission&&Object.fromEntries(Object.entries(readmission).map(([name,method])=>[name,legacy(method)])),
+    revocation:Object.fromEntries(Object.entries(revocation).map(([name,method])=>[name,legacy((first,...args)=>{
       if((first?.proposal??first)?.item?.event?.kind==='recoverDevice')throw Error('INVALID_REVOCATION');
       return method(first,...args);
     })])),
@@ -57,17 +61,17 @@ export function householdPairing({
       propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation, runtime})),
       review: active(item => reviewHouseholdAdmissionRule({...member, item})),
       approve: active(input => approveHouseholdAdmissionRule({...input, ...member})),
-      retain: active(input => retainHouseholdAdmissionRule({...input, ...member})),
-      checkout: active(async input => {
+      retain: legacy(input => retainHouseholdAdmissionRule({...input, ...member})),
+      checkout: legacy(async input => {
         await runtime.authorize();
         return checkoutPolicyHead({...input, ...member, LoroDoc});
       }),
     },
     transfer:{
-      publish:active(transfer.publish),
+      publish:legacy(transfer.publish),
       seal:active(transfer.seal),
       publishedFiles:active(transfer.publishedFiles),
-      installExisting:active(transfer.installExisting),
+      installExisting:legacy(transfer.installExisting),
       completedProof:active(transfer.completedProof),
       async install(input) {
         const result = await active(transfer.install)(input);
@@ -99,7 +103,7 @@ export function householdPairing({
     }),
     acceptedParents: active(() => pins.list()),
     prepareDelegation: active(input => prepareHouseholdDelegation({...input, ...member})),
-    acceptDelegation: active(input => acceptHouseholdDelegation({...input, ...authority})),
+    acceptDelegation: legacy(input => acceptHouseholdDelegation({...input, ...authority})),
     prepareInvite: active(input => prepareHouseholdInvite({...input, ...preparation})),
     prepareGrant: active(input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID})),
     prepareCeremony: active(input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey})),

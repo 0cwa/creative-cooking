@@ -265,6 +265,48 @@ test(`three enrolled devices preserve and explicitly reopen household admissions
  await c.getByRole('button',{name:'Return to original local household'}).click();
  await expect(c.getByText('Newcomer local basil',{exact:true})).toBeVisible();
  const beforeLostCounter=await readRetained(b,scope.id,oldDocument,oldHead);
+ if(!adultRemoval){
+  const enrollment=beforeLostCounter.enrollment;
+  const otherBinding='f'.repeat(64),otherName=`joined-v2-${otherBinding}`;
+  await b.evaluate(async({scopeId,otherName,otherBinding,enrollment})=>{
+   const request=req=>new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)});
+   const opening=indexedDB.open(`${otherName}-sequences`,1);
+   opening.onupgradeneeded=()=>{
+    const store=opening.result.createObjectStore('sequences');
+    store.put(1,'format');store.put(otherBinding,'binding');store.put(0,JSON.stringify(['counter',scopeId]));
+   };
+   (await request(opening)).close();
+   const db=await request(indexedDB.open(`${localStorage.getItem('creative-cooking-local-workspace-v1')}-joined`));
+   try{
+    const tx=db.transaction('enrollments','readwrite');
+    await new Promise((resolve,reject)=>{
+     tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
+     tx.objectStore('enrollments').put({...enrollment,sequenceName:otherName},scopeId);
+    });
+   }finally{db.close();}
+  },{scopeId:scope.id,otherName,otherBinding,enrollment});
+  await b.reload();
+  await expect(b.getByText('ENROLLMENT_CONFLICT',{exact:true})).toBeVisible();
+  await b.evaluate(async({scopeId,otherName,enrollment})=>{
+   const db=await new Promise((resolve,reject)=>{
+    const opening=indexedDB.open(`${localStorage.getItem('creative-cooking-local-workspace-v1')}-joined`);
+    opening.onsuccess=()=>resolve(opening.result);opening.onerror=()=>reject(opening.error);
+   });
+   try{
+    const tx=db.transaction('enrollments','readwrite');
+    await new Promise((resolve,reject)=>{
+     tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
+     tx.objectStore('enrollments').put(enrollment,scopeId);
+    });
+   }finally{db.close();}
+   await new Promise((resolve,reject)=>{
+    const deletion=indexedDB.deleteDatabase(`${otherName}-sequences`);
+    deletion.onsuccess=resolve;deletion.onerror=()=>reject(deletion.error);
+   });
+  },{scopeId:scope.id,otherName,enrollment});
+  await b.reload();
+  await expect(b.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ }
  await b.evaluate(({scopeId,sequenceName})=>new Promise((resolve,reject)=>{
   const opening=indexedDB.open(`${sequenceName}-sequences`);
   opening.onerror=()=>reject(opening.error);

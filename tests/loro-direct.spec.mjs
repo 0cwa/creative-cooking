@@ -663,11 +663,18 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await expect(label(b,`Household device ${recipient}`)).toContainText('This device');
     await expect(button(b,`Review local quarantine for ${recipient}`)).toHaveCount(0);
     await review().click();
+    const staleEditor = await openPage(contexts[1],baseURL);
+    await visible(staleEditor,'Already applied shallot');
+    const beforeStaleEdit = await scopeFingerprint(staleEditor,scope);
     const otherTab = await openPage(contexts[1],baseURL);
     await button(otherTab,'Open settings').click();
     await button(otherTab,'Show device identity').click();
     await button(otherTab,'Return to original local household').click();
     await saved(otherTab);
+    await add(staleEditor,'Stale tab turnip');
+    await expect(staleEditor.getByTestId('pantry-local-persistence-status')).toHaveText('Local save failed');
+    expect(await scopeFingerprint(staleEditor,scope)).toEqual(beforeStaleEdit);
+    await staleEditor.close();
     await button(otherTab,'Open settings').click();
     await button(otherTab,'Show device identity').click();
     await button(otherTab,'Open this shared household').click();

@@ -44,7 +44,9 @@ export function CookingExchange({quarantineChanged = 0}:{quarantineChanged?:numb
       try {
         if (app.localPersistenceStatus === 'error') throw Error('Retry local saving before receiving an update');
         await app.flushCurrentWorkspace();
-        const result = await apply();
+        const result = web
+          ? await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, apply)
+          : await apply();
         if (result.replayed) {
           let message = 'This exact update was already applied. No new changes were made.';
           try { await app.refreshSharedCooking?.(); }
@@ -77,8 +79,7 @@ export function CookingExchange({quarantineChanged = 0}:{quarantineChanged?:numb
         catch { setStatus(`${message} Refresh the update list to try again.`); }
       } finally { if (!reloadRequested) release(); }
     };
-    if (web) await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, update);
-    else await update(); // Native file operations hold their own selection lock after local saves drain.
+    await update();
   }
   async function choose() {
     const bytes = await chooseExchangeFile({accept:['application/octet-stream','application/x-binary'],minBytes:1,maxBytes:MAX_OBJECT});

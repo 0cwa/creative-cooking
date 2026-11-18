@@ -1028,7 +1028,6 @@ test('selected recipe shopping copies and current-only admission survive durable
  t.after(()=>joinStore.close());
  const joinId=householdReceiverIds(sodium,scope,newcomerOptions.recipientDevice).operationId;
  const enrollment={scope,pin:a.root.head,operationId:joinId,confirmedParent:record.acceptedParent};
- await joinStore.pins.save({version:1,scope,pin:a.root.head,head:record.acceptedParent});
  await joinStore.prepareJoinedSequences(enrollment);
  const install=(bytes=sealed)=>installHouseholdFile({...newcomerOptions,bytes});
  const beforeNewcomer=freshRows();
@@ -1064,6 +1063,10 @@ test('selected recipe shopping copies and current-only admission survive durable
   return absent;
  };
  assert.deepEqual(await install(),{replayed:true,head:eventHash});
+ const withoutPin=freshRows();
+ await assert.rejects(()=>joinStore.finalizeJoinedSequences(enrollment),/INVALID_ADMISSION/);
+ assert.deepEqual(freshRows(),withoutPin);
+ await joinStore.pins.save({version:1,scope,pin:a.root.head,head:record.acceptedParent});
  await assert.rejects(()=>joinStore.selection.select(scope),/INCOMPLETE_ENROLLMENT/);
  await assert.rejects(()=>joinStore.finalizeJoinedSequences({...enrollment,confirmedParent:'wrong-parent'}),/INVALID_ADMISSION/);
  const joined=await joinStore.finalizeJoinedSequences(enrollment);
@@ -1124,6 +1127,11 @@ test('selected recipe shopping copies and current-only admission survive durable
  const installedAuthority=await readAuthority(freshStorage,scope,a.root.head,a.provider);
  assert.equal(installedAuthority.activeHead,eventHash);
  const installedRecord=must(await freshStorage.readPairingAuthority(scope));
+ const beforeRewrite=freshRows();
+ const blockedRewrite=await freshStorage.compareAndSwapPairingAuthority({expectedRevision:installedRecord.revision,
+  record:{...installedRecord,revision:installedRecord.revision+1}});
+ assert.deepEqual(blockedRewrite,{ok:false,error:'UNSUPPORTED_VERSION'});
+ assert.deepEqual(freshRows(),beforeRewrite);
  const expectedAuthority={version:2,scope,record:{revision:installedRecord.revision,
   acceptedParent:installedRecord.acceptedParent,authorizationSnapshot:installedRecord.authorizationSnapshot}};
  const seedContext={current:installedAuthority,resolved:{expectedAuthority}};

@@ -99,7 +99,7 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
    restoreAttempt.current=attempt;
   }
   const {actionId,command}=attempt;
-  if(workspace.executeHouseholdAction) await executeHousehold(actionId,[command],recipeId);
+  if(workspace.householdContent||workspace.executeHouseholdAction) await executeHousehold(actionId,[command],recipeId);
   else {
    const {selection,selectedHousehold}=workspace.householdPairing;
    const scopeId=selectedHousehold?workspace.household.scope.scopeId:null;

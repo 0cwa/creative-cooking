@@ -82,7 +82,7 @@ export function CookingDirect() {
       .finally(() => setBusy(false));
   }
   function withVisibleSelection(use:()=>Promise<void>) {
-    if (Platform.OS !== 'web') return use();
+    if (Platform.OS !== 'web'||workspace.householdContent) return use();
     const {selection,selectedHousehold} = workspace.householdPairing;
     return selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, use);
   }

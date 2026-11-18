@@ -110,7 +110,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
       return lockWorkspace(name, 'enrollment', async () => {
         const found = await storage.householdRecipient.find(scope.id, operationId);
         if (!found.ok) throw Error('INVALID_ADMISSION');
-        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value});
+        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value});
         const key = enrollmentKey(scope.id);
         const enrollment = await workspaceRun(false, tx => tx.get(key));
         const identity = {version:1, scopeId:scope.id, pin, deviceId, operationId};
@@ -134,7 +134,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         }
         const verified=await admission();
         if (!verified) throw Error('MISSING_ADMISSION');
-        if (mode === 'open' && enrollment?.stage === 'pending') throw Error('INCOMPLETE_ENROLLMENT');
+        if (mode === 'open' && (enrollment??legacy)?.stage === 'pending') throw Error('INCOMPLETE_ENROLLMENT');
         if(verified.installedSet&&!enrollment&&!legacy)throw Error('MISSING_ENROLLMENT');
         const counters = openDatabase(`${name}-${operationId}`);
         try {

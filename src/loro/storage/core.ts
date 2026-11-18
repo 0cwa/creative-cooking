@@ -374,6 +374,9 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if (r.scope.kind==='household' && old && old.acceptedParent!==r.acceptedParent) {
         await this.requireSingleHouseholdDocument(tx,r.scope.id,[old.acceptedParent,r.acceptedParent]);
       }
+      if (r.scope.kind==='household'&&old&&await tx.get(key('projection-document-set',r.scope.id,old.acceptedParent))!==undefined) {
+        throw new StorageFailure('UNSUPPORTED_VERSION');
+      }
       await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
   /** Retain an independently verified public proof without granting local authority. */

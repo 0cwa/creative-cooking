@@ -343,6 +343,15 @@ test('fresh native workspaces use signed admission, durable selection and guarde
   await assert.rejects(openRecipient(false),/LEGACY_HOUSEHOLD_SELECTION/);
   await returnToOriginalNativeWorkspaceWith(args(recipientName,false));
   recipient = await openRecipient(false);
+  await assert.rejects(recipient.householdPairing.selection.select(scope),/INCOMPLETE_ENROLLMENT/);
+  const pendingOnly = new DatabaseSync(recipientPath);
+  try {
+   assert.equal(pendingOnly.prepare('SELECT value FROM loro_records WHERE key=?').get(enrollmentKey),undefined);
+  } finally { pendingOnly.close(); }
+  const legacyActive = new DatabaseSync(pairingPath);
+  try {
+   legacyActive.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,JSON.stringify(['enrollment',scope.id]));
+  } finally { legacyActive.close(); }
   await recipient.householdPairing.selection.select(scope);
   recipient.close();
   recipient = await openRecipient(false);
