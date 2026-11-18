@@ -254,6 +254,16 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.deepEqual(await exported(a,'create'),[initial]);
  const duplicate=await change(b,b.runtime,'duplicate-legacy',makeRecipe('r','Duplicate legacy recipe'));
  await assert.rejects(()=>execute(b,b.runtime,'duplicate-legacy',duplicate),/CONFLICT/);
+ const [plainCreate]=await change(b,b.runtime,'plain-root-duplicate',makeRecipe('r','Duplicate from a version-one envelope'));
+ const plain=await b.runtime.prepare({operationId:'plain-root-duplicate',command:plainCreate,deviceSequence:++sequence});
+ const {id:plainId,bytes:plainBytes}=plain.commit.outbound[0].object;
+ const plainItem={itemId:plainId,bytes:plainBytes};
+ must(await b.storage.stageInbox({scopeId:scope.id,object:{id:plainId,bytes:plainBytes},source:'plain-root-duplicate',
+  cursor:plainId,expectedCursor:null},await b.runtime.authorize(),b.deviceId));
+ const beforePlainImport=b.rows();
+ await assert.rejects(()=>b.runtime.importItem(plainItem),/CONFLICT/);
+ assert.deepEqual(b.rows(),beforePlainImport);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,plainId)),null);
  const unrelated=await change(a,other,'unrelated',makeRecipe('unrelated','Unrelated canary'));
  await execute(a,other,'unrelated',unrelated);
  const [unrelatedBytes]=await exported(a,'unrelated');
