@@ -375,9 +375,23 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         await this.requireSingleHouseholdDocument(tx,r.scope.id,[old.acceptedParent,r.acceptedParent]);
       }
       if (r.scope.kind==='household'&&old&&await tx.get(key('projection-document-set',r.scope.id,old.acceptedParent))!==undefined) {
-        throw new StorageFailure('UNSUPPORTED_VERSION');
+        // An installed set permits only one appended agreement at its current
+        // head. Authority replay verifies its signatures before use.
+        let before:any,after:any;
+        try {
+          const decoder=new TextDecoder('utf-8',{fatal:true});
+          before=JSON.parse(decoder.decode(old.authorityState));
+          after=JSON.parse(decoder.decode(r.authorityState));
+        } catch { throw new StorageFailure('UNSUPPORTED_VERSION'); }
+        const prior=before?.agreements??[],next=after?.agreements;
+        if (r.acceptedParent!==old.acceptedParent || !Array.isArray(prior) || !Array.isArray(next) ||
+            next.length!==prior.length+1 || next.at(-1)?.parentHead!==old.acceptedParent ||
+            !sameRecord(next.slice(0,-1),prior) ||
+            !sameRecord({...after,agreements:prior},{...before,agreements:prior})) {
+          throw new StorageFailure('UNSUPPORTED_VERSION');
+        }
       }
-      await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
+      await tx.put(k,r); this.fault?.('pairing-authority'); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
   /** Retain an independently verified public proof without granting local authority. */
   async retainPublicHouseholdParent(record:PairingAuthorityRecord):Promise<Result<{replayed:boolean},StorageError>> {

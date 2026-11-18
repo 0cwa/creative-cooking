@@ -350,7 +350,22 @@ export async function checkoutPolicyHead({storage,scope,pin,provider,LoroDoc,adu
 async function resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,installed) {
  const {record,state,nodes}=await load(storage,scope,pin,provider), selected=nodes.get(state.activeHead);
  const selectedSet=state.events.find(item=>item.admission?.manifest.version===5&&item.admission.grant.admissionEventHash===state.activeHead);
- if(selectedSet && (!installed || !same(record,installed.publication.nextAuthority) ||
+ // A verified delegation may be appended after installation. Keep every
+ // published event and selection byte-for-byte bound to the original receipt;
+ // only agreements for this selected head can extend that state.
+ const installedRecord=installed?.publication.nextAuthority;
+ let installedStateMatches=false;
+ if(installedRecord){
+  const published=JSON.parse(dec.decode(installedRecord.authorityState));
+  const prior=published.agreements??[], current=state.agreements??[];
+  const additions=current.slice(prior.length);
+  installedStateMatches=record.revision===installedRecord.revision+additions.length &&
+   same(record.scope,installedRecord.scope) && record.acceptedParent===installedRecord.acceptedParent &&
+   same(current.slice(0,prior.length),prior) && current.length>=prior.length &&
+   additions.every(agreement=>agreement.parentHead===state.activeHead) &&
+   same({...state,agreements:prior},{...published,agreements:prior});
+ }
+ if(selectedSet && (!installed || !installedStateMatches ||
    !same(selectedSet,installed.item) || installed.selection.to!==state.activeHead)) throw Error('UNSUPPORTED_VERSION');
  if(installed && !selectedSet) throw Error('INVALID_AUTHORITY');
  const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();

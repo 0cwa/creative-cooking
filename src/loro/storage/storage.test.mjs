@@ -272,3 +272,22 @@ test('effect dependencies are checked atomically within the same scope and group
  assert.equal((await store.commitLocalGroup({groupId:'forward',children:[a,z]})).error.code,'CONFLICT');
  assert.equal((await store.reopenDocument('scope','a')).value,null);conn.db.close();
 });
+
+test('installed document set permits only an appended current-head agreement', async () => {
+ const conn=connection(),storage=openSQLiteStorage(conn),scope={kind:'household',id:'set'};
+ const encode=value=>new TextEncoder().encode(JSON.stringify(value));
+ const state={version:1,activeHead:'head',events:[{event:'published'}],selections:[{to:'head'}],agreements:[]};
+ const record={scope,revision:0,acceptedParent:'head',authorizationSnapshot:'snapshot',authorityState:encode(state)};
+ assert.equal((await storage.compareAndSwapPairingAuthority({expectedRevision:null,record})).ok,true);
+ conn.db.prepare('INSERT INTO loro_records(key,value) VALUES (?,?)').run(JSON.stringify(['projection-document-set','set','head']),JSON.stringify({manifestId:'manifest',operationId:'operation',catalog:[]}));
+ const write=value=>storage.compareAndSwapPairingAuthority({expectedRevision:0,record:{...record,revision:1,authorityState:encode(value)}});
+ const agreement={parentHead:'head'};
+ for(const altered of [
+  {...state,events:[{event:'changed'}],agreements:[agreement]},
+  {...state,selections:[],agreements:[agreement]},
+  {...state,agreements:[{parentHead:'other'}]},
+  {...state,agreements:[agreement,agreement]},
+ ]) assert.equal((await write(altered)).error,'UNSUPPORTED_VERSION');
+ assert.equal((await write({...state,agreements:[agreement]})).ok,true);
+ conn.db.close();
+});

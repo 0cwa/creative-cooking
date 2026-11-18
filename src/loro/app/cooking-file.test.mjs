@@ -1617,6 +1617,35 @@ test('selected recipe shopping copies and current-only admission survive durable
  rmSync(join(freshDatabase,`${joinName}-${joinId}.sqlite`));
  await assert.rejects(()=>joinStore.selection.openSelected(),/MISSING_SEQUENCES/);
 
+ // A later delegation must not invalidate the exact installed publication.
+ // Both distinct adults sign at the installed head; one signature is insufficient.
+ const nextAgreement={version:1,householdId:scope.id,parentHead:eventHash,policyHash:a.root.policyHash,
+  roster:['adult','newcomer'],delegation:'currentCooking',sourcePolicyHashes:[a.root.policyHash]};
+ const nextSigners=[{adultId:'adult',deviceId:a.deviceId},{adultId:'newcomer',deviceId:newcomerContext.recipientDeviceId}];
+ const nextAcceptances=nextSigners.map((signer,index)=>({...signer,signature:sodium.to_hex(sodium.crypto_sign_detached(
+  domain('admission-agreement-acceptance',{agreement:nextAgreement,...signer}),
+  index===0?a.signingTestKey.privateKey:newcomerSign.privateKey))}));
+ const nextSigned={...nextAgreement,acceptances:nextAcceptances};
+ const extendedProvider={...a.provider,verify:(ref,bytes,signature)=>ref===sodium.to_hex(newcomerSign.publicKey)
+  ?sodium.crypto_sign_verify_detached(signature,bytes,newcomerSign.publicKey):a.provider.verify(ref,bytes,signature)};
+ const beforeDelegation=freshRows();
+ await assert.rejects(()=>acceptAdmissionAgreement(freshStorage,scope,a.root.head,extendedProvider,
+  {...nextAgreement,acceptances:nextAcceptances.slice(0,1)}));
+ assert.deepEqual(freshRows(),beforeDelegation);
+ freshFault='pairing-authority';
+ await assert.rejects(()=>acceptAdmissionAgreement(freshStorage,scope,a.root.head,extendedProvider,nextSigned),/IO/);
+ freshFault=null;
+ reopenFresh();
+ assert.deepEqual(freshRows(),beforeDelegation);
+ const retainedHash=await acceptAdmissionAgreement(freshStorage,scope,a.root.head,extendedProvider,nextSigned);
+ assert.equal(await acceptAdmissionAgreement(freshStorage,scope,a.root.head,extendedProvider,nextSigned),retainedHash);
+ reopenFresh();
+ const extended=await resolveInstalledSetAuthority({...newcomerOptions,provider:extendedProvider,operationId,authorDevice:newcomerContext.recipientDeviceId});
+ assert.equal(extended.scope.branchHead,eventHash);
+ assert.deepEqual(extended.members,newcomerAuthority.members);
+ assert.deepEqual((await readInstalledHouseholdDocumentSet({...newcomerOptions,operationId})).publication,
+  newcomerSelected.publication);
+
 });
 
 test('parent-format recipe children without catalog entries remain intact and require an explicit upgrade',async t=>{
