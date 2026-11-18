@@ -25,10 +25,13 @@ import {acceptInitialPolicy,prepareInitialPolicy} from '../disclosure/setup.mjs'
 import {disclosureService} from '../disclosure/service.mjs';
 import {hash as disclosureHash} from '../disclosure/policy.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
-import {openSQLiteStorage} from '../storage/sqlite.ts';
+import {openSQLiteStorage,openSQLiteTransaction} from '../storage/sqlite.ts';
+import {openNativeHouseholdPersistence} from '../native/household-persistence.mjs';
+import {householdReceiverIds} from './household-transfer.mjs';
 import {householdLocalTrust} from './household-local-trust.mjs';
 import {executeAction} from './action.mjs';
 import {bindHouseholdContent} from './household-content.mjs';
+import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planRecipeRestore,readRecipeHistory} from '../domain/recipe-history.mjs';
@@ -1010,6 +1013,23 @@ test('selected recipe shopping copies and current-only admission survive durable
  const newcomerOptions={sodium,storage:freshStorage,scope,pin:a.root.head,provider:a.provider,keys:newcomerKeys,
   sessionStore:newcomerSession,master:newcomerMaster,keyOperationId:'set-newcomer-key',confirmedParent:record.acceptedParent,
   recipientDevice:newcomerContext.recipientDeviceId,recipientKind:'document-set',LoroDoc};
+ const joinName='v5-joined-fixture';
+ const openDatabase=name=>{
+  const database=new DatabaseSync(join(freshDatabase,`${name}.sqlite`));
+  return {executeSync(sql,params=[]){
+   const statement=database.prepare(sql);
+   return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+  },close:()=>database.close()};
+ };
+ const openJoin=()=>openNativeHouseholdPersistence({name:joinName,openDatabase,
+  workspaceRun:openSQLiteTransaction(freshConnection),master:newcomerMaster,storage:freshStorage,
+  provider:a.provider,sodium,deviceId:newcomerOptions.recipientDevice});
+ let joinStore=openJoin();
+ t.after(()=>joinStore.close());
+ const joinId=householdReceiverIds(sodium,scope,newcomerOptions.recipientDevice).operationId;
+ const enrollment={scope,pin:a.root.head,operationId:joinId,confirmedParent:record.acceptedParent};
+ await joinStore.pins.save({version:1,scope,pin:a.root.head,head:record.acceptedParent});
+ await joinStore.prepareJoinedSequences(enrollment);
  const install=(bytes=sealed)=>installHouseholdFile({...newcomerOptions,bytes});
  const beforeNewcomer=freshRows();
  const bad=structuredClone(release);
@@ -1044,6 +1064,19 @@ test('selected recipe shopping copies and current-only admission survive durable
   return absent;
  };
  assert.deepEqual(await install(),{replayed:true,head:eventHash});
+ await assert.rejects(()=>joinStore.selection.select(scope),/INCOMPLETE_ENROLLMENT/);
+ await assert.rejects(()=>joinStore.finalizeJoinedSequences({...enrollment,confirmedParent:'wrong-parent'}),/INVALID_ADMISSION/);
+ const joined=await joinStore.finalizeJoinedSequences(enrollment);
+ assert.equal(joined.resolved.scope.branchHead,eventHash);
+ assert.equal(joined.installedSet.operationId,operationId);
+ const firstSequence=await joined.sequences.reserve(scope.id,'v5-first-action');
+ joined.sequences.close();
+ await joinStore.selection.select(scope,eventHash);
+ joinStore.close();reopenFresh();joinStore=openJoin();
+ const reselected=await joinStore.selection.openSelected();
+ assert.equal(reselected.resolved.scope.branchHead,eventHash);
+ assert.equal(await reselected.sequences.reserve(scope.id,'v5-first-action'),firstSequence);
+ reselected.sequences.close();
  reopenFresh();
  assert.deepEqual(await install(),{replayed:true,head:eventHash});
  const sponsorSelected=await readInstalledHouseholdDocumentSet(sealOptions);
@@ -1212,21 +1245,18 @@ test('selected recipe shopping copies and current-only admission survive durable
  const receiverRef=sodium.to_hex(newcomerSign.publicKey);
  const receiverKeys={use:(op,identity,fn)=>op==='test-signing'
   ?fn(newcomerSign.privateKey):newcomerCatalog.use(op,identity,fn)};
- const receiverCodec=candidateCodec(localProvider(sodium,receiverKeys,{
-  signing:{publicKey:receiverRef,operationId:'test-signing'},content:newcomerContent,
- }));
- const openPeer=(storage,codec,resolved)=>{
-  const installedSet={sodium,operationId,LoroDoc};
-  const runtime=new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,
-   keyRef:resolved.scope.epochId,authority:{kind:'household',rootPin:a.root.head,provider:a.provider,
-    selectionIndex:resolved.selectionIndex,installedSet}});
+ const openPeer=async (storage,{resolved,installedSet,sequences:peerSequences=sequences},keys,publicKey)=>{
+  const runtime=await openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin:a.root.head,
+   provider:a.provider,sodium,keys,signing:{publicKey,operationId:'test-signing'},LoroDoc,decodeImportBlobMeta});
   const service=disclosureService({storage,scope,rootPin:a.root.head,provider:a.provider,
-   deviceId:runtime.scope.authorDevice,installedSet});
-  const householdContent=bindHouseholdContent({runtime,sequences,disclosure:service});
+   deviceId:runtime.scope.authorDevice,installedSet:{...installedSet,sodium,LoroDoc}});
+  const householdContent=bindHouseholdContent({runtime,sequences:peerSequences,disclosure:service});
   return {runtime,service,householdContent,files:cookingFiles({runtime,service,recipeCatalogVersion:1})};
  };
- let sponsor=openPeer(a.storage,sender,sponsorAuthority);
- let newcomer=openPeer(freshStorage,receiverCodec,newcomerAuthority);
+ const openSponsor=async()=>openPeer(a.storage,await resolveOriginalHousehold({...sealOptions,deviceId:a.deviceId}),signerKeys,signingRef);
+ let newcomerSelection=await joinStore.selection.openSelected();
+ let sponsor=await openSponsor();
+ let newcomer=await openPeer(freshStorage,newcomerSelection,receiverKeys,receiverRef);
  const recipeRuntime=await sponsor.runtime.forRecipe(recipeId);
  await assert.rejects(()=>sponsor.runtime.forRecipe('outside-signed-catalog'),/INVALID_RECIPE_DOCUMENT/);
  const beforeUnsupported=a.rows(),beforeUnsupportedSequence=sequence;
@@ -1258,16 +1288,19 @@ test('selected recipe shopping copies and current-only admission survive durable
  await sponsor.files.receive(await newcomer.files.download(pantryObjectId));
  assert.equal((await newcomer.files.receive(recipeBytes)).replayed,true);
 
+ newcomerSelection.sequences.close();
  a.reopen();reopenFresh();
- sponsor=openPeer(a.storage,sender,await resolveInstalledSetAuthority({...sealOptions,authorDevice:a.deviceId}));
- newcomer=openPeer(freshStorage,receiverCodec,await resolveInstalledSetAuthority({
-  ...newcomerOptions,operationId,authorDevice:newcomerContext.recipientDeviceId,
- }));
+ sponsor=await openSponsor();
+ newcomerSelection=await joinStore.selection.openSelected();
+ newcomer=await openPeer(freshStorage,newcomerSelection,receiverKeys,receiverRef);
  for(const peer of [sponsor,newcomer]){
   const cooking=await peer.householdContent.readCooking();
   assert.equal(cooking.recipes.find(recipe=>recipe.id===recipeId)?.title,'Edited on the sponsor');
   assert.ok(cooking.pantry.some(item=>item.name==='Chickpeas'));
  }
+ newcomerSelection.sequences.close();
+ rmSync(join(freshDatabase,`${joinName}-${joinId}.sqlite`));
+ await assert.rejects(()=>joinStore.selection.openSelected(),/MISSING_SEQUENCES/);
 
 });
 

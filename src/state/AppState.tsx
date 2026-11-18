@@ -176,9 +176,9 @@ function LegacyAppStateProvider({children}:PropsWithChildren) {
 function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace:any}>) {
   const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
   const content=useLoroContentRuntime(state,setState,workspace);
-  return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local">{children}</AppStateBody></LoroWorkspaceContext>;
+  return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local" installedRecipeIds={workspace.installedRecipeIds}>{children}</AppStateBody></LoroWorkspaceContext>;
 }
-function AppStateBody({children,state,setState,content,storageMode}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing'}>) {
+function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
   const transitionInProgress=useRef(false);
   const [mutationsPaused,setMutationsPaused]=useState(false);
   const [sharedCookingRefreshPending,setSharedCookingRefreshPending]=useState(false);
@@ -321,6 +321,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
 
   const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
+    if (installedRecipeIds) throw Error('Creating new recipes is not available in this household yet.');
     validateRecipe(input);
 
     const now = new Date().toISOString();
@@ -332,7 +333,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
     }])[0];
     updateAppState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, [ensureSharedEditAllowed, updateAppState, validateRecipe, storageMode]);
+  }, [ensureSharedEditAllowed, installedRecipeIds, updateAppState, validateRecipe, storageMode]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) return;
@@ -404,8 +405,11 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
 
   const addShoppingItems = useCallback((listId: string, inputs: NewShoppingItem[]) => {
     if (!ensureSharedEditAllowed()) return;
+    if (inputs.some(item=>item.recipeId&&installedRecipeIds?.includes(item.recipeId))) {
+      throw Error('Adding ingredients from this recipe is not available yet. You can add items manually.');
+    }
     updateAppState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
-  }, [ensureSharedEditAllowed, updateAppState]);
+  }, [ensureSharedEditAllowed, installedRecipeIds, updateAppState]);
 
   const updateShoppingItem = useCallback((id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }) => {
     if (!ensureSharedEditAllowed()) return;

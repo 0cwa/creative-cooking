@@ -25,8 +25,8 @@ export function selectedHousehold({readStored, writeStored, lock, openJoined, ma
     if (!pin) throw Error('CONFIRMATION_REQUIRED');
     const {operationId} = householdReceiverIds(sodium, scope, deviceId);
     const receipt = await storage.householdRecipient.find(scope.id, operationId);
-    if (!receipt.ok || !receipt.value || receipt.value.expectedAuthority.acceptedParent !== pin.head) throw Error('INVALID_ADMISSION');
-    const joined = await openJoined({storage, scope, pin:pin.pin, provider, deviceId, operationId});
+    if (!receipt.ok || receipt.value && receipt.value.expectedAuthority.acceptedParent !== pin.head) throw Error('INVALID_ADMISSION');
+    const joined = await openJoined({storage, scope, pin:pin.pin, provider, deviceId, operationId,confirmedParent:pin.head});
     if (!joined) throw Error('INVALID_ADMISSION');
     return {...joined, scope, pin:pin.pin};
   }
@@ -48,8 +48,9 @@ export function selectedHousehold({readStored, writeStored, lock, openJoined, ma
       const {operationId} = householdReceiverIds(sodium, scope, deviceId);
       const receipt = await storage.householdRecipient.find(scope.id, operationId);
       if (!receipt.ok) throw Error(receipt.error);
-      if (!receipt.value) return false;
-      (await open(scope)).sequences.close();
+      if(!receipt.value&&!(await pins.list()).some(value=>value?.scope?.id===scope.id))return false;
+      try{(await open(scope)).sequences.close();}
+      catch(error){if(!receipt.value&&error?.message==='MISSING_ADMISSION')return false;throw error;}
       return true;
     },
     select(scope, expectedHead=undefined) {

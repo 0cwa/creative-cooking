@@ -5,7 +5,7 @@ import {openSelectedRecipeCatalog} from './selected-recipe-catalog.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 /** A user-selected encrypted object is staged durably before the authorized
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
-export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
+export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|null} */ (null)}){
  if(recipeCatalogVersion!==null && recipeCatalogVersion!==1)throw Error('UNSUPPORTED_VERSION');
  const {scopeId,branchHead,epochId,documentId}=runtime.scope;
  const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;

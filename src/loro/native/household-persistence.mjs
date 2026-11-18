@@ -1,4 +1,4 @@
-import {resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {joinedHouseholdAuthority} from '../app/joined-household-authority.mjs';
 import {validPairingScope} from '../contracts/pairing.ts';
 import {selectedHousehold} from '../app/household-selection.mjs';
 import {openSQLiteTransaction} from '../storage/sqlite.ts';
@@ -104,12 +104,13 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
     // Only a durable pending record in the main workspace proves this
     // allocator has never been exposed. Legacy receipts can reuse a verified
     // counter but cannot authorize creating one.
-    function joined({scope, pin, operationId}, mode) {
+    function joined({scope, pin, operationId, confirmedParent}, mode) {
       scope = structuredClone(scope);
       if (!household(scope) || !hash(pin) || !/^receive-[0-9a-f]{64}$/.test(operationId)) throw Error('MALFORMED');
       return lockWorkspace(name, 'enrollment', async () => {
         const found = await storage.householdRecipient.find(scope.id, operationId);
         if (!found.ok) throw Error('INVALID_ADMISSION');
+        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value});
         const key = enrollmentKey(scope.id);
         const enrollment = await workspaceRun(false, tx => tx.get(key));
         const identity = {version:1, scopeId:scope.id, pin, deviceId, operationId};
@@ -124,19 +125,17 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         checkEnrollment(legacy);
         const alreadyActive = enrollment?.stage === 'active' || legacy?.stage === 'active';
         if (mode === 'prepare') {
-          if (found.value) return null;
+          if (found.value || await admission()) return null;
           if (alreadyActive) throw Error('MISSING_ADMISSION');
           const established = await storage.householdRecipient.hasDevice(scope.id, deviceId);
           if (!established.ok || established.value) throw Error('MISSING_ENROLLMENT');
           if (!enrollment) await workspaceRun(true, tx => tx.put(key, {...identity, stage:'pending'}));
           return null;
         }
-        if (!found.value) throw Error('MISSING_ADMISSION');
+        const verified=await admission();
+        if (!verified) throw Error('MISSING_ADMISSION');
         if (mode === 'open' && enrollment?.stage === 'pending') throw Error('INCOMPLETE_ENROLLMENT');
-        const resolved = await resolveRuntimeAuthority(storage, scope, pin, provider, deviceId);
-        const receipt = found.value, checked = await storage.householdRecipient.check(receipt);
-        if (!checked.ok || checked.value !== true || receipt.receiptBody?.recipientDevice !== deviceId ||
-          receipt.scopeId !== scope.id) throw Error('INVALID_ADMISSION');
+        if(verified.installedSet&&!enrollment&&!legacy)throw Error('MISSING_ENROLLMENT');
         const counters = openDatabase(`${name}-${operationId}`);
         try {
           const initialize = mode === 'finalize' && enrollment?.stage === 'pending' && !alreadyActive;
@@ -144,7 +143,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
           if (enrollment?.stage !== 'active') {
             await workspaceRun(true, tx => tx.put(key, {...identity, stage:'active'}));
           }
-          return {resolved, sequences:{reserve:sequences.reserve, close:() => counters.close()}};
+          return {...verified, sequences:{reserve:sequences.reserve, close:() => counters.close()}};
         } catch (error) {
           counters.close();
           throw error;

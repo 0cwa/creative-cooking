@@ -154,14 +154,19 @@ export default function ShoppingScreen() {
       return;
     }
     const at = new Date().toISOString();
-    addShoppingItems(selectedList.id, addablePreviewRows.map(({ ingredient }) => ({
-      id: newId('shopping-item'),
-      name: ingredient.name,
-      recipeId: sourceRecipe.id,
-      ...(ingredient.id ? { ingredientId: ingredient.id } : {}),
-      ...(ingredient.amount === undefined ? {} : { displayQuantity: ingredient.amount }),
-      at
-    })));
+    try {
+      addShoppingItems(selectedList.id, addablePreviewRows.map(({ ingredient }) => ({
+        id: newId('shopping-item'),
+        name: ingredient.name,
+        recipeId: sourceRecipe.id,
+        ...(ingredient.id ? { ingredientId: ingredient.id } : {}),
+        ...(ingredient.amount === undefined ? {} : { displayQuantity: ingredient.amount }),
+        at
+      })));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not add recipe ingredients.');
+      return;
+    }
     setMessage(`${addablePreviewRows.length} ingredient${addablePreviewRows.length === 1 ? '' : 's'} added to ${selectedList.name}.`);
   };
 

@@ -1,8 +1,9 @@
 import {householdCompromise} from '../app/household-compromise.mjs';
 import {householdLocalTrust} from '../app/household-local-trust.mjs';
 import {bindHouseholdContent} from '../app/household-content.mjs';
+import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from '../app/workspace-household-runtime.mjs';
 import {openSQLiteStorage,openSQLiteTransaction,scheduleSQLite} from '../storage/sqlite.ts';
-import {rootPin,policyId,initializeAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {rootPin,policyId,initializeAuthority} from '../authority/chain.mjs';
 import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from '../authority/personal.mjs';
 import {domain} from '../authority/validator.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -82,7 +83,8 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const ensure=async(scope,initialize)=>{const old=await storage.readPairingAuthority(scope);if(!old.ok)throw Error(old.error);if(!old.value){if(ready)throw Error('MISSING_AUTHORITY');try{await initialize()}catch(e){const raced=await storage.readPairingAuthority(scope);if(!raced.ok||!raced.value)throw e}}};
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
-  const originalHouse=await resolveRuntimeAuthority(storage,{kind:'household',id:r.house},root.head,provider,r.device);
+  const originalHouse=await resolveOriginalHousehold({storage,scope:{kind:'household',id:r.house},pin:root.head,
+   provider,deviceId:r.device,sodium,LoroDoc});
   const originalPersonal={scopeId:r.personal,pin},personalSelection=await storage.readPersonalSelection(r.device);
   if(!personalSelection.ok)throw Error(personalSelection.error);
   const selectedPersonal=personalSelection.value??originalPersonal;
@@ -100,8 +102,11 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const selected=await selection.openSelected();
   joinedSequences=selected?.sequences;
   const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head;
-  const household=runtime(selected?.resolved??originalHouse,'household',activePin);
-  const disclosure=disclosureService({storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device});
+  const {resolved:house,installedSet}=selected??originalHouse;
+  const household=await openWorkspaceHouseholdRuntime({storage,resolved:house,installedSet,pin:activePin,provider,
+   sodium,keys,signing:{...signing,publicKey:signingRef},LoroDoc,decodeImportBlobMeta});
+  const disclosure=disclosureService({storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
+   installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
   const selectedId=selected?.scope.id??null;
   const withCurrent=use=>selection.withCurrent(selectedId,use);
   const active=fn=>(...args)=>withCurrent(()=>fn(...args));
@@ -109,12 +114,12 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const policyStatus=await withCurrent(()=>bootstrapDisclosurePolicy(storage,activeScope.id,disclosure));
   const selectionControls={available:selection.available,select:selection.select,clear:selection.clear};
   const householdPairing=bindHouseholdPairing({
-   name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:(selected?.resolved??originalHouse).adultId,
+   name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:house.adultId,
    runtime:household,service:disclosure,pins,keys,signing,wrapping,signingKey:signingRef,
    wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection:selectionControls,selectedHousehold:!!selected,LoroDoc,
    prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent,sha256
   });
-  const cooking=cookingFiles({runtime:household,service:disclosure});
+  const cooking=cookingFiles({runtime:household,service:disclosure,recipeCatalogVersion:installedSet?1:null});
   let direct;
   try {
    direct=await openDirect?.({
@@ -131,6 +136,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
    original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
   const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure});
+  const installedRecipeIds=installedSet?house.members.flatMap(member=>member.recipeId===null?[]:[member.recipeId]):undefined;
   return {
    personalRotation:rotatePersonal,personalPairing:pairPersonal,
    householdCompromise:householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)}),
@@ -143,7 +149,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
     subscribe:listener=>subscribeActions(household,listener)
    },
    personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing,cookingFiles:activeMethods(cooking),direct,
-   householdContent,executeHouseholdAction:householdContent.execute,
+   householdContent,installedRecipeIds,executeHouseholdAction:householdContent.execute,
    disclosure:activeMethods(disclosure),disclosureProvider:activeMethods(provider),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,

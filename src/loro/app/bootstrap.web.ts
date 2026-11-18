@@ -1,6 +1,7 @@
 import {householdCompromise} from './household-compromise.mjs';
 import {householdLocalTrust} from './household-local-trust.mjs';
 import {bindHouseholdContent} from './household-content.mjs';
+import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {householdPairing as bindHouseholdPairing} from './household-pairing.mjs';
 import {prepareJoinedSequences,finalizeJoinedSequences} from './joined-sequences.web.ts';
 import {householdSelection} from './household-selection.web.ts';
@@ -17,7 +18,7 @@ import sodium from 'libsodium-wrappers';
 import initLoro, { LoroDoc, decodeImportBlobMeta } from 'loro-crdt/web/loro_wasm.js';
 import {openIndexedDBStorage} from '../storage/indexeddb.ts';
 import {openBrowserMaster} from '../storage/browser-master.ts';
-import {rootPin,policyId,initializeAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {rootPin,policyId,initializeAuthority} from '../authority/chain.mjs';
 import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from '../authority/personal.mjs';
 import {domain} from '../authority/validator.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -88,7 +89,8 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(db.storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(db.storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
   if(!ready){const completed=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);await new Promise<void>((resolve,reject)=>{const tx=meta.transaction('metadata','readwrite');tx.objectStore('metadata').put(completed,'reservation');tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}})}
-  const originalHouse=await resolveRuntimeAuthority(db.storage,{kind:'household',id:r.house},root.head,provider,r.device);
+  const originalHouse=await resolveOriginalHousehold({storage:db.storage,scope:{kind:'household',id:r.house},
+   pin:root.head,provider,deviceId:r.device,sodium,LoroDoc});
   const originalPersonal={scopeId:r.personal,pin},personalSelection=await db.storage.readPersonalSelection(r.device);
   if(!personalSelection.ok)throw Error(personalSelection.error);
   const selectedPersonal=personalSelection.value??originalPersonal;
@@ -100,10 +102,13 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   };
   householdPins=await openHouseholdPins(name,master);
   const selection=householdSelection({name,meta,master,pins:householdPins,storage:db.storage,provider,sodium,deviceId:r.device}),selected=await selection.openSelected();joinedSequences=selected?.sequences;
-  const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head,house=selected?.resolved??originalHouse;
-  const disclosure=disclosureService({storage:db.storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device});
-  const householdRuntime=runtime(house,'household',activePin);
-  const cooking=cookingFiles({runtime:householdRuntime,service:disclosure});
+  const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head;
+  const {resolved:house,installedSet}=selected??originalHouse;
+  const householdRuntime=await openWorkspaceHouseholdRuntime({storage:db.storage,resolved:house,installedSet,
+   pin:activePin,provider,sodium,keys,signing:{...signing,publicKey:signingRef},LoroDoc,decodeImportBlobMeta});
+  const disclosure=disclosureService({storage:db.storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
+   installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
+  const cooking=cookingFiles({runtime:householdRuntime,service:disclosure,recipeCatalogVersion:installedSet?1:null});
   const selectedId=selected?.scope.id??null;
   const direct=typeof globalThis.RTCPeerConnection==='function'?cookingDirect({runtime:householdRuntime,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),withSelected:(use:()=>Promise<unknown>)=>selection.withCurrent(selectedId,use)}):null;
   const bootstrapPolicy=await bootstrapDisclosurePolicy(db.storage,activeScope.id,disclosure);
@@ -130,7 +135,8 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const workspaceSequences={reserve:(scopeId:string,operationId:string)=>scopeId===selectedPersonal.scopeId?
    sequences!.reserve(r.personal,operationId):selected&&scopeId===activeScope.id?
    joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId)};
+  const installedRecipeIds=installedSet?house.members.flatMap((member:{recipeId:string|null})=>member.recipeId===null?[]:[member.recipeId]):undefined;
   const householdContent=bindHouseholdContent({runtime:householdRuntime,sequences:workspaceSequences,disclosure});
-  return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:workspaceSequences,householdContent,close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};
+  return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:workspaceSequences,householdContent,installedRecipeIds,close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {joinedSequences?.close();householdPins?.close();ceremonyStore?.close();sequences?.close();db.close();master.close();meta.close();throw error}
 }
