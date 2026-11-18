@@ -16,7 +16,12 @@ export function householdPairing({
   runtime, service, pins, keys, signing, wrapping, signingKey, wrappingPublicKey,
   selection, selectedHousehold, LoroDoc, prepareJoinedSequences, finalizeJoinedSequences, randomUUID = () => crypto.randomUUID(), withCurrent = use => use()
 }) {
-  const active = method => (...args) => withCurrent(() => method(...args));
+  const active = method => (...args) => {
+    // Selection can queue behind a concurrent operation. Capture messages
+    // before waiting so callers cannot mutate what is verified or signed.
+    const input = structuredClone(args);
+    return withCurrent(() => method(...input));
+  };
   const authority = {storage, scope, pin, provider};
   const member = {...authority, adultId, deviceId};
   const cooking = {...member, runtime, service};
@@ -34,8 +39,11 @@ export function householdPairing({
     transfer:{
       publish:active(transfer.publish),
       seal:active(transfer.seal),
+      publishedFiles:active(transfer.publishedFiles),
+      installExisting:active(transfer.installExisting),
+      completedProof:active(transfer.completedProof),
       async install(input) {
-        const result = await withCurrent(() => transfer.install(input));
+        const result = await active(transfer.install)(input);
         for (const listener of [...installed]) {
           try { void Promise.resolve(listener()).catch(() => {}); }
           catch { /* A failed notification cannot undo an installed household. */ }

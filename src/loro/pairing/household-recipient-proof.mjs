@@ -1,7 +1,7 @@
 // Scratch proof preparation only. This does not install any authority or key.
 import {verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
-import {checkHouseholdCeremonies} from '../authority/ceremony.mjs';
+import {admissionPackage} from './household-admission-package.mjs';
 import {checkGrantManifest} from '../authority/grant.mjs';
 import {durableSession} from './durable-session.mjs';
 import {verifyStoredKeyPackage} from './key-package.mjs';
@@ -47,16 +47,12 @@ export async function verifyHouseholdRecipientProof({sodium,storage,scope,pin,pr
   if(!equal(grant.contentClasses,['pantry','recipe','shopping'])||!equal(p.seed,{seedId:s.seedId,identities:s.identities})||(manifest.version===1?(bundle!==null||p.policySeed!==undefined):!equal(p.policySeed,{bundle,bundleHash:manifest.policyBundleHash})))throw Error('INVALID_SEED');
   const seedProof=verifyCurrentSeed({LoroDoc,snapshot:s.snapshot,seed:s,schemaVersion:manifest.version===4?4:1});if(seedProof.peers.length!==1||seedProof.peers[0]!==s.peerId||[...Object.values(parent.runtime.authorPeers),...admission.event.subject.devices.map(d=>d.peerId)].includes(s.peerId))throw Error('INVALID_SEED');
   if(manifest.version!==1)await verifyPolicyProjection({provider,pin,state:old,seed:s,bundle,expectedBundleHash:manifest.policyBundleHash,expectedSourceHead:authority.activeHead,expectedSourceDocument:manifest.sourceDocument,expectedSourceRevision:manifest.sourceRevision,LoroDoc});
-  const evidence=a.ceremonies; // Stored authority encodes byte arrays; decode them below.
-  const decode=x=>Array.isArray(x)?x.map(decode):x&&typeof x==='object'?(Object.keys(x).length===1&&typeof x.__bytes==='string'&&/^(?:[0-9a-f]{2})*$/.test(x.__bytes)?Uint8Array.from(x.__bytes.match(/../g)??[],v=>parseInt(v,16)):Object.fromEntries(Object.entries(x).map(([k,v])=>[k,decode(v)]))):x;
-  const proofs=decode(evidence),devices=await checkHouseholdCeremonies(sodium,parent,raw.value.authorizationSnapshot,grant,proofs,provider),proof=proofs.find(x=>x.context.recipientDeviceId===recipientDevice),device=devices.find(x=>x.deviceId===recipientDevice);
-  if(!proof||!device||proof.context.sponsorDeviceId!==a.localDeviceId)throw Error('INVALID_PROOF');
+  const {kind,context,proof,guardId}=await admissionPackage({sodium,provider,parent,authorizationSnapshot:raw.value.authorizationSnapshot,item:admission,recipientDevice});
   const local=await durableSession(sodium,sessionStore,ownKeys,proof.transcript,proof.guard,'responder',proof.oob).evidence();
-  if(local.hash!==device.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
-  const releaseId=grant.keyEnvelopeRefs[grant.recipientDevices.indexOf(recipientDevice)],pkg=p.packages.find(x=>x.id===releaseId&&x.recipientDevice===recipientDevice),unsigned=Object.fromEntries(Object.entries(grant).filter(([k])=>k!=='signatures')),grantHash=await digest(provider,'current-state-grant',unsigned);
-  if(!pkg||p.packages.filter(x=>x.id===releaseId||x.recipientDevice===recipientDevice).length!==1||p.grantHash!==grantHash||p.epochId!==grant.newEpochId)throw Error('INVALID_PROOF');
-  const context={version:1,transcriptHash:device.transcriptHash,releaseId,scopeKind:'household',scopeId:sc.id,purpose:'data',epochId:grant.newEpochId,generation:grant.newDocumentGeneration,senderDevice:a.localDeviceId,senderSigningKey:hex(proof.transcript.initiator.signingPublicKey),senderWrappingKey:hex(proof.transcript.initiator.wrappingPublicKey),recipientDevice,recipientSigningKey:hex(proof.transcript.responder.signingPublicKey),recipientWrappingKey:device.wrappingKeyRef,policyHash:admission.event.policyHash,grantHash,projectionId:manifest.newDocumentId,manifestHash:grant.projectionManifestHash};
+  if(local.hash!==context.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
+  const pkg=p.packages.find(x=>x.id===context.releaseId&&x.recipientDevice===recipientDevice);
+  if(!pkg||p.packages.filter(x=>x.id===context.releaseId||x.recipientDevice===recipientDevice).length!==1||p.grantHash!==context.grantHash||p.epochId!==context.epochId)throw Error('INVALID_PROOF');
   verifyStoredKeyPackage(sodium,pkg.bytes,context);
-  return {expectedAuthority:raw.value,nextAuthority:{scope:sc,revision:raw.value.revision+1,acceptedParent:selection.to,authorizationSnapshot:p.nextAuthority.authorizationSnapshot,authorityState:new Uint8Array(p.nextAuthority.authorityState)},context,packet:pkg.bytes,guardId:device.guardId,seed:s,policyBundle:bundle};
+  return {kind,expectedAuthority:raw.value,nextAuthority:{scope:sc,revision:raw.value.revision+1,acceptedParent:selection.to,authorizationSnapshot:p.nextAuthority.authorizationSnapshot,authorityState:new Uint8Array(p.nextAuthority.authorityState)},context,packet:pkg.bytes,guardId,seed:s,policyBundle:bundle};
  } finally {ownKeys.signingSecret.fill(0);ownKeys.wrappingSecret.fill(0)}
 }
