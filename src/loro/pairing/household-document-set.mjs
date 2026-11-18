@@ -1,4 +1,4 @@
-import {authorityBytes,encodeEvidence,snapshotId,verifyAuthority} from '../authority/chain.mjs';
+import {authorityBytes,encodeEvidence,readAuthority,snapshotId,verifyAuthority} from '../authority/chain.mjs';
 import {verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
 import {domain} from '../authority/validator.mjs';
 import {selectedSourceHash} from '../projection/selected-sources.mjs';
@@ -35,10 +35,10 @@ async function writeOrReplay(storage,scopeId,operationId,write,replay){
   }
 }
 
-async function nextAuthority({pin,provider,parentState,record,item,selection}) {
+async function nextAuthority({pin,provider,parentState,record,item,selection,localDeviceId}) {
   const {grant,manifest,operationId}=item.admission??{};
   if (manifest?.version!==5 || operationId!==item.event.proposalId || grant?.admissionEventHash!==selection?.to ||
-    selection.from!==record.acceptedParent || selection.deviceId!==item.admission.localDeviceId) throw Error('INVALID_AUTHORITY');
+    selection.from!==record.acceptedParent || selection.deviceId!==(localDeviceId??item.admission.localDeviceId)) throw Error('INVALID_AUTHORITY');
   const state={...parentState,events:[...parentState.events,item],selections:[...parentState.selections,selection],activeHead:selection.to};
   const verified=await verifyAuthority(state,pin,provider);
   const next={scope:record.scope,revision:record.revision+1,acceptedParent:state.activeHead,
@@ -117,7 +117,9 @@ async function receiptBytes(provider,publication){
     operationId:publication.operationId,keyOperationId:local.operationId,recipientDevice:local.identity.deviceId,
     guardId:publication.guardIds[0],parentHead:publication.expectedAuthority.record.acceptedParent,
     authorizationSnapshot:publication.expectedAuthority.record.authorizationSnapshot,acceptedHead:publication.admissionEventHash,
-    manifestHash:publication.manifest.id,grantHash:publication.grantHash,epochId:publication.epochId,packets});
+    manifestHash:publication.manifest.id,grantHash:publication.grantHash,epochId:publication.epochId,packets,
+    ...(publication.documentSet.version===2?{publisherParent:publication.documentSet.publisherParent,
+      publisherSelection:publication.documentSet.publisherSelection,ciphertextHash:publication.documentSet.ciphertextHash}: {})});
 }
 
 function forStorage({checked,item,documents,operationId,guardIds,mode,packets,keys,pendingEdits}){
@@ -156,8 +158,19 @@ export async function readInstalledHouseholdDocumentSet({sodium,storage,scope,pi
   const {parentStorage,parentState,nextState,item,selection}=await parentFromPublication({scope,pin,provider,publication});
   LoroDoc??=await loadLoroDoc();
   const documents=savedDocuments(publication,LoroDoc);
-  const checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
   const {mode}=publication.documentSet;
+  let checked,publisherAuthorizationSnapshot=publication.nextAuthority.authorizationSnapshot;
+  if(publication.documentSet.version===2){
+    const {publisherParent,publisherSelection}=publication.documentSet;
+    const publisherStorage={readPairingAuthority:async()=>({ok:true,value:structuredClone(publisherParent)})};
+    const publisher=await proofAtParent({storage:publisherStorage,scope,pin,provider,LoroDoc,item,selection:publisherSelection,documents});
+    publisherAuthorizationSnapshot=publisher.next.authorizationSnapshot;
+    const local=await verifyPublicParent(parentStorage,scope,pin,provider);
+    if(!same(local.nodes.get(local.state.activeHead),publisher.parent))throw Error('INVALID_AUTHORITY');
+    const next=await nextAuthority({pin,provider,parentState:local.state,record:local.record,item,selection,
+      localDeviceId:publication.localKey.record.identity.deviceId});
+    checked={...publisher,...next,record:local.record,publisherRecord:publisher.record};
+  }else checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
   const localDevice=publication.localKey.record.identity.deviceId;
   const rootKey=publication.localKey.record,localKeys=[rootKey,...publication.documentSet.childKeys];
   for(const [index,document] of documents.entries()){
@@ -169,7 +182,7 @@ export async function readInstalledHouseholdDocumentSet({sodium,storage,scope,pi
   if(mode==='publisher'&&localDevice!==item.admission.localDeviceId)throw Error('INVALID_AUTHORITY');
   const contexts=[],guards=[];
   for(const recipientDevice of recipients){
-    const result=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item,recipientDevice});
+    const result=await contextsFor({sodium,provider,parent:checked.parent,record:checked.publisherRecord??checked.record,item,recipientDevice});
     contexts.push(...result.contexts);
     guards.push(result.guardId);
   }
@@ -193,7 +206,7 @@ export async function readInstalledHouseholdDocumentSet({sodium,storage,scope,pi
       await verifyRetainedPolicyBaseline(LoroDoc,retained,await policyBaseline(baseline,provider),provider);
     }catch{throw Error('CORRUPT');}
   }
-  return {mode,parentState,state:nextState,documents,item,selection,publication};
+  return {mode,parentState,state:nextState,documents,item,selection,publication,publisherAuthorizationSnapshot};
 }
 
 /** Create a resolver only after independently verifying the installed set.
@@ -261,7 +274,9 @@ export async function publishHouseholdDocumentSet({storage,scope,pin,provider,so
       const {encodeHouseholdDocumentSetFile}=await import('./household-file.mjs');
       for(const [index] of routes.entries()){
         const packets=prepared.map(key=>key.packets[index]);
-        encodeHouseholdDocumentSetFile({version:1,item:packed,selection,documents,packets}).fill(0);
+        const existing=!grant.recipientDevices.includes(routes[index].contexts[0].recipientDevice);
+        encodeHouseholdDocumentSetFile({version:existing?2:1,item:packed,selection,documents,packets,
+          ...(existing?{publisherParent:checked.record}:{})}).fill(0);
       }
       const packets=routes.flatMap((_,index)=>prepared.map(key=>key.packets[index]));
       const publication=forStorage({checked,item:packed,documents,operationId,guardIds:routes.map(route=>route.guardId).sort(),
@@ -280,15 +295,21 @@ export async function householdDocumentSetRelease({sodium,storage,scope,pin,prov
   if(saved.mode!=='publisher'||!same(current,saved.publication.nextAuthority))throw Error('STALE_AUTHORITY');
   const packets=saved.publication.packages.filter(packet=>packet.recipientDevice===recipientDevice);
   if(packets.length!==saved.documents.length)throw Error('UNAUTHORIZED_DEVICE');
-  return {version:1,item:saved.item,selection:saved.selection,documents:saved.documents,packets};
+  if(saved.item.admission.grant.recipientDevices.includes(recipientDevice))
+    return {version:1,item:saved.item,selection:saved.selection,documents:saved.documents,packets};
+  const {record}=await verifyPublicParent((await parentFromPublication({scope,pin,provider,publication:saved.publication})).parentStorage,scope,pin,provider);
+  return {version:2,item:saved.item,selection:saved.selection,documents:saved.documents,packets,publisherParent:record};
 }
 
 /** Independently verify the selected parent, admission, completed local
  * ceremony and every document/key binding before writing any selected state. */
 export async function installHouseholdDocumentSet({sodium,storage,scope,pin,provider,recipientDevice,sessionStore,keys,
-  master,keyOperationId,confirmedParent,confirmedEventHash,confirmedGrantHash,confirmedTranscriptHash,prepareEnrollment,release,LoroDoc}){
+  master,keyOperationId,confirmedParent,confirmedEventHash,confirmedGrantHash,confirmedTranscriptHash,prepareEnrollment,release,LoroDoc,recipientKind,ciphertextHash}){
   release=structuredClone(release);
-  if(!release || Object.keys(release).sort().join(',')!=='documents,item,packets,selection,version'||release.version!==1){
+  if(!release || !(release.version===1&&Object.keys(release).sort().join(',')==='documents,item,packets,selection,version'||
+    release.version===2&&Object.keys(release).sort().join(',')==='documents,item,packets,publisherParent,selection,version') ||
+    release.version===2&&recipientKind!=='existing' ||
+    release.version===2&&(typeof ciphertextHash!=='string'||!/^[0-9a-f]{64}$/.test(ciphertextHash))){
     throw Error('INVALID_DOCUMENT_SET');
   }
   const secrets=cloneSecrets(keys);
@@ -296,11 +317,27 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
     await sodium.ready;
     const {item,selection,documents,packets}=release;
     const {manifest,operationId}=item?.admission??{};
-    if(!manifest||typeof operationId!=='string'||typeof confirmedParent!=='string')throw Error('INVALID_DOCUMENT_SET');
+    if(!manifest||typeof operationId!=='string'||(release.version===1&&recipientKind!=='existing'&&typeof confirmedParent!=='string'))throw Error('INVALID_DOCUMENT_SET');
     const verifyInput=async parentStorage=>{
-      const checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
-      if(checked.record.acceptedParent!==confirmedParent)throw Error('INVALID_AUTHORITY');
-      const route=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item,recipientDevice});
+      let checked;
+      if(release.version===2){
+        const local=await verifyPublicParent(parentStorage,scope,pin,provider);
+        const publisherStorage={readPairingAuthority:async()=>({ok:true,value:structuredClone(release.publisherParent)})};
+        const publisher=await proofAtParent({storage:publisherStorage,scope,pin,provider,LoroDoc,item,selection,documents});
+        if(local.record.acceptedParent!==item.event.parentHead ||
+           !same(local.nodes.get(local.state.activeHead),publisher.parent) ||
+           item.admission.grant.recipientDevices.includes(recipientDevice))throw Error('INVALID_AUTHORITY');
+        const body={root:pin,householdId:scope.id,from:local.state.activeHead,to:publisher.eventHash,
+          deviceId:recipientDevice,index:local.state.selections.length};
+        const localSelection={from:body.from,to:body.to,deviceId:body.deviceId,index:body.index,
+          signature:hex(sodium.crypto_sign_detached(domain('select-head',body),secrets.signingSecret))};
+        const next=await nextAuthority({pin,provider,parentState:local.state,record:local.record,item,
+          selection:localSelection,localDeviceId:recipientDevice});
+        checked={...publisher,...next,record:local.record,publisherRecord:publisher.record};
+      }else checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
+      if(confirmedParent!==undefined&&checked.record.acceptedParent!==confirmedParent)throw Error('INVALID_AUTHORITY');
+      const route=await contextsFor({sodium,provider,parent:checked.parent,record:checked.publisherRecord??checked.record,item,recipientDevice});
+      if(recipientKind==='existing' && route.kind!=='existing')throw Error('INVALID_AUTHORITY');
       if([confirmedEventHash,confirmedGrantHash,confirmedTranscriptHash].some(value=>value!==undefined)&&
          (checked.eventHash!==confirmedEventHash||checked.grantHash!==confirmedGrantHash||
           route.proof.oob.hash!==confirmedTranscriptHash||!item.admission.grant.recipientDevices.includes(recipientDevice))){
@@ -314,7 +351,10 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
     const replay=async prior=>{
       const saved=await readInstalledHouseholdDocumentSet({sodium,storage,scope,pin,provider,operationId,LoroDoc});
       const installed=saved.publication;
-      if(saved.mode!=='recipient'||!same(item,saved.item)||!same(selection,saved.selection)||!same(documents,saved.documents)||
+      if(saved.mode!=='recipient'||!same(item,saved.item)||
+        !same(selection,saved.publication.documentSet.version===2?saved.publication.documentSet.publisherSelection:saved.selection)||
+        (release.version===2&&(!same(release.publisherParent,saved.publication.documentSet.publisherParent)||
+          ciphertextHash!==saved.publication.documentSet.ciphertextHash))||!same(documents,saved.documents)||
         !same(packets,installed.packages)||installed.localKey.record.operationId!==keyOperationId||
         installed.localKey.record.identity.deviceId!==recipientDevice) throw Error('CONFLICT');
       const {parentStorage}=await parentFromPublication({scope,pin,provider,publication:prior});
@@ -330,6 +370,10 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
       return {replayed:true,head:checked.eventHash};
     };
     return await writeOrReplay(storage,scope.id,operationId,async()=>{
+      if(recipientKind==='existing'){
+        const local=await readAuthority(storage,scope,pin,provider);
+        if(local.activeHead!==item.event.parentHead)throw Error('STALE_AUTHORITY');
+      }
       const {checked,contexts,guardId}=await verifyInput(storage);
       const prepared=[],seenKeys=new Set();
       for(const [index,packet] of packets.entries()){
@@ -344,8 +388,14 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
       }
       const publication=forStorage({checked,item,documents,operationId,guardIds:[guardId],mode:'recipient',
         keys:prepared,packets,pendingEdits:[]});
+      if(release.version===2){
+        publication.documentSet.version=2;
+        publication.documentSet.publisherParent=release.publisherParent;
+        publication.documentSet.publisherSelection=selection;
+        publication.documentSet.ciphertextHash=ciphertextHash;
+      }
       publication.documentSet.recipientSignature=sodium.crypto_sign_detached(await receiptBytes(provider,publication),secrets.signingSecret);
-      await prepareEnrollment?.();
+      if(recipientKind!=='existing')await prepareEnrollment?.();
       return {...must(await storage.publishProjection(publication)),head:checked.eventHash};
     },replay);
   }finally{clearSecrets(secrets);}

@@ -69,7 +69,7 @@ export function installedRecipeDelivery({sodium,keys,signing,wrapping,provider,p
       new Set(eligible.map(id=>auth.wrappingKeyRefs[id])).size!==eligible.length)throw Error('INVALID_AUTHORITY');
   const recipients=eligible.filter(id=>id!==h.authorDevice).sort();
   return Promise.all(recipients.map(async recipientDevice=>({
-   version:1,transcriptHash:scope.authorizationSnapshot,
+   version:1,transcriptHash:resolved.deliveryAuthorizationSnapshot??scope.authorizationSnapshot,
    releaseId:await hash('installed-recipe-key-delivery-v1',{pin,head:h.branchHead,innerId,
     scopeId:h.scopeId,epochId:h.epochId,generation:h.documentGeneration,documentId:h.documentId,
     senderDevice:h.authorDevice,recipientDevice}),

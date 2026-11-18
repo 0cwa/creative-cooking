@@ -4,7 +4,10 @@ import type { PairingAuthorityRecord } from './pairing.ts';
 /** Structural transaction only. Callers must verify admission, source delegation,
  * projection bytes, packages, ceremony, possession, and authority before invoking. */
 export type ProjectionDocumentSet = {
- version:1;
+ version:1|2;
+ publisherParent?:PairingAuthorityRecord;
+ publisherSelection?:unknown;
+ ciphertextHash?:Id;
  mode:'publisher'|'recipient';
  recipientSignature:Bytes|null;
  catalog:readonly {recipeId:Id;documentId:Id}[];

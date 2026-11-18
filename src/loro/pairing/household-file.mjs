@@ -53,10 +53,15 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
    if(local.hash!==context.transcriptHash||!equal(local.messages,proof.messages))throw Error('INVALID_PROOF');
   }
   const packets=p.packages.filter(x=>x.recipientDevice===recipientDevice);
-  let plain;
+  let plain,legacyDigest;
   if(set){
    const {householdDocumentSetRelease}=await import('./household-document-set.mjs');
-   plain=encodeHouseholdDocumentSetFile(await householdDocumentSetRelease({sodium,storage,scope:sc,pin,provider,operationId,recipientDevice,LoroDoc}));
+   const release=await householdDocumentSetRelease({sodium,storage,scope:sc,pin,provider,operationId,recipientDevice,LoroDoc});
+   plain=encodeHouseholdDocumentSetFile(release);
+   if(release.version===2){
+    const {publisherParent,...old}=release,legacy=encodeHouseholdDocumentSetFile({...old,version:1});
+    try{legacyDigest=sodium.to_hex(sodium.crypto_generichash(32,legacy));}finally{legacy.fill(0)}
+   }
   }else{
    if(packets.length!==1||packets[0].id!==context.releaseId||p.documents.length!==1||!p.seed)throw Error('INVALID_PROOF');
    verifyStoredKeyPackage(sodium,packets[0].bytes,context);
@@ -77,15 +82,15 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
   try{
    if(plain.length>MAX)throw Error('TOO_LARGE');
    const digest=sodium.to_hex(sodium.crypto_generichash(32,plain));
-   const signedBytes=bytes=>domain('household-sealed-file',{scopeId:sc.id,operationId,recipientDevice,digest,cipherHash:sodium.to_hex(sodium.crypto_generichash(32,bytes))});
-   const validate=record=>{
-    if(!record||record.version!==1||record.digest!==digest||!(record.bytes instanceof Uint8Array)||!(record.signature instanceof Uint8Array)||
-       !sodium.crypto_sign_verify_detached(record.signature,signedBytes(record.bytes),sender))throw Error('CONFLICT');
+   const signedBytes=(bytes,boundDigest=digest)=>domain('household-sealed-file',{scopeId:sc.id,operationId,recipientDevice,digest:boundDigest,cipherHash:sodium.to_hex(sodium.crypto_generichash(32,bytes))});
+   const validate=(record,boundDigest=digest)=>{
+    if(!record||record.version!==1||record.digest!==boundDigest||!(record.bytes instanceof Uint8Array)||!(record.signature instanceof Uint8Array)||
+       !sodium.crypto_sign_verify_detached(record.signature,signedBytes(record.bytes,boundDigest),sender))throw Error('CONFLICT');
     return new Uint8Array(record.bytes);
    };
    const read=await storage.readHouseholdSealedFile(expectedAuthority,operationId,recipientDevice);
    if(!read.ok)throw Error(read.error.code);
-   if(read.value!==null)return validate(read.value);
+   if(read.value!==null)return validate(read.value,read.value.digest===legacyDigest?legacyDigest:digest);
    const sealed=sodium.crypto_box_seal(plain,recipient);
    const record={version:1,digest,bytes:new Uint8Array(sealed),signature:sodium.crypto_sign_detached(signedBytes(sealed),secret.signingSecret)};
    const committed=await storage.commitHouseholdSealedFile(expectedAuthority,operationId,recipientDevice,record);
@@ -98,10 +103,11 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
  * against the independently accepted local parent and completed session. */
 export async function installHouseholdFile({sodium,bytes,keys,identify,...args}){
  if(!(bytes instanceof Uint8Array)||bytes.length<48||bytes.length>MAX+48)throw Error('MALFORMED');const signingSecret=new Uint8Array(keys.signingSecret),wrappingSecret=new Uint8Array(keys.wrappingSecret),cipher=new Uint8Array(bytes);let plain;
- try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(args.recipientKind==='document-set'){
+ try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(args.recipientKind==='document-set'||args.recipientKind==='existing'&&raw?.version===3){
   if(!raw||Object.keys(raw).sort().join(',')!=='release,version'||raw.version!==3)throw Error('INVALID_FILE');
   const {installHouseholdDocumentSet}=await import('./household-document-set.mjs');
   const identifiers=identify?identify(raw.release?.item?.admission?.grant?.admissionEventHash):{};
-  return await installHouseholdDocumentSet({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},release:raw.release});
+  return await installHouseholdDocumentSet({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},release:raw.release,
+   ciphertextHash:hex(sodium.crypto_generichash(32,cipher))});
  }if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==((args.recipientKind==='revocation'||args.recipientKind==='recovery')?2:1)||raw.version===2&&raw.policyBundle!==null)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
 }

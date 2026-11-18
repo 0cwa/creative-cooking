@@ -397,6 +397,7 @@ export async function resolveInstalledSetAuthority({storage,scope,pin,provider,a
   }
  }
  return {...resolved,wrappingKeyRefs:Object.fromEntries(wrapping),
+  deliveryAuthorizationSnapshot:installed.publisherAuthorizationSnapshot,
   members:manifest.entries.map(({recipeId,documentId})=>({recipeId:recipeId??null,documentId}))};
 }
 

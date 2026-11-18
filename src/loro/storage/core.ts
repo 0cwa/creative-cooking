@@ -180,7 +180,10 @@ const validBranchDocument = (x: unknown): x is BranchDocument => fields(x,['head
 const validBranchRevision = (x: unknown): x is BranchRevision => fields(x,['head','documentId','revision']) && validId(x.head) && validId(x.documentId) && (x.revision===null || revision(x.revision));
 const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
 function projectionSetValid(x:Record<string,any>,set:unknown):set is ProjectionDocumentSet {
- if (!fields(set,['version','mode','recipientSignature','catalog','seeds','childKeys']) || set.version!==1 ||
+ if (!(fields(set,['version','mode','recipientSignature','catalog','seeds','childKeys']) && set.version===1 ||
+       fields(set,['version','mode','recipientSignature','catalog','seeds','childKeys','publisherParent','publisherSelection','ciphertextHash']) &&
+       set.version===2 && set.mode==='recipient' && object(set.publisherParent) && object(set.publisherSelection) &&
+       typeof set.ciphertextHash==='string' && /^[0-9a-f]{64}$/.test(set.ciphertextHash)) ||
      !['publisher','recipient'].includes(set.mode) || !Array.isArray(x.documents) || !Array.isArray(x.guardIds) ||
      (set.mode==='recipient'
        ? x.guardIds.length!==1 || x.pendingEdits?.length!==0 ||
@@ -203,7 +206,9 @@ function projectionSetValid(x:Record<string,any>,set:unknown):set is ProjectionD
  try {manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(x.manifest.bytes))} catch {return false;}
  if (manifest?.version!==5 || manifest.admissionEventHash!==x.admissionEventHash ||
      manifest.newEpochId!==x.epochId || manifest.parentHead!==x.expectedAuthority?.record?.acceptedParent ||
-     manifest.authorizationSnapshot!==x.expectedAuthority?.record?.authorizationSnapshot ||
+     manifest.authorizationSnapshot!==(set.version===2?set.publisherParent?.authorizationSnapshot:x.expectedAuthority?.record?.authorizationSnapshot) ||
+     (set.version===2 && (set.publisherParent?.acceptedParent!==x.expectedAuthority?.record?.acceptedParent ||
+       !sameRecord(set.publisherParent?.scope,x.expectedAuthority?.scope))) ||
      x.nextAuthority?.acceptedParent!==x.admissionEventHash || manifest.catalog?.targetRevision!==set.catalog.length ||
      !Array.isArray(manifest.entries) || manifest.entries.length!==set.seeds.length) return false;
  const epochSlots=new Set([x.epochId]), ops=new Set([x.localKey?.record?.operationId]);

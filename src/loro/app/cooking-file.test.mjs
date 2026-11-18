@@ -12,7 +12,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
-import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,resolveInstalledSetAuthority,rootPin} from '../authority/chain.mjs';
+import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,resolveInstalledSetAuthority,rootPin,authorityBytes,snapshotId} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec,SUITE,LIMIT as CANDIDATE_LIMIT} from '../crypto/candidate.mjs';
@@ -1054,7 +1054,7 @@ test('selected recipe shopping copies and current-only admission survive durable
  const forgedFile=sodium.crypto_box_seal(forgedBytes,newcomerWrap.publicKey);
  forgedBytes.fill(0);
  await assert.rejects(()=>install(forgedFile),/INVALID_KEY_PACKAGE/);
- await assert.rejects(()=>install(existingSealed),/INVALID_FILE/);
+ await assert.rejects(()=>install(existingSealed),/INVALID_FILE|INVALID_DOCUMENT_SET/);
  await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,recipientKind:'newcomer'}),/INVALID_FILE/);
  assert.deepEqual(freshRows(),beforeNewcomer);
  for(const inPlace of [true,false]){
@@ -1260,11 +1260,61 @@ test('selected recipe shopping copies and current-only admission survive durable
    }));
  }
  assert.equal(distinctKeys.size,acceptedDraft.documents.length);
- const existingOptions={...newcomerOptions,storage:b.storage,keys:existingKeys,recipientDevice:b.deviceId,
-  sessionStore:existingSession,master:existingMaster,keyOperationId:'set-existing-key',bytes:existingSealed};
+ // The existing device can have a different, independently signed selection
+ // history at the same parent. Its history remains local after installation.
+ const localParent=must(await b.storage.readPairingAuthority(scope));
+ const localState=JSON.parse(new TextDecoder().decode(localParent.authorityState));
+ const localBody={root:a.root.head,householdId:scope.id,from:a.root.head,to:a.root.head,deviceId:b.deviceId,index:0};
+ const localSelection={from:localBody.from,to:localBody.to,deviceId:b.deviceId,index:0,
+  signature:sodium.to_hex(sodium.crypto_sign_detached(domain('select-head',localBody),b.signingTestKey.privateKey))};
+ localState.selections.push(localSelection);
+ const localRecord={...localParent,revision:localParent.revision+1,authorizationSnapshot:await snapshotId(a.provider,localState),authorityState:authorityBytes(localState)};
+ must(await b.storage.compareAndSwapPairingAuthority({expectedRevision:localParent.revision,record:localRecord}));
+ const existingOptions={...newcomerOptions,storage:b.storage,keys:existingKeys,recipientDevice:b.deviceId,recipientKind:'existing',
+  sessionStore:existingSession,master:existingMaster,keyOperationId:'set-existing-key',bytes:existingSealed,
+  prepareEnrollment:()=>assert.fail('Existing device must reuse its counter')};
+ const beforeExisting=b.rows();
+ const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
+ const originalAuthority=beforeExisting.find(row=>row.key===authoritySlot).value;
+ const corruptedAuthority=JSON.parse(originalAuthority);corruptedAuthority.authorizationSnapshot='0'.repeat(64);
+ b.replaceRow(authoritySlot,JSON.stringify(corruptedAuthority));
+ await assert.rejects(()=>installHouseholdFile(existingOptions),/INVALID_AUTHORITY/);
+ b.replaceRow(authoritySlot,originalAuthority);
+ await assert.rejects(()=>installHouseholdFile({...existingOptions,confirmedParent:'stale-head'}),/INVALID_AUTHORITY/);
+ const brokenCipher=new Uint8Array(existingSealed);brokenCipher[0]^=1;
+ await assert.rejects(()=>installHouseholdFile({...existingOptions,bytes:brokenCipher}),/INVALID_FILE/);
+ const existingRelease=await householdDocumentSetRelease({...sealOptions,recipientDevice:b.deviceId});
+ const reseal=release=>sodium.crypto_box_seal(encodeHouseholdDocumentSetFile(release),existingWrap.publicKey);
+ // A file sealed by the previous release format must remain an exact retry.
+ const {publisherParent:ignoredPublisherParent,...legacyFields}=existingRelease;
+ const legacyRelease={...legacyFields,version:1},legacyPlain=encodeHouseholdDocumentSetFile(legacyRelease);
+ const legacyDigest=sodium.to_hex(sodium.crypto_generichash(32,legacyPlain));legacyPlain.fill(0);
+ const legacyBytes=reseal(legacyRelease),legacySignature=sodium.crypto_sign_detached(domain('household-sealed-file',{
+  scopeId:scope.id,operationId,recipientDevice:b.deviceId,digest:legacyDigest,
+  cipherHash:sodium.to_hex(sodium.crypto_generichash(32,legacyBytes))}),sponsorKeys.signingSecret);
+ const readSealed=a.storage.readHouseholdSealedFile;
+ a.storage.readHouseholdSealedFile=async()=>({ok:true,value:{version:1,digest:legacyDigest,bytes:legacyBytes,signature:legacySignature}});
+ try{assert.deepEqual(await sealHouseholdFile({...sealOptions,recipientDevice:b.deviceId}),legacyBytes);}
+ finally{a.storage.readHouseholdSealedFile=readSealed;}
+ for(const mutate of [value=>{value.selection.signature='0'.repeat(128)},
+  value=>{value.publisherParent.authorizationSnapshot='0'.repeat(64)}]){
+  const invalid=structuredClone(existingRelease);mutate(invalid);
+  await assert.rejects(()=>installHouseholdFile({...existingOptions,bytes:reseal(invalid)}));
+ }
+ assert.deepEqual(b.rows(),beforeExisting);
+ for(const fault of ['projection-set-keys','projection-set-catalog','projection-set-authority']){
+  b.faultAt(fault);
+  await assert.rejects(()=>installHouseholdFile(existingOptions),/IO/);
+  b.reopen();assert.deepEqual(b.rows(),beforeExisting);
+ }
+ b.faultAt(null);
  assert.deepEqual(await installHouseholdFile(existingOptions),{replayed:false,head:eventHash});
  b.reopen();
  assert.deepEqual(await installHouseholdFile(existingOptions),{replayed:true,head:eventHash});
+ await assert.rejects(()=>installHouseholdFile({...existingOptions,bytes:reseal(existingRelease)}),/CONFLICT/);
+ const retainedState=JSON.parse(new TextDecoder().decode(must(await b.storage.readPairingAuthority(scope)).authorityState));
+ assert.deepEqual(retainedState.selections[0],localSelection);
+ assert.equal(retainedState.selections[1].deviceId,b.deviceId);
  assert.ok(must(await b.storage.reopenDocument(scope.id,br.scope.documentId)));
 
  const receiverRef=sodium.to_hex(newcomerSign.publicKey);
