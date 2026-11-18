@@ -1,6 +1,6 @@
 import {RTCPeerConnection} from 'react-native-webrtc';
 import {cookingDirect} from '../transport/cooking-direct.mjs';
-import {nativeCurrentDescriptions, nativeGatheredLocalSdp} from './webrtc-descriptions.mjs';
+import {NATIVE_GATHERING_STABLE_MS, nativeCurrentDescriptions, nativeGatheredLocalSdp} from './webrtc-descriptions.mjs';
 import {sha256} from './sha256.native';
 import sodium from './sodium';
 
@@ -15,6 +15,7 @@ export const openNativeCookingDirect = (options: Options) => cookingDirect({
   createPeerConnection: config => new RTCPeerConnection(config),
   readCurrentDescriptions: nativeCurrentDescriptions,
   readGatheredLocalSdp: nativeGatheredLocalSdp,
+  gatheringStableMs: NATIVE_GATHERING_STABLE_MS,
   sha256,
   randomBytes: size => sodium.randombytes_buf(size),
 });

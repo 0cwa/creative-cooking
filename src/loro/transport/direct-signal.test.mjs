@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {nativeCurrentDescriptions, nativeGatheredLocalSdp} from '../native/webrtc-descriptions.mjs';
+import {NATIVE_GATHERING_STABLE_MS, nativeCurrentDescriptions, nativeGatheredLocalSdp} from '../native/webrtc-descriptions.mjs';
 import {cookingDirect} from './cooking-direct.mjs';
 import {comparisonCode, directDomain, hex, readSignal, requireNegotiated, signalHash, signSignal, transcriptHash, verifySignal} from './direct-signal.mjs';
 
@@ -43,18 +43,21 @@ test('Android stable descriptions and injected SHA-256 preserve the browser tran
   assert.throws(() => requireNegotiated({...native,remoteDescription:changed}, offer, answer, false, nativeCurrentDescriptions), /NEGOTIATED_SIGNAL_MISMATCH/);
 });
 
-test('Android answer waits for candidate SDP after the gathering complete event', async t => {
+test('Android answers wait for progressive late candidates and reject overlapping signaling', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
   const {scopeId, head, initiator, responder} = offerBody;
   const {promise: gatheringReported, resolve: reportGathering} = Promise.withResolvers();
   const initialAnswer = dataSdp.replace('ufrag:fixture', 'ufrag:native');
-  const finalAnswer = initialAnswer.replace('m=application 9', 'm=application 46723') +
+  const partialAnswer = initialAnswer.replace('m=application 9', 'm=application 46723') +
     'a=candidate:1 1 udp 2122260223 10.0.2.16 46723 typ host\r\n';
+  const finalAnswer = partialAnswer + 'a=candidate:2 1 udp 2122260222 10.0.2.17 46724 typ host\r\n';
   let signed = 0;
   const provider = {verify: async () => true, sign: async () => { signed++; return new Uint8Array(64); }};
   const connection = Object.assign(new EventTarget(), {
     signalingState:'stable', iceGatheringState:'new',
     createDataChannel: () => Object.assign(new EventTarget(), {close() {}}),
     async setRemoteDescription(description) { this.remoteDescription = description; },
+    async createOffer() { return {type:'offer',sdp:dataSdp}; },
     async createAnswer() { return {type:'answer',sdp:initialAnswer}; },
     async setLocalDescription(description) {
       this.localDescription = description;
@@ -72,7 +75,8 @@ test('Android answer waits for candidate SDP after the gathering complete event'
     },
     provider, assertSelected:async () => {}, withSelected:use => use(),
     createPeerConnection:() => connection,
-    readCurrentDescriptions:nativeCurrentDescriptions, readGatheredLocalSdp:nativeGatheredLocalSdp
+    readCurrentDescriptions:nativeCurrentDescriptions, readGatheredLocalSdp:nativeGatheredLocalSdp,
+    gatheringStableMs:NATIVE_GATHERING_STABLE_MS
   }).connect({notify() {}});
   t.after(() => session.close());
 
@@ -81,10 +85,21 @@ test('Android answer waits for candidate SDP after the gathering complete event'
   await gatheringReported;
   await new Promise(setImmediate);
   assert.equal(signed, 0);
+  await assert.rejects(session.createOffer(initiator.deviceId), /INVALID_DIRECT_STEP/);
+  connection.localDescription = {type:'answer',sdp:partialAnswer};
+  connection.dispatchEvent(new Event('icecandidate'));
+  t.mock.timers.tick(NATIVE_GATHERING_STABLE_MS - 1);
+  await new Promise(setImmediate);
+  assert.equal(signed, 0);
   connection.localDescription = {type:'answer',sdp:finalAnswer};
   connection.dispatchEvent(new Event('icecandidate'));
+  t.mock.timers.tick(NATIVE_GATHERING_STABLE_MS - 1);
+  await new Promise(setImmediate);
+  assert.equal(signed, 0);
+  t.mock.timers.tick(1);
   const {text,code} = await response;
   assert.equal(readSignal(text, 'answer').sdp, finalAnswer);
   assert.ok(code);
   assert.equal(signed, 1);
+  await assert.rejects(session.createOffer(initiator.deviceId), /INVALID_DIRECT_STEP/);
 });

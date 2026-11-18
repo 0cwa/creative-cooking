@@ -14,27 +14,37 @@ const must = result => { if (!result.ok) throw Error(result.error); return resul
 const sameDevice = (a, b) => a.deviceId === b.deviceId && a.signingKey === b.signingKey;
 
 
-function waitForState(connection, events, ready, failure) {
-  if (ready()) return Promise.resolve();
+function waitForState(connection, events, ready, failure, stableMs = 0) {
+  const initial = ready();
+  if (initial && !stableMs) return Promise.resolve(initial);
   return new Promise((resolve, reject) => {
-    const finish = error => {
+    let stableTimer;
+    const finish = (error, value) => {
       clearTimeout(timeout);
+      clearTimeout(stableTimer);
       for (const event of events) connection.removeEventListener(event, check);
-      error ? reject(error) : resolve();
+      error ? reject(error) : resolve(value);
     };
     const check = () => {
-      if (connection.signalingState === 'closed') finish(Error('CLOSED'));
-      else if (ready()) finish();
+      clearTimeout(stableTimer);
+      if (connection.signalingState === 'closed') return finish(Error('CLOSED'));
+      const value = ready();
+      if (!value) return;
+      if (!stableMs) return finish(null, value);
+      stableTimer = setTimeout(() => {
+        if (connection.signalingState === 'closed' || ready() !== value) check();
+        else finish(null, value);
+      }, stableMs);
     };
     const timeout = setTimeout(() => finish(Error(failure)), GATHER_MS);
     for (const event of events) connection.addEventListener(event, check);
     check();
   });
 }
-async function gather(connection, description, readGatheredLocalSdp) {
+async function gather(connection, description, readGatheredLocalSdp, stableMs) {
   await connection.setLocalDescription(description);
-  await waitForState(connection, ['icegatheringstatechange', 'icecandidate', 'signalingstatechange'],
-    () => connection.iceGatheringState === 'complete' && !!readGatheredLocalSdp(connection), 'ICE_GATHERING_TIMEOUT');
+  return waitForState(connection, ['icegatheringstatechange', 'icecandidate', 'signalingstatechange'],
+    () => connection.iceGatheringState === 'complete' && readGatheredLocalSdp(connection), 'ICE_GATHERING_TIMEOUT', stableMs);
 }
 
 /** Manual signaling for a current, admitted household. Content and receipt
@@ -43,13 +53,14 @@ async function gather(connection, description, readGatheredLocalSdp) {
  * withSelected:<T>(use:()=>Promise<T>)=>Promise<T>,createPeerConnection?:(config:{iceServers:[]})=>any,
  * readCurrentDescriptions?:(connection:any)=>any[],sha256?:(bytes:Uint8Array)=>Promise<string>,
  * readGatheredLocalSdp?:(connection:any)=>string|undefined,
+ * gatheringStableMs?:number,
  * randomBytes?:(size:number)=>Uint8Array}} options
  */
 export function cookingDirect({
   runtime, provider, cooking, assertSelected, withSelected,
   createPeerConnection = config => new RTCPeerConnection(config),
   readCurrentDescriptions = currentDescriptions,
-  readGatheredLocalSdp = connection => connection.localDescription?.sdp,
+  readGatheredLocalSdp = connection => connection.localDescription?.sdp, gatheringStableMs = 0,
   sha256 = digest, randomBytes = size => crypto.getRandomValues(new Uint8Array(size))
 }) {
   const transferId = () => hex(randomBytes(16));
@@ -71,7 +82,7 @@ export function cookingDirect({
     channel.binaryType = 'arraybuffer';
     let offer, answer, transcript, descriptionsReady, initiator, local, peer, reassembler, ready = false;
     let confirmed = false, peerConfirmed = false, confirmationSent = false, confirmationSending = false, closed = false;
-    let idle, connectionTimeout, waiting, sending = false, queued = 0, queue = Promise.resolve();
+    let idle, connectionTimeout, waiting, sending = false, signaling = false, queued = 0, queue = Promise.resolve();
     let receivedMessages = 0, receivedObjects = 0, sentObjects = 0;
     const attempts = new Map();
     const appliedHere = new Set(), retainedHere = new Set(), storedByPeer = new Set(), appliedByPeer = new Set();
@@ -98,6 +109,22 @@ export function cookingDirect({
       const current = await devicePair(peer.deviceId);
       if (closed || !sameDevice(current.local, local) || !sameDevice(current.peer, peer)) throw Error('UNAUTHORIZED_PEER');
       requireNegotiated(connection, offer, answer, initiator, readCurrentDescriptions);
+    }
+    async function signalStep(use) {
+      if (closed || signaling) throw Error('INVALID_DIRECT_STEP');
+      signaling = true;
+      try { return await use(); }
+      finally { signaling = false; }
+    }
+    async function signGathered(fields, sdp) {
+      const matches = () => !closed && connection.localDescription?.type === fields.kind && connection.localDescription.sdp === sdp;
+      return withSelected(async () => {
+        await devicePair(peer.deviceId);
+        if (!matches()) throw Error('NEGOTIATED_SIGNAL_MISMATCH');
+        const signed = await signSignal(provider, {...fields, sdp}, local.signingKey);
+        if (!matches()) throw Error('NEGOTIATED_SIGNAL_MISMATCH');
+        return signed;
+      });
     }
     function checkReady() {
       if (!closed && !ready && confirmed && confirmationSent && peerConfirmed) {
@@ -277,49 +304,49 @@ export function cookingDirect({
 
     return {
       close,
-      async createOffer(otherId) {
-        ({local, peer} = await devicePair(otherId));
-        initiator = true;
-        await gather(connection, await connection.createOffer(), readGatheredLocalSdp);
-        offer = await withSelected(async () => {
-          await devicePair(peer.deviceId);
-          const sdp = readGatheredLocalSdp(connection);
-          return signSignal(provider, {version:1, kind:'offer', scopeId, head, sessionId:transferId(), initiator:local, responder:peer, sdp}, local.signingKey);
+      createOffer(otherId) {
+        return signalStep(async () => {
+          if (offer) throw Error('INVALID_DIRECT_STEP');
+          ({local, peer} = await devicePair(otherId));
+          initiator = true;
+          const sdp = await gather(connection, await connection.createOffer(), readGatheredLocalSdp, gatheringStableMs);
+          offer = await signGathered({version:1, kind:'offer', scopeId, head, sessionId:transferId(), initiator:local, responder:peer}, sdp);
+          return JSON.stringify(offer);
         });
-        return JSON.stringify(offer);
       },
-      async createAnswer(text) {
-        const incoming = readSignal(text, 'offer');
-        if (incoming.scopeId !== scopeId || incoming.head !== head || incoming.responder.deviceId !== localId) throw Error('DIRECT_HOUSEHOLD_MISMATCH');
-        ({local, peer} = await devicePair(incoming.initiator.deviceId));
-        if (!sameDevice(incoming.initiator, peer) || !sameDevice(incoming.responder, local)) throw Error('UNAUTHORIZED_PEER');
-        await verifySignal(provider, incoming, peer.signingKey);
-        offer = incoming;
-        initiator = false;
-        await connection.setRemoteDescription({type:'offer', sdp:offer.sdp});
-        await gather(connection, await connection.createAnswer(), readGatheredLocalSdp);
-        const {signature: _offerSignature, ...fields} = offer;
-        answer = await withSelected(async () => {
-          await devicePair(peer.deviceId);
+      createAnswer(text) {
+        return signalStep(async () => {
+          if (offer) throw Error('INVALID_DIRECT_STEP');
+          const incoming = readSignal(text, 'offer');
+          if (incoming.scopeId !== scopeId || incoming.head !== head || incoming.responder.deviceId !== localId) throw Error('DIRECT_HOUSEHOLD_MISMATCH');
+          ({local, peer} = await devicePair(incoming.initiator.deviceId));
+          if (!sameDevice(incoming.initiator, peer) || !sameDevice(incoming.responder, local)) throw Error('UNAUTHORIZED_PEER');
+          await verifySignal(provider, incoming, peer.signingKey);
+          offer = incoming;
+          initiator = false;
+          await connection.setRemoteDescription({type:'offer', sdp:offer.sdp});
+          const sdp = await gather(connection, await connection.createAnswer(), readGatheredLocalSdp, gatheringStableMs);
+          const {signature: _offerSignature, ...fields} = offer;
           const offerHash = await signalHash(offer, sha256);
-          const sdp = readGatheredLocalSdp(connection);
-          return signSignal(provider, {...fields, kind:'answer', sdp, offerHash}, local.signingKey);
+          answer = await signGathered({...fields, kind:'answer', offerHash}, sdp);
+          return {text:JSON.stringify(answer), code:await (descriptionsReady = completeDescriptions())};
         });
-        return {text:JSON.stringify(answer), code:await (descriptionsReady = completeDescriptions())};
       },
-      async acceptAnswer(text) {
-        if (!offer || !initiator || answer) throw Error('INVALID_DIRECT_STEP');
-        const incoming = readSignal(text, 'answer');
-        if (incoming.scopeId !== scopeId || incoming.head !== head || incoming.sessionId !== offer.sessionId ||
-          incoming.offerHash !== await signalHash(offer, sha256) || !sameDevice(incoming.initiator, local) || !sameDevice(incoming.responder, peer)) throw Error('DIRECT_HOUSEHOLD_MISMATCH');
-        await devicePair(peer.deviceId);
-        await verifySignal(provider, incoming, peer.signingKey);
-        descriptionsReady = (async () => {
-          await connection.setRemoteDescription({type:'answer', sdp:incoming.sdp});
-          answer = incoming;
-          return completeDescriptions();
-        })();
-        return descriptionsReady;
+      acceptAnswer(text) {
+        return signalStep(async () => {
+          if (!offer || !initiator || answer) throw Error('INVALID_DIRECT_STEP');
+          const incoming = readSignal(text, 'answer');
+          if (incoming.scopeId !== scopeId || incoming.head !== head || incoming.sessionId !== offer.sessionId ||
+            incoming.offerHash !== await signalHash(offer, sha256) || !sameDevice(incoming.initiator, local) || !sameDevice(incoming.responder, peer)) throw Error('DIRECT_HOUSEHOLD_MISMATCH');
+          await devicePair(peer.deviceId);
+          await verifySignal(provider, incoming, peer.signingKey);
+          descriptionsReady = (async () => {
+            await connection.setRemoteDescription({type:'answer', sdp:incoming.sdp});
+            answer = incoming;
+            return completeDescriptions();
+          })();
+          return descriptionsReady;
+        });
       },
       async confirm(value) {
         if (!transcript || value.trim().toUpperCase() !== comparisonCode(transcript)) throw Error('DIRECT_CODE_MISMATCH');
