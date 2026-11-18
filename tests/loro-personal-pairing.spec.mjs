@@ -179,6 +179,10 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await transferProof(source,receiver);
    await transferProof(receiver,source);
    for(const page of [source,receiver])await expect(page.getByText(/^Both devices proved/)).toBeVisible();
+   await source.goto('./chef');
+   await button(source,'Open settings').last().click();
+   await click(source,'Pair from this device');
+   await expect(source.getByText(/^Both devices proved/)).toBeVisible();
   });
 
   let path,encrypted;
@@ -224,8 +228,14 @@ test('Settings pairs independently provisioned personal devices and reopens the 
      return prior;
     }finally{db.close()}
    },next);
+   await click(source,'Back');
+   await expect(label(source,'Message Chef')).toBeVisible();
    const original=await swapInitiator(null);
+   await button(source,'Open settings').last().click();
+   await expect(label(source,'My personal pairing proof')).toHaveCount(0);
+   await expect(source.getByText(`Saved pairing file for device ${receiverId}.`)).toBeVisible();
    const [download]=await Promise.all([source.waitForEvent('download'),click(source,buttonLabel)]);
+   await expect(button(source,buttonLabel)).toHaveCount(0);
    await swapInitiator(original);
    expect(download.suggestedFilename()).toBe('creative-cooking-personal-pairing.ccpair');
    path=await download.path();

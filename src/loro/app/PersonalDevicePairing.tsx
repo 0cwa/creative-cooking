@@ -12,15 +12,20 @@ type Progress={text:string;stage:string;complete:boolean};
 type History={rootDevice:string;ownerId:string;devices:{deviceId:string;active:boolean;local:boolean}[];
  events:{deviceId:string;sponsor:string;action:string}[]};
 type Reopen={scopeId:string;head:string;authorizationSnapshot:string};
-// The app mutation gate survives leaving Settings. Keep its reopen target with
-// the mounted workspace so returning to Settings can finish the transition.
-const pendingReopens=new WeakMap<object,Reopen>();
-const reopenListeners=new Set<()=>void>();
-const subscribeReopen=(listener:()=>void)=>{
- reopenListeners.add(listener);
- return ()=>{reopenListeners.delete(listener)};
+type PendingExport={file:Uint8Array;code:string;peerDevice:string};
+type WorkspacePairing={selected?:Reopen;published?:Reopen;pendingExport?:PendingExport};
+// Settings can unmount while the workspace and its pairing work stay open.
+const workspacePairing=new WeakMap<object,WorkspacePairing>();
+const pairingListeners=new Set<()=>void>();
+const subscribePairing=(listener:()=>void)=>{
+ pairingListeners.add(listener);
+ return ()=>{pairingListeners.delete(listener)};
 };
-const noReopen=()=>null;
+const noPairingState=()=>null;
+function updateWorkspacePairing(workspace:object,change:WorkspacePairing){
+ workspacePairing.set(workspace,{...workspacePairing.get(workspace),...change});
+ for(const listener of pairingListeners)listener();
+}
 
 export function PersonalDevicePairing(){
  const workspace=useContext(LoroWorkspaceValue),app=useAppState(),service=workspace?.personalPairing;
@@ -30,10 +35,10 @@ export function PersonalDevicePairing(){
  const [request,setRequest]=useState(''),[incoming,setIncoming]=useState(''),[proposal,setProposal]=useState<Proposal|null>(null);
  const [peerPin,setPeerPin]=useState(''),[root,setRoot]=useState(''),[code,setCode]=useState('');
  const [progress,setProgress]=useState<Progress|null>(null),[peerProof,setPeerProof]=useState('');
- const [file,setFile]=useState<Uint8Array|null>(null),[publishedReopen,setPublishedReopen]=useState<Reopen|null>(null);
- const [pendingExport,setPendingExport]=useState<{code:string;file:Uint8Array}|null>(null);
- const selectedReopen=useSyncExternalStore(subscribeReopen,()=>workspace?pendingReopens.get(workspace)??null:null,noReopen);
- const reopen=selectedReopen??publishedReopen;
+ const [file,setFile]=useState<Uint8Array|null>(null);
+ const pairing=useSyncExternalStore(subscribePairing,()=>workspace?workspacePairing.get(workspace)??null:null,noPairingState);
+ const reopen=pairing?.selected??pairing?.published;
+ const pendingExport=pairing?.pendingExport;
  if(!service)return null;
  const run=(action:()=>Promise<void>)=>{
   if(working.current)return;
@@ -46,10 +51,6 @@ export function PersonalDevicePairing(){
     message==='TOO_LARGE'||message==='INVALID_FILE_SIZE'?'The pairing message or file exceeds the supported size.':
     'Pairing could not continue. Check that the message or encrypted file came from the verified device and matches this session.');
   }).finally(()=>{working.current=false;setBusy(false)});
- };
- const transition=async(action:()=>Promise<void>)=>{
-  const finish=app.beginWorkspaceTransition();
-  try{await app.flushCurrentWorkspace();await action()}finally{finish()}
  };
  const button=(label:string,action:()=>Promise<void>,disabled=false)=>
   <Pressable accessibilityRole="button" disabled={busy||disabled} onPress={()=>run(action)}><Text>{label}</Text></Pressable>;
@@ -64,7 +65,7 @@ export function PersonalDevicePairing(){
  </View>;
  const reset=(next:Role)=>{
   setRole(next);setRequest('');setIncoming('');setPeerPin('');setRoot('');setCode('');
-  setProposal(null);setProgress(null);setPeerProof('');setFile(null);setPublishedReopen(null);setPendingExport(null);
+  setProposal(null);setProgress(null);setPeerProof('');setFile(null);
  };
  const open=async(next:Role)=>{
   reset(next);
@@ -79,37 +80,41 @@ export function PersonalDevicePairing(){
   try{
    await app.flushCurrentWorkspace();
    const result=await select();
-   pendingReopens.set(workspace,result);
    saved=true;
-   for(const listener of reopenListeners)listener();
+   updateWorkspacePairing(workspace,{selected:result});
    return result;
   }finally{if(!saved)finish()}
  };
  const finishReopen=async(target:Reopen)=>{
-  if(pendingReopens.has(workspace)){reopenPersonal(target);return;}
+  if(workspacePairing.get(workspace)?.selected){reopenPersonal(target);return;}
   const finish=app.beginWorkspaceTransition();
   try{await app.flushCurrentWorkspace();reopenPersonal(target)}
   catch(error){finish();throw error;}
  };
- const save=async()=>{
-  if(!proposal)throw Error('OOB_REQUIRED');
-  let committed=pendingExport?.code===proposal.code?pendingExport:null;
-  let replayed=!!committed;
-  if(!committed)await transition(async()=>{
-   const result=await service.publish(proposal.code);
-   committed={code:proposal.code,file:result.file};
-   setPendingExport(committed);
-   setPublishedReopen(result);
-   replayed=result.replayed;
-  });
-  if(!committed)throw Error('CONFLICT');
+ const exportCommitted=async(committed:PendingExport,replayed:boolean)=>{
   try{
    await saveExchangeFile('creative-cooking-personal-pairing.ccpair','application/octet-stream',committed.file);
-   setPendingExport(null);
+   if(workspacePairing.get(workspace)?.pendingExport===committed)updateWorkspacePairing(workspace,{pendingExport:undefined});
    setStatus(replayed?'The same encrypted pairing file is ready.':'Device authorization saved. Send the encrypted file to the verified device to finish on that screen.');
   }catch{
    setStatus('Device authorization saved. The file could not be exported. Use Save encrypted personal pairing file to retry.');
   }
+ };
+ const save=async()=>{
+  const confirmed=proposal;
+  if(!confirmed)throw Error('OOB_REQUIRED');
+  const finish=app.beginWorkspaceTransition();
+  let committed:PendingExport,replayed:boolean;
+  try{
+   await app.flushCurrentWorkspace();
+   if(workspacePairing.get(workspace)?.pendingExport)throw Error('CONFLICT');
+   const result=await service.publish(confirmed.code);
+   const {file,scopeId,head,authorizationSnapshot}=result;
+   replayed=result.replayed;
+   committed={code:confirmed.code,peerDevice:confirmed.peerDevice,file};
+   updateWorkspacePairing(workspace,{published:{scopeId,head,authorizationSnapshot},pendingExport:committed});
+  }finally{finish()}
+  await exportCommitted(committed,replayed);
  };
  return <View style={{gap:8}}>
   <Text accessibilityRole="header">Personal devices</Text>
@@ -160,7 +165,7 @@ export function PersonalDevicePairing(){
    {output('My personal pairing proof',progress.text)}
    {field('Incoming personal pairing proof',peerProof,setPeerProof,true)}
    {button('Accept personal pairing proof',async()=>{setProgress(await service.accept(role,peerProof));setPeerProof('')},!peerProof)}
-   {progress.complete&&role==='initiator'?button('Save encrypted personal pairing file',save):null}
+   {progress.complete&&role==='initiator'&&!pendingExport?button('Save encrypted personal pairing file',save):null}
    {progress.complete&&role==='responder'?<>
     {button('Choose encrypted personal pairing file',async()=>{
      const chosen=await chooseExchangeFile({accept:Platform.OS==='web'?['application/octet-stream','.ccpair']:['*/*'],minBytes:113,maxBytes:MAX_PERSONAL_PAIRING_FILE});
@@ -171,6 +176,14 @@ export function PersonalDevicePairing(){
      setStatus(result.replayed?'The same verified personal copy is selected.':'Verified private copy saved and selected. Reopen to use it.');
     },!file||!!reopen)}
    </>:null}
+  </View>:null}
+  {pendingExport?<View style={{gap:4}}>
+   <Text selectable>Saved pairing file for device {pendingExport.peerDevice}.</Text>
+   <Text selectable accessibilityLabel="Saved pairing transcript code">{pendingExport.code}</Text>
+   {button('Save encrypted personal pairing file',async()=>{
+    if(workspacePairing.get(workspace)?.pendingExport!==pendingExport)throw Error('CONFLICT');
+    await exportCommitted(pendingExport,true);
+   })}
   </View>:null}
   {reopen?button('Reopen paired personal workspace',()=>finishReopen(reopen)):null}
   {status?<Text accessibilityRole="alert">{status}</Text>:null}
