@@ -102,11 +102,11 @@ export function CookingExchange({quarantineChanged = 0}:{quarantineChanged?:numb
       {pending.map(item => <View key={item.itemId}>
         <Text>{item.reason === 'QUARANTINED' ? `Retained update blocked by local device quarantine: ${item.itemId}` :
           `Retained update awaiting application: ${item.itemId}${item.reason === 'POLICY_GOVERNANCE_UNPROVEN' ? ' · policy governance proof required' : ' · retry after any missing earlier updates'}`}</Text>
-        {item.reason !== 'QUARANTINED' && <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(() => applyUpdate(() => workspace.cookingFiles.retry(item.itemId)),'Could not apply retained update')}>
+        {item.reason !== 'QUARANTINED' && <Pressable accessibilityRole="button" disabled={busy || !app.canEditSharedContent} onPress={() => run(() => applyUpdate(() => workspace.cookingFiles.retry(item.itemId)),'Could not apply retained update')}>
           <Text>Retry retained update {item.itemId}</Text>
         </Pressable>}
       </View>)}
-      <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(choose,'Update not applied')}><Text>Choose encrypted cooking update</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={busy || !app.canEditSharedContent} onPress={() => run(choose,'Update not applied')}><Text>Choose encrypted cooking update</Text></Pressable>
       {!!status && <Text accessibilityRole="alert">{status}</Text>}
     </>}
   </View>;

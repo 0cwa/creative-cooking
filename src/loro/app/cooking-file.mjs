@@ -5,7 +5,7 @@ import {openSelectedRecipeCatalog} from './selected-recipe-catalog.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 /** A user-selected encrypted object is staged durably before the authorized
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
-export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|null} */ (null)}){
+export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|null} */ (null),allowRecipeSources=recipeCatalogVersion===1}){
  if(recipeCatalogVersion!==null && recipeCatalogVersion!==1)throw Error('UNSUPPORTED_VERSION');
  const {scopeId,branchHead,epochId,documentId}=runtime.scope;
  const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;
@@ -35,9 +35,9 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|
    recipe={id:recipeId,create:command.kind==='recipe-create'};
   }
   validateCookingHeader(opened,expectedId??opened.object.id,target.scope);
-  if(recipeCatalogVersion===null||auth.members){
+  if(!allowRecipeSources||auth.members){
    command??=decodeCookingPayload(opened).command;
-   if(recipeCatalogVersion===null&&command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
+   if(!allowRecipeSources&&command.data.recipeSource)throw Error('UNSUPPORTED_VERSION');
    target.assertRecipeCommand(command);
   }
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
@@ -51,7 +51,7 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=/** @type {1|
    const selected=await openSelectedRecipeCatalog(runtime,recipe.id);
    if(!selected.children.has(recipe.id))throw Error('MISSING_DEPENDENCY');
   }
-  return importCookingWithPolicy({runtime:target,service,item,recipeCatalogVersion});
+  return importCookingWithPolicy({runtime:target,service,item,recipeCatalogVersion:allowRecipeSources?recipeCatalogVersion:null});
  };
  async function receive(raw){
   if(!(raw instanceof Uint8Array))throw Error('MALFORMED');

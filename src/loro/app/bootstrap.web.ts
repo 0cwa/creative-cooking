@@ -108,7 +108,9 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
    pin:activePin,provider,sodium,keys,signing:{...signing,publicKey:signingRef},LoroDoc,decodeImportBlobMeta});
   const disclosure=disclosureService({storage:db.storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
    installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
-  const cooking=cookingFiles({runtime:householdRuntime,service:disclosure,recipeCatalogVersion:installedSet?1:null});
+  const originalRecipeDocuments=!selected&&!installedSet;
+  const cooking=cookingFiles({runtime:householdRuntime,service:disclosure,
+   recipeCatalogVersion:installedSet||originalRecipeDocuments?1:null,allowRecipeSources:false});
   const selectedId=selected?.scope.id??null;
   const direct=typeof globalThis.RTCPeerConnection==='function'?cookingDirect({runtime:householdRuntime,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),withSelected:(use:()=>Promise<unknown>)=>selection.withCurrent(selectedId,use)}):null;
   const bootstrapPolicy=await bootstrapDisclosurePolicy(db.storage,activeScope.id,disclosure);
@@ -136,7 +138,7 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
    sequences!.reserve(r.personal,operationId):selected&&scopeId===activeScope.id?
    joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId)};
   const installedRecipeIds=installedSet?house.members.flatMap((member:{recipeId:string|null})=>member.recipeId===null?[]:[member.recipeId]):undefined;
-  const householdContent=bindHouseholdContent({runtime:householdRuntime,withCurrent,sequences:workspaceSequences,disclosure});
+  const householdContent=bindHouseholdContent({runtime:householdRuntime,withCurrent,sequences:workspaceSequences,disclosure,originalRecipeDocuments});
   return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:workspaceSequences,householdContent,installedRecipeIds,close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {joinedSequences?.close();householdPins?.close();ceremonyStore?.close();sequences?.close();db.close();master.close();meta.close();throw error}
 }

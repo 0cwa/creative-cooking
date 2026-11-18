@@ -11,7 +11,7 @@ import {
 } from '../account/accountWorkspace';
 import type { AccountWorkspace, WorkspaceRole } from '../account/contracts';
 import { DEFAULT_STATE } from '../domain/defaults';
-import type { PersistedState } from '../domain/types';
+import type { PersistedState, Recipe } from '../domain/types';
 import { loadState, saveState } from '../storage/appStorage';
 import {
   archiveWorkspaceState,
@@ -86,6 +86,8 @@ export type ContentRuntimeSnapshot = {
   markLocalStateChange(): number;
   selectWorkspace(spaceId: string): Promise<void>;
   keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
+  separateRecipeIds?: string[];
+  createRecipe?(actionId: string, recipe: Recipe): Promise<PersistedState>;
   readRecipeHistory?(recipeId: string): Promise<RecipeHistoryEntry[]>;
   restoreRecipeEdit?(recipeId: string, entry: RecipeHistoryEntry): Promise<void>;
   mergeGuestContent(): Promise<void>;

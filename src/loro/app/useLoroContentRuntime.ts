@@ -1,7 +1,7 @@
 import {randomUUID} from 'expo-crypto';
 import {useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction} from 'react';
 import {DEFAULT_STATE} from '@/domain/defaults';
-import type {PersistedState} from '@/domain/types';
+import type {PersistedState,Recipe} from '@/domain/types';
 import type {ContentRuntimeSnapshot,RecipeHistoryEntry} from '@/content/useContentRuntime';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {planRecipeRestore,readRecipeHistory as recipeHistory} from '../domain/recipe-history.mjs';
@@ -17,7 +17,7 @@ function historyContext(scope:any) {
  const {scopeId,branchHead,documentId,documentGeneration,epochId}=scope;
  return JSON.stringify([scopeId,branchHead,documentId,documentGeneration,epochId]);
 }
-async function readCooking(workspace:any) {
+async function readCooking(workspace:any):Promise<Pick<PersistedState,'recipes'|'pantry'|'shopping'>&{separateRecipeIds?:string[]}> {
  return workspace.householdContent
   ? workspace.householdContent.readCooking()
   : projectCooking((await workspace.household.document()).doc);
@@ -31,6 +31,7 @@ async function readRecipeDocument(workspace:any,recipeId:string) {
 // with an error; they are never written to the old workspace or shown as saved.
 export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<SetStateAction<PersistedState>>,workspace:any):ContentRuntimeSnapshot {
  const [hydrated,setHydrated]=useState(false),[error,setError]=useState<string|null>(null),[status,setStatus]=useState<'saving'|'saved'|'error'>('saving');
+ const [separateRecipeIds,setSeparateRecipeIds]=useState<string[]>([]);
  const unresolved=useRef<(()=>Promise<void>)|null>(null);
  const restoreAttempt=useRef<{key:string;actionId:string;command:any}|null>(null);
  const initialize=useRef<(()=>Promise<boolean>)|null>(null);
@@ -42,7 +43,7 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   : workspace.executeHouseholdAction
   ? workspace.executeHouseholdAction(actionId,commands)
   : executeAction(workspace.household,workspace.sequences,actionId,commands,workspace.disclosure),[workspace]);
- useEffect(()=>{let active=true;const open=async()=>{if(!active)return false;setStatus('saving');setError(null);try{const cooking=await readCooking(workspace);const personal=projectPersonal((await workspace.personal.document()).doc);const {mealContext,activeConversationId,recoveryReminderDismissed: _recoveryReminderDismissed,...settings}=personal.preferences;const selectedConversation=personal.conversations.find((c:any)=>c.id===activeConversationId);const initial={...DEFAULT_STATE,...cooking,settings:{...DEFAULT_STATE.settings,...settings},mealContext:mealContext??DEFAULT_STATE.mealContext,activeConversationId:selectedConversation?.id??null,chatMessages:selectedConversation?.messages??[],chatHistory:personal.conversations.filter((c:any)=>c.id!==selectedConversation?.id)};if(active){committed.current=initial;current.current=initial;setState(initial);setStatus('saved');setHydrated(true);return true}return false}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error');setHydrated(true)}return false}};initialize.current=open;void open();return()=>{active=false;if(initialize.current===open)initialize.current=null}},[workspace,setState]);
+ useEffect(()=>{let active=true;const open=async()=>{if(!active)return false;setStatus('saving');setError(null);try{const {separateRecipeIds=[],...cooking}=await readCooking(workspace);const personal=projectPersonal((await workspace.personal.document()).doc);const {mealContext,activeConversationId,recoveryReminderDismissed: _recoveryReminderDismissed,...settings}=personal.preferences;const selectedConversation=personal.conversations.find((c:any)=>c.id===activeConversationId);const initial={...DEFAULT_STATE,...cooking,settings:{...DEFAULT_STATE.settings,...settings},mealContext:mealContext??DEFAULT_STATE.mealContext,activeConversationId:selectedConversation?.id??null,chatMessages:selectedConversation?.messages??[],chatHistory:personal.conversations.filter((c:any)=>c.id!==selectedConversation?.id)};if(active){committed.current=initial;current.current=initial;setSeparateRecipeIds(separateRecipeIds);setState(initial);setStatus('saved');setHydrated(true);return true}return false}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error');setHydrated(true)}return false}};initialize.current=open;void open();return()=>{active=false;if(initialize.current===open)initialize.current=null}},[workspace,setState]);
  const save=useCallback(async(target:PersistedState)=>{
   // Resolve the exact earlier action before deriving a later target from disk.
   if(unresolved.current){await unresolved.current();unresolved.current=null;}
@@ -112,17 +113,22 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   // The caller has paused edits and flushed the latest target. Drain any
   // duplicate React saves before replacing the projection from the same disk.
   const refresh=queue.current.then(async()=>{
-   const cooking=await readCooking(workspace);
+   const {separateRecipeIds=[],...cooking}=await readCooking(workspace);
    if(!committed.current)throw Error('The local workspace has not opened.');
    const next={...committed.current,...cooking};
    projection.current={generation:projection.current.generation+1,replaced:current.current};
    committed.current=next;
    current.current=next;
+   setSeparateRecipeIds(separateRecipeIds);
    setState(next);
    return next;
   });
   queue.current=refresh;
   return refresh;
  },[setState,workspace]);
- return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current,sharedEditDeniedMessage:'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,readRecipeHistory,restoreRecipeEdit,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},refreshSharedCooking,retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError('The local workspace is opening.')};
+ const createRecipe=useCallback(async(actionId:string,recipe:Recipe)=>{
+  await workspace.householdContent.createRecipe(actionId,recipe);
+  return refreshSharedCooking();
+ },[refreshSharedCooking,workspace]);
+ return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current,sharedEditDeniedMessage:'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,readRecipeHistory,restoreRecipeEdit,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},separateRecipeIds,createRecipe,refreshSharedCooking,retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError('The local workspace is opening.')};
 }

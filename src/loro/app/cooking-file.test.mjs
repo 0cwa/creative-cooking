@@ -180,7 +180,7 @@ function fixtureSessionStore(connection){
 
 test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{
  const [a,b]=await household(t,{onDisk:true});
- const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeCatalogVersion:1});
+ const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeCatalogVersion:1,allowRecipeSources:false});
  const recipes=(runtime)=>runtime.document().then(({doc})=>projectCooking(doc).recipes);
  const at='2026-01-01T00:00:00Z';
  const makeRecipe=(id,title)=>({id,title,portions:2,ingredients:[{id:'i',name:'Carrot'}],steps:['Slice'],stepIds:['s'],createdAt:at,updatedAt:at});
@@ -188,9 +188,12 @@ test('pinned recipe documents retain competing encrypted edits independently and
   const {doc}=await runtime.document(),before=projectCooking(doc).recipes.find(x=>x.id===patch.id)??null;
   return planRecipeAction({doc,before,after:{...before,...patch},actionId,author:peer.deviceId,at});
  };
- const execute=(peer,runtime,id,commands)=>executeAction(runtime,{reserve:async(_scope,key)=>sequences.get(key)??sequences.set(key,++sequence).get(key)},id,commands,peer.service);
- let sequence=0;
  const sequences=new Map();
+ let sequence=0;
+ const allocator={reserve:async(_scope,key)=>sequences.get(key)??sequences.set(key,++sequence).get(key)};
+ const execute=(peer,runtime,id,commands)=>executeAction(runtime,allocator,id,commands,peer.service);
+ const content=peer=>bindHouseholdContent({runtime:peer.runtime,sequences:allocator,disclosure:peer.service,
+  originalRecipeDocuments:true});
  const exported=async(peer,id)=>{
   const saved=must(await peer.storage.getLocalOperation(scope.id,id));
   return Promise.all(saved.commit.outbound.map(row=>files(peer).download(row.object.id)));
@@ -214,9 +217,7 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const beforeCatalog=await openSelectedRecipeCatalog(b.runtime);
  assert.equal(beforeCatalog.children.size,0);
  assert.deepEqual(projectSelectedRecipes(beforeCatalog).map(r=>r.id),['legacy','original']);
- const duplicateChild=await b.runtime.forRecipe('legacy');
- const duplicateCreate=await change(b,duplicateChild,'duplicate-child',makeRecipe('legacy','Duplicate child recipe'));
- await assert.rejects(()=>execute(b,duplicateChild,'duplicate-child',duplicateCreate),/CONFLICT/);
+ await assert.rejects(()=>content(b).createRecipe('duplicate-child',makeRecipe('legacy','Duplicate child recipe')),/CONFLICT/);
  const legacyBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),b.runtime.scope.documentId));
  const anotherLegacy=await change(a,a.runtime,'legacy-second',makeRecipe('legacy-second','Legacy second soup'));
  await execute(a,a.runtime,'legacy-second',anotherLegacy);
@@ -233,15 +234,16 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.deepEqual(substitute.frontiers(),realSource.frontiers());
  await assert.rejects(()=>replayAuthenticated({runtime:a.runtime,checkpoint:substitute.export({mode:'snapshot'})}),/INSUFFICIENT_EVIDENCE/);
 
- const create=await change(a,ar,'create',makeRecipe('r','Soup'));
+ const recipeToCreate=makeRecipe('r','Soup'),createId='create';
+ const create=await change(a,ar,createId,recipeToCreate);
  await assert.rejects(()=>execute(a,other,'wrong-recipe',create),/INVALID_RECIPE_DOCUMENT/);
  const beforeCreate=a.rows();
  for(const fault of ['recipe-catalog','disclosure-local']){
   a.faultAt(fault);
-  await assert.rejects(()=>execute(a,ar,'create',create),/IO/);
+  await assert.rejects(()=>content(a).createRecipe(createId,recipeToCreate),/IO/);
   assert.equal((await ar.document()).revision,null);
-  assert.equal(must(await a.storage.getLocalOperation(scope.id,'create')),null);
-  assert.equal((await openSelectedRecipeCatalog(a.runtime)).children.size,0);
+  assert.equal(must(await a.storage.getLocalOperation(scope.id,createId)),null);
+  assert.deepEqual((await content(a).readCooking()).separateRecipeIds,[]);
   assert.deepEqual(a.rows(),beforeCreate);
  }
  a.faultAt(null);
@@ -252,12 +254,12 @@ test('pinned recipe documents retain competing encrypted edits independently and
   await a.edit('concurrent-pantry',++sequence);
   return commitPublication(...args);
  };
- await assert.rejects(()=>execute(a,ar,'create',create),/CONFLICT/);
+ await assert.rejects(()=>content(a).createRecipe(createId,recipeToCreate),/CONFLICT/);
  assert.equal((await openSelectedRecipeCatalog(a.runtime)).children.size,0);
  assert.equal((await ar.document()).revision,null);
- await execute(a,ar,'create',create);
- const [initial]=await exported(a,'create');
- const savedCreate=must(await a.storage.getLocalOperation(scope.id,'create')).commit.outbound[0].object.id;
+ await content(a).createRecipe(createId,recipeToCreate);
+ const [initial]=await exported(a,createId);
+ const savedCreate=must(await a.storage.getLocalOperation(scope.id,createId)).commit.outbound[0].object.id;
  assert.ok((await files(a).list()).some(row=>row.objectId===savedCreate));
  assert.ok((await files(a).directBatch(b.deviceId,256,new Map())).objects.some(row=>row.objectId===savedCreate));
  assert.ok(!(await a.cooking.list()).some(row=>row.objectId===savedCreate));
@@ -294,9 +296,13 @@ test('pinned recipe documents retain competing encrypted edits independently and
  } finally {
   b.replaceRow(storedChild.key,storedChild.value);
  }
- const retainedCreate=await execute(a,ar,'create',create);
+ a.reopen();
+ const retainedCreate=await content(a).createRecipe(createId,recipeToCreate);
+ await assert.rejects(()=>content(a).createRecipe(createId,{...recipeToCreate,title:'Different retry'}),/CONFLICT/);
+ assert.equal((await content(a).readRecipe('legacy')).scope.documentId,a.runtime.scope.documentId);
+ assert.equal((await content(a).readRecipe('r')).scope.documentId,ar.scope.documentId);
  assert.equal(retainedCreate.replayed,true);
- assert.deepEqual(await exported(a,'create'),[initial]);
+ assert.deepEqual(await exported(a,createId),[initial]);
  const duplicate=await change(b,b.runtime,'duplicate-legacy',makeRecipe('r','Duplicate legacy recipe'));
  await assert.rejects(()=>execute(b,b.runtime,'duplicate-legacy',duplicate),/CONFLICT/);
  const [plainCreate]=await change(b,b.runtime,'plain-root-duplicate',makeRecipe('r','Duplicate from a version-one envelope'));
@@ -354,12 +360,16 @@ test('pinned recipe documents retain competing encrypted edits independently and
  await assert.rejects(()=>files(b).receive(new TextEncoder().encode(JSON.stringify(unsigned))));
  for(const header of [
   {...opened.header,documentId:other.scope.documentId},
+  {...opened.header,branchHead:'unselected-head'},
   {...opened.header,documentGeneration:0},
   {...opened.header,epochId:'old-epoch'},
  ]){
   const forged=await ar.codec.sealContent(header,opened.value,ar.keyRef,signing);
   await assert.rejects(()=>files(b).receive(forged.bytes),/INVALID_AUTHORITY|INVALID_RECIPE_DOCUMENT/);
  }
+ const mismatchedAuthor=await br.codec.sealContent({...opened.header,authorDevice:b.deviceId},
+  opened.value,br.keyRef,auth.signingKeyRefs[b.deviceId]);
+ await assert.rejects(()=>files(b).receive(mismatchedAuthor.bytes),/INVALID_AUTHORITY/);
  for(const header of [
   {...opened.header,semanticEffectIds:['different-effect']},
   {...opened.header,sourceEffectIds:['different-source']},
@@ -1279,6 +1289,8 @@ test('selected recipe shopping copies and current-only admission survive durable
  const unsupported=planRecipeAction({doc:(await sponsor.runtime.document()).doc,before:null,
   after:recipe(newRecipe,'Unsupported'),actionId:newRecipe,author:a.deviceId,at});
  await assert.rejects(()=>executeAction(sponsor.runtime,sequences,newRecipe,unsupported,sponsor.service),/UNSUPPORTED_VERSION/);
+ await assert.rejects(()=>sponsor.householdContent.createRecipe(newRecipe,recipe(newRecipe,'Unsupported')),/UNSUPPORTED_VERSION/);
+ await assert.rejects(()=>newcomer.householdContent.createRecipe(newRecipe,recipe(newRecipe,'Unsupported')),/UNSUPPORTED_VERSION/);
  assert.equal(sequence,beforeUnsupportedSequence);
  assert.deepEqual(a.rows(),beforeUnsupported);
  const originalRecipe=(await sponsor.householdContent.readCooking()).recipes.find(recipe=>recipe.id===recipeId);

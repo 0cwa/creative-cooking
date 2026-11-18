@@ -139,6 +139,7 @@ type AppStateApi = PersistedState & {
   setPantryPreferenceByName(name: string, preference: IngredientPreference): boolean;
   validateRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
+  createRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Promise<void>;
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
   createShoppingList(input: NewShoppingList): void;
@@ -180,6 +181,7 @@ function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace
 }
 function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
   const transitionInProgress=useRef(false);
+  const recipeCreation=useRef<{input:string;actionId:string;recipe:Recipe}|null>(null);
   const [mutationsPaused,setMutationsPaused]=useState(false);
   const [sharedCookingRefreshPending,setSharedCookingRefreshPending]=useState(false);
   const beginWorkspaceTransition=useCallback(()=>{if(transitionInProgress.current)throw Error('A workspace switch is already in progress.');transitionInProgress.current=true;setMutationsPaused(true);let released=false;return()=>{if(released)return;released=true;transitionInProgress.current=false;setMutationsPaused(false)}},[]);
@@ -319,21 +321,50 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
     if (!validation.ok) throw new RecipeAllergyError(validation.matches);
   }, [state.settings.allergies]);
 
-  const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
-    if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
-    if (installedRecipeIds) throw Error('Creating new recipes is not available in this household yet.');
-    validateRecipe(input);
-
+  const prepareRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe => {
     const now = new Date().toISOString();
-    const recipe: Recipe = normalizeRecipes([{
+    return normalizeRecipes([{
       ...input,
       id: storageMode === 'fresh-local' ? `recipe-${randomUUID()}` : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: now,
       updatedAt: now
     }])[0];
+  }, [storageMode]);
+
+  const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
+    if (installedRecipeIds) throw Error('Creating new recipes is not available in this household yet.');
+    validateRecipe(input);
+    const recipe = prepareRecipe(input);
     updateAppState((current) => ({ ...current, recipes: [recipe, ...current.recipes] }));
     return recipe;
-  }, [ensureSharedEditAllowed, installedRecipeIds, updateAppState, validateRecipe, storageMode]);
+  }, [ensureSharedEditAllowed, installedRecipeIds, prepareRecipe, updateAppState, validateRecipe]);
+
+  const createRecipe = useCallback(async (input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!content.createRecipe) {
+      saveRecipe(input);
+      return;
+    }
+    if (!ensureSharedEditAllowed()) throw Error('This workspace is not available for editing.');
+    if (installedRecipeIds) throw Error('Creating new recipes is not available in this household yet.');
+    validateRecipe(input);
+    const release = beginWorkspaceTransition();
+    try {
+      await flushCurrentWorkspace();
+      const key = JSON.stringify(input);
+      const attempt = recipeCreation.current?.input === key
+        ? recipeCreation.current
+        : {input:key,actionId:randomUUID(),recipe:prepareRecipe(input)};
+      recipeCreation.current = attempt;
+      const next = await content.createRecipe(attempt.actionId,attempt.recipe);
+      appStateRef.current = next;
+      pantryRef.current = next.pantry;
+      recipeCreation.current = null;
+    } finally {
+      release();
+    }
+  }, [beginWorkspaceTransition, content.createRecipe, ensureSharedEditAllowed, flushCurrentWorkspace,
+    installedRecipeIds, prepareRecipe, saveRecipe, validateRecipe]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) return;
@@ -405,11 +436,11 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
 
   const addShoppingItems = useCallback((listId: string, inputs: NewShoppingItem[]) => {
     if (!ensureSharedEditAllowed()) return;
-    if (inputs.some(item=>item.recipeId&&installedRecipeIds?.includes(item.recipeId))) {
+    if (inputs.some(item=>item.recipeId&&content.separateRecipeIds?.includes(item.recipeId))) {
       throw Error('Adding ingredients from this recipe is not available yet. You can add items manually.');
     }
     updateAppState((current) => ({ ...current, shopping: appendShoppingItems(current.shopping, listId, inputs) }));
-  }, [ensureSharedEditAllowed, installedRecipeIds, updateAppState]);
+  }, [content.separateRecipeIds, ensureSharedEditAllowed, updateAppState]);
 
   const updateShoppingItem = useCallback((id: string, patch: { name: string; displayQuantity?: string; displayUnit?: string }) => {
     if (!ensureSharedEditAllowed()) return;
@@ -610,6 +641,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       setPantryPreferenceByName,
       validateRecipe,
       saveRecipe,
+      createRecipe,
       updateRecipe,
       deleteRecipe,
       createShoppingList,
@@ -656,6 +688,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       setPantryPreferenceByName,
       validateRecipe,
       saveRecipe,
+      createRecipe,
       updateRecipe,
       deleteRecipe,
       createShoppingList,
