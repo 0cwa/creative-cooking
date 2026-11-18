@@ -1,5 +1,5 @@
 import {readAuthority,verifyAuthority} from '../authority/chain.mjs';
-import {domain} from '../authority/validator.mjs';
+import {admissionThreshold,domain} from '../authority/validator.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const key=s=>typeof s==='string'&&/^[0-9a-f]{64}$/.test(s);
 const id=s=>typeof s==='string'&&s.length>0&&new TextEncoder().encode(s).length<=256;
@@ -17,5 +17,5 @@ export async function prepareHouseholdInvite({storage,scope,pin,provider,store,s
  const event={version:2,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:sc.id,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,proposalId:draft.proposalId,kind:'inviteAdult',authorDeviceId:deviceId,frozenAdultRoster:[...parent.roster],subject:{adultId:person.adultId,devices:[{deviceId:person.deviceId,signingKeyRef:person.signingKey,wrappingKeyRef:person.wrappingKey,peerId:draft.peerId}],documentId:draft.documentId,newGeneration:parent.generation+1,newEpochId:draft.epochId},nextPolicy:null};
  const digest=await provider.hash(domain('event',event));if(!(digest instanceof Uint8Array)||digest.length!==32)throw Error('INVALID_PROOF');const eventHash=hex(digest),approval={version:1,householdId:sc.id,eventHash,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,adultId,deviceId};
  const authorSignature=hex(await provider.sign(author.signingKeyRef,domain('event-signature',event))),signature=hex(await provider.sign(author.signingKeyRef,domain('approval-signature',approval)));
- return {version:1,eventHash,item:{event,authorSignature,approvals:[{...approval,signature}]},adultElectorate:[...parent.roster],requiredApprovals:parent.policy.kind==='unanimous'?parent.roster.length:parent.policy.kind==='fixed'?parent.policy.fixedCount:Math.max(1,parent.roster.length-1),status:'admission-and-projection-required'};
+ return {version:1,eventHash,item:{event,authorSignature,approvals:[{...approval,signature}]},adultElectorate:[...parent.roster],requiredApprovals:admissionThreshold(parent.policy,parent.roster.length),status:'admission-and-projection-required'};
 }

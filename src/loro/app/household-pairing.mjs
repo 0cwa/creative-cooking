@@ -9,6 +9,7 @@ import {prepareHouseholdInvite} from './household-invite.mjs';
 import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
 import {householdSession} from './household-session.ts';
 import {reviewHouseholdInvite,approveHouseholdInvite,collectHouseholdInviteApproval} from './household-approval.mjs';
+import {householdAdmissionRule,proposeHouseholdAdmissionRule,reviewHouseholdAdmissionRule,approveHouseholdAdmissionRule,retainHouseholdAdmissionRule} from './household-admission-rule.mjs';
 
 /** Both apps use the current workspace identity and the same signed admission flow. */
 export function householdPairing({
@@ -36,6 +37,13 @@ export function householdPairing({
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
+    admissionRule: {
+      status: active(() => householdAdmissionRule(member)),
+      propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation})),
+      review: active(item => reviewHouseholdAdmissionRule({...member, item})),
+      approve: active(input => approveHouseholdAdmissionRule({...input, ...member})),
+      retain: active(input => retainHouseholdAdmissionRule({...input, ...member})),
+    },
     transfer:{
       publish:active(transfer.publish),
       seal:active(transfer.seal),

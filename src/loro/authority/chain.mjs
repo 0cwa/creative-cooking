@@ -139,13 +139,31 @@ async function save(storage,record,state,provider) {
 }
 /** Persist a signed child without selecting it; competing children remain visible. */
 export async function observeSuccessor(storage,scope,pin,provider,item) {
+ return (await observePolicySuccessor(storage,scope,pin,provider,item,false)).eventHash;
+}
+
+/** Retry an exact retained successor without writing another authority revision. */
+export function observeSuccessorWithOutcome(storage,scope,pin,provider,item,expectedParent) {
+ return observePolicySuccessor(storage,scope,pin,provider,item,true,expectedParent);
+}
+
+async function observePolicySuccessor(storage,scope,pin,provider,item,retry,expectedParent) {
+ scope=copy(scope);
  item=copy(item); const {record,state,nodes}=await load(storage,scope,pin,provider);
  const parent=nodes.get(item.event?.parentHead); if(!parent)throw Error('MISSING_PARENT');
  const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
  if(r.status!=='validated')throw Error(r.reason);
  if(item.event.kind!=='changePolicy')throw Error('UNSUPPORTED_TRANSITION');
+ const alreadyRetained=current=>retry&&current.events.some(value=>hex(bytes(value))===hex(bytes(item)));
+ if(alreadyRetained(state))return {eventHash:r.eventHash,replayed:true};
+ if(expectedParent!==undefined&&(parent.head!==expectedParent||state.activeHead!==expectedParent))throw Error('CONFLICT');
  if(nodes.has(r.eventHash))throw Error('DUPLICATE_EVENT');
- state.events.push(item); await verifyAuthority(state,pin,provider); await save(storage,record,state,provider); return r.eventHash;
+ state.events.push(item); await verifyAuthority(state,pin,provider);
+ try{await save(storage,record,state,provider)}catch(error){
+  if(!retry||error?.message!=='CONFLICT'||!alreadyRetained((await load(storage,scope,pin,provider)).state))throw error;
+  return {eventHash:r.eventHash,replayed:true};
+ }
+ return {eventHash:r.eventHash,replayed:false};
 }
 /** Signature is from an active device on the currently selected branch. */
 export async function selectHead(storage,scope,pin,provider,selection) {

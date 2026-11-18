@@ -2,6 +2,7 @@ import { HouseholdExistingDevice } from '@/loro/app/HouseholdExistingDevice';
 import { HouseholdGrantReview } from '@/loro/app/HouseholdGrantReview';
 import { HouseholdDelegation } from '@/loro/app/HouseholdDelegation';
 import { HouseholdApproval } from '@/loro/app/HouseholdApproval';
+import { HouseholdAdmissionRule } from '@/loro/app/HouseholdAdmissionRule';
 import { CookingDirect } from '@/loro/app/CookingDirect';
 import { CookingExchange } from '@/loro/app/CookingExchange';
 import { HouseholdInvitation } from '@/loro/app/HouseholdInvitation';
@@ -544,6 +545,7 @@ export default function SettingsScreen() {
             <HouseholdIdentity />
             <HouseholdInvitation />
             <HouseholdApproval />
+            <HouseholdAdmissionRule />
             <HouseholdDelegation />
             <HouseholdGrantReview />
             <HouseholdExistingDevice />

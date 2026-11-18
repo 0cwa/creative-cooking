@@ -18,7 +18,7 @@
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "check": "npm run test && npm run typecheck && EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web && npm run verify:pwa",
     "test:e2e": "playwright test",
-    "test:loro": "npm run test:loro-contracts && node --experimental-strip-types --test src/loro/storage/*.test.mjs src/loro/engine/runtime.test.mjs src/loro/domain/replay.test.mjs src/loro/domain/shopping-actions.test.mjs src/loro/authority/admission.test.mjs src/loro/authority/grant.test.mjs src/loro/disclosure/incomplete-lineage.test.mjs src/loro/disclosure/storage-defensive.test.mjs src/loro/app/household-delegation.test.mjs src/loro/app/household-invite.test.mjs src/loro/app/cooking-file.test.mjs src/loro/app/personal-recovery.test.mjs src/loro/app/guardians/guardian-workflow.test.mjs",
+    "test:loro": "npm run test:loro-contracts && node --experimental-strip-types --test src/loro/storage/*.test.mjs src/loro/engine/runtime.test.mjs src/loro/domain/replay.test.mjs src/loro/domain/shopping-actions.test.mjs src/loro/authority/admission.test.mjs src/loro/authority/grant.test.mjs src/loro/disclosure/incomplete-lineage.test.mjs src/loro/disclosure/storage-defensive.test.mjs src/loro/app/household-admission-rule.test.mjs src/loro/app/household-delegation.test.mjs src/loro/app/household-invite.test.mjs src/loro/app/cooking-file.test.mjs src/loro/app/personal-recovery.test.mjs src/loro/app/guardians/guardian-workflow.test.mjs",
     "test:loro-contracts": "node --experimental-strip-types --test src/loro/contracts/*.test.mjs",
     "prepare:native": "node src/loro/native/prepare-native.mjs",
     "preandroid": "npm run prepare:native",
