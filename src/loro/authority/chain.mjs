@@ -5,6 +5,7 @@ import {policyBranchAncestors,recoverPolicyBaseline} from './policy-baseline.mjs
 import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import {verifyRevocation, revocationPackage, verifyRevocationSeed, projectRemovalSeed} from '../compromise/revocation.mjs';
+import {verifyOwnDeviceEvent} from './own-device.mjs';
 import sodium from 'libsodium-wrappers';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -15,11 +16,12 @@ const digest=async(provider,purpose,v)=>{const b=await provider.hash(domain(purp
 const read=async(storage,scope)=>{const r=await storage.readPairingAuthority(scope);if(!r.ok)throw Error(r.error);return r.value};
 const write=async(storage,expectedRevision,record)=>{const r=await storage.compareAndSwapPairingAuthority({expectedRevision,record});if(!r.ok)throw Error(r.error)};
 const copy=v=>structuredClone(v);
-const encodeEvidence=v=>v instanceof Uint8Array?{__bytes:hex(v)}:Array.isArray(v)?v.map(encodeEvidence):v && typeof v==='object'?Object.fromEntries(Object.keys(v).map(k=>[k,encodeEvidence(v[k])])):v;
-const decodeEvidence=v=>Array.isArray(v)?v.map(decodeEvidence):v && typeof v==='object'?(Object.keys(v).length===1 && typeof v.__bytes==='string' && /^[0-9a-f]*$/.test(v.__bytes) && v.__bytes.length%2===0?Uint8Array.from(v.__bytes.match(/../g) ?? [],x=>parseInt(x,16)):Object.fromEntries(Object.keys(v).map(k=>[k,decodeEvidence(v[k])]))):v;
+export const encodeEvidence=v=>v instanceof Uint8Array?{__bytes:hex(v)}:Array.isArray(v)?v.map(encodeEvidence):v && typeof v==='object'?Object.fromEntries(Object.keys(v).map(k=>[k,encodeEvidence(v[k])])):v;
+export const decodeEvidence=v=>Array.isArray(v)?v.map(decodeEvidence):v && typeof v==='object'?(Object.keys(v).length===1 && typeof v.__bytes==='string' && /^[0-9a-f]*$/.test(v.__bytes) && v.__bytes.length%2===0?Uint8Array.from(v.__bytes.match(/../g) ?? [],x=>parseInt(x,16)):Object.fromEntries(Object.keys(v).map(k=>[k,decodeEvidence(v[k])]))):v;
+export {bytes as authorityBytes};
 export const authorityRootId=(provider,root)=>rootPin(provider,root);
 export const policyId=(provider,policy)=>digest(provider,'policy',policy);
-const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
+export const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
 
 /** Replay every signed event from a locally pinned, explicitly preaccepted genesis. */
 export async function verifyAuthority(state,pin,provider) {
@@ -29,12 +31,33 @@ export async function verifyAuthority(state,pin,provider) {
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
  const policyParents=new Map(), legacyPolicyHeads=new Set(), seedSchemas=new Map(), wrappingHistory=new Map();
- const wrappingFingerprints=new Map();
+ const wrappingFingerprints=new Map(), wrappingByHead=new Map([[pin,new Map()]]), pairingHeads=new Set(), pairingGuards=new Set();
  for(const item of state.events) {
-  if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
+  if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation','approvals,authorSignature,event,ownDevice'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
   const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
-  if(item.event.kind==='changePolicy') {
+  if(Object.hasOwn(item,'ownDevice')&&item.event.kind!=='pairOwnDevice')throw Error('INVALID_OWN_DEVICE');
+  if(item.event.kind==='pairOwnDevice'&&item.event.version===4&&r.reason==='CEREMONY_AND_POSSESSION_REQUIRED'){
+   const s=item.event.subject,proof=decodeEvidence(item.ownDevice),known=wrappingByHead.get(parent.head);
+   await sodium.ready;
+   const {assertFreshRecoveryWrappingKey}=await import('../recovery/readmission.mjs');
+   assertFreshRecoveryWrappingKey(sodium,wrappingHistory,parent.head,s.wrappingKeyRef,wrappingFingerprints);
+   const oob=verifyOwnDeviceEvent(sodium,pin,parent,item.event,proof,known.get(item.event.authorDeviceId));
+   assertFreshRecoveryWrappingKey(sodium,new Map([['sponsor',{keys:[oob.pins.initiator.wrappingKey]}]]),'sponsor',s.wrappingKeyRef,wrappingFingerprints);
+   if(nodes.has(r.eventHash)||pairingGuards.has(proof.guard.guardId)||[...nodes.values()].some(n=>n.runtime.documentId===s.documentId))throw Error('INVALID_OWN_DEVICE');
+   const child=copy(parent);
+   child.head=r.eventHash;
+   child.devices.push({adultId:s.adultId,deviceId:s.deviceId,signingKeyRef:s.signingKeyRef,active:true});
+   child.runtime.documentId=s.documentId;
+   child.runtime.authorPeers={...child.runtime.authorPeers,[s.deviceId]:s.peerId};
+   child.runtime.acceptedRecipients=[...child.runtime.acceptedRecipients,s.deviceId].sort();
+   if(!validParent(child))throw Error('INVALID_OWN_DEVICE');
+   nodes.set(r.eventHash,child);
+   policyParents.set(r.eventHash,{head:parent.head,baseline:s.baseline});
+   seedSchemas.set(r.eventHash,seedSchemas.get(parent.head)??1);
+   pairingHeads.add(r.eventHash);
+   pairingGuards.add(proof.guard.guardId);
+  } else if(item.event.kind==='changePolicy') {
    if(r.status!=='validated' || Object.hasOwn(item,'admission') || Object.hasOwn(item,'rotation')) throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
    if(nodes.has(r.eventHash)) throw Error('DUPLICATE_EVENT');
    const child={...copy(parent),head:r.eventHash,policy:copy(item.event.nextPolicy),policyHash:await policyId(provider,item.event.nextPolicy)};
@@ -105,14 +128,27 @@ export async function verifyAuthority(state,pin,provider) {
    if(a.manifest.version===4)seedSchemas.set(r.eventHash,4);
   } else throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
   const wrappingKeys=new Set((item.event.subject?.devices??[]).map(d=>d.wrappingKeyRef));
+  const known=new Map(wrappingByHead.get(parent.head));
+  for(const d of item.event.subject?.devices??[])known.set(d.deviceId,d.wrappingKeyRef);
   // Legacy recovery could authenticate a package sender key separately from the roster.
   if(item.event.kind==='recoverDevice')wrappingKeys.add(item.rotation.recoveryProof.senderWrappingKey);
   for(const ceremony of [...(item.admission?.ceremonies??[]),...(item.admission?.existingCeremonies??[]),...(item.rotation?.ceremonies??[])]){
    for(const role of ['initiator','responder']){
-    const key=decodeEvidence(ceremony.transcript[role].wrappingPublicKey);
-    if(key instanceof Uint8Array)wrappingKeys.add(hex(key));
+    const participant=ceremony.transcript[role], key=decodeEvidence(participant.wrappingPublicKey);
+    if(key instanceof Uint8Array){
+     const wrap=hex(key);
+     wrappingKeys.add(wrap);
+     if(!known.has(participant.deviceId))known.set(participant.deviceId,wrap);
+    }
    }
   }
+  const proof=item.ownDevice&&decodeEvidence(item.ownDevice);
+  if(proof)for(const p of [proof.transcript.initiator,proof.transcript.responder]){
+   const wrap=hex(p.wrappingPublicKey);
+   wrappingKeys.add(wrap);
+   known.set(p.deviceId,wrap);
+  }
+  wrappingByHead.set(r.eventHash,known);
   wrappingHistory.set(r.eventHash,{parent:parent.head,keys:wrappingKeys});
  }
  const agreements=state.agreements ?? [];
@@ -133,7 +169,7 @@ export async function verifyAuthority(state,pin,provider) {
   active=selection.to;
  }
  if(active!==state.activeHead)throw Error('MISSING_ACTIVE_HEAD');
- return {nodes,state,policyParents,legacyPolicyHeads,seedSchemas,wrappingHistory};
+ return {nodes,state,policyParents,legacyPolicyHeads,seedSchemas,wrappingHistory,wrappingByHead,pairingHeads};
 }
 // Hash excludes head so genesis is not self-referential.
 export async function rootPin(provider,root) { const r=copy(root); delete r.head; return digest(provider,'root',r); }
@@ -152,8 +188,19 @@ async function load(storage,scope,pin,provider) {
  let state; try {state=JSON.parse(dec.decode(record.authorityState));}catch {throw Error('MALFORMED');}
  if (hex(bytes(state))!==hex(record.authorityState) || record.acceptedParent!==state.activeHead || record.authorizationSnapshot!==await snapshotId(provider,state) || state.root?.householdId!==scope.id) throw Error('INVALID_AUTHORITY');
  const verified=await verifyAuthority(state,pin,provider);
- let recipient=null;if(storage.householdRecipient){for(const item of [...state.events].reverse()){if(!item.admission&&item.rotation?.grant?.version!==2)continue;const hash=await digest(provider,'event',item.event),found=await storage.householdRecipient.findByEvent(scope.id,hash);if(!found.ok)throw Error('INVALID_AUTHORITY');if(found.value){const {verifyRecipientInstallation}=await import('./recipient-load.mjs');await sodium.ready;recipient=await verifyRecipientInstallation({storage,scope,pin,provider,sodium,state,eventHash:hash});break;}}}
+ let recipient=null;if(storage.householdRecipient){for(const item of [...state.events].reverse()){if(!item.admission&&!item.ownDevice&&item.rotation?.grant?.version!==2)continue;const hash=await digest(provider,'event',item.event),found=await storage.householdRecipient.findByEvent(scope.id,hash);if(!found.ok)throw Error('INVALID_AUTHORITY');if(found.value){const {verifyRecipientInstallation}=await import('./recipient-load.mjs');await sodium.ready;recipient=await verifyRecipientInstallation({storage,scope,pin,provider,sodium,state,eventHash:hash});break;}}}
  const publicPrefix=item=>recipient&&recipient.parent.events.some(old=>JSON.stringify(canonical(old))===JSON.stringify(canonical(item)));
+ for(const item of state.events) if(item.ownDevice){
+  const eventHash=await digest(provider,'event',item.event);
+  if(recipient&&(recipient.installation.nextAuthority.acceptedParent===eventHash||publicPrefix(item)))continue;
+  const saved=await storage.readHouseholdOwnDeviceRelease(scope,item.event.proposalId,false);
+  if(!saved.ok||!saved.value||saved.value.next.acceptedParent!==eventHash||
+     saved.value.documentId!==item.event.subject.documentId||saved.value.guardId!==item.ownDevice.guard.guardId||
+     saved.value.link.head!==item.event.parentHead||saved.value.link.documentId!==verified.nodes.get(item.event.parentHead).runtime.documentId||
+     await digest(provider,'household-own-device-sources',saved.value.sources)!==item.event.subject.sourcesHash)throw Error('INVALID_AUTHORITY');
+  const published=JSON.parse(dec.decode(saved.value.next.authorityState));
+  if(!published.events.some(event=>hex(bytes(event))===hex(bytes(item))))throw Error('INVALID_AUTHORITY');
+ }
  for(const item of state.events) if(item.admission) {
   if(recipient&&(item.event.parentHead===recipient.parent.activeHead&&await digest(provider,'event',item.event)===recipient.installation.nextAuthority.acceptedParent||publicPrefix(item)))continue;
   const saved=await storage.getProjectionPublication(scope.id,item.admission.operationId);
@@ -237,8 +284,8 @@ async function observePolicySuccessor(storage,scope,pin,provider,item,retry,expe
 }
 
 /** Traverse only signed policy edges. Each component has one retained starting workspace. */
-export function policyCheckoutCandidates({nodes,state,policyParents,legacyPolicyHeads}) {
- const base=head=>{while(policyParents.has(head))head=policyParents.get(head).head;return head;};
+export function policyCheckoutCandidates({nodes,state,policyParents,legacyPolicyHeads,pairingHeads=new Set()}) {
+ const base=head=>{while(policyParents.has(head)&&!pairingHeads.has(head))head=policyParents.get(head).head;return head;};
  const activeBase=base(state.activeHead);
  return [...nodes.values()].filter(node=>node.head!==state.activeHead && base(node.head)===activeBase && !legacyPolicyHeads.has(activeBase));
 }
@@ -252,7 +299,7 @@ export async function checkoutPolicyHead({storage,scope,pin,provider,LoroDoc,adu
  if (!device || !policyCheckoutCandidates(verified).some(node=>node.head===targetHead)) throw Error('INVALID_POLICY_CHECKOUT');
  const location=node=>({head:node.head,documentId:node.runtime.documentId});
  const edge=policyParents.get(targetHead), target=location(nodes.get(targetHead));
- const parent=edge ? location(nodes.get(edge.head)) : null;
+ const parent=edge && !verified.pairingHeads.has(targetHead) ? location(nodes.get(edge.head)) : null;
  const expectedAuthority={version:2,scope,record:{revision:record.revision,acceptedParent:expectedHead,authorizationSnapshot:record.authorizationSnapshot}};
  const opened=await storage.readPolicyCheckoutDocuments(expectedAuthority,location(from),target,parent);
  if (!opened.ok) throw Error(opened.error.code);

@@ -12,6 +12,7 @@ import { CookingExchange } from '@/loro/app/CookingExchange';
 import { HouseholdInvitation } from '@/loro/app/HouseholdInvitation';
 import { HouseholdIdentity } from '@/loro/app/HouseholdIdentity';
 import { DisclosureControls } from '@/loro/app/DisclosureControls';
+import { HouseholdOwnDevice } from '@/loro/app/HouseholdOwnDevice';
 import { PersonalDevicePairing } from '@/loro/app/PersonalDevicePairing';
 import { PersonalAuthority } from '@/loro/app/PersonalAuthority';
 import { RecoveryReminder } from '@/loro/app/RecoveryReminder';
@@ -552,6 +553,7 @@ export default function SettingsScreen() {
             <PersonalDevicePairing />
             <PersonalAuthority />
             <HouseholdIdentity />
+            <HouseholdOwnDevice />
             <HouseholdInvitation />
             <HouseholdApproval />
             <HouseholdAdmissionRule />

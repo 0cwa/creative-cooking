@@ -108,7 +108,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const policyStatus=await withCurrent(()=>bootstrapDisclosurePolicy(storage,activeScope.id,disclosure));
   const selectionControls={available:selection.available,select:selection.select,clear:selection.clear};
   const householdPairing=bindHouseholdPairing({
-   name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:r.adult,
+   name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:(selected?.resolved??originalHouse).adultId,
    runtime:household,service:disclosure,pins,keys,signing,wrapping,signingKey:signingRef,
    wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection:selectionControls,selectedHousehold:!!selected,LoroDoc,
    prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent,sha256

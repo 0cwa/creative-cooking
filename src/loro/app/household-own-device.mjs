@@ -1,0 +1,327 @@
+import {
+ authorityBytes,encodeEvidence,readAuthority,resolveRuntimeAuthority,snapshotId,verifyAuthority
+} from '../authority/chain.mjs';
+import {admissionThreshold,domain} from '../authority/validator.mjs';
+import {checkOwnDeviceCeremony,ownDeviceSignal} from '../authority/own-device.mjs';
+import {policyBaseline,verifyPolicyBaseline} from '../authority/policy-baseline.mjs';
+import {durableSession} from '../pairing/durable-session.mjs';
+import {makeKeyPackage,withOpenedKeyPackage} from '../pairing/key-package.mjs';
+import {
+ openDeviceCopy,pairingDigest,pairingText,parsePairingText,sealDeviceCopy,verifyDeviceCopyFile,MAX_PERSONAL_PAIRING_FILE
+} from '../pairing/personal-copy.mjs';
+import {
+ HOUSEHOLD_OWN_DEVICE_FILE,exact,must,sameOwnDevice,inspectOwnDeviceSnapshot,ownDeviceCopyHash,ownDeviceSourcesHash,ownDevicePacketContext,
+ ownDeviceReceiptBody,verifyOwnDeviceCopy,verifyOwnDeviceSuccessor
+} from '../pairing/household-own-device.mjs';
+import {verifyHouseholdParentRecord} from './household-parent.mjs';
+import {householdReceiverIds} from './household-transfer.mjs';
+
+const roles=['initiator','responder'];
+const other=role=>role==='initiator'?'responder':'initiator';
+const hex64=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value);
+const id=value=>typeof value==='string'&&/^[A-Za-z0-9-]{1,100}$/.test(value);
+export const MAX_HOUSEHOLD_OWN_DEVICE_MESSAGE=2_200_000;
+
+export function householdOwnDevice({
+ name,sodium:s,scope,pin,storage,provider,store,pins,identity,runtime,service,keys,master,withSecrets,LoroDoc,
+ prepareJoinedSequences,finalizeJoinedSequences,randomUUID
+}){
+ const {deviceId,signingKey,wrappingKey}=identity,own={deviceId,signingKey,wrappingKey};
+ const digest=bytes=>pairingDigest(s,bytes);
+ const same=(a,b)=>sameOwnDevice(s,a,b);
+ const fingerprint=participant=>digest(domain('household-own-device-fingerprint',participant));
+ const requestBytes=request=>domain('household-own-device-request',request);
+ const slot=key=>'household-own-device/v1:'+key;
+ const read=key=>store.transaction(tx=>tx.get(slot(key)),{readOnly:true});
+ const write=(key,value,old)=>store.transaction(tx=>{
+  if(!same(tx.get(slot(key)),old))throw Error('CONFLICT');
+  tx.put(slot(key),value);
+ });
+ const participant=(role,keys,nonce)=>({role,deviceId:keys.deviceId,signingPublicKey:s.from_hex(keys.signingKey),
+  wrappingPublicKey:s.from_hex(keys.wrappingKey),nonce:s.from_hex(nonce)});
+ const text=value=>pairingText(s,value);
+ const parse=value=>parsePairingText(s,value,MAX_HOUSEHOLD_OWN_DEVICE_MESSAGE);
+ const rootRecord=async (bundle,rootPin,head)=>verifyHouseholdParentRecord({provider,bundle,
+  confirmedRootPin:rootPin,confirmedSelectedHead:head,explicit:true});
+ async function current(){
+  const resolved=await resolveRuntimeAuthority(storage,scope,pin,provider,deviceId);
+  const {record:{revision}}=resolved.expectedAuthority,record=must(await storage.readPairingAuthority(scope));
+  if(record?.revision!==revision||record.authorizationSnapshot!==resolved.scope.authorizationSnapshot)throw Error('CONFLICT');
+  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState));
+  const verified=await verifyAuthority(state,pin,provider);
+  return {resolved,record,state,parent:verified.nodes.get(record.acceptedParent)};
+ }
+ async function request(renew=false){
+  const old=await read('request');
+  if(old&&!renew)return text(old);
+  const request={...own,nonce:s.to_hex(s.randombytes_buf(32))};
+  const item={request,signature:s.to_hex(await provider.sign(signingKey,requestBytes(request)))};
+  await store.transaction(tx=>{
+   if(!same(tx.get(slot('request')),old))throw Error('CONFLICT');
+   tx.put(slot('request'),item);
+   tx.put(slot('responder'),null);
+  });
+  return text(item);
+ }
+ async function readRequest(item){
+  const r=item?.request;
+  if(!exact(item,['request','signature'])||!exact(r,['deviceId','signingKey','wrappingKey','nonce'])||
+     !id(r.deviceId)||![r.signingKey,r.wrappingKey,r.nonce].every(hex64)||
+     typeof item.signature!=='string'||!/^[0-9a-f]{128}$/.test(item.signature)||
+     !await provider.verify(r.signingKey,requestBytes(r),s.from_hex(item.signature)))throw Error('INVALID_REQUEST');
+  return r;
+ }
+ async function inspectProposal(proposal,role){
+  if(!exact(proposal,['version','bundle','adultId','peerId','parentRevision','request','transcript','guard'])||proposal.version!==1||
+     (!Number.isSafeInteger(proposal.parentRevision)||proposal.parentRevision<0)||typeof proposal.peerId!=='string'||!/^[1-9][0-9]{0,19}$/.test(proposal.peerId)||BigInt(proposal.peerId)>18446744073709551615n)throw Error('INVALID_PROOF');
+  const {bundle,transcript:t,guard:g,adultId,peerId,parentRevision}=proposal;
+  const record=await rootRecord(bundle,bundle.rootPin,bundle.selectedHead);
+  const verified=await verifyAuthority(bundle.state,bundle.rootPin,provider),parent=verified.nodes.get(bundle.selectedHead);
+  const oob=checkOwnDeviceCeremony(s,bundle.rootPin,parent,t,g,adultId,peerId,parentRevision,verified.wrappingByHead.get(parent.head).get(t.initiator.deviceId));
+  const r=await readRequest(proposal.request);
+  if(!same(oob.pins[role],own)||!same(t.responder,participant('responder',r,r.nonce))||
+     !same(record.scope,t.scope)||record.authorizationSnapshot!==t.authorizationSnapshot)throw Error('INVALID_PROOF');
+  if(role==='responder'&&!same(await read('request'),proposal.request))throw Error('INVALID_REQUEST');
+  return {proposal,parent,record,oob,view:{text:text(proposal),code:oob.hash,rootPin:bundle.rootPin,head:bundle.selectedHead,
+   adultId,peerDevice:oob.pins[other(role)].deviceId}};
+ }
+ async function propose(incoming,confirmedFingerprint){
+  const item=parse(incoming),r=await readRequest(item),old=await read('initiator');
+  if(fingerprint({deviceId:r.deviceId,signingKey:r.signingKey,wrappingKey:r.wrappingKey})!==confirmedFingerprint)throw Error('OOB_REQUIRED');
+  if(old&&same(old.proposal.request,item)&&old.proposal.bundle.scope.id===scope.id)return (await inspectProposal(old.proposal,'initiator')).view;
+  const {resolved,record,state,parent}=await current();
+  await runtime.authorize();
+  const {doc}=await runtime.document();
+  const occupied=new Set([...Object.values(parent.runtime.authorPeers),...doc.oplogVersion().toJSON().keys()]);
+  let peerId;
+  do peerId=String(BigInt('0x'+s.to_hex(s.randombytes_buf(8))));
+  while(peerId==='0'||occupied.has(peerId));
+  const transcript={version:1,sessionId:randomUUID(),action:'pairOwnDevice',scope,purpose:'data',
+   acceptedParent:parent.head,authorizationSnapshot:record.authorizationSnapshot,
+   initiator:participant('initiator',own,s.to_hex(s.randombytes_buf(32))),responder:participant('responder',r,r.nonce),
+   signaling:[ownDeviceSignal(pin,parent,resolved.adultId,peerId,record.revision)]};
+  const guard={version:1,guardId:randomUUID(),scope,direction:'initiator-to-responder',purpose:'data'};
+  const proposal={version:1,bundle:{version:1,scope,rootPin:pin,selectedHead:parent.head,state},
+   adultId:resolved.adultId,peerId,parentRevision:record.revision,request:item,transcript,guard};
+  const {view}=await inspectProposal(proposal,'initiator');
+  if(view.text.length>MAX_HOUSEHOLD_OWN_DEVICE_MESSAGE)throw Error('TOO_LARGE');
+  await write('initiator',{proposal,confirmed:false},old);
+  return view;
+ }
+ async function confirm(role,incoming,peerFingerprint,rootPin,head,code){
+  if(!roles.includes(role))throw Error('INVALID_PROOF');
+  const old=await read(role);
+  const checked=await inspectProposal(role==='initiator'?old?.proposal:parse(incoming),role);
+  const {proposal,record,oob}=checked;
+  if(proposal.bundle.rootPin!==rootPin||record.acceptedParent!==head||oob.hash!==code||
+     fingerprint(oob.pins[other(role)])!==peerFingerprint)throw Error('OOB_REQUIRED');
+  if(role==='initiator'){
+   const live=await current();
+   if(live.record.authorizationSnapshot!==record.authorizationSnapshot||live.record.revision!==proposal.parentRevision)throw Error('STALE_AUTHORITY');
+  }else{
+   const local=must(await storage.readPairingAuthority(record.scope));
+   if(local&&(local.revision!==0||!same(local,record)))throw Error('STALE_AUTHORITY');
+   await pins.save({version:1,scope:record.scope,pin:rootPin,head});
+  }
+  if(!old?.confirmed||!same(old.proposal,proposal))await write(role,{proposal,confirmed:true},old);
+  return progress(role);
+ }
+ async function withSession(role,use){
+  const saved=await read(role);
+  if(!saved?.confirmed)throw Error('OOB_REQUIRED');
+  const checked=await inspectProposal(saved.proposal,role);
+  const {transcript,guard}=saved.proposal;
+  const localStore={transaction:(apply,options)=>store.transaction(tx=>{
+   if(!same(tx.get(slot(role)),saved)||(role==='responder'&&!same(tx.get(slot('request')),saved.proposal.request)))throw Error('CONFLICT');
+   return apply(tx);
+  },options)};
+  return withSecrets(secrets=>use({...checked,secrets,session:durableSession(s,localStore,secrets,transcript,guard,role,checked.oob)}));
+ }
+ function progress(role){
+  return withSession(role,async({session})=>{
+   await session.initialize();
+   const {offer,response,ack,complete}=await session.outgoing();
+   return {complete,text:text({offer,response,ack}),stage:ack?'Acknowledgement':response?'Response':'Challenge'};
+  });
+ }
+ async function accept(role,incoming){
+  const message=parsePairingText(s,incoming);
+  if(!exact(message,['offer','response','ack'])||!exact(message.offer,['role','hash','challenge','signature'])||
+     !(message.response===null||exact(message.response,['role','hash','offer','token','signature']))||
+     !(message.ack===null||exact(message.ack,['role','hash','response','signature']))||(message.ack&&!message.response))throw Error('INVALID_PROOF');
+  await withSession(role,async({session})=>{
+   await session.initialize();
+   const {revision}=await session.outgoing();
+   await session.respond(message.offer,revision);
+   if(message.response)await session.acknowledge(message.response,revision+1);
+   if(message.ack)await session.finish(message.ack,revision+2);
+  });
+  return progress(role);
+ }
+ async function resume(role){
+  const saved=await read(role);
+  if(!saved)return null;
+  const {view}=await inspectProposal(saved.proposal,role);
+  const sc=saved.proposal.bundle.scope;
+  let installed=null;
+  if(role==='responder'&&saved.confirmed){
+   const {operationId}=householdReceiverIds(s,sc,deviceId),receipt=must(await storage.householdRecipient.find(sc.id,operationId));
+   if(receipt?.ownDevice&&receipt.guardId===saved.proposal.guard.guardId){
+    const joined={name,storage,scope:sc,pin:saved.proposal.bundle.rootPin,provider,deviceId,operationId};
+    const opened=await finalizeJoinedSequences(joined);
+    try{installed={scope:sc,head:opened.resolved.scope.branchHead};}finally{opened.sequences.close();}
+   }
+  }
+  return {...view,installed,progress:saved.confirmed?await progress(role):null};
+ }
+ async function publish(code){
+  return withSession('initiator',async({proposal,record,oob,secrets,session})=>{
+   const {bundle,transcript,guard,adultId,peerId}=proposal;
+   if(code!==oob.hash||!same(scope,bundle.scope)||pin!==bundle.rootPin)throw Error('OOB_REQUIRED');
+   const {messages}=await session.evidence();
+   const prior=must(await storage.readHouseholdOwnDeviceRelease(scope,transcript.sessionId));
+   if(prior){
+    const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:record,next:prior.next,proposal:{hash:oob.hash,guard}});
+    verifyDeviceCopyFile(s,HOUSEHOLD_OWN_DEVICE_FILE,prior.file,oob.hash,transcript.initiator.signingPublicKey);
+    if(checked.proof.guard.guardId!==prior.guardId)throw Error('CONFLICT');
+    const {item,selection,head}=checked;
+    return {file:prior.file,replayed:true,head,update:text({version:1,item,selection,head})};
+   }
+   const live=await current(), expectedAuthority=await runtime.authorize();
+   if(record.authorizationSnapshot!==live.record.authorizationSnapshot||live.record.revision!==proposal.parentRevision||adultId!==live.resolved.adultId||
+      !same(expectedAuthority,live.resolved.expectedAuthority))throw Error('STALE_AUTHORITY');
+   const documentId=live.resolved.scope.documentId, stored=must(await storage.reopenBranchDocument(expectedAuthority,documentId));
+   const source={documentId,revision:stored?.revision??null,bytes:stored?.bytes??null};
+   const snapshot=source.bytes??new LoroDoc().export({mode:'snapshot'});
+   const retained=must(await storage.readProjectionSeed(expectedAuthority,documentId));
+   const seed=retained?.seed??{seedId:transcript.sessionId,identities:[]},seedSnapshot=retained?.snapshot??null;
+   const {doc,identities}=inspectOwnDeviceSnapshot({LoroDoc,snapshot,peerId,seed,seedSnapshot});
+   const sources=must(await storage.readOwnDeviceSourcePolicies(expectedAuthority,documentId,identities.map(x=>x.effectId)));
+   const disclosure=await service.authority(),policies=new Map();
+   for(const hash of new Set(sources.flatMap(row=>row.policyHashes))){
+    let next=hash;
+    while(next&&!policies.has(next)){
+     const policy=await service.validateStored(next,disclosure);
+     policies.set(next,policy);
+     next=policy.policy.predecessor;
+    }
+   }
+   const copy={snapshot,seed,seedSnapshot,sources,policies:[...policies.values()].sort((a,b)=>a.policyHash<b.policyHash?-1:1)};
+   const parent=live.parent,receiver=oob.pins.responder;
+   const event={version:4,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:scope.id,parentHead:parent.head,
+    policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,proposalId:transcript.sessionId,
+    kind:'pairOwnDevice',authorDeviceId:deviceId,frozenAdultRoster:parent.roster,nextPolicy:null,subject:{
+     adultId,deviceId:receiver.deviceId,signingKeyRef:receiver.signingKey,wrappingKeyRef:receiver.wrappingKey,
+     peerId,documentId:'paired-'+transcript.sessionId,parentSnapshot:record.authorizationSnapshot,parentRevision:live.record.revision,
+     transcriptHash:oob.hash,baseline:await policyBaseline(doc,provider),copyHash:ownDeviceCopyHash(s,copy),sourcesHash:ownDeviceSourcesHash(s,sources)
+    }};
+   const head=s.to_hex(await provider.hash(domain('event',event)));
+   const item={event,approvals:[],authorSignature:s.to_hex(await provider.sign(signingKey,domain('event-signature',event))),
+    ownDevice:encodeEvidence({transcript,guard,messages})};
+   const selection={from:parent.head,to:head,deviceId,index:live.state.selections.length};
+   const signature=s.to_hex(await provider.sign(signingKey,domain('select-head',{root:pin,householdId:scope.id,...selection})));
+   const nextState={...live.state,events:[...live.state.events,item],selections:[...live.state.selections,{...selection,signature}],activeHead:head};
+   const next={scope,revision:live.record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
+   await verifyAuthority(nextState,pin,provider);
+   const context=ownDevicePacketContext(item,oob,head);
+   const packet=await keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:context.epochId},
+    key=>makeKeyPackage(s,context,key,secrets.signingSecret));
+   const file=sealDeviceCopy(s,HOUSEHOLD_OWN_DEVICE_FILE,oob.hash,transcript.responder,secrets.signingSecret,
+    {version:1,head,item,selection:{...selection,signature},copy,packet});
+   must(await storage.commitHouseholdOwnDevice({operationId:transcript.sessionId,guardId:guard.guardId,expected:live.record,
+    next,source,document:{documentId:context.projectionId,bytes:snapshot},file,sources}));
+   return {file,replayed:false,head,update:text({version:1,item,selection:{...selection,signature},head})};
+  });
+ }
+ async function install(file){
+  if(!(file instanceof Uint8Array)||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
+  file=new Uint8Array(file);
+  return withSession('responder',async({proposal,record,oob,secrets,session})=>{
+   const {bundle,transcript,guard}=proposal,sc=bundle.scope;
+   const confirmed=(await pins.list()).find(x=>x.scope.id===sc.id);
+   if(confirmed?.pin!==bundle.rootPin||confirmed.head!==record.acceptedParent)throw Error('OOB_REQUIRED');
+   const evidence=await session.evidence();
+   const contents=openDeviceCopy(s,HOUSEHOLD_OWN_DEVICE_FILE,file,oob.hash,transcript,secrets.wrappingSecret);
+   if(!exact(contents,['version','head','item','selection','copy','packet'])||contents.version!==1)throw Error('INVALID_FILE');
+   const {item,selection,head,copy,packet}=contents, {snapshot,seed,seedSnapshot,sources,policies}=copy;
+   if(!exact(copy,['snapshot','seed','seedSnapshot','sources','policies']))throw Error('INVALID_FILE');
+   const {operationId,keyOperationId}=householdReceiverIds(s,sc,deviceId);
+   const prior=must(await storage.householdRecipient.find(sc.id,operationId));
+   const latest=must(await storage.readPairingAuthority(sc));
+   if(prior?!same(latest,prior.nextAuthority)||!same(record,prior.expectedAuthority):latest&&!same(latest,record))throw Error('STALE_AUTHORITY');
+   const state=bundle.state, nextState={...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:head};
+   const next={scope:sc,revision:record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
+   const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin:bundle.rootPin,parentRecord:record,next,proposal:{hash:oob.hash,guard}});
+   if(!same(checked.proof.messages,evidence.messages))throw Error('INVALID_PROOF');
+   const {context}=checked;
+   const identities=await verifyOwnDeviceCopy({sodium:s,provider,LoroDoc,copy,pin:bundle.rootPin,parentState:state,item});
+   const joined={name,storage,scope:sc,pin:bundle.rootPin,provider,deviceId,operationId};
+   const localIdentity={version:1,scope:sc,deviceId,purpose:'data',epochId:context.epochId};
+   const result=await withOpenedKeyPackage(s,packet,context,secrets.wrappingSecret,async key=>{
+    const localKey=await storage.localKeys(master,s).preparePairedDataKey(keyOperationId,localIdentity,key);
+    const input={version:1,operationId,scopeId:sc.id,guardId:guard.guardId,documentId:context.projectionId,
+     generation:context.generation,expectedAuthority:record,nextAuthority:next,
+     manifest:{id:context.manifestHash,bytes:authorityBytes(item.event.subject)},seed,policySeed:null,snapshot,packet,localKey,
+     ownDevice:{seedSnapshot,identities,sources,policies,fileHash:digest(file)}};
+    const receiptBody=ownDeviceReceiptBody(s,input,context);
+    const receipt=s.crypto_sign_detached(domain('household-own-device-receipt',receiptBody),secrets.signingSecret);
+    await prepareJoinedSequences(joined);
+    return must(await storage.householdRecipient.install({...input,receiptBody,receipt}));
+   });
+   const opened=await finalizeJoinedSequences(joined);
+   opened.sequences.close();
+   return {scope:sc,head,replayed:result.replayed};
+  });
+ }
+ async function acceptExisting(incoming,explicit){
+  const update=parse(incoming);
+  if(explicit!==true||!exact(update,['version','item','selection','head'])||update.version!==1||
+     !update.item?.ownDevice||!hex64(update.head))throw Error('INVALID_OWN_DEVICE');
+  const {item,selection,head}=update,live=await current(),sponsor=item.event.authorDeviceId;
+  if(!live.parent.runtime.acceptedRecipients.includes(deviceId)||sponsor===deviceId||
+     item.event.subject.deviceId===deviceId||item.event.parentHead!==live.record.acceptedParent)throw Error('STALE_AUTHORITY');
+  const nextState={...live.state,events:[...live.state.events,item],selections:[...live.state.selections,selection],activeHead:head};
+  const next={scope,revision:live.record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
+  const {context,proof}=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:live.record,next});
+  const expected=await runtime.authorize(),documentId=live.parent.runtime.documentId;
+  if(!same(expected,live.resolved.expectedAuthority))throw Error('STALE_AUTHORITY');
+  const stored=must(await storage.reopenBranchDocument(expected,documentId));
+  const doc=new LoroDoc();
+  if(stored)doc.import(stored.bytes);
+  // The signed frontier must already be present locally. Any later local
+  // edits stay in the original document for historical review.
+  const baseline=await verifyPolicyBaseline(doc,LoroDoc,item.event.subject.baseline,provider);
+  const retained=must(await storage.readProjectionSeed(expected,documentId));
+  const snapshot=baseline.export({mode:'snapshot'});
+  const {identities}=inspectOwnDeviceSnapshot({LoroDoc,snapshot,peerId:item.event.subject.peerId,
+   seed:retained?.seed??{seedId:item.event.proposalId,identities:[]},seedSnapshot:retained?.snapshot??null});
+  const sources=must(await storage.readOwnDeviceSourcePolicies(expected,documentId,identities.map(x=>x.effectId)));
+  if(ownDeviceSourcesHash(s,sources)!==item.event.subject.sourcesHash)throw Error('SOURCE_PROVENANCE_REQUIRED');
+  await keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:context.epochId},()=>{});
+  must(await storage.commitHouseholdOwnDevice({operationId:item.event.proposalId,guardId:proof.guard.guardId,expected:live.record,next,
+   source:{documentId,revision:stored?.revision??null,bytes:stored?.bytes??null},
+   document:{documentId:context.projectionId,bytes:snapshot},file:null,sources}));
+  return {scope,head};
+ }
+ async function history(){
+  const status=await readAuthority(storage,scope,pin,provider),verified=await verifyAuthority(status.state,pin,provider);
+  const selected=verified.nodes.get(status.activeHead), ancestry=[];
+  let head=status.activeHead;
+  while(verified.nodes.has(head)&&head!==pin){
+   const entry=status.state.events.find(item=>s.to_hex(s.crypto_generichash(32,domain('event',item.event)))===head);
+   if(!entry)throw Error('INVALID_AUTHORITY');
+   const {kind,subject,authorDeviceId:sponsor,parentHead}=entry.event, previous=verified.nodes.get(parentHead), child=verified.nodes.get(head);
+   for(const device of child.devices){
+    const before=previous.devices.find(prior=>prior.deviceId===device.deviceId);
+    const action=!before?kind==='pairOwnDevice'?'Paired':kind==='recoverDevice'?'Recovered':'Admitted':
+     before.active&&!device.active?'Retired':null;
+    if(action)ancestry.push({action,deviceId:device.deviceId,sponsor,adultId:kind==='pairOwnDevice'?subject.adultId:device.adultId});
+   }
+   head=parentHead;
+  }
+  return {head:status.activeHead,roster:selected.roster,threshold:admissionThreshold(selected.policy,selected.roster.length),
+   policy:selected.policy,devices:selected.devices,events:ancestry.reverse()};
+ }
+ return {deviceId,fingerprint:fingerprint(own),rootPin:pin,request,propose,inspect:async incoming=>(await inspectProposal(parse(incoming),'responder')).view,
+  confirm,accept,resume,publish,install,acceptExisting,history};
+}

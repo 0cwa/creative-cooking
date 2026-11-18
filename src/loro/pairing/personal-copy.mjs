@@ -25,12 +25,12 @@ export const pairingDigest = (sodium, bytes) => sodium.to_hex(sodium.crypto_gene
 
 /** The snapshot stays inside the recipient's sealed box. The sponsor signs the
  * ciphertext in the exact local transcript, including role and key fingerprints. */
-export function sealPersonalCopy(sodium, hash, participant, signingSecret, value) {
+export function sealDeviceCopy(sodium, fileDomain, hash, participant, signingSecret, value) {
  const plain = encoder.encode(pairingText(sodium, value));
  try {
   if (plain.length + 112 > MAX_PERSONAL_PAIRING_FILE) throw Error('TOO_LARGE');
   const cipher = sodium.crypto_box_seal(plain, participant.wrappingPublicKey);
-  const signature = sodium.crypto_sign_detached(domain('personal-device-file', [hash, pairingDigest(sodium, cipher)]), signingSecret);
+  const signature = sodium.crypto_sign_detached(domain(fileDomain, [hash, pairingDigest(sodium, cipher)]), signingSecret);
   const file = new Uint8Array(signature.length + cipher.length);
   file.set(signature);
   file.set(cipher, signature.length);
@@ -38,20 +38,24 @@ export function sealPersonalCopy(sodium, hash, participant, signingSecret, value
  } finally { plain.fill(0); }
 }
 
-export function verifyPersonalCopyFile(sodium, file, hash, sender) {
+export function verifyDeviceCopyFile(sodium, fileDomain, file, hash, sender) {
  if (!(file instanceof Uint8Array) || file.length <= 112 || file.length > MAX_PERSONAL_PAIRING_FILE) throw Error('INVALID_FILE');
  const cipher = file.subarray(64);
  if (!sodium.crypto_sign_verify_detached(file.subarray(0,64),
-  domain('personal-device-file', [hash, pairingDigest(sodium, cipher)]), sender)) throw Error('INVALID_FILE');
+  domain(fileDomain, [hash, pairingDigest(sodium, cipher)]), sender)) throw Error('INVALID_FILE');
  return cipher;
 }
 
-export function openPersonalCopy(sodium, file, hash, transcript, wrappingSecret) {
- const cipher = verifyPersonalCopyFile(sodium, file, hash, transcript.initiator.signingPublicKey);
+export function openDeviceCopy(sodium, fileDomain, file, hash, transcript, wrappingSecret) {
+ const cipher = verifyDeviceCopyFile(sodium, fileDomain, file, hash, transcript.initiator.signingPublicKey);
  const plain = sodium.crypto_box_seal_open(cipher, transcript.responder.wrappingPublicKey, wrappingSecret);
  try { return parsePairingText(sodium, decoder.decode(plain), MAX_PERSONAL_PAIRING_FILE); }
  finally { plain.fill(0); }
 }
+
+export const sealPersonalCopy = (sodium,...args) => sealDeviceCopy(sodium,'personal-device-file',...args);
+export const verifyPersonalCopyFile = (sodium,...args) => verifyDeviceCopyFile(sodium,'personal-device-file',...args);
+export const openPersonalCopy = (sodium,...args) => openDeviceCopy(sodium,'personal-device-file',...args);
 
 /** Retain semantic identities already present in the copied document. */
 export function personalCopyIdentities(doc) {

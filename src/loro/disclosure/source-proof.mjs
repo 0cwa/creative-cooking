@@ -4,7 +4,7 @@ const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.co
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 /** Reverify retained signed envelopes and recursively reconstruct source policy ancestry. */
-export function createSourceVerifier({runtime,service,context,allowIncomplete=false}) {
+export function createSourceVerifier({runtime,service,context,allowIncomplete=false,allowOwnDeviceBaseline=false}) {
  const verified=new Map(),visiting=new Set(),baselines=new Map();let replayChecked=null;
  const scope=runtime.scope;
  const ancestors=context.verified?.nodes ? policyBranchAncestors(context.verified,scope.branchHead) : [];
@@ -17,6 +17,12 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
 
  async function verifySource(effect) {
    if(verified.has(effect))return verified.get(effect);if(visiting.has(effect)||visiting.size+verified.size>=256)throw Error('SOURCE_PROVENANCE_REQUIRED');visiting.add(effect);
+   const copied=runtime.storage.readOwnDeviceCookingSource&&must(await runtime.storage.readOwnDeviceCookingSource(context.resolved.expectedAuthority,scope.documentId,effect));
+   if(copied&&allowOwnDeviceBaseline&&allowIncomplete){
+    for(const hash of copied.policyHashes)await service.validateStored(hash,context);
+    const result={policies:copied.policyHashes,incomplete:true};
+    visiting.delete(effect);verified.set(effect,result);return result;
+   }
    let source=must(await runtime.storage.readDisclosureSource(scope.scopeId,effect)),legacy=false;
    if(!source&&allowIncomplete&&ancestors.length>1){
     source=must(await runtime.storage.readLegacyCookingSource(context.resolved.expectedAuthority,effect));
@@ -26,6 +32,7 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
     let seed;
     try{const {verifiedSeedSources}=await import('./seed-source.mjs');seed=await verifiedSeedSources({runtime,service,context})}catch(e){if(e?.message!=='SOURCE_PROVENANCE_REQUIRED')throw e}
     const policies=seed?.entries.get(effect);
+    if(copied&&!policies)throw Error('SOURCE_PROVENANCE_REQUIRED');
     if(policies&&!allowIncomplete)throw Error('SOURCE_MAPPING_UNVERIFIED');
     const unknown=allowIncomplete&&await authenticateSeed(effect) ? {policies:[],incomplete:true} : await authenticateUnknown(effect);
     if(policies)for(const policy of policies)await service.validateStored(policy,context);

@@ -81,6 +81,12 @@ const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revis
 export const validPersonalSelection = (value:unknown): value is PersonalSelection =>
   fields(value,['scopeId','pin']) && validId(value.scopeId) && hexOf(value.pin,64);
 const sameRecord = (a:unknown,b:unknown) => JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
+type OwnDevicePublication = {
+  operationId:string; guardId:string; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
+  source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
+  document:{documentId:string;bytes:Uint8Array};
+  file:Uint8Array|null; sources:{effectId:string;policyHashes:string[]}[];
+};
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
   source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
@@ -107,7 +113,7 @@ const validateRecord = (k: string, v: any) => {
     case 'compromise-quarantine': valid=typeof v==='boolean'; break;
     case 'disclosure-pending': valid=fields(v,['reason','objectId']) && v.reason==='POLICY_GOVERNANCE_UNPROVEN' && typeof v.objectId==='string' && !!v.objectId; break;
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
-    case 'policy-checkout-parent': valid=validBranchDocument(v); break;
+    case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
     case 'disclosure-source': valid=(fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId']) || (fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId','incomplete']) && v.incomplete===true)) && v.envelope instanceof Uint8Array && ['local','import'].includes(v.origin) && typeof v.objectId==='string' && !!v.objectId && denseArray(v.policyHashes,(x:any)=>typeof x==='string' && !!x) && typeof v.checkpoint==='string' && !!v.checkpoint && typeof v.documentId==='string' && !!v.documentId && typeof v.commandId==='string' && !!v.commandId; break;
     case 'disclosure-review': valid=(fields(v,['record','state']) || (fields(v,['record','state','context']) && object(v.context))) && object(v.record) && ['reviewed','unknown','sent','failed'].includes(v.state); break;
@@ -131,6 +137,8 @@ const validateRecord = (k: string, v: any) => {
     case 'projection-outbox': valid = fields(v,['packageId','recipientDevice']) && typeof v.packageId==='string' && typeof v.recipientDevice==='string'; break;
     case 'projection-pending': valid = typeof v==='string'; break;
     case 'projection-document': valid = fields(v,['generation','operationId']) && revision(v.generation) && typeof v.operationId==='string'; break;
+    case 'household-own-device-sources': valid=denseArray(v,row=>fields(row,['effectId','policyHashes'])&&validId(row.effectId)&&denseArray(row.policyHashes,validId)); break;
+    case 'household-own-device': valid=fields(v,['next','guardId','documentId','file'])&&validatePairingAuthority(v.next).ok&&validId(v.guardId)&&validId(v.documentId)&&(v.file===null||validPairingFile(v.file)); break;
     case 'personal-pairing-file': valid = validPairingFile(v); break;
     case 'personal-selection': valid = validPersonalSelection(v); break;
     case 'personal-rotation': valid = fields(v,['receipt','epochId','documentId','head']) && validPersonalReceipt(v.receipt) && [v.epochId,v.documentId,v.head].every(validId); break;
@@ -480,6 +488,58 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:{replayed:false}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
+  /** Called only after verifying the signed same-adult transition and source snapshot. */
+  async commitHouseholdOwnDevice(input:OwnDevicePublication) {
+    const {operationId,guardId,expected,next,source,document,file,sources}=snapshot(input);
+    if(!validId(operationId)||!validId(guardId)||!validatePairingAuthority(expected).ok||!validatePairingAuthority(next).ok||
+       expected.scope.kind!=='household'||!sameRecord(next.scope,expected.scope)||next.revision!==expected.revision+1||
+       expected.acceptedParent===next.acceptedParent||!validId(source?.documentId)||!validId(document?.documentId)||
+       !document.documentId.startsWith('paired-')||document.documentId===source.documentId||
+       !(document.bytes instanceof Uint8Array)||!document.bytes.length||document.bytes.length>1_048_576||
+       !(source.revision===null?source.bytes===null:revision(source.revision)&&source.bytes instanceof Uint8Array)||
+       !(file===null||validPairingFile(file))||!denseArray(sources,row=>validId(row.effectId)&&denseArray(row.policyHashes,validId)))return fail('MALFORMED');
+    const scope=expected.scope.id;
+    try{return await this.run(true,async tx=>{
+      const authority=key('pairing-authority','household',scope),op=key('household-own-device',scope,operationId);
+      const guard=key('pairing-guard',guardId),owner=key('document-owner',scope,document.documentId);
+      const target=key('document',scope,document.documentId),edge=key('household-own-device-parent',scope,document.documentId);
+      const current=await tx.get(authority),link={head:expected.acceptedParent,documentId:source.documentId};
+      if(!sameRecord(current,expected))conflict();
+      for(const slot of [op,guard,owner,target,edge])if(await tx.get(slot)!==undefined)conflict();
+      const old=await this.checkoutDocument(tx,scope,{...link});
+      if((old?.revision??null)!==source.revision||!sameRecord(old?.bytes??null,source.bytes))conflict();
+      const write=async(slot:string,value:unknown)=>{await tx.put(slot,value);this.fault?.('household-own-device-release')};
+      await write(op,{next,guardId,documentId:document.documentId,file});
+      await write(guard,op);
+      await write(owner,next.acceptedParent);
+      await write(target,{bytes:document.bytes,revision:0});
+      await write(edge,link);
+      await write(key('household-own-device-sources',scope,document.documentId),sources);
+      const active=(await tx.get(key('disclosure-active',scope)))??null;
+      await write(key('policy-disclosure-head',scope,expected.acceptedParent),active);
+      await write(key('policy-disclosure-head',scope,next.acceptedParent),active);
+      await write(authority,next);
+      return {ok:true as const,value:undefined};
+    });}catch(error){return fail(mapError(error));}
+  }
+  async readHouseholdOwnDeviceRelease(scope:PairingScope,operationId:string,requireCurrent=true) {
+    if(!validPairingScope(scope)||scope.kind!=='household'||!validId(operationId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const op=key('household-own-device',scope.id,operationId),saved=await tx.get(op);
+      if(saved===undefined)return {ok:true as const,value:null};
+      if(!validatePairingAuthority(saved.next).ok||!sameRecord(saved.next.scope,scope)||!validId(saved.guardId)||
+         !validId(saved.documentId)||await tx.get(key('pairing-guard',saved.guardId))!==op||
+         await tx.get(key('document-owner',scope.id,saved.documentId))!==saved.next.acceptedParent||
+         !(saved.file===null||validPairingFile(saved.file)))return corrupt();
+      const current=await tx.get(key('pairing-authority','household',scope.id));
+      if(requireCurrent&&!sameRecord(saved.next,current))return conflict();
+      const sources=await tx.get(key('household-own-device-sources',scope.id,saved.documentId));
+      const link=await tx.get(key('household-own-device-parent',scope.id,saved.documentId));
+      const document=await tx.get(key('document',scope.id,saved.documentId));
+      if(!sources||!link||!document)return corrupt();
+      return {ok:true as const,value:snapshot({...saved,sources,link})};
+    });}catch(error){return fail(mapError(error));}
+  }
   private async pairingComplete(tx: Tx, r: PairingRelease, inputKey: string) {
     const s=r.transcript.scope;
     for (const k of [key('pairing-guard',r.guard.guardId),key('pairing-packet',s.kind,s.id,r.packet.id),key('pairing-outbox',s.kind,s.id,r.operationId)]) if (await tx.get(k) !== inputKey) corrupt();
@@ -780,8 +840,35 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if(governingPolicyHash!==undefined&&h.disclosurePolicyHash!==governingPolicyHash)conflict();
     const operation=parsed[1].operationId;if(source.origin==='local'){const local=await tx.get(key('local',scopeId,operation)),objectRecord=await tx.get(key('object',scopeId,source.objectId));if(parsed[0]!=='local'||!local||local.inputKey!==inputKey||!objectRecord||!sameBytes(objectRecord.bytes,source.envelope)||!parsed[1].outbound?.some((entry:any)=>entry.object?.id===source.objectId&&JSON.stringify(entry.object.bytes)===JSON.stringify(Array.from(source.envelope))))return corrupt()}else{const applied=await tx.get(key('applied',scopeId,source.objectId)),old=await tx.get(key('import',scopeId,operation)),inbox=await tx.get(key('inbox',scopeId,source.objectId));if(parsed[0]!=='import'||parsed[1].itemId!==source.objectId||applied!==operation||!old||old.inputKey!==inputKey||!inbox||!sameBytes(inbox.bytes,source.envelope))return corrupt()}return source;
   }
+  private async ownDeviceSource(tx:Tx,scope:string,documentId:string,effectId:string) {
+    for(const branch of await this.projectionLineage(tx,scope,documentId)){
+      const rows=await tx.get(key('household-own-device-sources',scope,branch.documentId));
+      if(rows===undefined)continue;
+      if(!denseArray(rows,row=>validId(row.effectId)&&denseArray(row.policyHashes,validId)))return corrupt();
+      const source=rows.find(row=>row.effectId===effectId);
+      if(source)return {policyHashes:source.policyHashes,incomplete:true as const};
+    }
+    return null;
+  }
+  async readOwnDeviceCookingSource(expected:AuthorityExpectation,documentId:string,effectId:string) {
+    try{return await this.run(false,async tx=>{
+      await this.requireAuthority(tx,expected);
+      return {ok:true as const,value:await this.ownDeviceSource(tx,expected.scope.id,documentId,effectId)};
+    });}catch(error){return fail(mapError(error));}
+  }
+  async readOwnDeviceSourcePolicies(expected:AuthorityExpectation,documentId:string,effectIds:string[]) {
+    try{return await this.run(false,async tx=>{
+      await this.requireAuthority(tx,expected);
+      const value=[];
+      for(const effectId of effectIds){
+        const policy=await this.disclosureDependency(tx,expected.scope.id,documentId,effectId);
+        value.push({effectId,policyHashes:policy.policyHashes});
+      }
+      return {ok:true as const,value};
+    });}catch(error){return fail(mapError(error));}
+  }
   private async disclosureDependency(tx:Tx,scope:string,documentId:string,effectId:string,visiting=new Set<string>()):Promise<{policyHashes:string[],incomplete:boolean}>{
-    if(visiting.has(effectId)||visiting.size>=256)corrupt();visiting.add(effectId);const source=await this.validatedDisclosureSource(tx,scope,effectId);if(source)return {policyHashes:source.policyHashes,incomplete:source.incomplete===true};
+    if(visiting.has(effectId)||visiting.size>=256)corrupt();visiting.add(effectId);const copied=await this.ownDeviceSource(tx,scope,documentId,effectId);if(copied)return copied;const source=await this.validatedDisclosureSource(tx,scope,effectId);if(source)return {policyHashes:source.policyHashes,incomplete:source.incomplete===true};
     const lineage=await this.projectionLineage(tx,scope,documentId),origin=lineage.at(-1)!;
     const old=await tx.get(key('effect',scope,effectId)),seedId=await tx.get(key('projection-seed-effect',scope,origin.documentId,effectId));if(old===undefined&&seedId===undefined)conflict();let hashes:string[]=[];
     if(old!==undefined){let parsed:any;try{parsed=JSON.parse(old)}catch{return corrupt()}const command=parsed?.[1]?.commands?.find((c:any)=>c.effectId===effectId&&lineage.some(branch=>branch.documentId===c.documentId));if(!command||await tx.get(key('command',scope,command.commandId))!==old||!denseArray(command.dependencyEffectIds,validId))return corrupt();const inherited=new Set<string>();for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,documentId,dep,new Set(visiting));for(const h of parent.policyHashes)inherited.add(h)}hashes=[...inherited].sort()}
@@ -877,23 +964,28 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   /** Structural retained seed lookup; callers must authenticate its historical head. */
   private async readRecipientProjection(scopeId:string,operationId:string,documentId:string,head?:string){
-    const store=(this as any).householdRecipient;if(!store)return null;const found=await store.find(scopeId,operationId);if(!found.ok)throw new StorageFailure('CORRUPT');if(!found.value)return null;const p=found.value,checked=await store.check(p);if(!checked.ok||p.documentId!==documentId||(head!==undefined&&p.nextAuthority.acceptedParent!==head))throw new StorageFailure('CORRUPT');return {nextAuthority:p.nextAuthority,manifest:p.manifest,documents:[{documentId:p.documentId,generation:p.generation,bytes:p.snapshot}],seed:p.seed,policySeed:p.policySeed};
+    const store=(this as any).householdRecipient;if(!store)return null;const found=await store.find(scopeId,operationId);if(!found.ok)throw new StorageFailure('CORRUPT');if(!found.value)return null;const p=found.value,checked=await store.check(p);if(!checked.ok||p.documentId!==documentId||(head!==undefined&&p.nextAuthority.acceptedParent!==head))throw new StorageFailure('CORRUPT');return {nextAuthority:p.nextAuthority,manifest:p.manifest,documents:[{documentId:p.documentId,generation:p.generation,bytes:p.snapshot}],seed:p.seed,policySeed:p.policySeed,ownDevice:p.ownDevice};
   }
   async readRetainedProjectionSeed(scopeId:string,documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array;head:string}|null,StorageError>> {
     if(!validId(scopeId)||!validId(documentId))return {ok:false,error:'MALFORMED'};
-    try{const found=await this.run(false,async tx=>{const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const p=await this.getProjectionPublication(scopeId,found.operationId);if(p.ok&&!p.value){const recipient=await this.readRecipientProjection(scopeId,found.operationId,documentId);if(recipient&&JSON.stringify(projectionCanonical(recipient.seed))===JSON.stringify(projectionCanonical(found.seed)))return {ok:true,value:{seed:found.seed,snapshot:copy(recipient.documents[0].bytes),head:recipient.nextAuthority.acceptedParent}};}if(!p.ok||!p.value||p.value.documents.length!==1||p.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(p.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(p.value.documents[0].bytes),head:p.value.nextAuthority.acceptedParent}}}catch(e){return {ok:false,error:mapError(e)}}
+    try{const found=await this.run(false,async tx=>{const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const p=await this.getProjectionPublication(scopeId,found.operationId);if(p.ok&&!p.value){const recipient=await this.readRecipientProjection(scopeId,found.operationId,documentId);if(recipient&&JSON.stringify(projectionCanonical(recipient.seed))===JSON.stringify(projectionCanonical(found.seed)))return {ok:true,value:recipient.ownDevice?.seedSnapshot===null?null:{seed:found.seed,snapshot:copy(recipient.ownDevice?.seedSnapshot??recipient.documents[0].bytes),head:recipient.nextAuthority.acceptedParent}};}if(!p.ok||!p.value||p.value.documents.length!==1||p.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(p.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(p.value.documents[0].bytes),head:p.value.nextAuthority.acceptedParent}}}catch(e){return {ok:false,error:mapError(e)}}
   }
   private async projectionLineage(tx:Tx,scope:string,documentId:string,head?:string) {
     let current={documentId,head};
     const lineage=[current];
-    for(let i=0;isPolicyDocumentId(current.documentId);i++) {
-      if(i>=128 || (current.head!==undefined && current.documentId!==`policy-${current.head}`)) return corrupt();
-      const parent=await tx.get(key('policy-checkout-parent',scope,current.documentId));
-      if(!parent) throw new StorageFailure('CHECKOUT_REQUIRED');
+    for(let i=0;i<=128;i++) {
+      const policy=isPolicyDocumentId(current.documentId);
+      if(policy&&current.head!==undefined&&current.documentId!==`policy-${current.head}`)return corrupt();
+      const parent=await tx.get(key(policy?'policy-checkout-parent':'household-own-device-parent',scope,current.documentId));
+      if(!parent){
+        if(policy)throw new StorageFailure('CHECKOUT_REQUIRED');
+        return lineage;
+      }
+      if(i===128||!validBranchDocument(parent))return corrupt();
       current=parent;
       lineage.push(current);
     }
-    return lineage;
+    return corrupt();
   }
   private async projectionOrigin(tx:Tx,scope:string,documentId:string,head?:string) {
     return (await this.projectionLineage(tx,scope,documentId,head)).at(-1)!;

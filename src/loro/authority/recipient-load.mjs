@@ -19,6 +19,10 @@ export async function verifyRecipientInstallation({storage,scope,pin,provider,so
  const prefix=(a,b)=>Array.isArray(a)&&Array.isArray(b)&&a.length<=b.length&&a.every((x,i)=>eq(x,b[i]));
  if(!eq(next.root,state.root)||!prefix(next.events,state.events)||!prefix(next.selections,state.selections)||!prefix(next.agreements??[],state.agreements??[])||hex(p.expectedAuthority.authorityState)!==hex(e.encode(JSON.stringify(canon(parent))))||hex(p.nextAuthority.authorityState)!==hex(e.encode(JSON.stringify(canon(next))))||parent.activeHead!==p.expectedAuthority.acceptedParent||next.activeHead!==eventHash||await digest(provider,'authority-state',parent)!==p.expectedAuthority.authorizationSnapshot||await digest(provider,'authority-state',next)!==p.nextAuthority.authorizationSnapshot||!eq(parent.root,next.root))throw Error('INVALID_AUTHORITY');
  await verifyAuthority(parent,pin,provider);const verified=await verifyAuthority(next,pin,provider),item=next.events.at(-1),selection=next.selections.at(-1),a=item?.admission,grant=a?.grant,manifest=a?.manifest;
+ if(p.ownDevice){
+  const {verifyInstalledOwnDevice}=await import('../pairing/household-own-device.mjs');
+  return verifyInstalledOwnDevice({sodium,provider,pin,LoroDoc:await loadLoroDoc(),p});
+ }
  if(item?.rotation?.grant?.version===2) {
   const selectionMatches=selection?.from===parent.activeHead&&selection.to===eventHash&&[item.event.authorDeviceId,p.localKey.record.identity.deviceId].includes(selection.deviceId);
   if(!selectionMatches||item.event.parentHead!==parent.activeHead||await digest(provider,'event',item.event)!==eventHash||

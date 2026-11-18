@@ -728,3 +728,207 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   for(const name of names)removeWorkspace(name);
  }
 });
+
+test('own-device household release and install roll back, reopen and preserve distinct-adult votes', {timeout:40_000}, async () => {
+ const names=['own-device-sponsor','own-device-adult','own-device-fresh'];
+ const [sponsorName,adultName,freshName]=names;
+ let sponsor, adult, fresh;
+ let faultName='',faultWrite=0,writes=0,failCounter=false;
+ const rawOpen=openDatabase;
+ const open=(name,create=false)=>openNativeWorkspaceWith({
+  ...args(name,create),policy:{kind:'unanimous',fixedCount:null},
+  openDatabase(dbName){
+   if(failCounter&&dbName.startsWith(freshName+'-receive-'))throw Error('COUNTER_OPEN_FAILED');
+   const db=rawOpen(dbName);
+   return {...db,executeSync(sql,params){
+    const result=db.executeSync(sql,params);
+    if(dbName===faultName&&sql.startsWith('INSERT INTO loro_records')&&++writes===faultWrite)throw Error('INJECTED');
+    return result;
+   }};
+  }
+ });
+ const rows=name=>{
+  const db=new DatabaseSync(join(dir,name+'.sqlite'));
+  try{return db.prepare('SELECT key,value FROM loro_records ORDER BY key').all()}finally{db.close()}
+ };
+ try{
+  sponsor=await open(sponsorName,true);
+  adult=await open(adultName,true);
+  fresh=await open(freshName,true);
+  await Promise.all([sponsor,adult,fresh].map(acceptPolicy));
+  await addPantry(sponsor,'shared-basil');
+  await addPantry(fresh,'original-thyme');
+  const s=sponsor.householdPairing,a=adult.householdPairing,scope=scopeOf(sponsor),original=scopeOf(fresh);
+  const agreement=await s.prepareDelegation({explicit:true});
+  await s.acceptDelegation({agreement:{...agreement.agreement,acceptances:[agreement.acceptance]},explicit:true});
+  const {item,eventHash}=await s.prepareInvite({recipient:a.identity,explicit:true});
+  const {grant,manifest,seed,policyBundle}=await s.prepareGrant({item,explicit:true});
+  const ceremony=await s.prepareCeremony({item,grant,manifest,seed,explicit:true});
+  const parent=await s.exportParent();
+  await a.acceptParent({bundle:parent,confirmedRootPin:parent.rootPin,confirmedSelectedHead:parent.selectedHead,explicit:true});
+  const verified=await a.verifyOffer({offer:{scope,item,grant,ceremony},confirmedHash:ceremony.oob.hash});
+  const sessionA=s.session({...ceremony,role:'initiator',confirmedHash:ceremony.oob.hash});
+  const sessionB=a.session({...verified,role:'responder',confirmedHash:ceremony.oob.hash});
+  const offers=await Promise.all([sessionA.initialize(),sessionB.initialize()]);
+  const responses=await Promise.all([sessionA.respond(offers[1],0),sessionB.respond(offers[0],0)]);
+  const acks=await Promise.all([sessionA.acknowledge(responses[1],1),sessionB.acknowledge(responses[0],1)]);
+  await Promise.all([sessionA.finish(acks[1],2),sessionB.finish(acks[0],2)]);
+  const selection={from:parent.selectedHead,to:eventHash,deviceId:sponsor.deviceId,index:parent.state.selections.length};
+  selection.signature=sodium.to_hex(await sponsor.disclosureProvider.sign(s.identity.signingKey,
+   domain('select-head',{root:parent.rootPin,householdId:scope.id,...selection})));
+  const {operationId}=await s.transfer.publish({item,grant,manifest,seed,policyBundle,
+   ceremonies:[{transcript:ceremony.transcript,guard:ceremony.guard,oob:ceremony.oob,context:ceremony.context,messages:(await sessionA.evidence()).messages}],existingCeremonies:[],selection});
+  const admission=await s.transfer.seal({operationId,recipientDevice:adult.deviceId});
+  await a.transfer.install({scope,bytes:admission});
+  await a.selection.select(scope);
+  sponsor.close();adult.close();
+  sponsor=await open(sponsorName);adult=await open(adultName);
+
+  const rootPin=parent.rootPin, sponsorId=sponsor.deviceId;
+  const provider={hash:async bytes=>sodium.crypto_generichash(32,bytes),
+   verify:async (key,bytes,signature)=>sodium.crypto_sign_verify_detached(signature,bytes,sodium.from_hex(key))};
+  const {openSQLiteStorage}=await import('../storage/sqlite.ts');
+  const readStore=async(name,use)=>{
+   const db=rawOpen(name);
+   try{return await use(openSQLiteStorage(db))}finally{db.close()}
+  };
+  const {verifyAuthority,readAuthority}=await import('../authority/chain.mjs');
+  const {validateSuccessor}=await import('../authority/validator.mjs');
+  const getNode=name=>readStore(name,async storage=>{
+   const view=await readAuthority(storage,scope,rootPin,provider);
+   return (await verifyAuthority(view.state,rootPin,provider)).nodes.get(view.activeHead);
+  });
+  const before=await getNode(sponsorName);
+  assert.equal(before.roster.length,2);
+  assert.deepEqual(before.policy,{kind:'unanimous',fixedCount:null});
+  const signApproval=async(node,eventId,workspace)=>{
+   const identity=workspace.householdPairing.identity,body={version:1,householdId:scope.id,eventHash:eventId,parentHead:node.head,
+    policyHash:node.policyHash,generation:node.generation,epochId:node.epochId,adultId:identity.adultId,deviceId:identity.deviceId};
+   return {...body,signature:sodium.to_hex(await workspace.disclosureProvider.sign(identity.signingKey,domain('approval-signature',body)))};
+  };
+  async function vote(node,devices,expected){
+   const event={version:1,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:scope.id,parentHead:node.head,
+    policyHash:node.policyHash,generation:node.generation,epochId:node.epochId,proposalId:'vote-check',kind:'changePolicy',
+    authorDeviceId:sponsorId,frozenAdultRoster:node.roster,subject:null,nextPolicy:{kind:'fixed',fixedCount:2}};
+   const eventId=sodium.to_hex(await provider.hash(domain('event',event)));
+   const signature=sodium.to_hex(await sponsor.disclosureProvider.sign(sponsor.householdPairing.identity.signingKey,domain('event-signature',event)));
+   const approvals=await Promise.all(devices.map(device=>signApproval(node,eventId,device)));
+   const result=await validateSuccessor(node,event,signature,approvals,provider);
+   assert.equal(result.status,expected);
+   assert.equal(result.required,2);
+   assert.equal(result.approvals,expected==='validated'?2:1);
+  }
+  await vote(before,[sponsor],'pending');
+  await vote(before,[sponsor,adult],'validated');
+
+  const initiator=sponsor.householdPairing.ownDevice,responder=fresh.householdPairing.ownDevice;
+  const proposal=await initiator.propose(await responder.request(),responder.fingerprint);
+  assert.deepEqual((await responder.inspect(proposal.text)).code,proposal.code);
+  await assert.rejects(responder.confirm('responder',proposal.text,initiator.fingerprint,rootPin,'0'.repeat(64),proposal.code),/OOB_REQUIRED/);
+  const start=(service,role,peer)=>service.confirm(role,proposal.text,peer.fingerprint,rootPin,before.head,proposal.code);
+  let x=await start(initiator,'initiator',responder),y=await start(responder,'responder',initiator);
+  await assert.rejects(initiator.publish(proposal.code),/INCOMPLETE/);
+  for(let round=0;round<3;round++){
+   const outgoing=x.text;
+   x=await initiator.accept('initiator',y.text);
+   y=await responder.accept('responder',outgoing);
+  }
+  assert.ok(x.complete&&y.complete);
+  const sponsorRows=rows(sponsorName),freshRows=rows(freshName);
+  const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
+  const row=sponsorRows.find(row=>row.key===authoritySlot);
+  const staleDb=new DatabaseSync(join(dir,sponsorName+'.sqlite'));
+  try{
+   const record=JSON.parse(row.value);
+   staleDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({...record,revision:record.revision+1}),authoritySlot);
+   await assert.rejects(initiator.publish(proposal.code),/STALE_AUTHORITY/);
+  }finally{
+   staleDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(row.value,authoritySlot);
+   staleDb.close();
+  }
+  for(let boundary=1;boundary<=9;boundary++){
+   writes=0;faultName=sponsorName;faultWrite=boundary;
+   await assert.rejects(sponsor.householdPairing.ownDevice.publish(proposal.code),/IO/);
+   assert.equal(writes,boundary);
+   faultName='';
+   sponsor.close();sponsor=await open(sponsorName);
+   assert.deepEqual(rows(sponsorName),sponsorRows);
+   assert.deepEqual(await getNode(sponsorName),before);
+  }
+  const {file,head,update}=await sponsor.householdPairing.ownDevice.publish(proposal.code);
+  assert.equal((await getNode(adultName)).head,before.head);
+  const transition=JSON.parse(update).item;
+  const retired={...before,devices:before.devices.map(device=>device.deviceId===sponsorId?{...device,active:false}:device),
+   runtime:{...before.runtime,authorPeers:Object.fromEntries(Object.entries(before.runtime.authorPeers).filter(([id])=>id!==sponsorId)),
+    acceptedRecipients:before.runtime.acceptedRecipients.filter(id=>id!==sponsorId)}};
+  assert.equal((await validateSuccessor(retired,transition.event,transition.authorSignature,[],provider)).reason,'UNAUTHORIZED_DEVICE');
+  const wrongAdult=structuredClone(transition.event);
+  wrongAdult.subject.adultId=adult.householdPairing.identity.adultId;
+  assert.equal((await validateSuccessor(before,wrongAdult,transition.authorSignature,[],provider)).status,'deny');
+  const wrongScope=JSON.parse(update);
+  wrongScope.item.event.householdId='unrelated-household';
+  await assert.rejects(adult.householdPairing.ownDevice.acceptExisting(JSON.stringify(wrongScope),true),/INVALID/);
+  assert.equal((await getNode(adultName)).head,before.head);
+  await adult.householdPairing.ownDevice.acceptExisting(update,true);
+  fresh.close();fresh=await open(freshName);
+  const damaged=new Uint8Array(file);damaged[damaged.length-1]^=1;
+  await assert.rejects(fresh.householdPairing.ownDevice.install(damaged),/INVALID_FILE/);
+  writes=0;faultName=freshName;faultWrite=2;
+  await assert.rejects(fresh.householdPairing.ownDevice.install(file),/IO/);
+  assert.equal(writes,2);
+  faultName='';
+  for(let boundary=1;boundary<=16;boundary++){
+   writes=0;faultName=freshName;faultWrite=boundary;
+   await assert.rejects(fresh.householdPairing.ownDevice.install(file),/IO/);
+   assert.equal(writes,boundary);
+   faultName='';
+   fresh.close();fresh=await open(freshName);
+   // Counter preparation is durable but has never enabled a cooking write.
+   const stable=rows(freshName).filter(row=>!JSON.parse(row.key)[0].startsWith('native-household-enrollment'));
+   assert.deepEqual(stable,freshRows);
+   assert.equal((await readStore(freshName,storage=>storage.readPairingAuthority(scope))).value,null);
+  }
+  failCounter=true;writes=0;faultName=freshName;faultWrite=0;
+  await assert.rejects(fresh.householdPairing.ownDevice.install(file),/COUNTER_OPEN_FAILED/);
+  assert.equal(writes,16);
+  faultName='';
+  await assert.rejects(fresh.householdPairing.selection.select(scope),/INCOMPLETE_ENROLLMENT/);
+  assert.deepEqual(scopeOf(fresh),original);
+  fresh.close();fresh=await open(freshName);
+  failCounter=false;
+  assert.equal((await fresh.householdPairing.ownDevice.resume('responder')).installed.head,head);
+  assert.equal((await fresh.householdPairing.ownDevice.install(file)).replayed,true);
+  await fresh.householdPairing.selection.select(scope,head);
+  [sponsor,adult,fresh].forEach(w=>w.close());
+  sponsor=await open(sponsorName);adult=await open(adultName);fresh=await open(freshName);
+  const after=await getNode(freshName);
+  for(const [index,workspace] of [sponsor,adult,fresh].entries()){
+   assert.deepEqual(await getNode(names[index]),after);
+   assert.deepEqual(await pantry(workspace),['shared-basil']);
+  }
+  assert.deepEqual(after.roster,before.roster);
+  assert.deepEqual(after.policy,before.policy);
+  assert.equal(after.generation,before.generation);
+  assert.equal(after.epochId,before.epochId);
+  assert.equal(after.devices.length,before.devices.length+1);
+  assert.equal(fresh.householdPairing.identity.adultId,sponsor.householdPairing.identity.adultId);
+  await vote(after,[sponsor,fresh],'pending');
+  await vote(after,[fresh,adult],'validated');
+  const {doc}=await fresh.household.document();
+  const itemId=Object.keys(doc.getMap('pantry-index').toJSON())[0],dep=doc.getMap('pantry-index').get(itemId);
+  await fresh.executeHouseholdAction('paired-edit',[{version:1,kind:'pantry-field',commandId:'paired-edit',
+   effectId:'paired-edit',dependencyEffectIds:[dep],data:{itemId,field:'name',value:'edited-basil',at:'2026-11-18T00:00:00Z',author:fresh.deviceId}}]);
+  const cooking=await fresh.cookingFiles.list();
+  assert.equal(cooking.length,1);
+  const bytes=await fresh.cookingFiles.download(cooking[0].objectId);
+  await sponsor.cookingFiles.receive(bytes);
+  assert.deepEqual(await pantry(sponsor),['edited-basil']);
+  await addPantry(fresh,'second-edit');
+  assert.deepEqual(await pantry(fresh),['edited-basil','second-edit']);
+  assert.deepEqual((await fresh.household.listOutboundObjects()).value.map(x=>
+   JSON.parse(new TextDecoder().decode(x.bytes)).header.deviceSequence).sort(),[1,2]);
+ }finally{
+  for(const workspace of [sponsor,adult,fresh])workspace?.close();
+  names.forEach(removeWorkspace);
+ }
+});

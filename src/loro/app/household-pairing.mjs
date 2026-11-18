@@ -1,3 +1,4 @@
+import {householdOwnDevice} from './household-own-device.mjs';
 import {householdReadmission} from './household-readmission.mjs';
 import {householdRevocation} from './household-revocation.mjs';
 import {prepareExistingCeremony,verifyExistingCeremony} from './household-existing-ceremony.mjs';
@@ -40,9 +41,12 @@ export function householdPairing({
   const revocation=householdRevocation({...preparation,master,runtime,signingKey,wrappingPublicKey,withSecrets,LoroDoc,sha256});
   const readmission=continuity&&householdReadmission({...authority,sodium,runtime,rotation:revocation,withSecrets,
     deviceId,signingKey,wrappingPublicKey,pins,transfer,...continuity});
+  const ownDevice=householdOwnDevice({name,sodium,storage,scope,pin,provider,store,pins,identity,runtime,service,keys,master,withSecrets,
+    LoroDoc,prepareJoinedSequences,finalizeJoinedSequences,randomUUID});
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
+    ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value==='function'?active(value):value])),
     readmission:readmission&&Object.fromEntries(Object.entries(readmission).map(([name,method])=>[name,active(method)])),
     revocation:Object.fromEntries(Object.entries(revocation).map(([name,method])=>[name,active((first,...args)=>{
       if((first?.proposal??first)?.item?.event?.kind==='recoverDevice')throw Error('INVALID_REVOCATION');

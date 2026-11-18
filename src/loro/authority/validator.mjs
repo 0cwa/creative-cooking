@@ -51,7 +51,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
  try {
   parent = structuredClone(parent); event = structuredClone(event); approvals = structuredClone(approvals);
   if (!validParent(parent)) return deny('INVALID_PARENT');
-  if (!keys(event,eventFields) || ![1,2,3].includes(event.version) || (event.version===2 && !['inviteAdult','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) || (event.version===3 && event.kind!=='changePolicy') || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) return deny('INVALID_INPUT');
+  if (!keys(event,eventFields) || ![1,2,3,4].includes(event.version) || (event.version===2 && !['inviteAdult','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) || (event.version===3 && event.kind!=='changePolicy') || (event.version===4 && event.kind!=='pairOwnDevice') || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) return deny('INVALID_INPUT');
   if (event.householdId !== parent.householdId || event.parentHead !== parent.head) return pending('PARENT_UNRESOLVED');
   if (event.policyHash !== parent.policyHash || event.generation !== parent.generation || event.epochId !== parent.epochId || JSON.stringify(event.frozenAdultRoster) !== JSON.stringify(parent.roster)) return deny('CONTEXT_MISMATCH');
   const author = parent.devices.find(d=>d.deviceId === event.authorDeviceId && d.active);
@@ -89,7 +89,21 @@ export async function validateSuccessor(parent, event, authorSignature, approval
    const expected=[...parent.devices.filter(d=>d.active).map(d=>({deviceId:d.deviceId,signingKeyRef:d.signingKeyRef})),{deviceId:s.deviceId,signingKeyRef:s.signingKeyRef}].sort((a,b)=>a.deviceId<b.deviceId?-1:a.deviceId>b.deviceId?1:0);if(s.devices.length!==expected.length)return deny('INVALID_INPUT');const peers=new Set(Object.values(parent.runtime.authorPeers));for(let i=0;i<expected.length;i++){const d=s.devices[i];if(!keys(d,['deviceId','signingKeyRef','wrappingKeyRef','peerId'])||d.deviceId!==expected[i].deviceId||d.signingKeyRef!==expected[i].signingKeyRef||typeof d.wrappingKeyRef!=='string'||!/^[0-9a-f]{64}$/.test(d.wrappingKeyRef)||(d.deviceId===s.deviceId&&d.wrappingKeyRef!==s.wrappingKeyRef)||typeof d.peerId!=='string'||!/^(0|[1-9][0-9]*)$/.test(d.peerId)||d.peerId.length>20||BigInt(d.peerId)>18446744073709551615n||peers.has(d.peerId))return deny('INVALID_INPUT');peers.add(d.peerId)}
   }
   if (event.kind === 'changePolicy' && ((event.version===3 ? !validPolicyBaseline(event.subject) : event.subject!==null) || !validAdmissionPolicy(event.nextPolicy,parent.roster.length))) return deny('INVALID_INPUT');
-  if (event.kind === 'pairOwnDevice' && (!keys(event.subject,['adultId','deviceId','signingKeyRef']) || event.subject.adultId !== author.adultId || !id(event.subject.deviceId) || !id(event.subject.signingKeyRef) || parent.devices.some(d=>d.deviceId === event.subject.deviceId) || event.nextPolicy !== null)) return deny('INVALID_INPUT');
+  if (event.kind === 'pairOwnDevice') {
+   const s=event.subject;
+   if(event.version===1) {
+    if(!keys(s,['adultId','deviceId','signingKeyRef'])||s.adultId!==author.adultId||!id(s.deviceId)||!id(s.signingKeyRef)||parent.devices.some(d=>d.deviceId===s.deviceId)||event.nextPolicy!==null)return deny('INVALID_INPUT');
+   } else {
+    const digest=x=>typeof x==='string'&&/^[0-9a-f]{64}$/.test(x);
+    if(!keys(s,['adultId','deviceId','signingKeyRef','wrappingKeyRef','peerId','documentId','parentSnapshot','parentRevision','transcriptHash','baseline','copyHash','sourcesHash'])||
+       s.adultId!==author.adultId||!parent.runtime.acceptedRecipients.includes(author.deviceId)||!id(s.deviceId)||
+       ![s.signingKeyRef,s.wrappingKeyRef,s.parentSnapshot,s.transcriptHash,s.copyHash,s.sourcesHash].every(digest)||
+       parent.devices.length>=128||parent.devices.some(d=>d.deviceId===s.deviceId||d.signingKeyRef===s.signingKeyRef)||
+       typeof s.peerId!=='string'||!/^[1-9][0-9]{0,19}$/.test(s.peerId)||BigInt(s.peerId)>18446744073709551615n||
+       Object.values(parent.runtime.authorPeers).includes(s.peerId)||!id(s.documentId)||!s.documentId.startsWith('paired-')||
+       !Number.isSafeInteger(s.parentRevision)||s.parentRevision<0||!validPolicyBaseline(s.baseline)||event.nextPolicy!==null||!Array.isArray(approvals)||approvals.length!==0)return deny('INVALID_INPUT');
+   }
+  }
   const canonical = Object.fromEntries(eventFields.map(k=>[k,event[k]]));
   const hashBytes = await provider.hash(domain('event',canonical));
   if (!(hashBytes instanceof Uint8Array) || hashBytes.length !== 32) return deny('INVALID_PROOF');
@@ -107,7 +121,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
    if (!await provider.verify(device.signingKeyRef,domain('approval-signature',unsigned),s)) return deny('INVALID_PROOF');
    seenDevices.add(a.deviceId); voters.add(a.adultId);
   }
-  if (event.kind === 'pairOwnDevice') return pending('CEREMONY_AND_POSSESSION_REQUIRED');
+  if (event.kind === 'pairOwnDevice') return {...pending('CEREMONY_AND_POSSESSION_REQUIRED'),eventHash};
   const required = admissionThreshold(parent.policy,parent.roster.length);
   if (voters.size < required) return {...pending('QUORUM_REQUIRED'),eventHash,approvals:voters.size,required};
   if(event.kind==='recoverDevice')return {...pending('RECOVERY_DISTRIBUTION_REQUIRED'),eventHash,approvals:voters.size,required};
