@@ -374,8 +374,22 @@ test('clean draft rechecks the selected document and exact frozen bytes before a
   await author.edit('after saved draft',2);
   const changedDocument=author.rows();
   await assert.rejects(api.saveCleanDraft(fresh,['original saffron']),/STALE_DOCUMENT/);
+  const rechecked=await author.runtime.document();
+  const retryDraft=async()=>store.finalizeHistorical({runtime:author.runtime,reviews:store,scopeId:scope.id,reviewId:id,
+    expected:await store.get(scope.id,id),expectedDocumentRevision:rechecked.revision,selectedEffectIds:['original saffron']});
+  await assert.rejects(retryDraft(),/DRAFT_SOURCE_CHANGED/);
   assert.deepEqual(author.rows(),changedDocument);
   assert.deepEqual((await api.inspect(token,id)).draft,result.draft);
+
+  const draftKey=JSON.stringify(['compromise-review',scope.id,id]);
+  const savedDraft=await store.get(scope.id,id);
+  const legacyDraft=structuredClone(savedDraft);
+  delete legacyDraft.draft.publicationBaseRevision;
+  await store.run(true,tx=>tx.put(draftKey,legacyDraft));
+  const beforeLegacyRetry=author.rows();
+  await assert.rejects(retryDraft(),/DRAFT_SOURCE_CHANGED/);
+  assert.deepEqual(author.rows(),beforeLegacyRetry);
+  await store.run(true,tx=>tx.put(draftKey,savedDraft));
 });
 
 test('saved reports at a legacy policy head remain readable without enabling reconstruction',async t=>{

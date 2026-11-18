@@ -218,6 +218,8 @@ export class CompromiseReviews {
    const owner=await tx.get(key('document-owner',scopeId,baseId));
    if(saved.draft.publicationBaseDocumentId!==baseId||(current?.revision??null)!==expectedDocumentRevision||
       (current?owner!==c.authorityHead:owner!==undefined))throw Error('STALE_DOCUMENT');
+   if(!Object.hasOwn(saved.draft,'publicationBaseRevision')||
+      saved.draft.publicationBaseRevision!==expectedDocumentRevision)throw Error('DRAFT_SOURCE_CHANGED');
    const {documentId,included,excluded,held}=saved.draft;
    return clone({documentId,status:saved.status,included,excluded,held});
   });

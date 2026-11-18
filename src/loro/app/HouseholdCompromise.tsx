@@ -35,6 +35,7 @@ const errors:Record<string,string> = {
   STALE_AUTHORITY:'Household authority changed. Reopen incident reports.',
   STALE_REVIEW:'The saved report changed. Reopen it before saving a clean draft.',
   STALE_DOCUMENT:'The cooking workspace changed. Reopen the report and review your selection again.',
+  DRAFT_SOURCE_CHANGED:'Start a fresh incident review and save a new clean draft for this cooking revision.',
   STALE_EVIDENCE:'Frozen evidence changed or became unavailable. Reopen the report.',
   POLICY_BASELINE_UNAVAILABLE:'The frozen originals could not verify a signed policy checkout boundary.',
   UNSUPPORTED_POLICY_LINEAGE:'An earlier policy change predates signed cooking checkout boundaries.',

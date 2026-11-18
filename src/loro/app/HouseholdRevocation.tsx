@@ -35,6 +35,7 @@ export function HouseholdRevocation(){
   const [state,setState]=useState<Status|null>(null), [reviewed,setReviewed]=useState<Reviewed|null>(null);
   const [proposal,setProposal]=useState(''), [bindings,setBindings]=useState(''), [binding,setBinding]=useState('');
   const [status,setStatus]=useState(''), [busy,setBusy]=useState(false);
+  const [needsStatus,setNeedsStatus]=useState(false);
   const reopen=state?.reopen??null;
   const paused=useRef<ReturnType<typeof app.beginWorkspaceTransition>|null>(null);
   const [late,setLate]=useState<string[]>([]), [inspection,setInspection]=useState<Awaited<ReturnType<Service['inspectLate']>>|null>(null);
@@ -55,14 +56,18 @@ export function HouseholdRevocation(){
   const action=(label:string,fn:()=>Promise<void>,disabled=false)=>
     <Pressable accessibilityRole="button" disabled={disabled||busy} onPress={()=>run(fn)}><Text>{label}</Text></Pressable>;
   const copy=async(value:string)=>{if(!await copyText(value))throw Error('Copy the displayed message manually.');setStatus('Copied.');};
-  async function refresh(){
-    const current=await controls.status();
+  function showStatus(current:Status){
     setState(current);
+    setNeedsStatus(false);
     if(!current.reopen){
       paused.current?.();
       paused.current=null;
-      setLate(await controls.lateEvidence());
     }
+  }
+  async function refresh(){
+    const current=await controls.status();
+    showStatus(current);
+    if(!current.reopen)setLate(await controls.lateEvidence());
   }
   function setReview(value:Reviewed){
     setReviewed(value);
@@ -75,14 +80,13 @@ export function HouseholdRevocation(){
       await app.flushCurrentWorkspace();
       const result=await commit();
       if(result.acceptedHead!==workspace.household.scope.branchHead){
+        keep=true;
+        paused.current=release;
+        setNeedsStatus(true);
         // A competing transition can finish after a saved retry. Reopen only
         // the still-selected head returned by the status read.
         const current=await controls.status();
-        setState(current);
-        if(current.reopen){
-          keep=true;
-          paused.current=release;
-        }
+        showStatus(current);
         if(current.head!==result.acceptedHead)throw Error('STALE_AUTHORITY');
       }else{
         await refresh();
@@ -91,6 +95,11 @@ export function HouseholdRevocation(){
     }finally{if(!keep)release();}
   }
   function loadProposal(value:string){setProposal(value);setReviewed(null);}
+  if(needsStatus)return <View style={{gap:8}}>
+    <Text>Rotation saved. Refresh the selected household branch to continue.</Text>
+    {action('Refresh selected household branch',refresh)}
+    {!!status&&<Text accessibilityRole="alert">{status}</Text>}
+  </View>;
   return <View style={{gap:8}}>
     {!state?action('Manage device revocation',refresh):<>
       {!reopen&&action('Close device revocation',async()=>{setState(null);setReviewed(null);setProposal('');setBinding('');setBindings('');setInspection(null);setArchive(null);setArchivedReport(null);})}
@@ -99,13 +108,9 @@ export function HouseholdRevocation(){
       <Text>Local quarantine applies on this device. A signed revocation creates a successor with a new key and clean cooking document. Each device chooses whether to open it.</Text>
       {reopen&&action('Reopen rotated household',async()=>{
         const result=await controls.status();
-        setState(result);
+        showStatus(result);
         if(result.head!==reopen){
-          if(!result.reopen){
-            paused.current?.();
-            paused.current=null;
-            setLate(await controls.lateEvidence());
-          }
+          if(!result.reopen)setLate(await controls.lateEvidence());
           setStatus('The selected household branch changed. Review the displayed branch before reopening.');
           return;
         }

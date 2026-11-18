@@ -442,14 +442,43 @@ async function routedRevocation({a,b,c,existingId,thirdId,scope,publishedHead}){
  await a.reload();
  await open(a);
  await review(a,proposal);
+ const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
+ await a.evaluate(({publication,authoritySlot})=>{
+  const put=IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put=function(value,key){
+   const request=put.call(this,value,key);
+   if(typeof key==='string'&&key.startsWith('["projection-publication",')&&key.includes(publication)){
+    IDBObjectStore.prototype.put=put;
+    this.transaction.addEventListener('complete',()=>{
+     const get=IDBObjectStore.prototype.get;
+     IDBObjectStore.prototype.get=function(key){
+      if(key===authoritySlot){
+       IDBObjectStore.prototype.get=get;
+       throw Error('injected status failure after committed rotation');
+      }
+      return get.call(this,key);
+     };
+    },{once:true});
+   }
+   return request;
+  };
+ },{publication:parsed.item.event.proposalId,authoritySlot});
  await button(a,'Confirm revocation and publish rotation').click();
+ await expect(a.getByText('Rotation saved. Refresh the selected household branch to continue.',{exact:true})).toBeVisible();
+ await expect(a.getByText('Local storage could not complete the change. You can retry.',{exact:true})).toBeVisible();
+ const committedRows=await rows(a);
+ expect(committedRows[authoritySlot].acceptedParent).toBe(parsed.grant.eventHash);
+ await button(a,'Exchange encrypted cooking files').click();
+ await uploadFile(a,'Choose encrypted cooking update',late);
+ await expect(a.getByText(/^Update not applied: A workspace switch is already in progress/)).toBeVisible();
+ expect(await rows(a)).toEqual(committedRows);
+ await button(a,'Refresh selected household branch').click();
  await expect(button(a,'Reopen rotated household')).toBeVisible();
  await expect(a.getByLabel('Household document generation')).toHaveText('Household generation 3');
  const download=`Download rotation for ${existingId}`;
  const file=await downloadFile(a,download);
  expect(file.includes(Buffer.from('Rotation carrots'))).toBe(false);
  await expect(button(a,`Download rotation for ${thirdId}`)).toHaveCount(0);
- const authoritySlot=JSON.stringify(['pairing-authority','household',scope.id]);
  const parentAuthority={...beforeA[authoritySlot],authorityState:new Uint8Array(Object.values(beforeA[authoritySlot].authorityState))};
  const rotationAuthority=await changeWorkspaceRecord(a,authoritySlot,parentAuthority);
  try{
