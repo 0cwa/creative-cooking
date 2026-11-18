@@ -225,6 +225,12 @@ test('admitted browser devices independently verify their direct connection, ret
     await button(a,'Download connection message').click();
     const offerFile = await readFile(await (await signalDownload).path());
     expect(offerFile.toString()).toBe(offer);
+    await label(b,'Direct connection offer').fill(offer);
+    const emptyChooser = b.waitForEvent('filechooser');
+    await button(b,'Choose connection message file').click();
+    await (await emptyChooser).setFiles({name:'empty.json', mimeType:'application/json', buffer:Buffer.alloc(0)});
+    await visible(b,'The connection message file is empty or too large.');
+    await expect(label(b,'Direct connection offer')).toHaveValue(offer);
     const signalChooser = b.waitForEvent('filechooser');
     await button(b,'Choose connection message file').click();
     await (await signalChooser).setFiles({name:'offer.json', mimeType:'application/json', buffer:offerFile});

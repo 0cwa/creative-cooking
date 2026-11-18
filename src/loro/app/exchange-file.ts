@@ -16,7 +16,7 @@ export async function chooseExchangeFile({accept,minBytes,maxBytes}:{accept:stri
   try {
     const length = handle.size;
     if (length === null || handle.offset !== 0) throw Error('FILE_READ_UNAVAILABLE');
-    if (length < minBytes || length > maxBytes) throw Error('INVALID_FILE_SIZE');
+    if (length === 0 || length < minBytes || length > maxBytes) throw Error('INVALID_FILE_SIZE');
     const bytes = handle.readBytes(length + 1);
     if (bytes.length !== length || handle.offset !== length || handle.size !== length) throw Error('FILE_CHANGED_DURING_READ');
     return bytes;
@@ -33,7 +33,10 @@ export async function saveExchangeFile(name:string, mimeType:string, bytes:Uint8
   let sharingStarted = false;
   try {
     if (!await Sharing.isAvailableAsync()) throw Error('FILE_SHARING_UNAVAILABLE');
-    pruneExchangeShares(Paths.cache.list().filter(entry => entry instanceof Directory), Date.now());
+    pruneExchangeShares(Paths.cache.list().filter(entry => entry instanceof Directory), Date.now(), (entry:Directory) => {
+      const marker = new File(entry, '.handoff');
+      return marker.exists ? marker.modificationTime : null;
+    });
     directory = new Directory(Paths.cache, `cooking-share-${randomUUID()}`);
     directory.create();
     const file = new File(directory, name);

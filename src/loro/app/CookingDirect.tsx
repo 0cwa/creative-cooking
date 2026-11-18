@@ -17,6 +17,7 @@ const messages:Record<string,string> = {
   INVALID_SIGNAL:'This connection message is invalid.',
   INVALID_SIGNAL_SIGNATURE:'The connection message signature is invalid.',
   SIGNAL_TOO_LARGE:'This connection message is too large.',
+  INVALID_FILE_SIZE:'The connection message file is empty or too large.',
   DIRECT_HOUSEHOLD_MISMATCH:'The connection message is for a different household, device or invitation.',
   UNAUTHORIZED_PEER:'This device is no longer authorized for direct exchange in the open household.',
   INVALID_AUTHORITY:'The household authority changed. Reopen the household to continue.',
@@ -117,13 +118,7 @@ export function CookingDirect() {
     }
   }
   async function readSignalFile() {
-    let bytes;
-    try {
-      bytes = await chooseExchangeFile({accept:['application/json','text/plain'], minBytes:0, maxBytes:MAX_SIGNAL});
-    } catch (error: any) {
-      if (error?.message === 'INVALID_FILE_SIZE') throw Error('SIGNAL_TOO_LARGE');
-      throw error;
-    }
+    const bytes = await chooseExchangeFile({accept:['application/json','text/plain'], minBytes:1, maxBytes:MAX_SIGNAL});
     if (bytes) setInput(signalDecoder.decode(bytes));
   }
   const saveSignalFile = () => saveExchangeFile(`creative-cooking-direct-${role}.json`, 'application/json', signalEncoder.encode(output));
