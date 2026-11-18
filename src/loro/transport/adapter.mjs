@@ -1,10 +1,17 @@
+import base64 from 'base64-js';
+const {fromByteArray,toByteArray}=base64;
 // Provisional C0.1 encoding. No wire compatibility is claimed before C1.
 export const MAX_FRAME = 16384, CHUNK = 8192, MAX_OBJECT = 2425344, MAX_TRANSFERS = 8, MAX_PENDING_BYTES = MAX_OBJECT * MAX_TRANSFERS;
 const enc = new TextEncoder(), dec = new TextDecoder('utf-8', {fatal:true});
 const id = x => typeof x === 'string' && x.length > 0 && enc.encode(x).length <= 256;
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));
-const b64 = b => {let s=''; for(const n of b) s+=String.fromCharCode(n); return btoa(s);};
-const un64 = s => {if(typeof s !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s)) throw Error('MALFORMED'); const b=Uint8Array.from(atob(s),c=>c.charCodeAt(0)); if(b64(b)!==s) throw Error('MALFORMED'); return b;};
+const b64 = bytes => fromByteArray(bytes);
+const un64 = value => {
+ if(typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw Error('MALFORMED');
+ const bytes=toByteArray(value);
+ if(b64(bytes)!==value) throw Error('MALFORMED');
+ return bytes;
+};
 const equal = (a,b) => a.length===b.length && a.every((v,i)=>v===b[i]);
 export async function digest(bytes) {return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)), n=>n.toString(16).padStart(2,'0')).join('');}
 async function checkedDigest(fn,bytes) {if(typeof fn!=='function')throw Error('MALFORMED');const value=await fn(new Uint8Array(bytes));if(typeof value!=='string'||!/^[0-9a-f]{64}$/.test(value))throw Error('INVALID_PROOF');return value;}

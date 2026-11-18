@@ -6,6 +6,10 @@ import {candidateCodec} from '../crypto/candidate.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {localProvider} from '../app/local-provider.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
+import {householdPairing as bindHouseholdPairing} from '../app/household-pairing.mjs';
+import {bootstrapDisclosurePolicy} from '../app/bootstrap-policy.mjs';
+import {cookingFiles} from '../app/cooking-file.mjs';
+import {openNativeHouseholdPersistence} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
 import {openNativeSequences} from './sequences.mjs';
 const enc=new TextEncoder(),dec=new TextDecoder('utf-8',{fatal:true});
@@ -18,12 +22,12 @@ async function transaction(db,fn){exec(db,'BEGIN IMMEDIATE');try{const r=await f
 function check(r){if(!r||r.version!==1||!fields.every(k=>valid(r[k]))||new Set(fields.map(k=>r[k])).size!==fields.length)throw Error('LOCKED');return r}
 const decode=bytes=>check(JSON.parse(dec.decode(bytes)));
 const serial=new Map();
-export function openNativeWorkspaceWith({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta}) {
+export function openNativeWorkspaceWith({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect}) {
  if(!valid(name)||typeof create!=='boolean')throw Error('MALFORMED');
- const previous=serial.get(name)??Promise.resolve();const current=previous.catch(()=>{}).then(()=>open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta}));serial.set(name,current);current.finally(()=>{if(serial.get(name)===current)serial.delete(name)}).catch(()=>{});return current;
+ const previous=serial.get(name)??Promise.resolve();const current=previous.catch(()=>{}).then(()=>open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect}));serial.set(name,current);current.finally(()=>{if(serial.get(name)===current)serial.delete(name)}).catch(()=>{});return current;
 }
-async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta}){
- await sodium.ready;const db=openDatabase(name);let master,sequences;
+async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeImportBlobMeta,randomUUID,openDirect}){
+ await sodium.ready;const db=openDatabase(name);let master,sequences,pairing,joinedSequences;
  try {
   master=openMaster(name);
   exec(db,'CREATE TABLE IF NOT EXISTS loro_bootstrap (id INTEGER PRIMARY KEY CHECK(id=1), stage TEXT NOT NULL, data BLOB NOT NULL)');
@@ -56,11 +60,37 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const ensure=async(scope,initialize)=>{const old=await storage.readPairingAuthority(scope);if(!old.ok)throw Error(old.error);if(!old.value){if(ready)throw Error('MISSING_AUTHORITY');try{await initialize()}catch(e){const raced=await storage.readPairingAuthority(scope);if(!raced.ok||!raced.value)throw e}}};
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
-  const house=await resolveRuntimeAuthority(storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,r.device);
+  const originalHouse=await resolveRuntimeAuthority(storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,r.device);
   const runtime=(resolved,kind,rootPin)=>{const p=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epoch,fn)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epoch),fn)});return new OfflineRuntime({storage,codec:candidateCodec(p),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider}})};
-  const disclosure=disclosureService({storage,scope:{kind:'household',id:r.house},rootPin:root.head,provider,deviceId:r.device});const active=await storage.readDisclosureActive(r.house);if(!active.ok)throw Error(active.error);if(active.value)await disclosure.active();
+  pairing=openNativeHouseholdPersistence({name,openDatabase,master,storage,provider,sodium,deviceId:r.device});
+  const {selection,pins,store,prepareJoinedSequences,finalizeJoinedSequences}=pairing;
+  const selected=await selection.openSelected();
+  joinedSequences=selected?.sequences;
+  const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head;
+  const household=runtime(selected?.resolved??originalHouse,'household',activePin);
+  const disclosure=disclosureService({storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device});
+  const policyStatus=await bootstrapDisclosurePolicy(storage,activeScope.id,disclosure);
+  const householdPairing=bindHouseholdPairing({
+   name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:r.adult,
+   runtime:household,service:disclosure,pins,keys,signing,wrapping,signingKey:signingRef,
+   wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection,selectedHousehold:!!selected,LoroDoc,
+   prepareJoinedSequences,finalizeJoinedSequences,randomUUID
+  });
+  const cooking=cookingFiles({runtime:household,service:disclosure});
+  const selectedId=selected?.scope.id??null;
+  const direct=openDirect?.({
+   runtime:household,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),
+   withSelected:use=>selection.withCurrent(selectedId,use)
+  });
   if(!ready)await transaction(db,async()=>{const now=load();if(!now||!['sealed','ready'].includes(now.stage))throw Error('LOCKED');const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(now.data),aad));if(decoded.stage!==now.stage)throw Error('LOCKED');const {stage,...current}=decoded;if(JSON.stringify(current)!==JSON.stringify(r))throw Error('LOCKED');if(now.stage==='sealed'){const complete=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['ready',complete])}});
   const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
-  return {household:runtime(house,'household',root.head),personal:runtime(personal,'personal',pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!active.value,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences,recovery,close:()=>{sequences.close();db.close();master.close()}};
- }catch(e){sequences?.close();db.close();master?.close();throw e}
+  return {
+   household,personal:runtime(personal,'personal',pin),householdPairing,cookingFiles:cooking,direct,
+   disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&policyStatus.needsSetup,
+   needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
+   deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
+   sequences:selected?{reserve:(scopeId,operationId)=>(scopeId===activeScope.id?joinedSequences:sequences).reserve(scopeId,operationId)}:sequences,
+   close:()=>{joinedSequences?.close();pairing.close();sequences.close();db.close();master.close()}
+  };
+ }catch(e){joinedSequences?.close();pairing?.close();sequences?.close();db.close();master?.close();throw e}
 }

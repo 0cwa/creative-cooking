@@ -1,11 +1,10 @@
 import {publishHouseholdAdmission} from '../authority/chain.mjs';
 import {sealHouseholdFile,installHouseholdFile} from '../pairing/household-file.mjs';
-import {prepareJoinedSequences,finalizeJoinedSequences} from './joined-sequences.web.ts';
 import {validPairingScope} from '../contracts/pairing.ts';
 const enc=new TextEncoder(),hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 export function householdReceiverIds(sodium,scope,deviceId){if(!validPairingScope(scope)||scope.kind!=='household'||typeof deviceId!=='string'||!deviceId)throw Error('MALFORMED');const tag=hex(sodium.crypto_generichash(32,enc.encode(JSON.stringify([scope.id,deviceId]))));return {operationId:`receive-${tag}`,keyOperationId:`household-data-${tag}`};}
 /** Trusted app dependencies are closed over; no identity key leaves withSecrets. */
-export function householdTransfer({name,sodium,storage,master,provider,sessionStore,scope,pin,deviceId,runtime,service,keys,withSecrets,LoroDoc}){
+export function householdTransfer({name,sodium,storage,master,provider,sessionStore,scope,pin,deviceId,runtime,service,keys,withSecrets,LoroDoc,prepareJoinedSequences,finalizeJoinedSequences}){
  const ownScope=structuredClone(scope);
  async function publish(input){
   const data=structuredClone(input),operationId=data?.item?.event?.proposalId;if(typeof operationId!=='string'||!operationId||!(data.seed?.snapshot instanceof Uint8Array))throw Error('MALFORMED');

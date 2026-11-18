@@ -1,14 +1,85 @@
 import {useContext,useState} from 'react';
-import {Pressable,Text,View} from 'react-native';
+import {Platform,Pressable,Text,View} from 'react-native';
 import {useAppState} from '@/state/AppState';
+import {MAX_OBJECT} from '../transport/adapter.mjs';
+import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
-/** Explicit foreground file exchange; no peer receipt or automatic sync is implied. */
-export function CookingExchange(){
- const workspace=useContext(LoroWorkspaceValue),app=useAppState(),[open,setOpen]=useState(false),[rows,setRows]=useState<any[]>([]),[pending,setPending]=useState<any[]>([]),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
- const refresh=async()=>{setStatus('');try{const [outbound,inbox]=await Promise.all([workspace.cookingFiles.list(),workspace.cookingFiles.pending()]);setRows(outbound);setPending(inbox)}catch(e){setStatus(e instanceof Error?e.message:'Could not list updates.')}};
- const download=async(id:string)=>{setBusy(true);setStatus('');try{const bytes=await workspace.cookingFiles.download(id),url=URL.createObjectURL(new Blob([new Uint8Array(bytes).buffer],{type:'application/octet-stream'})),link=document.createElement('a');link.href=url;link.download='creative-cooking-update.bin';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setStatus('Encrypted update downloaded. This does not confirm that a peer received it.')}catch(e){setStatus(e instanceof Error?e.message:'Could not download update.')}finally{setBusy(false)}};
- const receive=async()=>{const input=document.createElement('input');input.type='file';const file:File=await new Promise((resolve,reject)=>{input.onchange=()=>input.files?.[0]?resolve(input.files[0]):reject(Error('No file selected.'));input.oncancel=()=>reject(Error('No file selected.'));input.click()});if(file.size>3_300_000)throw Error('The update file is too large.');const release=app.beginWorkspaceTransition();try{if(app.localPersistenceStatus==='error')throw Error('Retry local saving before receiving an update.');await app.flushCurrentWorkspace();const result=await workspace.cookingFiles.receive(new Uint8Array(await file.arrayBuffer()));if(result.status==='pending'){setStatus('The encrypted update is retained, awaiting policy governance proof.');release();return}globalThis.location.reload()}catch(e){release();throw e}};
- const retry=async(itemId:string)=>{const release=app.beginWorkspaceTransition();try{if(app.localPersistenceStatus==='error')throw Error('Retry local saving before receiving an update.');await app.flushCurrentWorkspace();const result=await workspace.cookingFiles.retry(itemId);if(result.status==='pending'){setStatus('The encrypted update is retained, awaiting policy governance proof.');release();return}globalThis.location.reload()}catch(e){release();throw e}};
- const choose=()=>{setStatus('');setBusy(true);void receive().catch(e=>setStatus(e instanceof Error?`Update not applied: ${e.message}. Authenticated staged updates remain on this device.`:'Could not receive update.')).finally(()=>setBusy(false))};
- return <View style={{gap:6}}><Pressable accessibilityRole="button" onPress={()=>{setOpen(!open);if(!open)void refresh()}}><Text>{open?'Close cooking file exchange':'Exchange encrypted cooking files'}</Text></Pressable>{open?<><Text>Exchange one encrypted update file at a time with an authorized household member. Updates may need earlier files first. This does not report delivery or run in the background.</Text><Pressable accessibilityRole="button" disabled={busy} onPress={()=>void refresh()}><Text>Refresh retained cooking updates</Text></Pressable>{rows.map(row=><View key={row.objectId}><Text selectable>{row.objectId}</Text><Pressable accessibilityRole="button" disabled={busy} onPress={()=>void download(row.objectId)}><Text>Download encrypted update {row.objectId}</Text></Pressable></View>)}{pending.map(item=><View key={item.itemId}><Text>Retained update awaiting application: {item.itemId}{item.reason==='POLICY_GOVERNANCE_UNPROVEN'?' · policy governance proof required':' · retry after any missing earlier updates'}</Text><Pressable accessibilityRole="button" disabled={busy} onPress={()=>{setBusy(true);setStatus('');void retry(item.itemId).catch(e=>setStatus(e instanceof Error?`Update not applied: ${e.message}. The encrypted update remains on this device.`:'Could not apply retained update.')).finally(()=>setBusy(false))}}><Text>Retry retained update {item.itemId}</Text></Pressable></View>)}<Pressable accessibilityRole="button" disabled={busy} onPress={choose}><Text>Choose encrypted cooking update</Text></Pressable>{status?<Text accessibilityRole="alert">{status}</Text>:null}</>:null}</View>;
+
+/** Explicit foreground file exchange. A file handoff does not provide a peer receipt. */
+export function CookingExchange() {
+  const workspace = useContext(LoroWorkspaceValue), app = useAppState();
+  const [open,setOpen] = useState(false), [rows,setRows] = useState<any[]>([]), [pending,setPending] = useState<any[]>([]);
+  const [status,setStatus] = useState(''), [busy,setBusy] = useState(false);
+  const web = Platform.OS === 'web';
+
+  async function refresh() {
+    const [outbound,inbox] = await Promise.all([workspace.cookingFiles.list(),workspace.cookingFiles.pending()]);
+    setRows(outbound);
+    setPending(inbox);
+  }
+  function run(fn:()=>Promise<void>, failure:string) {
+    setStatus('');
+    setBusy(true);
+    void fn().catch(error => setStatus(`${failure}${error instanceof Error ? `: ${error.message}` : ''}.`))
+      .finally(() => setBusy(false));
+  }
+  async function exportUpdate(id:string) {
+    const bytes = await workspace.cookingFiles.download(id);
+    await saveExchangeFile('creative-cooking-update.bin','application/octet-stream',bytes);
+    setStatus(web ? 'Encrypted update downloaded. This does not confirm that a peer received it.' : 'Encrypted update ready to share.');
+  }
+  async function applyUpdate(apply:()=>Promise<{status:string}>) {
+    const {selection,selectedHousehold} = workspace.householdPairing;
+    await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, async () => {
+      const release = app.beginWorkspaceTransition();
+      try {
+        if (app.localPersistenceStatus === 'error') throw Error('Retry local saving before receiving an update');
+        await app.flushCurrentWorkspace();
+        const result = await apply();
+        if (result.status === 'pending') {
+          setStatus('The encrypted update is retained, awaiting policy governance proof.');
+          return;
+        }
+        if (web) {
+          globalThis.location.reload();
+          return;
+        }
+        try {
+          await app.refreshSharedCooking?.();
+          setStatus('The encrypted update was applied.');
+        } catch {
+          setStatus('The encrypted update was applied. Retry cooking refresh to update this view.');
+        }
+        await refresh();
+      } finally { release(); }
+    });
+  }
+  async function choose() {
+    const bytes = await chooseExchangeFile({accept:['application/octet-stream','application/x-binary'],minBytes:1,maxBytes:MAX_OBJECT});
+    if (bytes) await applyUpdate(() => workspace.cookingFiles.receive(bytes));
+  }
+
+  return <View style={{gap:6}}>
+    <Pressable accessibilityRole="button" disabled={busy} onPress={() => {setOpen(!open); if (!open) run(refresh,'Could not list updates');}}>
+      <Text>{open ? 'Close cooking file exchange' : 'Exchange encrypted cooking files'}</Text>
+    </Pressable>
+    {open && <>
+      <Text>Exchange one encrypted update file at a time with an authorized household member. Apply any required earlier updates first.</Text>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(refresh,'Could not list updates')}><Text>Refresh retained cooking updates</Text></Pressable>
+      {rows.map(row => <View key={row.objectId}>
+        <Text selectable>{row.objectId}</Text>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(() => exportUpdate(row.objectId),'Could not share update')}>
+          <Text>{web ? 'Download' : 'Share'} encrypted update {row.objectId}</Text>
+        </Pressable>
+      </View>)}
+      {pending.map(item => <View key={item.itemId}>
+        <Text>Retained update awaiting application: {item.itemId}{item.reason === 'POLICY_GOVERNANCE_UNPROVEN' ? ' · policy governance proof required' : ' · retry after any missing earlier updates'}</Text>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(() => applyUpdate(() => workspace.cookingFiles.retry(item.itemId)),'Could not apply retained update')}>
+          <Text>Retry retained update {item.itemId}</Text>
+        </Pressable>
+      </View>)}
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(choose,'Update not applied')}><Text>Choose encrypted cooking update</Text></Pressable>
+      {!!status && <Text accessibilityRole="alert">{status}</Text>}
+    </>}
+  </View>;
 }

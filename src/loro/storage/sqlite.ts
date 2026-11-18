@@ -17,11 +17,18 @@ const decode = (v: string) => { try { return JSON.parse(v, (_k,x) => {
   }
   return x;
 }); } catch { throw new StorageFailure('CORRUPT'); } };
+// All transactions on the same connection must finish before the next begins.
+const connectionQueue = new WeakMap<SQLiteConnection,Promise<void>>();
+export function scheduleSQLite<T>(db: SQLiteConnection, execute: () => Promise<T>|T): Promise<T> {
+  const result = (connectionQueue.get(db) ?? Promise.resolve()).then(execute);
+  connectionQueue.set(db,result.then(() => {}, () => {}));
+  return result;
+}
+
 /** Uses BEGIN IMMEDIATE to serialize writers across connections and processes. */
-export function openSQLiteStorage(db: SQLiteConnection, fault?: (boundary: string) => void) {
+export function openSQLiteTransaction(db: SQLiteConnection): TransactionRunner {
   db.executeSync('CREATE TABLE IF NOT EXISTS loro_records (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
-  let pending = Promise.resolve();
-  const run: TransactionRunner = (write,body) => {
+  return (write,body) => {
     const execute = async () => {
       db.executeSync(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
       try {
@@ -33,7 +40,11 @@ export function openSQLiteStorage(db: SQLiteConnection, fault?: (boundary: strin
         db.executeSync('COMMIT'); return result;
       } catch(e) { try { db.executeSync('ROLLBACK'); } catch {} throw e; }
     };
-    const result = pending.then(execute); pending = result.then(() => {},() => {}); return result;
+    return scheduleSQLite(db,execute);
   };
+}
+
+export function openSQLiteStorage(db: SQLiteConnection, fault?: (boundary: string) => void) {
+  const run = openSQLiteTransaction(db);
   return Object.assign(new TransactionalStorage(run,fault), {householdRecipient:new HouseholdRecipientTransaction(run,fault),recoveryTransaction:recoveryTransaction(run),continuity:new ContinuityRegistry(run,fault),compromise:new CompromiseReviews(run,fault),recipient:new RecipientRecords(run,fault),localKeys:(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit)});
 }

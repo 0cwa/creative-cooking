@@ -1,14 +1,17 @@
 import {useContext, useEffect, useRef, useState} from 'react';
-import {Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
+import {Platform, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
 import {useAppState} from '@/state/AppState';
 import {MAX_SIGNAL} from '../transport/direct-signal.mjs';
 import {copyText} from './clipboard';
+import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 
 type Status = {
   ready:boolean; closed:boolean; error:string|null;
   receivedApplied:number; receivedRetained:number; peerStored:number; peerApplied:number;
 };
+const signalDecoder = new TextDecoder('utf-8',{fatal:true});
+const signalEncoder = new TextEncoder();
 const initial:Status = {ready:false, closed:false, error:null, receivedApplied:0, receivedRetained:0, peerStored:0, peerApplied:0};
 const messages:Record<string,string> = {
   INVALID_SIGNAL:'This connection message is invalid.',
@@ -22,7 +25,7 @@ const messages:Record<string,string> = {
   DIRECT_CODE_MISMATCH:'The verification code does not match this connection.',
   INVALID_CONFIRMATION:'The other device’s confirmation could not be verified.',
   DIRECT_CONNECTION_FAILED:'The devices could not connect directly. Try another network or exchange encrypted cooking files.',
-  ICE_GATHERING_TIMEOUT:'The browser could not prepare a direct connection. You can exchange encrypted cooking files.',
+  ICE_GATHERING_TIMEOUT:'This device could not prepare a direct connection. You can exchange encrypted cooking files.',
   DIRECT_CLOSED:'The other device disconnected.',
   DIRECT_TIMEOUT:'The connection expired. Start a new direct connection to continue.',
   DIRECT_RESULT_TIMEOUT:'The other device did not confirm the update in time. Reconnect to retry.',
@@ -116,25 +119,16 @@ export function CookingDirect() {
     }
   }
   async function readSignalFile() {
-    const inputElement = document.createElement('input');
-    inputElement.type = 'file';
-    inputElement.accept = '.json,application/json';
-    const file = await new Promise<File>((resolve, reject) => {
-      inputElement.onchange = () => inputElement.files?.[0] ? resolve(inputElement.files[0]) : reject(Error('INVALID_SIGNAL'));
-      inputElement.oncancel = () => reject(Error('INVALID_SIGNAL'));
-      inputElement.click();
-    });
-    if (file.size > MAX_SIGNAL) throw Error('SIGNAL_TOO_LARGE');
-    setInput(await file.text());
+    let bytes;
+    try {
+      bytes = await chooseExchangeFile({accept:['application/json','text/plain'], minBytes:0, maxBytes:MAX_SIGNAL});
+    } catch (error: any) {
+      if (error?.message === 'INVALID_FILE_SIZE') throw Error('SIGNAL_TOO_LARGE');
+      throw error;
+    }
+    if (bytes) setInput(signalDecoder.decode(bytes));
   }
-  function saveSignalFile() {
-    const url = URL.createObjectURL(new Blob([output], {type:'application/json'}));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `creative-cooking-direct-${role}.json`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  const saveSignalFile = () => saveExchangeFile(`creative-cooking-direct-${role}.json`, 'application/json', signalEncoder.encode(output));
   async function sendUpdates() {
     await latestApp.current.flushCurrentWorkspace();
     const result = await active.current.send();
@@ -144,7 +138,8 @@ export function CookingDirect() {
     setNotice(text);
   }
   async function retryRefresh() {
-    await workspace.direct.withSelected(async () => {
+    const {selection,selectedHousehold} = workspace.householdPairing;
+    await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, async () => {
       const current = latestApp.current;
       const release = current.beginWorkspaceTransition();
       try {
@@ -154,10 +149,10 @@ export function CookingDirect() {
     });
   }
 
-  if (!workspace.direct || typeof RTCPeerConnection !== 'function') return null;
+  if (!workspace.direct && !app.sharedCookingRefreshPending) return null;
   const responseInput = (role === 'answer' && !output) || (role === 'offer' && output && !code);
   return <View style={styles.group}>
-    {button(open ? 'Close direct cooking exchange' : 'Exchange cooking updates directly', () => {if (open) reset(); setOpen(!open);}, busy)}
+    {workspace.direct && button(open ? 'Close direct cooking exchange' : 'Exchange cooking updates directly', () => {if (open) reset(); setOpen(!open);}, busy)}
     {open && <>
       {!peers.length && <Text>Invite a device to this household before starting direct exchange.</Text>}
       {!!peers.length && !status.closed && <>
@@ -171,7 +166,7 @@ export function CookingDirect() {
           {peers.map(id => <Pressable key={id} accessibilityRole="radio" accessibilityState={{checked:(peer||peers[0])===id}} onPress={() => setPeer(id)} disabled={busy} style={styles.button}><Text>{id}</Text></Pressable>)}
         </>}
         {responseInput && <>
-          <TextInput accessibilityLabel={role === 'offer' ? 'Direct connection answer' : 'Direct connection offer'} value={input} onChangeText={setInput} multiline maxLength={MAX_SIGNAL} editable={!busy} style={styles.input} />
+          <TextInput accessibilityLabel={role === 'offer' ? 'Direct connection answer' : 'Direct connection offer'} value={input} onChangeText={setInput} multiline autoCapitalize="none" autoCorrect={false} maxLength={MAX_SIGNAL} editable={!busy} style={styles.input} />
           {button('Choose connection message file', () => run(readSignalFile), busy)}
         </>}
         {!output && button(role === 'offer' ? 'Create connection offer' : 'Verify offer and create answer', () => run(start), busy || (role === 'answer' && !input.trim()))}
@@ -179,8 +174,8 @@ export function CookingDirect() {
           <Text>{role === 'offer' ? 'Share this offer with the other device.' : 'Share this answer with the other device.'}</Text>
           <Text selectable accessibilityLabel="Outgoing direct connection message" style={styles.signal}>{output}</Text>
           <View style={styles.actions}>
-            {button('Copy connection message', () => run(async () => {if (!await copyText(output)) setNotice('Copy the displayed connection message or download its file.');}), busy)}
-            {button('Download connection message', saveSignalFile, busy)}
+            {button('Copy connection message', () => run(async () => {if (!await copyText(output)) setNotice('Copy the displayed connection message or share its file.');}), busy)}
+            {button(Platform.OS === 'web' ? 'Download connection message' : 'Share connection message', () => run(saveSignalFile), busy)}
           </View>
         </>}
         {role === 'offer' && output && !code && button('Verify connection answer', () => run(async () => {setCode(await active.current.acceptAnswer(input)); setInput('');}), busy || !input.trim())}
@@ -213,6 +208,6 @@ export function CookingDirect() {
 const styles = StyleSheet.create({
   group:{gap:8}, actions:{flexDirection:'row', flexWrap:'wrap', gap:8},
   button:{alignSelf:'flex-start', paddingHorizontal:10, paddingVertical:7, borderWidth:1, borderColor:'#94a3b8', borderRadius:6},
-  disabled:{opacity:0.5}, input:{borderWidth:1, borderColor:'#94a3b8', borderRadius:6, padding:8},
+  disabled:{opacity:0.5}, input:{borderWidth:1, borderColor:'#94a3b8', borderRadius:6, padding:8, maxHeight:110},
   signal:{maxHeight:95, fontFamily:'monospace', fontSize:12, borderWidth:1, borderColor:'#94a3b8', padding:6, overflow:'scroll'},
 });

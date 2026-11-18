@@ -50,14 +50,17 @@ export async function verifySignal(provider, message, key) {
   if (!await provider.verify(key, directDomain(signal.kind, signal), signature(value))) throw Error('INVALID_SIGNAL_SIGNATURE');
 }
 
-export const signalHash = message => digest(directDomain('signed-signal', message));
-export const transcriptHash = (offer, answer) => digest(directDomain('transcript', {offer, answer}));
+export const signalHash = (message, sha256 = digest) => sha256(directDomain('signed-signal', message));
+export const transcriptHash = (offer, answer, sha256 = digest) => sha256(directDomain('transcript', {offer, answer}));
 export const comparisonCode = hash => hash.slice(0, 32).match(/.{4}/g).join('-').toUpperCase();
 
-export function requireNegotiated(connection, offer, answer, initiator) {
-  // `current` descriptions represent the applied offer/answer, not a pending negotiation.
+export const currentDescriptions = connection => [connection.currentLocalDescription, connection.currentRemoteDescription];
+
+export function requireNegotiated(connection, offer, answer, initiator, readDescriptions = currentDescriptions) {
+  // Only stable descriptions represent the applied offer and answer.
+  if (connection.signalingState !== 'stable') throw Error('NEGOTIATED_SIGNAL_MISMATCH');
   const [local, remote] = initiator ? [offer, answer] : [answer, offer];
-  if (connection.signalingState !== 'stable' || connection.currentLocalDescription?.type !== local.kind ||
-    connection.currentRemoteDescription?.type !== remote.kind || connection.currentLocalDescription.sdp !== local.sdp ||
-    connection.currentRemoteDescription.sdp !== remote.sdp) throw Error('NEGOTIATED_SIGNAL_MISMATCH');
+  const [actualLocal, actualRemote] = readDescriptions(connection);
+  if (actualLocal?.type !== local.kind || actualRemote?.type !== remote.kind ||
+    actualLocal.sdp !== local.sdp || actualRemote.sdp !== remote.sdp) throw Error('NEGOTIATED_SIGNAL_MISMATCH');
 }

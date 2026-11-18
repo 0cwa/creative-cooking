@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {nativeCurrentDescriptions} from '../native/webrtc-descriptions.mjs';
 import {comparisonCode, directDomain, hex, readSignal, requireNegotiated, signalHash, signSignal, transcriptHash, verifySignal} from './direct-signal.mjs';
 
 const dataSdp = ['v=0', 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', `a=fingerprint:sha-256 ${Array(32).fill('AA').join(':')}`, 'a=ice-ufrag:fixture', 'a=ice-pwd:fixture', ''].join('\r\n');
@@ -23,4 +25,19 @@ test('direct signaling signs both endpoints and the original SDP; both current d
   requireNegotiated(state, offer, answer, true);
   assert.throws(() => requireNegotiated({...state,currentLocalDescription:{type:'offer',sdp:changed.sdp}}, offer, answer, true), /NEGOTIATED_SIGNAL_MISMATCH/);
   assert.equal(hex(await provider.sign('sender', directDomain('confirm', offer))).length, 128);
+});
+
+test('Android stable descriptions and injected SHA-256 preserve the browser transcript', async () => {
+  const offer = offerBody;
+  const answer = {...offerBody, kind:'answer', sdp:dataSdp.replace('ufrag:fixture', 'ufrag:native'), offerHash:await signalHash(offer)};
+  const nativeSha256 = async bytes => createHash('sha256').update(bytes).digest('hex');
+  assert.equal(await signalHash(offer, nativeSha256), answer.offerHash);
+  assert.equal(await transcriptHash(offer, answer, nativeSha256), await transcriptHash(offer, answer));
+
+  const local = {type:'answer',sdp:answer.sdp}, remote = {type:'offer',sdp:offer.sdp};
+  const native = {signalingState:'stable',localDescription:local,remoteDescription:remote};
+  requireNegotiated(native, offer, answer, false, nativeCurrentDescriptions);
+  assert.throws(() => requireNegotiated({...native,signalingState:'have-remote-offer'}, offer, answer, false, nativeCurrentDescriptions), /NEGOTIATED_SIGNAL_MISMATCH/);
+  const changed = {...remote, sdp:remote.sdp.replaceAll('\r\n','\n')};
+  assert.throws(() => requireNegotiated({...native,remoteDescription:changed}, offer, answer, false, nativeCurrentDescriptions), /NEGOTIATED_SIGNAL_MISMATCH/);
 });

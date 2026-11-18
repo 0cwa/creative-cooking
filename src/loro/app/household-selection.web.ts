@@ -1,16 +1,23 @@
-import {validPairingScope} from '../contracts/pairing.ts';
 import {openJoinedSequences} from './joined-sequences.web.ts';
-import {householdReceiverIds} from './household-transfer.mjs';
-const enc=new TextEncoder(),dec=new TextDecoder('utf-8',{fatal:true}),aad=enc.encode('creative-cooking/selected-household/v1');
+import {selectedHousehold} from './household-selection.mjs';
+
 const request=<T,>(r:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
-/** The saved choice is separate from the original workspace; every reopen
- * rechecks the wrapped independent pin, signed receipt and counter database. */
-export function householdSelection({name,meta,master,pins,storage,provider,sodium,deviceId}:any){
- const locks=globalThis.navigator?.locks;if(!locks)throw Error('LOCK_UNAVAILABLE');
- const read=async()=>{const store=meta.transaction('metadata','readonly').objectStore('metadata'),[raw,marker]=await Promise.all([request(store.get('selected-household')),request(store.get('selected-household-required'))]);if(raw===undefined&&marker===undefined)return null;if(raw===undefined||marker!==1)throw Error('SELECTION_CORRUPT');let selection:any;try{selection=JSON.parse(dec.decode(await master.unwrap('workspace-master',raw,aad)))}catch{throw Error('SELECTION_CORRUPT')}if(!selection||Object.keys(selection).sort().join(',')!=='scope,version'||selection.version!==1||!validPairingScope(selection.scope)||selection.scope.kind!=='household')throw Error('SELECTION_CORRUPT');return selection};
- const open=async(scope:any)=>{if(!validPairingScope(scope)||scope.kind!=='household')throw Error('MALFORMED');scope=structuredClone(scope);const pin=(await pins.list()).find((x:any)=>x?.scope?.kind==='household'&&x.scope.id===scope.id);if(!pin)throw Error('CONFIRMATION_REQUIRED');const {operationId}=householdReceiverIds(sodium,scope,deviceId),receipt=await storage.householdRecipient.find(scope.id,operationId);if(!receipt.ok||!receipt.value||receipt.value.expectedAuthority.acceptedParent!==pin.head)throw Error('INVALID_ADMISSION');const joined=await openJoinedSequences({name,storage,scope,pin:pin.pin,provider,deviceId,operationId});if(!joined)throw Error('INVALID_ADMISSION');return {...joined,scope,pin:pin.pin}};
- const write=async(value:any)=>{const tx=meta.transaction('metadata','readwrite');if(value===null){tx.objectStore('metadata').delete('selected-household');tx.objectStore('metadata').delete('selected-household-required')}else{tx.objectStore('metadata').put(value,'selected-household');tx.objectStore('metadata').put(1,'selected-household-required')}await new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}})};
- const assertCurrent=async(id:string|null)=>{if(((await read())?.scope.id??null)!==id)throw Error('HOUSEHOLD_SELECTION_CHANGED')};
- const withCurrent = <T,>(id:string|null, use:()=>Promise<T>) => locks.request(`creative-cooking/bootstrap/v1/${name}`, {mode:'shared'}, async()=>{await assertCurrent(id);return use()});
- return {assertCurrent,withCurrent,openSelected:async()=>{const selected=await read();return selected?open(selected.scope):null},available:async(scope:any)=>{scope=structuredClone(scope);if(!validPairingScope(scope)||scope.kind!=='household')throw Error('MALFORMED');const {operationId}=householdReceiverIds(sodium,scope,deviceId),receipt=await storage.householdRecipient.find(scope.id,operationId);if(!receipt.ok)throw Error(receipt.error);if(!receipt.value)return false;const verified=await open(scope);verified.sequences.close();return true},select:async(scope:any)=>{scope=structuredClone(scope);return locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode:'exclusive'},async()=>{const verified=await open(scope);try{const wrapped=await master.wrap('workspace-master',enc.encode(JSON.stringify({version:1,scope})),aad);await write(wrapped)}finally{verified.sequences.close()}})},clear:()=>locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode:'exclusive'},()=>write(null))};
+export function householdSelection({name,meta,...dependencies}:any){
+ const locks=globalThis.navigator?.locks;
+ if(!locks)throw Error('LOCK_UNAVAILABLE');
+ return selectedHousehold({
+  ...dependencies,
+  openJoined:(input:any)=>openJoinedSequences({...input,name}),
+  lock:<T,>(mode:'shared'|'exclusive',use:()=>Promise<T>)=>locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode},use),
+  readStored:()=>{
+   const store=meta.transaction('metadata','readonly').objectStore('metadata');
+   return Promise.all([request(store.get('selected-household')),request(store.get('selected-household-required'))]);
+  },
+  writeStored:async(value:Uint8Array|null)=>{
+   const tx=meta.transaction('metadata','readwrite'),store=tx.objectStore('metadata');
+   if(value===null){store.delete('selected-household');store.delete('selected-household-required')}
+   else{store.put(value,'selected-household');store.put(1,'selected-household-required')}
+   await new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}});
+  }
+ });
 }
