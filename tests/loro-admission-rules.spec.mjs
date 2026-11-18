@@ -87,9 +87,14 @@ test('fresh setup bounds fixed quorum by the actual electorate and preserves the
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Fixed quorum of 1. Requires 1 of 1 existing adults.');
 });
 
-test('fresh setup resumes one reserved workspace after a failed ready write', async ({page}) => {
+test('stale choosers preserve both pending and ready fresh workspace choices', async ({page, context}) => {
   const key='creative-cooking-storage-choice-v1';
   await page.goto('./');
+  const [pendingChooser,readyChooser]=await Promise.all([context.newPage(),context.newPage()]);
+  for(const chooser of [pendingChooser,readyChooser]){
+    await chooser.goto(page.url());
+    await expect(button(chooser,'Open existing workspace')).toBeVisible();
+  }
   await page.getByRole('radio', {name:/Every adult/}).click();
   await page.evaluate(key=>{
     const save=Storage.prototype.setItem;
@@ -104,10 +109,16 @@ test('fresh setup resumes one reserved workspace after a failed ready write', as
   expect(saved).toMatch(/^pending:/);
   const {name,policy}=JSON.parse(saved.slice('pending:'.length));
   expect(policy).toEqual({kind:'unanimous',fixedCount:null});
+  await button(pendingChooser,'Open existing workspace').click();
+  await expect(button(pendingChooser,'Start fresh local preview')).toHaveCount(0);
+  expect(await pendingChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(saved);
   await page.reload();
   await button(page,'Review household policy').click();
   await button(page,'Accept this household policy').click();
   expect(await page.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
+  await button(readyChooser,'Open existing workspace').click();
+  await expect(button(readyChooser,'Start fresh local preview')).toHaveCount(0);
+  expect(await readyChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await button(page,'Open settings').click();
   await button(page,'Manage adult admission rules').click();
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 1 of 1 existing adults.');

@@ -85,6 +85,7 @@ function AccountWorkspaceBootstrap() {
 }
 
 const webChoiceKey = 'creative-cooking-storage-choice-v1';
+const webChoiceLock = 'creative-cooking/web-workspace-choice/v1';
 const webWorkspaceKey = 'creative-cooking-local-workspace-v1';
 const pendingPrefix = 'pending:';
 
@@ -150,7 +151,19 @@ export default function RootLayout() {
     }catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
-  const legacy=()=>{try{if(Platform.OS==='web')globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy')}catch{Alert.alert('Workspace choice was not saved','Your existing workspace will open for this session. This browser could not remember your selection.')}setChoice('legacy')};
+  const legacy=async()=>{
+    try{
+      if(Platform.OS==='web'){
+        const locks=globalThis.navigator?.locks;
+        if(!locks)throw Error('LOCK_UNAVAILABLE');
+        await locks.request(webChoiceLock,()=>{
+          const mode=globalThis.localStorage.getItem(webChoiceKey);
+          if(!mode?.startsWith(pendingPrefix)&&!mode?.startsWith('local:'))globalThis.localStorage.setItem(webChoiceKey,'legacy');
+        });
+      }
+    }catch{Alert.alert('Workspace choice was not saved','Your existing workspace will open for this session. This browser could not remember your selection.')}
+    setChoice('legacy');
+  };
   const fresh=async()=>{
     setChoice('loading');setError(null);
     try{
@@ -163,7 +176,7 @@ export default function RootLayout() {
       const policy=initialAdmissionPolicy(admissionPolicy);
       const locks=globalThis.navigator?.locks;
       if(!locks)throw Error('LOCK_UNAVAILABLE');
-      await locks.request('creative-cooking/web-workspace-choice/v1',()=>{
+      await locks.request(webChoiceLock,()=>{
         const mode=globalThis.localStorage.getItem(webChoiceKey);
         if(mode?.startsWith(pendingPrefix)||mode?.startsWith('local:'))return;
         const record={version:1,name:`cooking-${crypto.randomUUID()}`,policy};
