@@ -1,4 +1,5 @@
 import {createSourceVerifier} from './source-proof.mjs';
+import {validate} from '../domain/registry.mjs';
 // Seals real Loro updates with the exact source-policy ancestry authenticated in
 // a v2 envelope, then commits document, outbound bytes and provenance together.
 const cookingKinds=new Set(['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction']);
@@ -29,6 +30,15 @@ export function validateCookingHeader(opened,itemId,s){
  const h=opened.header,same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
  if(opened.object.id!==itemId||![2,3,4].includes(h.version)||h.scopeId!==s.scopeId||h.documentId!==s.documentId||h.documentGeneration!==s.documentGeneration||h.branchHead!==s.branchHead||h.epochId!==s.epochId||h.suiteId!==s.suiteId||!same(h.policyHashes,s.policyHashes)||!s.acceptedAuthors.includes(h.authorDevice)||h.payloadKind!=='loro-update-v1'||h.semanticEffectIds.length!==1)throw Error('INVALID_AUTHORITY');
 }
+/** Validate signed command and update identities without reading local state. */
+export function decodeCookingPayload({value,header}){
+ let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(value))}catch{throw Error('MALFORMED_UPDATE')}
+ if(!payload||Object.keys(payload).sort().join(',')!=='command,update,version'||payload.version!==1||!Array.isArray(payload.update)||!payload.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))throw Error('MALFORMED_UPDATE');
+ const command=validate(payload.command);
+ if(!cookingKinds.has(command.kind)||command.data.author!==undefined&&command.data.author!==header.authorDevice)throw Error('INVALID_AUTHORITY');
+ if(command.effectId!==header.semanticEffectIds[0]||JSON.stringify([...command.dependencyEffectIds].sort())!==JSON.stringify(header.sourceEffectIds))throw Error('MALFORMED_UPDATE');
+ return {command,update:payload.update};
+}
 /** Authenticate, validate and import a v2 source-policy envelope atomically. */
 export async function importCookingWithPolicy({runtime,service,item}) {
  item=structuredClone(item);if(!item||typeof item.itemId!=='string'||!(item.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
@@ -49,12 +59,10 @@ export async function importCookingWithPolicy({runtime,service,item}) {
  validateCookingHeader(opened,item.itemId,s);
  const alreadyApplied=must(await runtime.storage.getInboxApplication(s.scopeId,item.itemId));
  for(const policyHash of h.disclosurePolicyHashes)await service.validateStored(policyHash,context);
- let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value))}catch{throw Error('MALFORMED_UPDATE')}
- if(!payload||Object.keys(payload).sort().join(',')!=='command,update,version'||payload.version!==1||!Array.isArray(payload.update)||!payload.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))throw Error('MALFORMED_UPDATE');
- const command=registry.validate(payload.command);runtime.assertRecipeCommand(command);if(!cookingKinds.has(command.kind))throw Error('INVALID_AUTHORITY');if(command.data.author!==undefined&&command.data.author!==h.authorDevice)throw Error('INVALID_AUTHORITY');if(command.effectId!==h.semanticEffectIds[0]||!same([...command.dependencyEffectIds].sort(),h.sourceEffectIds))throw Error('MALFORMED_UPDATE');
+ const {command,update:encodedUpdate}=decodeCookingPayload(opened);runtime.assertRecipeCommand(command);
  if((h.version===2||h.version===4&&!h.disclosureIncomplete)&&(record?.policyHash??null)!==h.disclosurePolicyHash&&!alreadyApplied){const staged=must(await runtime.storage.listStagedInbox(s.scopeId)).find(x=>x.itemId===item.itemId);if(!staged||!same(Array.from(staged.bytes),Array.from(item.bytes)))throw Error('STAGED_BYTES_MISMATCH');must(await runtime.storage.markDisclosurePending(auth.expectedAuthority,item.itemId,item.bytes,h.authorDevice));return {status:'pending',reason:'POLICY_GOVERNANCE_UNPROVEN',itemId:item.itemId};}
  const applied=alreadyApplied;if(applied){const source=must(await runtime.storage.readDisclosureSource(s.scopeId,command.effectId));if(!source||source.commandId!==command.commandId||!same(source.policyHashes,h.disclosurePolicyHashes)||!same(Array.from(source.envelope),Array.from(item.bytes)))throw Error('CORRUPT');return {outcome:applied.outcome,replayed:true};}
- const update=Uint8Array.from(payload.update),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!same(meta.predecessors,h.predecessorRefs))throw Error('MALFORMED_UPDATE');
+ const update=Uint8Array.from(encodedUpdate),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!same(meta.predecessors,h.predecessorRefs))throw Error('MALFORMED_UPDATE');
  const {doc,revision}=await runtime.document();let prior;try{prior=doc.forkAt(meta.frontiers)}catch{throw Error('MISSING_DEPENDENCY')};const verifier=prior.forkAt(meta.frontiers),start=verifier.oplogVersion(),checked=verifier.import(update);if(checked.pending?.size)throw Error('MISSING_DEPENDENCY');registry.validateOperations(command,verifier.exportJsonUpdates(start,undefined,false).changes);registry.checkPreconditions(prior,command,{importing:true});registry.checkShoppingCompatibility(doc,command);if(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h.version!==4)throw Error('UNSUPPORTED_VERSION');const verifySource=createSourceVerifier({runtime,service,context,allowIncomplete:h.version===3||h.version===4&&h.disclosureIncomplete,allowOwnDeviceBaseline:true});for(const dep of command.dependencyEffectIds){const source=await verifySource(dep);if(source.incomplete&&!(h.version===3||h.version===4&&h.disclosureIncomplete))throw Error('INCOMPLETE_PROVENANCE')}const imported=doc.import(update);if(imported.pending?.size)throw Error('MISSING_DEPENDENCY');
  const commit={version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority:auth.expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:registry.bytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds};
  return must(await runtime.storage.commitImportWithDisclosurePolicy(commit,h,{objectId:opened.object.id,bytes:new Uint8Array(item.bytes)},expectedActiveHash));

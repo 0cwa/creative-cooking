@@ -1,7 +1,6 @@
 import {MAX_OBJECT} from '../transport/adapter.mjs';
-import {importCookingWithPolicy,validateCookingHeader} from '../disclosure/cooking.mjs';
+import {decodeCookingPayload,importCookingWithPolicy,validateCookingHeader} from '../disclosure/cooking.mjs';
 import {commandRecipeId} from '../domain/recipe-document.mjs';
-import {validate} from '../domain/registry.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 /** A user-selected encrypted object is staged durably before the authorized
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
@@ -18,11 +17,8 @@ export function cookingFiles({runtime,service,recipeDocuments=false}){
   const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
   let target=runtime;
   if(recipeDocuments&&opened.header.documentId!==runtime.scope.documentId){
-   let payload;
-   try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value));}
-   catch{throw Error('MALFORMED_UPDATE');}
-   const command=validate(payload?.command),recipeId=commandRecipeId(command);
-   if(payload.version!==1||!recipeId||command.data.author!==opened.header.authorDevice)throw Error('INVALID_RECIPE_DOCUMENT');
+   const {command}=decodeCookingPayload(opened),recipeId=commandRecipeId(command);
+   if(!recipeId||command.data.author!==opened.header.authorDevice)throw Error('INVALID_RECIPE_DOCUMENT');
    target=await runtime.forRecipe(recipeId);
   }
   validateCookingHeader(opened,expectedId??opened.object.id,target.scope);

@@ -172,6 +172,12 @@ test('pinned recipe documents retain competing encrypted edits independently and
  await files(b).receive(unrelatedBytes);
  const otherB=await b.runtime.forRecipe('unrelated');
  const unrelatedBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),otherB.scope.documentId));
+ for(const runtime of [a.runtime,ar,other,b.runtime,br,otherB]){
+  const {doc,storedBytes}=await runtime.document();
+  const replay=await replayAuthenticated({runtime,checkpoint:storedBytes});
+  assert.deepEqual(replay.held,[]);
+  assert.deepEqual(projectCooking(replay.doc),projectCooking(doc));
+ }
  const [dependent]=await change(a,ar,'cross-recipe-dependency',{id:'r',title:'Cross-recipe write'});
  await assert.rejects(()=>execute(a,ar,'cross-recipe-dependency',[{
   ...dependent,dependencyEffectIds:[...dependent.dependencyEffectIds,unrelated[0].effectId],
@@ -196,14 +202,24 @@ test('pinned recipe documents retain competing encrypted edits independently and
   const forged=await ar.codec.sealContent(header,opened.value,ar.keyRef,signing);
   await assert.rejects(()=>files(b).receive(forged.bytes),/INVALID_AUTHORITY|INVALID_RECIPE_DOCUMENT/);
  }
+ for(const header of [
+  {...opened.header,semanticEffectIds:['different-effect']},
+  {...opened.header,sourceEffectIds:['different-source']},
+ ]){
+  const forged=await ar.codec.sealContent(header,opened.value,ar.keyRef,signing);
+  await assert.rejects(()=>files(b).receive(forged.bytes),/MALFORMED_UPDATE/);
+ }
  assert.deepEqual(b.rows(),beforeForgery);
 
  const beforeImport=(await br.document()).revision;
- b.faultAt('import-documents');
- await assert.rejects(()=>files(b).receive(editA),/IO/);
- assert.equal((await br.document()).revision,beforeImport);
- assert.equal(must(await b.storage.getInboxApplication(scope.id,opened.object.id)),null);
- assert.deepEqual(must(await b.storage.listStagedInbox(scope.id)).find(row=>row.itemId===opened.object.id)?.bytes,editA);
+ for(const boundary of ['import-documents','import']){
+  b.faultAt(boundary);
+  await assert.rejects(()=>files(b).receive(editA),/IO/);
+  assert.equal((await br.document()).revision,beforeImport);
+  assert.equal(must(await b.storage.getInboxApplication(scope.id,opened.object.id)),null);
+  assert.equal(must(await b.storage.readDisclosureSource(scope.id,opened.header.semanticEffectIds[0])),null);
+  assert.deepEqual(must(await b.storage.listStagedInbox(scope.id)).find(row=>row.itemId===opened.object.id)?.bytes,editA);
+ }
  b.faultAt(null);
  const imported=await files(b).retry(opened.object.id);
  assert.deepEqual(await files(b).receive(editA),{...imported,replayed:true});
@@ -239,6 +255,15 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const currentBytes=JSON.stringify(fresh.exportJsonUpdates(undefined,undefined,false));
  for(const secret of ['Legacy soup','Unrelated canary',history.find(row=>row.field==='title'&&row.status==='current').value])
   assert.equal(currentBytes.includes(secret),false,secret);
+
+ const [versionOne]=await change(a,ar,'legacy-child-edit',{id:'r',title:'Version-one child'});
+ await ar.execute({operationId:'legacy-child-edit',deviceSequence:++sequence,command:versionOne});
+ const [legacyChild]=await exported(a,'legacy-child-edit');
+ const childId=(await ar.codec.openContent(legacyChild,auth.signingKeyRefs)).object.id;
+ must(await b.storage.stageInbox({scopeId:scope.id,object:{id:childId,bytes:legacyChild},source:'legacy-child',expectedCursor:null,cursor:childId}));
+ const item={itemId:childId,bytes:legacyChild},applied=await br.importItem(item);
+ assert.deepEqual(await br.importItem(item),{...applied,replayed:true});
+ await assert.rejects(()=>otherB.importItem(item),/INVALID_AUTHORITY/);
 });
 async function confirmation(receiver,deviceId) {
   const row = (await receiver.trust.list()).find(item => item.deviceId === deviceId);

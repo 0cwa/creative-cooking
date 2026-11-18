@@ -155,11 +155,12 @@ export class OfflineRuntime {
     if(!(item?.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
     const {expectedAuthority,signingKeyRefs}=await this.authorization();
     const applied=required(await this.storage.getInboxApplication(this.scope.scopeId,item.itemId,item.bytes));
-    if (applied) return {outcome:applied.outcome,replayed:true};
     const opened=await this.codec.openContent(item.bytes,signingKeyRefs), h=opened.header, s=this.scope;
     if(h.version!==1)throw Error('PROVENANCE_HANDLER_REQUIRED');
-    if (!this.storage.compromise) throw Error('QUARANTINE_UNAVAILABLE');
-    if (await this.storage.compromise.isQuarantined(s.scopeId,h.authorDevice)) throw Error('QUARANTINED');
+    if (!applied) {
+      if (!this.storage.compromise) throw Error('QUARANTINE_UNAVAILABLE');
+      if (await this.storage.compromise.isQuarantined(s.scopeId,h.authorDevice)) throw Error('QUARANTINED');
+    }
     if (opened.object.id !== item.itemId || h.scopeId !== s.scopeId || h.documentId !== s.documentId || h.documentGeneration !== s.documentGeneration || h.branchHead !== s.branchHead || h.epochId !== s.epochId || h.suiteId !== s.suiteId || !same(h.policyHashes,s.policyHashes) || !s.acceptedAuthors.includes(h.authorDevice) || h.payloadKind !== 'loro-update-v1' || h.semanticEffectIds.length !== 1) throw new Error('INVALID_AUTHORITY');
     let payload; try { payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value)); } catch { throw new Error('MALFORMED_UPDATE'); }
     if (!payload || Object.keys(payload).sort().join(',') !== 'command,update,version' || payload.version !== 1 || !Array.isArray(payload.update) || !payload.update.every(x=>Number.isInteger(x) && x>=0 && x<=255)) throw new Error('MALFORMED_UPDATE');
@@ -171,6 +172,10 @@ export class OfflineRuntime {
     const update=Uint8Array.from(payload.update);
     const meta=this.inspectUpdate(update);
     if (meta.peer !== s.authorPeers[h.authorDevice] || !same(meta.predecessors,h.predecessorRefs)) throw new Error('MALFORMED_UPDATE');
+    if (applied) {
+      if (applied.outcome.revisions.length!==1 || applied.outcome.revisions[0].documentId!==s.documentId) throw Error('CONFLICT');
+      return {outcome:applied.outcome,replayed:true};
+    }
     const {doc,revision}=await this.document();
     // Verify the entire authenticated update on its causal starting document,
     // independently of operations already present on this receiver.

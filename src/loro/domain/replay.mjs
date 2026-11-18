@@ -59,11 +59,21 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  if(!runtime || !(checkpoint instanceof Uint8Array) || checkpoint.length>MAX_BYTES || !dense(excludedEffectIds) || excludedEffectIds.length>LIMIT || !excludedEffectIds.every(x=>typeof x==='string'&&x) || new Set(excludedEffectIds).size!==excludedEffectIds.length) throw Error('MALFORMED_REPLAY');
  const {expectedAuthority,signingKeyRefs}=await runtime.authorization();
  const scope=runtime.scope, outbound=required(await runtime.storage.listOutboundObjects(scope.scopeId)), inbox=required(await runtime.storage.listStagedInbox(scope.scopeId));
- if(outbound.length+inbox.length>LIMIT || checkpoint.length+[...outbound,...inbox].reduce((n,x)=>n+x.bytes.length,0)>MAX_BYTES) throw Error('TOO_LARGE');
  const seed=typeof runtime.storage.readProjectionSeed==='function'?required(await runtime.storage.readProjectionSeed(expectedAuthority,scope.documentId)):null;
- if(seed && checkpoint.length+seed.snapshot.length+[...outbound,...inbox].reduce((n,x)=>n+x.bytes.length,0)>MAX_BYTES)throw Error('TOO_LARGE');
- const objects=outbound.filter(x=>x.branchHead===scope.branchHead&&x.epochId===scope.epochId).map(x=>({id:x.objectId,bytes:x.bytes}));
- for(const item of inbox) if(required(await runtime.storage.getInboxApplication(scope.scopeId,item.itemId))){let h;try{h=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(item.bytes)).header}catch{throw Error('MALFORMED_UPDATE')}if(h?.branchHead===scope.branchHead&&h?.epochId===scope.epochId)objects.push({id:item.itemId,bytes:item.bytes})}
+ const objects=[],decoder=new TextDecoder('utf-8',{fatal:true});
+ let size=checkpoint.length+(seed?.snapshot.length??0);
+ if(size>MAX_BYTES)throw Error('TOO_LARGE');
+ function include(id,bytes){
+  // The clear header only selects candidates. Each selected envelope is
+  // authenticated below, and the live document must have complete evidence.
+  let header;try{header=JSON.parse(decoder.decode(bytes)).header}catch{throw Error('MALFORMED_UPDATE')}
+  if(header?.branchHead!==scope.branchHead||header.epochId!==scope.epochId||header.documentId!==scope.documentId)return;
+  size+=bytes.length;
+  if(objects.length>=LIMIT||size>MAX_BYTES)throw Error('TOO_LARGE');
+  objects.push({id,bytes});
+ }
+ for(const row of outbound)if(row.branchHead===scope.branchHead&&row.epochId===scope.epochId)include(row.objectId,row.bytes);
+ for(const item of inbox)if(required(await runtime.storage.getInboxApplication(scope.scopeId,item.itemId)))include(item.itemId,item.bytes);
  const {doc:original,storedBytes}=await runtime.document(),entries=[],identities=new Map(),effects=new Set();
  for(const object of objects) {
   const opened=await runtime.codec.openContent(object.bytes,signingKeyRefs),h=opened.header;
@@ -71,6 +81,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
   let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value));}catch{throw Error('MALFORMED_UPDATE');}
   if(!payload || Object.keys(payload).sort().join(',')!=='command,update,version' || payload.version!==1 || (!dense(payload.update) || !payload.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))) throw Error('MALFORMED_UPDATE');
   const command=validate(payload.command),update=Uint8Array.from(payload.update),meta=runtime.inspectUpdate(update);
+  runtime.assertRecipeCommand(command);
   if(command.data.author!==undefined && command.data.author!==h.authorDevice) throw Error('INVALID_AUTHORITY');
   if(command.effectId!==h.semanticEffectIds[0] || meta.peer!==scope.authorPeers[h.authorDevice] || !same(meta.predecessors,h.predecessorRefs)) throw Error('MALFORMED_UPDATE');
   let prior;try{prior=original.forkAt(meta.frontiers);}catch{throw Error('INSUFFICIENT_EVIDENCE');}
