@@ -15,7 +15,7 @@ import sodium from 'libsodium-wrappers';
 import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,resolveInstalledSetAuthority,rootPin} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
-import {candidateCodec,SUITE} from '../crypto/candidate.mjs';
+import {candidateCodec,SUITE,LIMIT as CANDIDATE_LIMIT} from '../crypto/candidate.mjs';
 import {localProvider} from './local-provider.mjs';
 import {testProvider} from '../crypto/test-provider.mjs';
 import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
@@ -1394,11 +1394,67 @@ test('selected recipe shopping copies and current-only admission survive durable
    value=>{value.encrypted=(value.encrypted[0]==='0'?'1':'0')+value.encrypted.slice(1);},
   ])await assert.rejects(()=>newcomer.files.receive(tampered(mutate)),/INVALID_AUTHORITY|INVALID_PROOF|UNSUPPORTED_VERSION/);
   const opened=await sponsor.runtime.codec.openContent(bytes,sponsorAuthority.signingKeyRefs);
+  assert.ok((await newcomer.runtime.document()).doc.getMap('recipe-index').get('legacy'));
+  const collision={version:1,kind:'recipe-create',commandId:'root-recipe-collision',effectId:'root-recipe-collision',dependencyEffectIds:[],
+   data:{recipe:recipe('legacy','Conflicting child'),author:a.deviceId,at}};
+  const collisionDoc=new LoroDoc();
+  collisionDoc.setPeerId(sponsor.runtime.scope.authorPeers[a.deviceId]);
+  const empty=collisionDoc.oplogVersion();
+  apply(collisionDoc,collision);
+  const collisionUpdate=collisionDoc.export({mode:'update',from:empty});
+  const rootCollision=await sponsor.runtime.authority.recipeDelivery.create(sponsor.runtime,'legacy',worker=>
+   worker.codec.sealContent({...opened.header,documentId:worker.scope.documentId,deviceSequence:++sequence,
+    semanticEffectIds:[collision.effectId]},new TextEncoder().encode(JSON.stringify({version:1,command:collision,update:[...collisionUpdate]})),
+    worker.keyRef,signingRef));
+  await assert.rejects(()=>newcomer.files.receive(rootCollision.bytes),/CONFLICT/);
+  const collisionStaging=new Set([JSON.stringify(['inbox',scope.id,rootCollision.id]),
+   JSON.stringify(['cursor',scope.id,`file:${rootCollision.id}`])]);
+  assert.deepEqual(freshRows().filter(({key})=>!collisionStaging.has(key)),beforeReceive);
+  const afterCollision=await newcomer.householdContent.readCooking();
+  assert.deepEqual(afterCollision.recipes.filter(value=>value.id==='legacy').map(value=>value.title),['legacy']);
+
+  // Pad a fixture header to exercise the wrapper boundary with real inner
+  // encryption and real packets. The app cannot emit these synthetic lists.
+  const sizeBefore=a.rows();
+  const largeRecipe=recipe('delivery-size-boundary','Carrots');
+  const sizeAction='delivery-size-boundary';
+  const sizeCommands=planRecipeAction({doc:new LoroDoc(),before:null,after:largeRecipe,
+   actionId:sizeAction,author:a.deviceId,at});
+  const encoder=new TextEncoder();
+  const pad=(header,length)=>{
+   const ids=Array.from({length:64},(_,index)=>'\0'.repeat(length)+String(index).padStart(2,'0'));
+   return {...header,policyHashes:ids,predecessorRefs:ids,semanticEffectIds:ids,sourceEffectIds:ids};
+  };
+  const encodedSize=header=>encoder.encode(JSON.stringify({kind:'content',header,encrypted:'',signature:'0'.repeat(128)})).length+
+   2*(CANDIDATE_LIMIT+sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES+sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES);
+  const hash=sodium.crypto_generichash;
+  const nearLimit=[];
+  sodium.crypto_generichash=(length,bytes,...args)=>{
+   if(bytes.length>4*CANDIDATE_LIMIT){
+    const [format,purpose,hex]=JSON.parse(dec.decode(bytes));
+    if(format==='creative-cooking/k2-candidate/v1'&&purpose==='object-id')nearLimit.push(hex.length/2);
+   }
+   return hash(length,bytes,...args);
+  };
+  try{
+   await assert.rejects(()=>sponsor.runtime.authority.recipeDelivery.create(sponsor.runtime,largeRecipe.id,worker=>{
+    const seal=worker.codec.sealContent;
+    worker.codec.sealContent=(header,_payload,ref,signRef)=>{
+     const padding=Math.floor((MAX_OBJECT-encodedSize(pad(header,0)))/(6*64*4));
+     return seal(pad(header,padding),new Uint8Array(CANDIDATE_LIMIT),ref,signRef);
+    };
+    return executeAction(worker,sequences,sizeAction,sizeCommands,sponsor.service);
+   }),/TOO_LARGE/);
+  }finally{sodium.crypto_generichash=hash;}
+  assert.equal(nearLimit.length,1);
+  assert.ok(nearLimit[0]<=MAX_OBJECT&&nearLimit[0]>MAX_OBJECT-6*64*4);
+  assert.deepEqual(a.rows(),sizeBefore);
+
   const wrongRecipeId='other-member-slot';
   const wrongRecipe=await sponsor.runtime.authority.recipeDelivery.create(sponsor.runtime,wrongRecipeId,worker=>
    worker.codec.sealContent({...opened.header,documentId:worker.scope.documentId},opened.value,worker.keyRef,signingRef));
   await assert.rejects(()=>newcomer.files.receive(wrongRecipe.bytes),/INVALID_RECIPE_DOCUMENT/);
-  assert.deepEqual(freshRows(),beforeReceive);
+  assert.deepEqual(freshRows().filter(({key})=>!collisionStaging.has(key)),beforeReceive);
   await newcomer.householdContent.createRecipe('competing-create',added);
   const competing=must(await freshStorage.getLocalOperation(scope.id,'competing-create')).commit.outbound[0].object;
   const sponsorBeforeConflict=a.rows();
