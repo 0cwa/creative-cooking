@@ -89,7 +89,7 @@ export function householdPairing({
     exportParent: active(() => exportHouseholdParent(authority)),
     acceptParent: active(async input => {
       const args = structuredClone(input);
-      const result = await acceptHouseholdParent({...args, storage, provider});
+      const result = await acceptHouseholdParent({...args, storage, provider,replacePublic:false});
       await pins.save({version:1, scope:args.bundle.scope, pin:args.confirmedRootPin, head:args.confirmedSelectedHead});
       return result;
     }),

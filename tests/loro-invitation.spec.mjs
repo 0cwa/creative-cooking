@@ -709,8 +709,11 @@ async function routedReadmission(a,b,lost,context,setup,scope,kits){
  await recoveryButton(fresh,'Verify and accept public authority').click();
  await expect(fresh.getByText('Public authority accepted. No access or keys have been granted.')).toBeVisible();
  await expect(recoveryButton(fresh,'Open this shared household')).toHaveCount(0);
+ await recoveryButton(a,'Show signed readmission parent').click();
+ const sponsorParent=await a.getByLabel('Signed readmission parent',{exact:true}).textContent();
 
  async function request(){
+  await fresh.getByLabel('Sponsoring device parent proof').fill(sponsorParent);
   await recoveryButton(fresh,'Create signed recovery request').click();
   await expect(fresh.getByText(/^Send this signed request/)).toBeVisible();
   return JSON.parse(await recoveryOutput(fresh).textContent());

@@ -16,7 +16,7 @@ import {householdCompromise} from './household-compromise.mjs';
 import {householdReadmission} from './household-readmission.mjs';
 import {householdTransfer} from './household-transfer.mjs';
 import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
-import {continuityBindingBytes,continuityBindingHash,continuityPublicKey,recoveryClaimBytes} from '../recovery/readmission.mjs';
+import {continuityBindingBytes,continuityBindingHash,continuityPublicKey,recoveryClaimBytes,recoveryClaimHash} from '../recovery/readmission.mjs';
 import {householdRevocation} from './household-revocation.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {localProvider} from './local-provider.mjs';
@@ -548,13 +548,30 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
   assert.equal((await apply(a.runtime,4,'pantry-create','current-v4',
    {itemId:'current-v4',name:'Current saffron',preference:3,author:a.deviceId,at})).outcome.state,'saved');
   const publicBundle=await exportHouseholdParent({storage:a.storage,scope,pin,provider:a.provider});
+  const sponsorParent=await a.readmission(pin).exportSponsorParent();
   const confirmed={scope,pin,head:retired.eventHash};
   const freshService=(seed=credential,generation=1)=>fresh.readmission(pin,{confirmed,credential:seed,generation});
   await assert.rejects(freshService().request({householdId:scope.id,explicit:true}),/INVALID_AUTHORITY/);
-  await acceptHouseholdParent({storage:fresh.storage,provider:fresh.provider,bundle:publicBundle,
+  const alternate=structuredClone(publicBundle);
+  for(const [from,to] of [[retired.eventHash,pin],[pin,retired.eventHash]]){
+   const selection={from,to,deviceId:'alpha',index:alternate.state.selections.length};
+   const signature=sodium.to_hex(await a.provider.sign(a.signingKey,domain('select-head',{root:pin,householdId:scope.id,...selection})));
+   alternate.state.selections.push({...selection,signature});
+  }
+  await acceptHouseholdParent({storage:fresh.storage,provider:fresh.provider,bundle:alternate,
    confirmedRootPin:pin,confirmedSelectedHead:retired.eventHash,explicit:true});
-  const draftRequest=async api=>api.request({householdId:scope.id,explicit:true});
+  await assert.rejects(freshService().request({householdId:scope.id,explicit:true}),/MISSING_SPONSOR_PARENT/);
+  const draftRequest=async api=>api.request({householdId:scope.id,sponsorParent,explicit:true});
+  const retainedOwner=JSON.stringify(['document-owner',scope.id,'retained-doc']);
+  await fresh.storage.compromise.run(true,tx=>tx.put(retainedOwner,retired.eventHash));
+  const beforeReplacement=fresh.rows();
+  await assert.rejects(draftRequest(freshService()),/CONFLICT/);
+  assert.deepEqual(fresh.rows(),beforeReplacement);
+  fresh.deleteRow(retainedOwner);
   const old=await draftRequest(freshService(credential0,0));
+  const sponsorRecord=(await fresh.storage.readPairingAuthority(scope)).value;
+  assert.equal(sponsorRecord.authorizationSnapshot,sponsorParent.sponsor.snapshot);
+  assert.equal(JSON.parse(new TextDecoder().decode(sponsorRecord.authorityState)).selections.length,publicBundle.state.selections.length);
   const serviceA=()=>a.readmission(pin),serviceB=()=>b.readmission(pin);
   const beforeOld=a.rows();
   await assert.rejects(serviceA().issue({request:old,explicit:true}),/INVALID_CONTEXT/);
@@ -565,8 +582,10 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
    const bytes=recoveryClaimBytes(claim), seed=sodium.from_hex(credential);
    const key=sodium.crypto_sign_seed_keypair(seed);
    try{
+    const sponsor=request.sponsor,sponsorSignature=sodium.to_hex(await fresh.provider.sign(fresh.signingKey,
+     domain('household-readmission-request-sponsor',{claimHash:recoveryClaimHash(sodium,claim),sponsor})));
     return {claim,continuitySignature:sodium.to_hex(sodium.crypto_sign_detached(bytes,key.privateKey)),
-     deviceSignature:sodium.to_hex(await fresh.provider.sign(fresh.signingKey,bytes))};
+     deviceSignature:sodium.to_hex(await fresh.provider.sign(fresh.signingKey,bytes)),sponsor,sponsorSignature};
    }finally{seed.fill(0);key.privateKey.fill(0);}
   };
   const alias=sodium.from_hex(historicalBinding.wrappingKey);
@@ -658,6 +677,19 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
   assert.equal(saved.outcome.state,'saved');
   await reopen(fresh,pin);
   assert.ok(projectCooking((await fresh.runtime.document()).doc).pantry.some(x=>x.name==='Fresh sumac'));
+  const member=p=>({storage:p.storage,scope,pin,provider:p.provider,deviceId:p.deviceId,
+   adultId:p===fresh?'gamma':p.adultId,runtime:p.runtime});
+  const policyItem=await proposeHouseholdAdmissionRule({...member(fresh),expectedHead:decision.eventHash,
+   explicit:true,store:bind(new Map()),policy:{kind:'unanimous',fixedCount:null},randomUUID:()=>crypto.randomUUID()});
+  const checked=await reviewHouseholdAdmissionRule({...member(fresh),item:policyItem});
+  const vote=(p,item)=>approveHouseholdAdmissionRule({...member(p),item,confirmedEventHash:checked.eventHash,explicit:true});
+  const successor=await vote(b,(await vote(a,policyItem)).item);
+  await retainHouseholdAdmissionRule({...member(fresh),item:successor.item,confirmedEventHash:checked.eventHash,explicit:true});
+  const selected=await readAuthority(fresh.storage,scope,pin,fresh.provider);
+  await checkoutPolicyHead({...member(fresh),LoroDoc,expectedHead:selected.activeHead,expectedRevision:selected.revision,
+   targetHead:checked.eventHash,explicit:true});
+  assert.equal((await install()).acceptedHead,decision.eventHash);
+  assert.equal((await freshService().installed())[0].acceptedHead,checked.eventHash);
   for(const original of beforeA.filter(row=>JSON.parse(row.key)[0]==='document')){
    assert.deepEqual(a.rows().find(row=>row.key===original.key),original);
   }

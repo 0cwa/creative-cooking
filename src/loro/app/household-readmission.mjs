@@ -10,9 +10,13 @@ import {answerRecoveryChallenge,continuityBindingBytes,continuityPublicKey,persi
 import {recoveryHash} from '../recovery/enrollment.mjs';
 import {inspectPersonal} from '../recovery/recovery.mjs';
 import {openRecoveryArchive} from './recovery-archive.mjs';
+import {acceptHouseholdParent} from './household-parent.mjs';
 
 const slot=(...parts)=>JSON.stringify(['recovery-install',...parts]);
 const challengeDomain='household-readmission-challenge';
+const sponsorDomain='household-readmission-sponsor-parent';
+const sponsorRequestDomain='household-readmission-request-sponsor';
+const claimProof=({claim,continuitySignature,deviceSignature})=>({claim,continuitySignature,deviceSignature});
 const eligible=(parent,id)=>parent.devices.find(d=>d.active&&d.deviceId===id&&parent.runtime.acceptedRecipients.includes(id));
 const requireExplicit=explicit=>{if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');};
 const needsRecovery=(parent,claim)=>{
@@ -49,8 +53,22 @@ export function householdReadmission({
  async function checkChallenge(parent,request,message){
   if(!exact(message,'challenge,sponsorDevice,signature'))throw Error('INVALID_PROOF');
   const {challenge,sponsorDevice,signature}=message, sponsor=eligible(parent,sponsorDevice);
-  if(!sponsor||challenge?.claimHash!==recoveryClaimHash(sodium,request.claim)||
+  if(!sponsor||request.sponsor?.deviceId!==sponsorDevice||challenge?.claimHash!==recoveryClaimHash(sodium,request.claim)||
      !await verifySignature(provider,sponsor.signingKeyRef,challengeDomain,{challenge,sponsorDevice},signature))throw Error('INVALID_PROOF');
+ }
+ const sponsorBody=(sponsor,confirmed)=>({deviceId:sponsor.deviceId,snapshot:sponsor.snapshot,
+  scope:confirmed.scope,rootPin:confirmed.pin,head:confirmed.head});
+ async function checkSponsor(sponsor,confirmed,parent,snapshot){
+  const current=eligible(parent,sponsor?.deviceId);
+  if(!exact(sponsor,'deviceId,snapshot,signature')||!current||sponsor.snapshot!==snapshot||
+     !await verifySignature(provider,current.signingKeyRef,sponsorDomain,sponsorBody(sponsor,confirmed),sponsor.signature))throw Error('INVALID_SPONSOR');
+ }
+ async function checkSponsorRequest(request,checked){
+  const {sponsor,sponsorSignature}=request;
+  if(sponsor?.deviceId!==deviceId||
+     !await verifySignature(provider,request.claim.signingKey,sponsorRequestDomain,{claimHash:checked.claimHash,sponsor},sponsorSignature))throw Error('INVALID_SPONSOR');
+  await checkSponsor(request.sponsor,{scope,pin,head:checked.parent.head},checked.parent,
+   await digest(provider,'authority-state',checked.authority.state));
  }
  async function freshParent(householdId){
   const confirmed=(await pins.list()).find(p=>p.scope.id===householdId);
@@ -88,11 +106,15 @@ export function householdReadmission({
    const confirmed=(await pins.list()).find(p=>p.scope.id===event.householdId);
    if(!confirmed||!same(request.claim,proposal.recoveryProof.claim)||event.parentHead!==confirmed.head)throw Error('INVALID_RECOVERY_PROOF');
    // Exact retries may use the durable receipt's original independently pinned parent.
-   const {parent,nodes,state}=await transfer.readRecoveryParent(confirmed);
+   const {parent,nodes,state,record,installed}=await transfer.readRecoveryParent(confirmed);
+   if(request.sponsor){
+    if(request.sponsor.deviceId!==event.authorDeviceId)throw Error('INVALID_SPONSOR');
+    await checkSponsor(request.sponsor,confirmed,parent,record.authorizationSnapshot);
+   }else if(!installed)throw Error('MISSING_SPONSOR_PARENT');
    const checked=await verifyRevocation({provider,parent,...proposal});
    await verifyRecoveryProof({sodium,provider,parent,nodes,event,proof:proposal.recoveryProof});
    if(!await recoveryBindingOnAncestry(provider,state.events,parent.head,proposal.recoveryProof.binding.checkpoint))throw Error('INVALID_RECOVERY_PROOF');
-   return {...checked,scope:confirmed.scope,claimHash:event.subject.claimHash};
+   return {...checked,scope:confirmed.scope,claimHash:event.subject.claimHash,parentSnapshot:record.authorizationSnapshot};
   }
  const registrationState=(owner,bindingHash)=>slot('registered-catalog',scope.id,owner,bindingHash);
  const catalogFor=(owner,bindingHash)=>bindingHash?run(false,tx=>tx.get(registrationState(owner,bindingHash))):null;
@@ -104,6 +126,12 @@ export function householdReadmission({
   });
  }
  return {
+  async exportSponsorParent(){
+   const {current}=await local();
+   const bundle={version:1,scope,rootPin:pin,selectedHead:current.activeHead,state:current.state};
+   const sponsor={deviceId,snapshot:await digest(provider,'authority-state',current.state)};
+   return {bundle,sponsor:{...sponsor,signature:await sign(domain(sponsorDomain,sponsorBody(sponsor,{scope,pin,head:current.activeHead})))}};
+  },
   async createArchive(){
    const {device}=await local();
    const current=await registration(device.adultId);
@@ -147,21 +175,27 @@ export function householdReadmission({
    }
    return installed;
   },
-  async request({householdId,explicit}){
+  async request({householdId,sponsorParent,explicit}){
    requireExplicit(explicit);
-   const {parent}=await freshParent(householdId);
+   const {parent,confirmed}=await freshParent(householdId);
    return recoveryImport.useContinuity(async (saved,credential)=>{
     const continuityKey=continuityPublicKey(sodium,credential);
     const claim={version:1,householdId,owner:saved.owner,checkpoint:parent.head,policyHash:parent.policyHash,deviceId,
      signingKey,wrappingKey:wrappingPublicKey,continuityKey,recoveryGeneration:saved.generation,nonce:hex(sodium.randombytes_buf(32))};
     needsRecovery(parent,claim);
     if(parent.devices.some(d=>d.deviceId===deviceId||d.signingKeyRef===signingKey))throw Error('INVALID_FRESH_DEVICE');
+    if(!exact(sponsorParent,'bundle,sponsor'))throw Error('MISSING_SPONSOR_PARENT');
+    const {bundle,sponsor}=sponsorParent;
+    if(!same(bundle?.scope,confirmed.scope)||bundle.rootPin!==confirmed.pin||bundle.selectedHead!==confirmed.head)throw Error('INVALID_SPONSOR');
+    await checkSponsor(sponsor,confirmed,parent,await digest(provider,'authority-state',bundle.state));
+    await acceptHouseholdParent({storage,provider,bundle,confirmedRootPin:confirmed.pin,confirmedSelectedHead:confirmed.head,explicit,replacePublic:true});
     const payload=recoveryClaimBytes(claim), seed=sodium.from_hex(credential),pair=sodium.crypto_sign_seed_keypair(seed);
     try{
-     const request={claim,continuitySignature:hex(sodium.crypto_sign_detached(payload,pair.privateKey)),deviceSignature:await sign(payload)};
+     const sponsorSignature=await sign(domain(sponsorRequestDomain,{claimHash:recoveryClaimHash(sodium,claim),sponsor}));
+     const request={claim,continuitySignature:hex(sodium.crypto_sign_detached(payload,pair.privateKey)),deviceSignature:await sign(payload),sponsor,sponsorSignature};
      return run(true,async tx=>{
       const key=requestSlot(householdId), prior=await tx.get(key);
-      if(prior&&same({...prior.claim,nonce:claim.nonce},claim))return prior;
+      if(prior&&same({...prior.claim,nonce:claim.nonce},claim)&&same(prior.sponsor,sponsor))return prior;
       await tx.put(key,request);
       return request;
      });
@@ -170,7 +204,9 @@ export function householdReadmission({
   },
   async issue({request,explicit}){
    requireExplicit(explicit);
-   const {parent}=await checkClaim(request);
+   if(!exact(request,'claim,continuitySignature,deviceSignature,sponsor,sponsorSignature'))throw Error('INVALID_CLAIM');
+   const checked=await checkClaim(claimProof(request)), {parent}=checked;
+   await checkSponsorRequest(request,checked);
    if(!eligible(parent,deviceId))throw Error('NO_AUTHORIZED_DEVICE');
    const expected=await runtime.authorize();
    if(expected.record.acceptedParent!==parent.head)throw Error('STALE_AUTHORITY');
@@ -180,8 +216,9 @@ export function householdReadmission({
   },
   async answer({householdId,message,explicit}){
    requireExplicit(explicit);
-   const request=await ownRequest(householdId),{parent}=await freshParent(householdId);
+   const request=await ownRequest(householdId),{parent,confirmed,record}=await freshParent(householdId);
    if(request.claim.checkpoint!==parent.head)throw Error('STALE_AUTHORITY');
+   await checkSponsor(request.sponsor,confirmed,parent,record.authorizationSnapshot);
    await checkChallenge(parent,request,message);
    return withSecrets(({signingSecret,wrappingSecret})=>{
     const possession=answerRecoveryChallenge(sodium,request.claim,message.challenge.sealed,sodium.from_hex(wrappingPublicKey),wrappingSecret,signingSecret);
@@ -191,14 +228,17 @@ export function householdReadmission({
   },
   async prepare({response,bindings,explicit}){
    requireExplicit(explicit);
-   const {request,message,possession}=response??{}, checked=await checkClaim(request);
+   const {request,message,possession}=response??{};
+   if(!exact(request,'claim,continuitySignature,deviceSignature,sponsor,sponsorSignature'))throw Error('INVALID_CLAIM');
+   const checked=await checkClaim(claimProof(request));
+   await checkSponsorRequest(request,checked);
    await checkChallenge(checked.parent,request,message);
    if(message.sponsorDevice!==deviceId)throw Error('INVALID_SPONSOR');
    const challenge=await run(false,tx=>tx.get(JSON.stringify(['recovery-readmission-challenge',scope.id,checked.claimHash])));
    if(!same(challenge,message.challenge))throw Error('MISSING_CHALLENGE');
    verifyRecoveryPossession(sodium,request.claim,challenge,possession);
    const {proposal}=await rotation.prepare({recovery:{claim:request.claim,claimHash:checked.claimHash,bindingHash:checked.registered.bindingHash},bindings,explicit});
-   const recoveryProof={...request,binding:checked.registered.binding,bindingSignature:checked.registered.bindingSignature,
+   const recoveryProof={...claimProof(request),binding:checked.registered.binding,bindingSignature:checked.registered.bindingSignature,
     challenge,possession,confirmations:[],senderSigningKey:signingKey,senderWrappingKey:wrappingPublicKey,
     senderKeySignature:await sign(recoverySenderKeyBytes(proposal.grant.eventHash,signingKey,wrappingPublicKey))};
    const next={...proposal,recoveryProof};

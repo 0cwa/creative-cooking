@@ -10,9 +10,10 @@ import {ArchiveFile} from './ArchiveFile';
 import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 
 const limit=512*1024;
+const sponsorLimit=1024*1024;
 const encoder=new TextEncoder();
-function parse(text:string){
- if(encoder.encode(text).length>=limit)throw Error('MESSAGE_TOO_LARGE');
+function parse(text:string,maxBytes=limit){
+ if(encoder.encode(text).length>=maxBytes)throw Error('MESSAGE_TOO_LARGE');
  return JSON.parse(text);
 }
 const explanations:Record<string,string>={
@@ -23,6 +24,8 @@ const explanations:Record<string,string>={
  NO_AUTHORIZED_QUORUM:'Too few eligible current adults can authorize readmission under this branch’s rule. Recovered personal data is still available.',
  CONFIRMATION_REQUIRED:'Independently verify the current household root and head using Show device identity before requesting access.',
  MISSING_REQUEST:'Create a recovery request from the imported archive first.',
+ MISSING_SPONSOR_PARENT:'Ask the adult who will sponsor your readmission for their signed parent export.',
+ INVALID_SPONSOR:'Use the signed parent export from the sponsoring device. Ask that adult for a new export if their branch history changed.',
  MISSING_CHALLENGE:'The issuing device has no matching saved challenge.',
  STALE_AUTHORITY:'This message uses a different household head. Compare the current root and head with an eligible adult.',
  WRONG_RECOVERY_OWNER:'The archive must authenticate this device’s personal authority and its household adult.',
@@ -38,6 +41,7 @@ export function HouseholdReadmission(){
  const [mode,setMode]=useState<'setup'|'member'|'fresh'|null>(null);
  const [status,setStatus]=useState(''),[busy,setBusy]=useState(false);
  const [incoming,setIncoming]=useState(''),[outgoing,setOutgoing]=useState(''),[householdId,setHouseholdId]=useState('');
+ const [sponsorText,setSponsorText]=useState('');
  const [bindings,setBindings]=useState(''),[code,setCode]=useState(''),[archive,setArchive]=useState<File|null>(null);
  const [decision,setDecision]=useState<Decision|null>(null),[recipient,setRecipient]=useState(false);
  const [branch,setBranch]=useState<BranchStatus|null>(null),[refreshNeeded,setRefreshNeeded]=useState(false);
@@ -62,7 +66,7 @@ export function HouseholdReadmission(){
   setOutgoing(text);
  }
  function switchMode(next:typeof mode){
-  setMode(next);input('');setOutgoing('');setStatus('');setBranch(null);
+  setMode(next);input('');setSponsorText('');setOutgoing('');setStatus('');setBranch(null);
  }
  function reviewed(value:Decision){setDecision(value);setRecipient(false);show(value.proposal);}
  async function refresh(){
@@ -110,10 +114,13 @@ export function HouseholdReadmission(){
    <GuardianStart restoreIntoWorkspace={async(...args)=>{
     const result=await workspace.recoveryImport.restore(...args);setArchiveRevision(n=>n+1);return result;
    }}/>
-   <Text>Use Show device identity to compare the household root and current head with an eligible adult before making a request.</Text>
+   <Text>Use Show device identity to verify the household root and head with your sponsoring adult. Provide that device’s signed readmission parent export before making a request.</Text>
    <TextInput accessibilityLabel="Verified household ID" value={householdId} onChangeText={text=>{setHouseholdId(text);setDecision(null);setRecipient(false);setOutgoing('')}} maxLength={256} editable={!busy}/>
+   <TextInput accessibilityLabel="Sponsoring device parent proof" value={sponsorText} onChangeText={setSponsorText}
+    multiline maxLength={sponsorLimit} editable={!busy}/>
+   <PublicMessageFile label="signed readmission parent" limit={sponsorLimit} onRead={setSponsorText} run={run} disabled={busy}/>
    {button('Create signed recovery request',async()=>{
-    setOutgoing('');show(await service.request({householdId,explicit:true}));setStatus('Send this signed request to an eligible current adult.');
+    setOutgoing('');show(await service.request({householdId,sponsorParent:sponsorText?parse(sponsorText,sponsorLimit):undefined,explicit:true}));setStatus('Send this signed request to the sponsoring adult.');
    },!householdId)}
    {button('Answer recovery challenge',async()=>{
     setOutgoing('');show(await service.answer({householdId,message:parse(incoming),explicit:true}));setStatus('Send this proof of the new device’s keys to the adult who issued the challenge.');
@@ -136,6 +143,15 @@ export function HouseholdReadmission(){
     })}</View>)}
    </>}
    {!branch?.reopen&&!refreshNeeded&&<>
+    {button('Show signed readmission parent',async()=>{
+     const text=JSON.stringify(await service.exportSponsorParent());
+     if(encoder.encode(text).length>=sponsorLimit)throw Error('MESSAGE_TOO_LARGE');
+     setSponsorText(text);
+    })}
+    {sponsorText&&<>
+     <Text selectable accessibilityLabel="Signed readmission parent">{sponsorText}</Text>
+     <PublicMessageFile label="signed readmission parent" limit={sponsorLimit} outgoing={sponsorText} run={run} disabled={busy}/>
+    </>}
     {button('Retain signed continuity registration',async()=>{
      const result=await service.retainRegistration({message:parse(incoming),explicit:true});
      setStatus(result.replayed?'This exact continuity generation is already retained.':'Signed continuity generation retained on this device.');
@@ -174,7 +190,7 @@ export function HouseholdReadmission(){
     const install=()=>service.install({proposal:decision.proposal,bytes,fresh,explicit:true});
     if(!fresh){await transition(install);return;}
     const result=await install();
-    setInstalled(current=>[...current.filter(entry=>entry.scope.id!==result.scope.id),result]);
+    setInstalled(await service.installed());
     setStatus(result.replayed?'This exact readmission is already installed.':'Household installed on this device. Open it explicitly to start using it.');
    })}
   </>}

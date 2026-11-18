@@ -219,6 +219,28 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     write = snapshot(write);
     try { return await this.run(true,async tx => { const r=write.record, k=key('pairing-authority',r.scope.kind,r.scope.id), old=await tx.get(k); if (old && (old.scope.kind !== r.scope.kind || old.scope.id !== r.scope.id)) corrupt(); if ((old === undefined ? null : old.revision) !== write.expectedRevision) conflict(); await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
+  /** Retain an independently verified public proof without granting local authority. */
+  async retainPublicHouseholdParent(record:PairingAuthorityRecord,replace=false):Promise<Result<{replayed:boolean},StorageError>> {
+    const checked=validatePairingAuthority(record);
+    if(!checked.ok)return checked;
+    if(record.scope.kind!=='household'||record.revision!==0)return {ok:false,error:'MALFORMED'};
+    record=snapshot(record);
+    try{return await this.run(true,async tx=>{
+      const scope=record.scope.id,slot=key('pairing-authority','household',scope),prior=await tx.get(slot);
+      if(prior!==undefined){
+        if(!validatePairingAuthority(prior).ok||prior.scope.kind!=='household'||prior.scope.id!==scope)return corrupt();
+        if(prior.revision!==0||prior.acceptedParent!==record.acceptedParent)return conflict();
+        if(prior.authorizationSnapshot===record.authorizationSnapshot&&sameBytes(prior.authorityState,record.authorityState))return {ok:true as const,value:{replayed:true}};
+        if(!replace)return conflict();
+        const localPrefixes=[key('local-key','household',scope),...['document','document-owner','projection-document','projection-publication',
+          'recipient-admission','recipient-admission-event','continuity-head','continuity-binding','inbox','object'].map(kind=>key(kind,scope))]
+          .map(prefix=>prefix.slice(0,-1)+',');
+        if((await tx.keys()).some(k=>localPrefixes.some(prefix=>k.startsWith(prefix))))return conflict();
+      }
+      await tx.put(slot,record);
+      return {ok:true as const,value:{replayed:false}};
+    });}catch(error){return {ok:false,error:mapError(error)};}
+  }
   private async checkoutDocument(tx:Tx,scope:string,{head,documentId}:BranchDocument,allowUninstalled=false):Promise<{bytes:Uint8Array;revision:number}|null> {
     const doc=await tx.get(key('document',scope,documentId)), owner=await tx.get(key('document-owner',scope,documentId));
     if(isPolicyDocumentId(documentId)) {

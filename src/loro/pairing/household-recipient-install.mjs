@@ -11,7 +11,7 @@ const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(cano
 const same=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
 const hash=async(p,name,v)=>{const b=await p.hash(domain(name,canon(v)));if(!(b instanceof Uint8Array)||b.length!==32)throw Error('INVALID_PROOF');return hex(b)};
 /** Verify the recipient's durable session with its private keys before committing. */
-export async function installHouseholdRecipient({sodium,storage,scope,pin,provider,sessionStore,keys,recipientDevice,publication,seed,policyBundle,LoroDoc,master,operationId,keyOperationId,recipientKind,confirmedParent,confirmedEventHash,confirmedGrantHash,confirmedClaimHash,confirmedDecisionHash,prepareEnrollment}){
+export async function installHouseholdRecipient({sodium,storage,scope,pin,provider,sessionStore,keys,recipientDevice,publication,seed,policyBundle,LoroDoc,master,operationId,keyOperationId,recipientKind,confirmedParent,confirmedParentSnapshot,confirmedEventHash,confirmedGrantHash,confirmedClaimHash,confirmedDecisionHash,prepareEnrollment}){
  if(!storage?.householdRecipient||typeof storage.localKeys!=='function'||typeof operationId!=='string'||!operationId||typeof keyOperationId!=='string'||!keyOperationId)throw Error('MALFORMED');
  // All transport data and secret material are copied before the first await.
  const p=structuredClone(publication),s=structuredClone(seed),bundle=structuredClone(policyBundle),sc=structuredClone(scope),privateKeys={signingSecret:new Uint8Array(keys.signingSecret),wrappingSecret:new Uint8Array(keys.wrappingSecret)};
@@ -23,7 +23,8 @@ export async function installHouseholdRecipient({sodium,storage,scope,pin,provid
   const savedSelection=prior.value&&rotation?
    JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(prior.value.nextAuthority.authorityState)).selections.at(-1):undefined;
   const proof=await verify({sodium,storage:parentStorage,scope:sc,pin,provider,sessionStore,keys:privateKeys,recipientDevice,publication:p,seed:s,policyBundle:bundle,LoroDoc,confirmedEventHash,confirmedGrantHash,savedSelection,recipientKind,confirmedClaimHash,confirmedDecisionHash});
-  if((recipientKind!==undefined&&proof.kind!==recipientKind)||(confirmedParent!==undefined&&proof.expectedAuthority.acceptedParent!==confirmedParent))throw Error('INVALID_AUTHORITY');
+  if((recipientKind!==undefined&&proof.kind!==recipientKind)||(confirmedParent!==undefined&&proof.expectedAuthority.acceptedParent!==confirmedParent)||
+     (confirmedParentSnapshot!==undefined&&proof.expectedAuthority.authorizationSnapshot!==confirmedParentSnapshot))throw Error('INVALID_AUTHORITY');
   const context=proof.context,packetHash=await hash(provider,'household-recipient-packet',Array.from(proof.packet));
   const publisherSelection=rotation?{publisherSelectionHash:await hash(provider,'household-rotation-publisher-selection',p.selection)}:{};
   const body={version:1,scopeId:sc.id,operationId,keyOperationId,guardId:proof.guardId,recipientDevice,parentHead:proof.expectedAuthority.acceptedParent,acceptedHead:proof.nextAuthority.acceptedParent,documentId:context.projectionId,epochId:context.epochId,manifestHash:context.manifestHash,grantHash:context.grantHash,policyBundleHash:bundle?p.policySeed.bundleHash:null,packetHash,...publisherSelection};

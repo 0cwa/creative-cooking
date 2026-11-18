@@ -83,7 +83,7 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   const input=prior.value?{readPairingAuthority:async()=>({ok:true,value:prior.value.expectedAuthority})}:storage;
   const verified=await verifyPublicParent(input,confirmed.scope,confirmed.pin,provider);
   if(verified.state.activeHead!==confirmed.head)throw Error('STALE_AUTHORITY');
-  return {...verified,parent:verified.nodes.get(confirmed.head)};
+  return {...verified,parent:verified.nodes.get(confirmed.head),installed:!!prior.value};
  }
  async function installedRecovery(confirmed){
   const {operationId}=householdReceiverIds(sodium,confirmed.scope,deviceId);
@@ -93,7 +93,7 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   const {scope,adultId}=await resolveRuntimeAuthority(storage,confirmed.scope,confirmed.pin,provider,deviceId);
   return {scope:confirmed.scope,acceptedHead:scope.branchHead,adultId};
  }
- async function installRecovery({scope:sc,bytes,claimHash,eventHash,grantHash,fresh,decisionHash}){
+ async function installRecovery({scope:sc,bytes,claimHash,eventHash,grantHash,fresh,decisionHash,parentSnapshot}){
   bytes=checkedBytes(bytes);
   const confirmed=fresh?(await keys.list()).find(x=>x.scope.id===sc.id):{pin,scope:ownScope};
   if(!confirmed||!fresh&&sc.id!==ownScope.id)throw Error('CONFIRMATION_REQUIRED');
@@ -101,7 +101,7 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   const joined={name,storage,scope:sc,pin:confirmed.pin,provider,deviceId,operationId:ids.operationId};
   const install=()=>withSecrets(secret=>installHouseholdFile({sodium,bytes,keys:secret,storage,scope:sc,pin:confirmed.pin,provider,recipientDevice:deviceId,LoroDoc,master,
    ...ids,recipientKind:'recovery',confirmedClaimHash:claimHash,confirmedDecisionHash:decisionHash,confirmedEventHash:eventHash,confirmedGrantHash:grantHash,
-   confirmedParent:fresh?confirmed.head:undefined,prepareEnrollment:fresh?()=>prepareJoinedSequences(joined):undefined}));
+   confirmedParent:fresh?confirmed.head:undefined,confirmedParentSnapshot:parentSnapshot,prepareEnrollment:fresh?()=>prepareJoinedSequences(joined):undefined}));
   let result;
   try{result=await install();}
   catch(error){
