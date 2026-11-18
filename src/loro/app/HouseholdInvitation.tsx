@@ -13,7 +13,8 @@ type PublishedFiles = {operationId: string; generation: number; recipients: {rec
 /** Assemble signed admission evidence and exchange recipient-specific files. */
 export function HouseholdInvitation(){
  const app=useAppState();
- const workspace=useContext(LoroWorkspaceValue),[open,setOpen]=useState(false),[role,setRole]=useState<'organizer'|'recipient'>('organizer'),[identityText,setIdentityText]=useState(''),[offerText,setOfferText]=useState(''),[recoveryText,setRecoveryText]=useState(''),[code,setCode]=useState(''),[peer,setPeer]=useState(''),[output,setOutput]=useState(''),[phase,setPhase]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false),[published,setPublished]=useState(false);
+ const workspace=useContext(LoroWorkspaceValue),[open,setOpen]=useState(false),[role,setRole]=useState<'organizer'|'recipient'>('organizer'),[identityText,setIdentityText]=useState(''),[offerText,setOfferText]=useState(''),[recoveryText,setRecoveryText]=useState(''),[code,setCode]=useState(''),[peer,setPeer]=useState(''),[output,setOutput]=useState(''),[phase,setPhase]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
+ const inFlight=useRef(false);
  const session=useRef<any>(null),draft=useRef<any>(null),verified=useRef<any>(null),offer=useRef<any>(null);
  const [grantText,setGrantText]=useState(''),[existingText,setExistingText]=useState('');
  const [existingEvidence,setExistingEvidence]=useState<Record<string,any>>({});
@@ -25,8 +26,11 @@ export function HouseholdInvitation(){
   void workspace.householdPairing.transfer.publishedFiles().then((value:PublishedFiles|null)=>{if(current)setFiles(value)},(error:Error)=>{if(current)setStatus(error.message)});
   return ()=>{current=false};
  },[open,role,workspace]);
- const run=async(fn:()=>Promise<void>)=>{setBusy(true);setStatus('');try{await fn()}catch(e){setStatus(e instanceof Error?e.message:'The invitation step failed.')}finally{setBusy(false)}};
+ const run=async(fn:()=>Promise<void>)=>{if(inFlight.current)return;inFlight.current=true;setBusy(true);setStatus('');try{await fn()}catch(e){setStatus(e instanceof Error?e.message:'The invitation step failed.')}finally{inFlight.current=false;setBusy(false)}};
  const bounded=(text:string,set:(v:string)=>void)=>{if(encoder.encode(text).length>limit){setStatus('The pasted message is too large.');return}set(text);setStatus('')};
+ const clearVerification=()=>{session.current=null;verified.current=null;offer.current=null;setPhase('');setOutput('');setPeer('')};
+ const changeOffer=(text:string)=>{clearVerification();setOfferText(text)};
+ const changeCode=(text:string)=>{if(inFlight.current)return;if(role==='recipient')clearVerification();setCode(text);setStatus('')};
  const copy=async(text:string)=>{if(!await copyText(text))throw Error('Could not copy. Copy the displayed text manually.');setStatus('Copied.')};
  const displayOutgoing=(out:any)=>{setOutput(encode(out.ack??out.response??out.offer));setPhase(out.complete?'complete':out.ack?'ack':out.response?'response':'offer')};
  const refresh=async()=>displayOutgoing(await session.current.outgoing());
@@ -90,7 +94,6 @@ export function HouseholdInvitation(){
   const {item,prepared,ceremony}=draft.current,evidence=await session.current.evidence();
   const {transcript,guard,oob,context}=ceremony;
   const result=await workspace.householdPairing.transfer.publish({item,grant:prepared.grant,manifest:prepared.manifest,seed:prepared.seed,policyBundle:prepared.policyBundle,ceremonies:[{transcript,guard,oob,context,messages:evidence.messages}],existingCeremonies:expectedExisting.map(device=>existingEvidence[device])});
-  setPublished(true);
   setFiles(await workspace.householdPairing.transfer.publishedFiles());
   if(expectedExisting.length) setStatus(`Household generation ${item.event.subject.newGeneration} ${result.replayed?'was already published':'was published'}. Share each encrypted file with its named device.`);
   else await savePublished(result.operationId,context.recipientDeviceId);
@@ -104,10 +107,12 @@ export function HouseholdInvitation(){
   try{await app.flushCurrentWorkspace();workspace.reopen()}catch(error){release();throw error}
  };
  const install=async()=>{
-  if(!verified.current||!session.current||(await session.current.outgoing()).complete!==true)throw Error('Finish device verification first.');
+  const currentOffer=offer.current,currentSession=session.current,currentVerification=verified.current;
+  if(!currentOffer||!currentVerification||!currentSession||(await currentSession.outgoing()).complete!==true)throw Error('Finish device verification first.');
   const bytes=await chooseExchangeFile({accept:['application/octet-stream','application/x-binary'],minBytes:48,maxBytes:16*1024*1024+48});
   if(!bytes)return;
-  const result=await workspace.householdPairing.transfer.install({scope:offer.current.scope,bytes});
+  if(currentOffer!==offer.current||currentSession!==session.current||currentVerification!==verified.current)throw Error('The invitation changed. Verify it before choosing a file.');
+  const result=await workspace.householdPairing.transfer.install({scope:currentOffer.scope,bytes});
   setStatus(result.replayed?'This household was already installed. Open it using the confirmed household control.':'Household installed. Your current household is still open; use the confirmed household control to switch.');
  };
 
@@ -133,7 +138,7 @@ export function HouseholdInvitation(){
     {draft.current?<><Text>Verification code to compare separately</Text>
      <Text selectable accessibilityLabel="Invitation verification code">{draft.current.ceremony.oob.hash}</Text>
      <Text selectable accessibilityLabel="Public invitation message">{encode(draft.current.offer)}</Text>
-     <Pressable accessibilityRole="button" onPress={()=>void run(()=>copy(encode(draft.current.offer)))}><Text>Copy public invitation message</Text></Pressable>
+     <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(()=>copy(encode(draft.current.offer)))}><Text>Copy public invitation message</Text></Pressable>
      <PublicMessageFile label="invitation" limit={limit} outgoing={encode(draft.current.offer)} run={run} disabled={busy}/>
      {expectedExisting.length?<><Text>Use the existing-device verification controls below. Collect the completed evidence here for each device.</Text>
       <TextInput accessibilityLabel="Completed existing-device evidence" editable={!busy} multiline maxLength={limit} value={existingText} onChangeText={v=>bounded(v,setExistingText)} style={{borderWidth:1,padding:8}}/>
@@ -153,14 +158,14 @@ export function HouseholdInvitation(){
     <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(recoverFile)}><Text>{noun} an already admitted household file</Text></Pressable>
    </>:<>
     <Text>First verify the organizer’s latest public household authority above. Paste the invitation and enter the code you compared separately.</Text>
-    <TextInput accessibilityLabel="Public invitation message input" multiline maxLength={limit} value={offerText} onChangeText={v=>bounded(v,setOfferText)} style={{borderWidth:1,padding:8}}/>
-    <PublicMessageFile label="invitation" limit={limit} onRead={setOfferText} run={run} disabled={busy}/>
+    <TextInput accessibilityLabel="Public invitation message input" multiline maxLength={limit} editable={!busy} value={offerText} onChangeText={v=>{if(!inFlight.current)bounded(v,changeOffer)}} style={{borderWidth:1,padding:8}}/>
+    <PublicMessageFile label="invitation" limit={limit} onRead={changeOffer} run={run} disabled={busy}/>
    </>}
-   <TextInput accessibilityLabel="Confirmed invitation code" maxLength={128} value={code} onChangeText={setCode} placeholder="Code compared separately" style={{borderWidth:1,padding:8}}/>
+   <TextInput accessibilityLabel="Confirmed invitation code" editable={!busy} maxLength={128} value={code} onChangeText={changeCode} placeholder="Code compared separately" style={{borderWidth:1,padding:8}}/>
    <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(begin)}><Text>Start or resume device verification</Text></Pressable>
    {phase?<><Text>{phase==='complete'?'Both devices have completed verification.':phase==='offer'?'Exchange your offer with the other device.':phase==='response'?'Exchange your response with the other device.':'Exchange your acknowledgement with the other device.'}</Text>
     <Text selectable accessibilityLabel="Your verification message">{output}</Text>
-    <Pressable accessibilityRole="button" onPress={()=>void run(()=>copy(output))}><Text>Copy verification message</Text></Pressable>
+    <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(()=>copy(output))}><Text>Copy verification message</Text></Pressable>
     <PublicMessageFile label="verification message" limit={limit} outgoing={output} run={run} disabled={busy}/>
     {phase!=='complete'?<>
      <TextInput accessibilityLabel="Other device verification message" multiline maxLength={limit} value={peer} onChangeText={v=>bounded(v,setPeer)} style={{borderWidth:1,padding:8}}/>
@@ -170,7 +175,7 @@ export function HouseholdInvitation(){
      <Text>{expectedExisting.length?'Publish verified household generation':`Admit and ${noun.toLowerCase()} encrypted household file`}</Text>
     </Pressable>:<Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(install)}><Text>Choose encrypted household file</Text></Pressable>}
    </>:null}
-   {published&&workspace.reopen?<>
+   {files&&files.generation>workspace.household.scope.documentGeneration&&workspace.reopen?<>
     <Text>Reopen to edit cooking in the new generation. Edits saved to the previous generation are retained on this device.</Text>
     <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void run(reopen)}><Text>Reopen household after admission</Text></Pressable>
    </>:null}
