@@ -26,7 +26,11 @@ export function HouseholdInvitation(){
   void workspace.householdPairing.transfer.publishedFiles().then((value:PublishedFiles|null)=>{if(current)setFiles(value)},(error:Error)=>{if(current)setStatus(error.message)});
   return ()=>{current=false};
  },[open,role,workspace]);
- const run=async(fn:()=>Promise<void>)=>{if(inFlight.current)return;inFlight.current=true;setBusy(true);setStatus('');try{await fn()}catch(e){setStatus(e instanceof Error?e.message:'The invitation step failed.')}finally{inFlight.current=false;setBusy(false)}};
+ const run=async(fn:()=>Promise<void>)=>{if(inFlight.current)return;inFlight.current=true;setBusy(true);setStatus('');try{await fn()}catch(e){
+  const message=e instanceof Error?e.message:'The invitation step failed.';
+  setStatus(message==='DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED'?
+   'Invitations for households with separate recipe documents currently require a single existing device.':message);
+ }finally{inFlight.current=false;setBusy(false)}};
  const bounded=(text:string,set:(v:string)=>void)=>{if(encoder.encode(text).length>limit){setStatus('The pasted message is too large.');return}set(text);setStatus('')};
  const clearVerification=()=>{session.current=null;verified.current=null;offer.current=null;setPhase('');setOutput('');setPeer('')};
  const changeOffer=(text:string)=>{clearVerification();setOfferText(text)};
@@ -35,9 +39,11 @@ export function HouseholdInvitation(){
  const displayOutgoing=(out:any)=>{setOutput(encode(out.ack??out.response??out.offer));setPhase(out.complete?'complete':out.ack?'ack':out.response?'response':'offer')};
  const refresh=async()=>displayOutgoing(await session.current.outgoing());
  const prepareOffer=async(item:any,prepared:any)=>{
-  const ceremony=await workspace.householdPairing.prepareCeremony({item,grant:prepared.grant,manifest:prepared.manifest,seed:prepared.seed,explicit:true});
+  const documentSet=prepared.manifest?.version===5;
+  const ceremony=await workspace.householdPairing.prepareCeremony({item,grant:prepared.grant,manifest:prepared.manifest,
+   seed:prepared.seed,documents:prepared.documents,explicit:true});
   const scope=ceremony.transcript.scope;
-  offer.current={scope,item,grant:prepared.grant,ceremony};
+  offer.current={scope,item,grant:prepared.grant,ceremony,...(documentSet?{manifestVersion:5}:{})};
   draft.current={item,prepared,ceremony,offer:offer.current};
   session.current=null;
   setOfferText(encode(offer.current));setCode('');setPhase('');setOutput('');setPeer('');setExistingEvidence({});setExistingText('');
@@ -93,7 +99,7 @@ export function HouseholdInvitation(){
   if(expectedExisting.some(device=>!existingEvidence[device]))throw Error('Collect completed verification evidence for every existing device.');
   const {item,prepared,ceremony}=draft.current,evidence=await session.current.evidence();
   const {transcript,guard,oob,context}=ceremony;
-  const result=await workspace.householdPairing.transfer.publish({item,grant:prepared.grant,manifest:prepared.manifest,seed:prepared.seed,policyBundle:prepared.policyBundle,ceremonies:[{transcript,guard,oob,context,messages:evidence.messages}],existingCeremonies:expectedExisting.map(device=>existingEvidence[device])});
+  const result=await workspace.householdPairing.transfer.publish({item,grant:prepared.grant,manifest:prepared.manifest,seed:prepared.seed,policyBundle:prepared.policyBundle,documents:prepared.documents,ceremonies:[{transcript,guard,oob,context,messages:evidence.messages}],existingCeremonies:expectedExisting.map(device=>existingEvidence[device])});
   setFiles(await workspace.householdPairing.transfer.publishedFiles());
   if(expectedExisting.length) setStatus(`Household generation ${item.event.subject.newGeneration} ${result.replayed?'was already published':'was published'}. Share each encrypted file with its named device.`);
   else await savePublished(result.operationId,context.recipientDeviceId);
@@ -112,7 +118,7 @@ export function HouseholdInvitation(){
   const bytes=await chooseExchangeFile({accept:['application/octet-stream','application/x-binary'],minBytes:48,maxBytes:16*1024*1024+48});
   if(!bytes)return;
   if(currentOffer!==offer.current||currentSession!==session.current||currentVerification!==verified.current)throw Error('The invitation changed. Verify it before choosing a file.');
-  const result=await workspace.householdPairing.transfer.install({scope:currentOffer.scope,bytes});
+  const result=await workspace.householdPairing.transfer.install({scope:currentOffer.scope,bytes,documentSet:currentVerification.documentSet});
   setStatus(result.replayed?'This household was already installed. Open it using the confirmed household control.':'Household installed. Your current household is still open; use the confirmed household control to switch.');
  };
 

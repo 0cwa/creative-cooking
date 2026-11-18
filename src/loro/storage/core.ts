@@ -1002,6 +1002,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     await tx.put(slot,{binding,recipeId,sourceRevision,documentId:child.documentId,effectId:command.effectId,objectId});
     this.fault?.('recipe-catalog');
   }
+  async hasSelectedRecipeCatalog(expected:AuthorityExpectation) {
+    expected=snapshot(expected);
+    if(expected?.scope?.kind!=='household'||!expected.record)return fail('MALFORMED');
+    try {
+      return await this.run(false,async tx=>{
+        await this.requireAuthority(tx,expected);
+        return {ok:true as const,value:await hasSelectedRecipeChildren(tx,expected.scope.id,[expected.record!.acceptedParent])};
+      });
+    }catch(error){return fail(mapError(error));}
+  }
   /** Read index, selected source and child snapshots at one durable revision. */
   async readSelectedRecipeCatalog(expected:AuthorityExpectation,binding:RecipeCatalogBinding,target?:{recipeId:string;documentId:string},maxChildren?:number) {
     expected=snapshot(expected);binding=snapshot(binding);target=snapshot(target);

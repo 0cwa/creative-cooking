@@ -286,7 +286,7 @@ export async function householdDocumentSetRelease({sodium,storage,scope,pin,prov
 /** Independently verify the selected parent, admission, completed local
  * ceremony and every document/key binding before writing any selected state. */
 export async function installHouseholdDocumentSet({sodium,storage,scope,pin,provider,recipientDevice,sessionStore,keys,
-  master,keyOperationId,confirmedParent,release,LoroDoc}){
+  master,keyOperationId,confirmedParent,confirmedEventHash,confirmedGrantHash,confirmedTranscriptHash,prepareEnrollment,release,LoroDoc}){
   release=structuredClone(release);
   if(!release || Object.keys(release).sort().join(',')!=='documents,item,packets,selection,version'||release.version!==1){
     throw Error('INVALID_DOCUMENT_SET');
@@ -301,6 +301,11 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
       const checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
       if(checked.record.acceptedParent!==confirmedParent)throw Error('INVALID_AUTHORITY');
       const route=await contextsFor({sodium,provider,parent:checked.parent,record:checked.record,item,recipientDevice});
+      if([confirmedEventHash,confirmedGrantHash,confirmedTranscriptHash].some(value=>value!==undefined)&&
+         (checked.eventHash!==confirmedEventHash||checked.grantHash!==confirmedGrantHash||
+          route.proof.oob.hash!==confirmedTranscriptHash||!item.admission.grant.recipientDevices.includes(recipientDevice))){
+        throw Error('INVALID_PROOF');
+      }
       await checkSession(sodium,sessionStore,secrets,route.proof,'responder');
       checkPackets(sodium,packets,route.contexts);
       return {checked,...route};
@@ -340,6 +345,7 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
       const publication=forStorage({checked,item,documents,operationId,guardIds:[guardId],mode:'recipient',
         keys:prepared,packets,pendingEdits:[]});
       publication.documentSet.recipientSignature=sodium.crypto_sign_detached(await receiptBytes(provider,publication),secrets.signingSecret);
+      await prepareEnrollment?.();
       return {...must(await storage.publishProjection(publication)),head:checked.eventHash};
     },replay);
   }finally{clearSecrets(secrets);}

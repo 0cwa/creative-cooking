@@ -1013,6 +1013,8 @@ test('selected recipe shopping copies and current-only admission survive durable
  const newcomerOptions={sodium,storage:freshStorage,scope,pin:a.root.head,provider:a.provider,keys:newcomerKeys,
   sessionStore:newcomerSession,master:newcomerMaster,keyOperationId:'set-newcomer-key',confirmedParent:record.acceptedParent,
   recipientDevice:newcomerContext.recipientDeviceId,recipientKind:'document-set',LoroDoc};
+ const confirmedInvitation={confirmedEventHash:eventHash,confirmedGrantHash:must(await a.storage.getProjectionPublication(scope.id,operationId)).grantHash,
+  confirmedTranscriptHash:ceremonies[0].oob.hash};
  const joinName='v5-joined-fixture';
  const openDatabase=name=>{
   const database=new DatabaseSync(join(freshDatabase,`${name}.sqlite`));
@@ -1029,8 +1031,13 @@ test('selected recipe shopping copies and current-only admission survive durable
  const joinId=householdReceiverIds(sodium,scope,newcomerOptions.recipientDevice).operationId;
  const enrollment={scope,pin:a.root.head,operationId:joinId,confirmedParent:record.acceptedParent};
  await joinStore.prepareJoinedSequences(enrollment);
- const install=(bytes=sealed)=>installHouseholdFile({...newcomerOptions,bytes});
+ const install=(bytes=sealed)=>installHouseholdFile({...newcomerOptions,...confirmedInvitation,bytes});
  const beforeNewcomer=freshRows();
+ for(const field of Object.keys(confirmedInvitation)){
+  await assert.rejects(()=>installHouseholdFile({...newcomerOptions,...confirmedInvitation,[field]:'0'.repeat(64),
+   bytes:sealed,prepareEnrollment:()=>assert.fail('Unverified invitation reached enrollment')}),/INVALID_PROOF/);
+ }
+ assert.deepEqual(freshRows(),beforeNewcomer);
  const bad=structuredClone(release);
  [bad.packets[1],bad.packets[2]]=[bad.packets[2],bad.packets[1]];
  const forgedBytes=encodeHouseholdDocumentSetFile(bad);

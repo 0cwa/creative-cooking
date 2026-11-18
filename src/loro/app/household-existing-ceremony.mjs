@@ -7,6 +7,7 @@ const pins=t=>Object.fromEntries(['initiator','responder'].map(role=>[role,{devi
 /** Bind one existing device to the newly admitted generation. Its wrapping key
  * is independently confirmed with that device during the ceremony. */
 export async function prepareExistingCeremony({storage,scope,pin,provider,store,sodium,adultId,deviceId,wrappingPublicKey,item,grant,manifest,seed,recipient,explicit,randomUUID=()=>crypto.randomUUID()}){
+ if(manifest?.version===5)throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
  if(explicit!==true||!(seed?.snapshot instanceof Uint8Array)||seed.snapshot.length>8*1024*1024)throw Error('MALFORMED');const sc=structuredClone(scope),i=structuredClone(item),g=structuredClone(grant),m=structuredClone(manifest),bytes=new Uint8Array(seed.snapshot),target=structuredClone(recipient);
  if(JSON.stringify(g.recipientDevices)!==JSON.stringify(i?.event?.subject?.devices?.map(d=>d.deviceId))||g.newDocumentGeneration!==i?.event?.subject?.newGeneration||g.newEpochId!==i?.event?.subject?.newEpochId||m.newDocumentId!==i?.event?.subject?.documentId)throw Error('CONTEXT_MISMATCH');
  const checked=await checkCurrentAdmission(storage,sc,pin,provider,i,g,m,bytes),current=await readAuthority(storage,sc,pin,provider),v=await verifyAuthority(current.state,pin,provider),parent=v.nodes.get(current.activeHead),sender=parent?.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId),other=parent?.devices.find(d=>d.active&&d.deviceId===target?.deviceId&&d.adultId===target?.adultId);
@@ -18,6 +19,7 @@ export async function prepareExistingCeremony({storage,scope,pin,provider,store,
 /** An existing device checks its own accepted parent, signed admission and
  * independently compared transcript before responding to a challenge. */
 export async function verifyExistingCeremony({storage,scope,pin,provider,sodium,adultId,deviceId,wrappingPublicKey,item,grant,manifest,seed,ceremony,confirmedHash}){
+ if(manifest?.version===5)throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
  if(!(seed?.snapshot instanceof Uint8Array)||seed.snapshot.length>8*1024*1024||typeof confirmedHash!=='string'||!/^[0-9a-f]{64}$/.test(confirmedHash))throw Error('MALFORMED');const sc=structuredClone(scope),i=structuredClone(item),g=structuredClone(grant),m=structuredClone(manifest),bytes=new Uint8Array(seed.snapshot),proof=structuredClone(ceremony);
  if(JSON.stringify(g.recipientDevices)!==JSON.stringify(i?.event?.subject?.devices?.map(d=>d.deviceId))||g.newDocumentGeneration!==i?.event?.subject?.newGeneration||g.newEpochId!==i?.event?.subject?.newEpochId||m.newDocumentId!==i?.event?.subject?.documentId)throw Error('CONTEXT_MISMATCH');
  const checked=await checkCurrentAdmission(storage,sc,pin,provider,i,g,m,bytes),current=await readAuthority(storage,sc,pin,provider),v=await verifyAuthority(current.state,pin,provider),parent=v.nodes.get(current.activeHead),c=proof?.context,t=proof?.transcript,guard=proof?.guard,own=parent?.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId),sender=parent?.devices.find(d=>d.active&&d.deviceId===c?.sponsorDeviceId);

@@ -13,10 +13,13 @@ export function planRecipeAction({doc,before,after,actionId,author,at}) {
  const recipe=doc.getMap(named('recipe',id)).toJSON();
  if(!after){if(recipe.removed)throw Error('CONFLICT');const prev=doc.getMap(head('recipe',id,'removed')).get('effect');add('recipe-field',{recipeId:id,field:'removed',value:true,author,at},[root,...(prev?[prev]:[])]);return commands;}
  if(before.createdAt!==after.createdAt)throw Error('UNSUPPORTED_EDIT');
- for(const field of ['title','description','portions','notes','updatedAt'])if(!equal(before[field],after[field])){
-  const canonical=(value)=>value===undefined&&field==='description'?'':value===undefined&&field==='notes'?[]:value;
-  if(!equal(canonical(recipe[field]),canonical(before[field])))throw Error('REBASE_REQUIRED');
-  const value=after[field]===undefined&&field==='description'?'':after[field]===undefined&&field==='notes'?[]:after[field];
+ for(const field of ['title','description','portions','notes','updatedAt']){
+  const canonical=value=>value===undefined&&field==='description'?'':value===undefined&&field==='notes'?[]:value;
+  const previous=canonical(before[field]),value=canonical(after[field]);
+  // The editor omits blank optional fields. Compare the values Loro stores
+  // so an unchanged field does not produce an unverifiable no-op update.
+  if(equal(previous,value))continue;
+  if(!equal(canonical(recipe[field]),previous))throw Error('REBASE_REQUIRED');
   if(value===undefined)throw Error('UNSUPPORTED_EDIT');
   const prev=doc.getMap(head('recipe',id,field)).get('effect');add('recipe-field',{recipeId:id,field,value,author,at},[root,...(prev?[prev]:[])]);
  }

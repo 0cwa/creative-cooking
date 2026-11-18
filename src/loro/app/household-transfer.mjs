@@ -1,4 +1,7 @@
 import {publishHouseholdAdmission,readAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {selectedSourceHash} from '../projection/selected-sources.mjs';
+import {publishHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
+import {matchesInvitationSignaling} from './household-ceremony.mjs';
 import {domain} from '../authority/validator.mjs';
 import {sealHouseholdFile,installHouseholdFile} from '../pairing/household-file.mjs';
 import {durableSession} from '../pairing/durable-session.mjs';
@@ -24,9 +27,22 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
  }
  async function publish(input){
   const data=structuredClone(input),event=data?.item?.event,operationId=event?.proposalId;
-  if(typeof operationId!=='string'||!operationId||!(data.seed?.snapshot instanceof Uint8Array)||!Array.isArray(data.ceremonies)||!Array.isArray(data.existingCeremonies))throw Error('MALFORMED');
+  const documentSet=data?.manifest?.version===5;
+  if(typeof operationId!=='string'||!operationId||!Array.isArray(data.ceremonies)||!Array.isArray(data.existingCeremonies)||
+     (documentSet?data.seed!==undefined||data.policyBundle!==undefined||!Array.isArray(data.documents):
+      data.documents!==undefined||!(data.seed?.snapshot instanceof Uint8Array)))throw Error('MALFORMED');
   const prior=await storage.getProjectionPublication(ownScope.id,operationId);
   if(!prior.ok)throw Error(prior.error);
+  if(prior.value&&!!prior.value.documentSet!==documentSet||
+     runtime.authority?.installedSet&&(!documentSet||!prior.value))throw Error('UNSUPPORTED_VERSION');
+  if(documentSet){
+   if(data.existingCeremonies.length||!prior.value&&runtime.scope.acceptedRecipients.some(device=>device!==deviceId)){
+    throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
+   }
+   const {signatures,...unsigned}=data.grant??{};
+   const grantHash=await selectedSourceHash(provider,'current-state-grant',unsigned);
+   if(!data.ceremonies.every(proof=>matchesInvitationSignaling(proof?.transcript,proof?.context,5,grantHash)))throw Error('INVALID_PROOF');
+  }
   return withSecrets(async secret=>{
    for(const proof of [...data.ceremonies,...data.existingCeremonies])await completedOrganizerProof(proof,secret);
    let selection,pendingEdits;
@@ -36,24 +52,40 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
    }else{
     const current=await readAuthority(storage,ownScope,pin,provider);
     if(current.activeHead!==event.parentHead)throw Error('STALE_AUTHORITY');
-    const expected=await runtime.authorize(),archive=await storage.listBranchLocalOperations(expected);
-    if(!archive.ok)throw Error(archive.error);
-    pendingEdits=archive.value;
+    if(!documentSet){
+     const expected=await runtime.authorize(),archive=await storage.listBranchLocalOperations(expected);
+     if(!archive.ok)throw Error(archive.error);
+     pendingEdits=archive.value;
+    }
     const body={root:pin,householdId:ownScope.id,from:event.parentHead,to:data.grant.admissionEventHash,deviceId,index:current.state.selections.length};
     selection={from:body.from,to:body.to,deviceId,index:body.index,signature:hex(sodium.crypto_sign_detached(domain('select-head',body),secret.signingSecret))};
+   }
+   if(documentSet){
+    const result=await publishHouseholdDocumentSet({storage,scope:ownScope,pin,provider,sodium,sessionStore,keys:secret,
+     master,runtime,service,item:data.item,grant:data.grant,manifest:data.manifest,documents:data.documents,selection,
+     localDeviceId:deviceId,ceremonies:data.ceremonies,existingCeremonies:data.existingCeremonies,keyOperationId:`admission-key:${operationId}`});
+    return {replayed:result.replayed,operationId};
    }
    const result=await publishHouseholdAdmission({storage,scope:ownScope,pin,provider,master,operationId,keyOperationId:`admission-key:${operationId}`,localDeviceId:deviceId,signingSecret:secret.signingSecret,item:data.item,grant:data.grant,manifest:data.manifest,snapshot:data.seed.snapshot,ceremonies:data.ceremonies,existingCeremonies:data.existingCeremonies,selection,pendingEdits,sourceRuntime:runtime,policyBundle:data.policyBundle,disclosureService:service});
    return {replayed:result.replayed,operationId};
   });
  }
- async function seal(input){const data=structuredClone(input);if(typeof data?.operationId!=='string'||typeof data?.recipientDevice!=='string')throw Error('MALFORMED');return withSecrets(keys=>sealHouseholdFile({sodium,storage,scope:ownScope,pin,provider,sessionStore,keys,operationId:data.operationId,recipientDevice:data.recipientDevice,LoroDoc}));}
+ async function seal(input){
+  const data=structuredClone(input);
+  if(typeof data?.operationId!=='string'||typeof data?.recipientDevice!=='string')throw Error('MALFORMED');
+  const saved=await storage.getProjectionPublication(ownScope.id,data.operationId);
+  if(!saved.ok||!saved.value)throw Error('MISSING_PUBLICATION');
+  const kind=saved.value.documentSet?'document-set':'admission';
+  return withSecrets(keys=>sealHouseholdFile({sodium,storage,scope:ownScope,pin,provider,sessionStore,keys,
+   operationId:data.operationId,recipientDevice:data.recipientDevice,LoroDoc,kind}));
+ }
  async function publishedFiles(){
   const {activeHead,state}=await readAuthority(storage,ownScope,pin,provider);
   const item=state.events.find(entry=>entry.admission?.grant.admissionEventHash===activeHead&&entry.admission.localDeviceId===deviceId);
   if(!item)return null;
   const {operationId}=item.admission,result=await storage.getProjectionPublication(ownScope.id,operationId);
   if(!result.ok||!result.value)throw Error('MISSING_PUBLICATION');
-  if(result.value.documentSet)throw Error('UNSUPPORTED_VERSION');
+  if(!!result.value.documentSet!==(item.admission.manifest.version===5))throw Error('UNSUPPORTED_VERSION');
   return {operationId,generation:item.event.subject.newGeneration,recipients:result.value.packages.map(({recipientDevice})=>({recipientDevice,joining:item.admission.grant.recipientDevices.includes(recipientDevice)}))};
  }
  function checkedBytes(bytes){
@@ -61,13 +93,21 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   return new Uint8Array(bytes);
  }
  async function install(input){
-  const bytes=checkedBytes(input?.bytes),sc=structuredClone(input.scope);
+  const bytes=checkedBytes(input?.bytes),sc=structuredClone(input.scope),documentSet=structuredClone(input.documentSet);
   if(!validPairingScope(sc)||sc.kind!=='household')throw Error('MALFORMED');
   const confirmed=(await keys.list()).find(x=>x.scope.kind==='household'&&x.scope.id===sc.id);
   if(!confirmed)throw Error('CONFIRMATION_REQUIRED');
   const {operationId,keyOperationId}=householdReceiverIds(sodium,sc,deviceId);
-  const joined={name,storage,scope:sc,pin:confirmed.pin,provider,deviceId,operationId};
-  const result=await withSecrets(secret=>installHouseholdFile({sodium,bytes,keys:secret,storage,scope:sc,pin:confirmed.pin,provider,sessionStore,recipientDevice:deviceId,LoroDoc,master,operationId,keyOperationId,recipientKind:'newcomer',confirmedParent:confirmed.head,prepareEnrollment:()=>prepareJoinedSequences(joined)}));
+  if(documentSet!==undefined&&(documentSet?.version!==5||
+     ![documentSet.eventHash,documentSet.grantHash,documentSet.transcriptHash].every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value)))){
+   throw Error('MALFORMED');
+  }
+  const joined={name,storage,scope:sc,pin:confirmed.pin,provider,deviceId,operationId,confirmedParent:confirmed.head};
+  const result=await withSecrets(secret=>installHouseholdFile({sodium,bytes,keys:secret,storage,scope:sc,pin:confirmed.pin,
+   provider,sessionStore,recipientDevice:deviceId,LoroDoc,master,operationId,keyOperationId,
+   recipientKind:documentSet?'document-set':'newcomer',confirmedParent:confirmed.head,
+   confirmedEventHash:documentSet?.eventHash,confirmedGrantHash:documentSet?.grantHash,confirmedTranscriptHash:documentSet?.transcriptHash,
+   prepareEnrollment:()=>prepareJoinedSequences(joined)}));
   const opened=await finalizeJoinedSequences(joined);opened.sequences.close();return {replayed:result.replayed,scope:sc,selected:false};
  }
  async function installExisting(input){

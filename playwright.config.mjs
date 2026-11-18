@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test';
 const webPort = process.env.TEST_WEB_PORT ?? '4173';
 const webURL = `http://127.0.0.1:${webPort}/creative-cooking/`;
 const admissionURL = 'http://127.0.0.1:19482/';
-const admissionSpecs = /loro-(file-binding|grant-review|selection)\.spec\.mjs$/;
+const admissionSpecs = /loro-(document-set-invitation|file-binding|grant-review|selection)\.spec\.mjs$/;
 
 export default defineConfig({
   testDir: './tests',

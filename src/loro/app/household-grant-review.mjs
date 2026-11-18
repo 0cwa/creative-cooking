@@ -1,21 +1,33 @@
 import {readAuthority,verifyAuthority} from '../authority/chain.mjs';
 import {checkAdmissionAgreement,checkGrantSignatures,checkGrantManifest} from '../authority/grant.mjs';
-import {projectCooking} from '../domain/app-projection.mjs';
+import {projectCooking,projectRecipes} from '../domain/app-projection.mjs';
 import {domain,validateSuccessor} from '../authority/validator.mjs';
 import {verifyPolicyProjection} from '../disclosure/policy-seed.mjs';
+import {verifyCurrentDocumentSet} from '../projection/current-document-set.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 async function checked({storage,scope,pin,provider,runtime,service,adultId,deviceId,item,prepared}) {
  scope=structuredClone(scope);item=structuredClone(item);prepared=structuredClone(prepared);
  const {state,activeHead}=await readAuthority(storage,scope,pin,provider),verified=await verifyAuthority(state,pin,provider),parent=verified.nodes.get(activeHead),device=parent?.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId);
  if(!device||item?.event?.kind!=='inviteAdult'||item.event.parentHead!==activeHead)throw Error('INVALID_AUTHORITY');
  const successor=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);if(successor.reason!=='ADMISSION_AND_PROJECTION_REQUIRED')throw Error(successor.reason||'INVALID_PROOF');
- const {grant,manifest,seed,policyBundle}=prepared??{},signed=await checkGrantSignatures(parent,grant,provider),association=await checkGrantManifest(parent,grant,manifest,seed?.snapshot,provider),subject=item.event.subject;
+ const {grant,manifest,seed,policyBundle,documents}=prepared??{},signed=await checkGrantSignatures(parent,grant,provider);
+ if(manifest?.version===5){
+  if(prepared.version!==2||seed!==undefined||policyBundle!==undefined)throw Error('INVALID_PROOF');
+  const verified=await verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc:runtime.LoroDoc});
+  const projected=verified.documents.map(({seed})=>{const doc=new runtime.LoroDoc();doc.import(seed.snapshot);return doc;});
+  const cooking=projectCooking(projected[0]);
+  cooking.recipes.push(...projected.slice(1).flatMap(projectRecipes));
+  cooking.recipes.sort((left,right)=>left.id<right.id?-1:left.id>right.id?1:0);
+  return {grant,manifest,device,parent,prepared,grantHash:verified.grantHash,signed,cooking,sourceRevision:manifest.entries[0].sourceRevision};
+ }
+ if(documents!==undefined)throw Error('INVALID_PROOF');
+ const association=await checkGrantManifest(parent,grant,manifest,seed?.snapshot,provider),subject=item.event.subject;
  if(manifest?.version!==policyBundle?.version||signed.status==='deny'||association.reason!=='SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED'||grant.admissionEventHash!==successor.eventHash||grant.recipientAdult!==subject.adultId||JSON.stringify(grant.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId))||grant.newDocumentGeneration!==subject.newGeneration||grant.newEpochId!==subject.newEpochId||manifest.newDocumentId!==subject.documentId)throw Error('INVALID_PROOF');
  let accepted=false;for(const agreement of state.agreements??[]){if(agreement.parentHead!==activeHead)continue;const result=await checkAdmissionAgreement(parent,agreement,provider);if(result.status==='accepted'&&result.delegationHash===grant.delegationHash&&JSON.stringify(agreement.sourcePolicyHashes)===JSON.stringify(grant.sourcePolicyHashes))accepted=true}if(!accepted)throw Error('DELEGATION_REQUIRED');
  await verifyPolicyProjection({provider,pin,state,seed,bundle:policyBundle,expectedBundleHash:manifest.policyBundleHash,expectedSourceHead:parent.head,expectedSourceDocument:parent.runtime.documentId,expectedSourceRevision:manifest.sourceRevision,LoroDoc:runtime.LoroDoc});
  const unsigned=Object.fromEntries(Object.entries(grant).filter(([k])=>k!=='signatures')),digest=await provider.hash(domain('current-state-grant',unsigned));if(!(digest instanceof Uint8Array)||digest.length!==32)throw Error('INVALID_PROOF');
- const projected=new runtime.LoroDoc();projected.import(seed.snapshot);const cooking=projectCooking(projected);return {grant,manifest,device,parent,prepared,grantHash:hex(digest),signed,cooking};
+ const projected=new runtime.LoroDoc();projected.import(seed.snapshot);const cooking=projectCooking(projected);return {grant,manifest,device,parent,prepared,grantHash:hex(digest),signed,cooking,sourceRevision:manifest.sourceRevision};
 }
-export async function reviewHouseholdGrant(args){const r=await checked(args);return {grantHash:r.grantHash,parentHead:r.parent.head,recipientAdult:r.grant.recipientAdult,recipientDevices:[...r.grant.recipientDevices],contentClasses:[...r.grant.contentClasses],sourceRevision:r.manifest.sourceRevision,cooking:r.cooking,approvals:r.signed.approvals,required:r.signed.required};}
+export async function reviewHouseholdGrant(args){const r=await checked(args);return {grantHash:r.grantHash,parentHead:r.parent.head,recipientAdult:r.grant.recipientAdult,recipientDevices:[...r.grant.recipientDevices],contentClasses:[...r.grant.contentClasses],sourceRevision:r.sourceRevision,cooking:r.cooking,approvals:r.signed.approvals,required:r.signed.required};}
 export async function approveHouseholdGrant(args){if(args.explicit!==true)throw Error('CONFIRMATION_REQUIRED');const r=await checked(args);if(r.grantHash!==args.confirmedGrantHash)throw Error('REVIEW_CHANGED');if(r.grant.signatures.some(x=>x.adultId===args.adultId))throw Error('ALREADY_APPROVED');const unsigned=Object.fromEntries(Object.entries(r.grant).filter(([k])=>k!=='signatures')),signature=hex(await args.provider.sign(r.device.signingKeyRef,domain('current-state-grant-signature',{grant:unsigned,adultId:args.adultId,deviceId:args.deviceId}))),approval={adultId:args.adultId,deviceId:args.deviceId,signature},result=await checkGrantSignatures(r.parent,{...r.grant,signatures:[...r.grant.signatures,approval]},args.provider);if(result.status==='deny')throw Error(result.reason);return {approval,grantHash:r.grantHash,approvals:result.approvals,required:result.required};}
 export async function collectHouseholdGrantApproval(args){const approval=structuredClone(args.approval),r=await checked(args);if(r.grant.signatures.some(x=>x.adultId===approval?.adultId))throw Error('ALREADY_APPROVED');const grant={...r.grant,signatures:[...r.grant.signatures,approval]},result=await checkGrantSignatures(r.parent,grant,args.provider);if(result.status==='deny')throw Error(result.reason);return {prepared:{...r.prepared,grant},grantHash:r.grantHash,approvals:result.approvals,required:result.required};}

@@ -68,7 +68,7 @@ export function householdPairing({
       }),
     },
     transfer:{
-      publish:legacy(transfer.publish),
+      publish:active(transfer.publish),
       seal:active(transfer.seal),
       publishedFiles:active(transfer.publishedFiles),
       installExisting:legacy(transfer.installExisting),
@@ -104,10 +104,10 @@ export function householdPairing({
     acceptedParents: active(() => pins.list()),
     prepareDelegation: active(input => prepareHouseholdDelegation({...input, ...member})),
     acceptDelegation: legacy(input => acceptHouseholdDelegation({...input, ...authority})),
-    prepareInvite: active(input => prepareHouseholdInvite({...input, ...preparation})),
-    prepareGrant: active(input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID})),
-    prepareCeremony: active(input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey})),
-    verifyOffer: active(input => verifyHouseholdOffer({...input, storage, pins, provider, sodium, identity})),
+    prepareInvite: legacy(input => prepareHouseholdInvite({...input, ...preparation})),
+    prepareGrant: legacy(input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID})),
+    prepareCeremony: legacy(input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey,LoroDoc})),
+    verifyOffer: active(input => verifyHouseholdOffer({...input, storage, pins, provider, sodium, identity,LoroDoc})),
     session(input) {
       const session = householdSession({...input, sodium, store, keys, signing, wrapping});
       return Object.fromEntries(Object.entries(session).map(([key, method]) => [key, active(method)]));
