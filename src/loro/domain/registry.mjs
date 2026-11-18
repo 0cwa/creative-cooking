@@ -1,4 +1,4 @@
-import {normalizeIngredientName} from '../../domain/pantry.ts';
+import {normalizeIngredientName} from '../../domain/ingredient-name.mjs';
 import {normalizedFrontiers} from '../authority/policy-baseline.mjs';
 import {isRecipeDocumentId} from './recipe-document.mjs';
 import {isPersonalCommand,validatePersonalCommand,personalOperations,checkPersonalPreconditions} from './personal-codec.mjs';
