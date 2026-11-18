@@ -87,6 +87,16 @@ test('fresh setup bounds fixed quorum by the actual electorate and preserves the
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Fixed quorum of 1. Requires 1 of 1 existing adults.');
 });
 
+test('legacy choice persists without Web Locks', async ({page}) => {
+  await page.addInitScript(()=>Object.defineProperty(navigator,'locks',{value:undefined}));
+  await page.goto('./');
+  await button(page,'Open existing workspace').click();
+  await expect(button(page,'Open settings')).toBeVisible();
+  await page.reload();
+  await expect(button(page,'Open settings')).toBeVisible();
+  await expect(button(page,'Start fresh local preview')).toHaveCount(0);
+});
+
 test('stale choosers preserve both pending and ready fresh workspace choices', async ({page, context}) => {
   const key='creative-cooking-storage-choice-v1';
   await page.goto('./');
@@ -116,6 +126,7 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
   await button(page,'Review household policy').click();
   await button(page,'Accept this household policy').click();
   expect(await page.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
+  await readyChooser.evaluate(()=>Object.defineProperty(navigator,'locks',{value:undefined}));
   await button(readyChooser,'Open existing workspace').click();
   await expect(button(readyChooser,'Start fresh local preview')).toHaveCount(0);
   expect(await readyChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);

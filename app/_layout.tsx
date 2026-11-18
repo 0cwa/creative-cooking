@@ -85,6 +85,7 @@ function AccountWorkspaceBootstrap() {
 }
 
 const webChoiceKey = 'creative-cooking-storage-choice-v1';
+const webLegacyPreferenceKey = 'creative-cooking-legacy-preference-v1';
 const webChoiceLock = 'creative-cooking/web-workspace-choice/v1';
 const webWorkspaceKey = 'creative-cooking-local-workspace-v1';
 const pendingPrefix = 'pending:';
@@ -132,7 +133,10 @@ export default function RootLayout() {
     let opened:any=null,adopted=false;
     try{
       const mode=globalThis.localStorage.getItem(webChoiceKey);
-      if(mode==='legacy'){if(active)setChoice('legacy');return;}
+      if(mode==='legacy'||(mode===null&&globalThis.localStorage.getItem(webLegacyPreferenceKey)==='legacy')){
+        if(active)setChoice('legacy');
+        return;
+      }
       if(mode&&(mode.startsWith('local:')||mode.startsWith(pendingPrefix))){
         const pending=mode.startsWith(pendingPrefix)?readPendingWebChoice(mode):null;
         const name=pending?.name??mode.slice(6);
@@ -155,8 +159,8 @@ export default function RootLayout() {
     try{
       if(Platform.OS==='web'){
         const locks=globalThis.navigator?.locks;
-        if(!locks)throw Error('LOCK_UNAVAILABLE');
-        await locks.request(webChoiceLock,()=>{
+        if(!locks)globalThis.localStorage.setItem(webLegacyPreferenceKey,'legacy');
+        else await locks.request(webChoiceLock,()=>{
           const mode=globalThis.localStorage.getItem(webChoiceKey);
           if(!mode?.startsWith(pendingPrefix)&&!mode?.startsWith('local:'))globalThis.localStorage.setItem(webChoiceKey,'legacy');
         });
