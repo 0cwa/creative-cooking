@@ -1,7 +1,7 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
 import {validateSuccessor, validParent, domain, isPolicyDocumentId} from './validator.mjs';
-import {recoverPolicyBaseline} from './policy-baseline.mjs';
+import {policyBranchAncestors,recoverPolicyBaseline} from './policy-baseline.mjs';
 import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import sodium from 'libsodium-wrappers';
@@ -27,7 +27,7 @@ export async function verifyAuthority(state,pin,provider) {
  if (!validParent(state.root) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
- const policyParents=new Map(), legacyPolicyHeads=new Set();
+ const policyParents=new Map(), legacyPolicyHeads=new Set(), seedSchemas=new Map();
  for(const item of state.events) {
   if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
@@ -68,6 +68,7 @@ export async function verifyAuthority(state,pin,provider) {
    child.runtime.documentId=subject.documentId;for(const d of subject.devices) child.runtime.authorPeers[d.deviceId]=d.peerId;
    child.runtime.acceptedRecipients=[...parent.runtime.acceptedRecipients,...subject.devices.map(d=>d.deviceId)].sort();
    if(!validParent(child)) throw Error('INVALID_ADMISSION');nodes.set(r.eventHash,child);
+   if(a.manifest.version===4)seedSchemas.set(r.eventHash,4);
   } else throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
  }
  const agreements=state.agreements ?? [];
@@ -88,7 +89,7 @@ export async function verifyAuthority(state,pin,provider) {
   active=selection.to;
  }
  if(active!==state.activeHead)throw Error('MISSING_ACTIVE_HEAD');
- return {nodes,state,policyParents,legacyPolicyHeads};
+ return {nodes,state,policyParents,legacyPolicyHeads,seedSchemas};
 }
 // Hash excludes head so genesis is not self-referential.
 export async function rootPin(provider,root) { const r=copy(root); delete r.head; return digest(provider,'root',r); }
@@ -347,12 +348,30 @@ export async function publishHouseholdAdmission(input) {
 /** Historical inspection only: resolve a head actually selected in the pinned chain.
  * This grants no present authority and does not authorize publication. */
 export async function resolveHistoricalAuthority(storage,scope,pin,provider,head) {
- const {record,state,nodes}=await load(storage,scope,pin,provider);
+ const verified=await load(storage,scope,pin,provider);
+ return historicalAuthority(verified,scope,pin,head);
+}
+
+function historicalAuthority({record,state,nodes,seedSchemas},scope,pin,head) {
  const selected=new Set([pin,...state.selections.map(s=>s.to)]);
  if(!selected.has(head))throw Error('HISTORICAL_HEAD_NOT_SELECTED');
  const node=nodes.get(head);if(!node)throw Error('MISSING_PARENT');
  const devices=node.devices.filter(d=>d.active);
- return {scope:{scopeId:scope.id,documentId:node.runtime.documentId,documentGeneration:node.generation,branchHead:head,policyHashes:[node.policyHash],epochId:node.epochId,acceptedAuthors:devices.map(d=>d.deviceId).sort(),authorPeers:copy(node.runtime.authorPeers),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'},signingKeyRefs:Object.fromEntries(devices.map(d=>[d.deviceId,d.signingKeyRef])),expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+ return {scope:{scopeId:scope.id,documentId:node.runtime.documentId,documentGeneration:node.generation,branchHead:head,policyHashes:[node.policyHash],epochId:node.epochId,acceptedAuthors:devices.map(d=>d.deviceId).sort(),authorPeers:copy(node.runtime.authorPeers),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'},signingKeyRefs:Object.fromEntries(devices.map(d=>[d.deviceId,d.signingKeyRef])),seedSchemaVersion:seedSchemas.get(head)??1,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+}
+
+/** A report may inherit cooking operations only along verified checkout edges. */
+export async function resolveHistoricalPolicyLineage(storage,scope,pin,provider,head,maxHeads) {
+ const verified=await load(storage,scope,pin,provider);
+ const ancestors=policyBranchAncestors(verified,head);
+ if(!ancestors.length)throw Error('HISTORICAL_HEAD_NOT_SELECTED');
+ if(ancestors.length>maxHeads)throw Error('AUTHORITY_HEAD_BUDGET');
+ if(verified.legacyPolicyHeads.has(ancestors.at(-1).head))throw Error('UNSUPPORTED_POLICY_LINEAGE');
+ const ordered=ancestors.reverse();
+ return ordered.map((node,index)=>({
+  authority:historicalAuthority(verified,scope,pin,node.head),
+  upperBound:verified.policyParents.get(ordered[index+1]?.head)?.baseline??null
+ }));
 }
 
 /** Publish a deliberately selected, previously authenticated compromise draft.

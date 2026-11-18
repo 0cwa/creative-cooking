@@ -260,6 +260,13 @@ test('fresh native workspaces use signed admission, durable selection and guarde
   const frozen=await verifier.inspect(targetToken,reviewId);
   assert.equal(frozen.checkpointLabel,'Verified household projection checkpoint');
   assert.equal(frozen.rows.filter(row=>row.category==='suspect').length,1);
+  const kept=frozen.rows.filter(row=>row.category!=='suspect').map(row=>row.effectId);
+  const clean=await verifier.saveCleanDraft(frozen,kept);
+  assert.equal(clean.draft.included.length,1);
+  assert.equal(clean.draft.excluded.length,1);
+  assert.equal(clean.draft.held.length,0);
+  assert.equal(clean.draft.pantry.length,2);
+  assert.ok(clean.draft.pantry.includes('seed-leek'));
   assert.deepEqual(await pantry(organizer),await pantry(recipient));
   const deviceId = recipient.deviceId;
   const joined = houseCounterName(recipientName,scope,deviceId);

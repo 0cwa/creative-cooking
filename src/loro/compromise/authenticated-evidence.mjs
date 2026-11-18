@@ -13,9 +13,11 @@ export async function authenticateEvidence(runtime,kind,a,o) {
  let p;try{p=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value))}catch{throw Error('MALFORMED_UPDATE')}
  if(!p||Object.keys(p).sort().join(',')!=='command,update,version'||p.version!==1||!dense(p.update)||!p.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))throw Error('MALFORMED_UPDATE');
  const command=validate(p.command);assertCommandScope(command.kind,kind);if(command.dependencyEffectIds.length>REVIEW_LIMITS.dependencies||command.effectId!==h.semanticEffectIds[0]||(command.data.author!==undefined&&command.data.author!==h.authorDevice))throw Error('MALFORMED_UPDATE');
+ if(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h.version!==4)throw Error('UNSUPPORTED_VERSION');
  const update=Uint8Array.from(p.update),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!eq(meta.predecessors,h.predecessorRefs))throw Error('MALFORMED_UPDATE');
  if(h.version>=2&&!eq([...command.dependencyEffectIds].sort(),h.sourceEffectIds))throw Error('MALFORMED_UPDATE');
  const vectors=runtime.decodeImportBlobMeta(update,true);
  const startCounter=vectors.partialStartVersionVector.toJSON().get(meta.peer)??0;
- return {sourceId:o.sourceId,objectId:o.objectId,authorDevice:h.authorDevice,sourceDocumentId:h.documentId,sourceGeneration:h.documentGeneration,sourceHead:h.branchHead,command,update,meta,startCounter};
+ const endCounter=vectors.partialEndVersionVector.toJSON().get(meta.peer);
+ return {sourceId:o.sourceId,objectId:o.objectId,authorDevice:h.authorDevice,sourceDocumentId:h.documentId,sourceGeneration:h.documentGeneration,sourceHead:h.branchHead,command,update,meta,startCounter,endCounter};
 }

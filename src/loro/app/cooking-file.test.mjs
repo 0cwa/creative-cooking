@@ -333,6 +333,44 @@ test('force report preflight before crypto and reject a stale boundary or file s
   assert.deepEqual(receiver.rows(),capacity);
 });
 
+test('clean draft rechecks the selected document and exact frozen bytes before a durable retry',async t => {
+  const [author,suspect]=await household(t);
+  const original=await suspect.edit('original saffron',1);
+  await author.cooking.receive(original.bytes);
+  const api=householdCompromise({runtime:author.runtime,withCurrent:use=>use(0)});
+  const token=(await api.open()).confirmation;
+  const proposal=await api.prepare(token,suspect.deviceId);
+  const id=await api.sign(proposal,{kind:'operation',ref:original.itemId});
+  const stale=await api.inspect(token,id);
+  await author.edit('later oregano',1);
+  const afterEdit=author.rows();
+  await assert.rejects(api.saveCleanDraft(stale,['original saffron']),/STALE_DOCUMENT/);
+  assert.deepEqual(author.rows(),afterEdit);
+
+  const fresh=await api.inspect(token,id);
+  const store=author.storage.compromise;
+  const key=JSON.stringify(['compromise-frozen-original',scope.id,id]);
+  const frozen=await store.run(false,tx=>tx.get(key));
+  const damaged=structuredClone(frozen);
+  damaged.objects[0][0]^=1;
+  await store.run(true,tx=>tx.put(key,damaged));
+  const afterDamage=author.rows();
+  await assert.rejects(api.saveCleanDraft(fresh,['original saffron']),/STALE_EVIDENCE/);
+  assert.deepEqual(author.rows(),afterDamage);
+  assert.equal((await api.inspect(token,id)).canSave,false);
+  await store.run(true,tx=>tx.put(key,frozen));
+
+  const result=await api.saveCleanDraft(fresh,['original saffron']);
+  assert.deepEqual(result.draft.pantry,['original saffron']);
+  assert.equal(result.draft.included[0].objectId,original.itemId);
+  const saved=author.rows();
+  assert.deepEqual(saved.filter(row=>JSON.parse(row.key)[0]!=='compromise-review'),
+    afterEdit.filter(row=>JSON.parse(row.key)[0]!=='compromise-review'));
+  assert.deepEqual(await api.saveCleanDraft(fresh,['original saffron']),result);
+  await assert.rejects(api.saveCleanDraft(fresh,[]),/STALE_REVIEW/);
+  assert.deepEqual(author.rows(),saved);
+});
+
 test('checkpoint report authentication and limits precede document reads, and overlapping effects stay ambiguous',async t=>{
   const [reporter,receiver]=await household(t);
   const suspect=await receiver.edit('checkpoint overlap',1);

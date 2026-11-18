@@ -163,9 +163,29 @@ export class CompromiseReviews {
  async classify(scopeId,reviewId,items){if(!bounded(items?.map(x=>x.effectId),MAX_OBJECTS)||!items.every(x=>id(x.authorDevice)&&bounded(x.dependencies,MAX_DEPENDENCIES)&&['eligible','suspect','dependent','missing'].includes(x.category)))throw Error('MALFORMED');return this.run(true,async tx=>{const k=reviewKey(scopeId,reviewId),r=checked(await tx.get(k));if(r.status!=='frozen'&&r.status!=='classified')throw Error('CONFLICT');r.classifications=clone(items);r.status='classified';await this.put(tx,k,r);return clone(r)})}
  async select(scopeId,reviewId,effects){if(!bounded(effects,MAX_OBJECTS))throw Error('MALFORMED');return this.run(true,async tx=>{const k=reviewKey(scopeId,reviewId),r=checked(await tx.get(k));if(r.status!=='classified')throw Error('CONFLICT');const known=new Set(r.classifications.map(x=>x.effectId));if(effects.some(x=>!known.has(x)))throw Error('UNKNOWN_EFFECT');r.selection={effects:[...effects],context:clone(r.context),manifest:clone(r.manifest)};r.status='selected';await this.put(tx,k,r);return clone(r)})}
  /** Called after authenticated reconstruction; compare review and selected authority in the same transaction. */
- async #installLocalDraft(scopeId,reviewId,expected,{documentId,sourceDocumentId,sourceGeneration,publicationBaseDocumentId,snapshot,included,excluded,held}) {
+ async #installLocalDraft(scopeId,reviewId,expected,selection,original,{documentId,sourceDocumentId,sourceGeneration,publicationBaseDocumentId,base,snapshot,included,excluded,held}) {
   if(!id(documentId)||!id(sourceDocumentId)||!id(publicationBaseDocumentId)||!Number.isSafeInteger(sourceGeneration)||sourceGeneration<0||documentId===sourceDocumentId||documentId===publicationBaseDocumentId||!(snapshot instanceof Uint8Array)||snapshot.length>MAX_BYTES||!Array.isArray(included)||!Array.isArray(excluded)||!Array.isArray(held))throw Error('MALFORMED');
-  return this.run(true,async tx=>{const k=reviewKey(scopeId,reviewId),r=checked(await tx.get(k));if(r.status!=='selected'||!same(r,expected))throw Error('STALE_REVIEW');const c=r.context,a=await tx.get(key('pairing-authority',c.kind,c.scopeId));if(!a||a.revision!==c.authorityRevision||a.acceptedParent!==c.authorityHead||a.authorizationSnapshot!==c.authoritySnapshot)throw Error('STALE_AUTHORITY');r.draft={documentId,sourceDocumentId,sourceGeneration,publicationBaseDocumentId,snapshot:new Uint8Array(snapshot),included:clone(included),excluded:clone(excluded),held:clone(held),state:'local-draft'};r.status='local-draft';await this.put(tx,k,r);return clone(r)})
+  return this.run(true,async tx=>{
+   const k=reviewKey(scopeId,reviewId),r=checked(await tx.get(k));
+   if(!same(r,expected))throw Error('STALE_REVIEW');
+   await currentAuthority(tx,r.context);
+   if(base!==undefined){
+    const current=await tx.get(key('document',scopeId,publicationBaseDocumentId));
+    const owner=await tx.get(key('document-owner',scopeId,publicationBaseDocumentId));
+    if((current?.revision??null)!==(base?.revision??null)||
+       (base?owner!==r.context.authorityHead||!matchBytes(current?.bytes,base.bytes):current!==undefined||owner!==undefined))throw Error('STALE_DOCUMENT');
+   }
+   if(r.isolated){
+    const stored=await tx.get(originalKey(scopeId,reviewId));
+    if(!matchBytes(stored?.checkpoint,original.checkpoint)||!Array.isArray(stored?.objects)||
+       stored.objects.length!==original.objects.length||!original.objects.every((o,i)=>matchBytes(stored.objects[i],o.bytes)))throw Error('STALE_EVIDENCE');
+   }
+   r.selection=clone(selection);
+   r.draft={documentId,sourceDocumentId,sourceGeneration,publicationBaseDocumentId,snapshot:new Uint8Array(snapshot),included:clone(included),excluded:clone(excluded),held:clone(held),state:'local-draft'};
+   r.status='local-draft';
+   await this.put(tx,k,r);
+   return clone(r);
+  });
  }
 
  /** Prepare a separately scoped current-state-only copy, never the old-audience archive. */
@@ -178,10 +198,35 @@ export class CompromiseReviews {
  }
  async finalizeHistorical(input) {
   if(input.reviews!==this)throw Error('MALFORMED');
-  const before=await this.get(input.scopeId,input.reviewId);
-  const {reconstructHistorical}=await import('./historical.mjs');
-  const result=await reconstructHistorical(input),documentId=crypto.randomUUID();
-  const saved=await this.#installLocalDraft(input.scopeId,input.reviewId,before,{documentId,sourceDocumentId:result.sourceDocumentId,sourceGeneration:result.sourceGeneration,publicationBaseDocumentId:input.runtime.scope.documentId,snapshot:result.doc.export({mode:'snapshot'}),included:result.included,excluded:result.excluded,held:result.held});
+  const {runtime,scopeId,reviewId,expected,expectedDocumentRevision}=input;
+  const selectedEffectIds=clone(input.selectedEffectIds);
+  const before=await this.get(scopeId,reviewId);
+  if(!before||!bounded(selectedEffectIds,MAX_OBJECTS))throw Error('INVALID_SELECTION');
+  const authority=await runtime.authorize();
+  if(before.status==='local-draft'&&before.isolated&&expected){
+   const c=before.context;
+   if(authority.record.acceptedParent!==c.authorityHead||authority.record.revision!==c.authorityRevision||
+      authority.record.authorizationSnapshot!==c.authoritySnapshot)throw Error('STALE_AUTHORITY');
+   if(!same(before.selection?.effects,selectedEffectIds))throw Error('STALE_REVIEW');
+   const {documentId,included,excluded,held}=before.draft;
+   return {documentId,status:before.status,included,excluded,held};
+  }
+  if(expected&&(!before.isolated||before.status!=='frozen'||!same(before,expected)))throw Error('STALE_REVIEW');
+  let base;
+  if(expected){
+   const stored=await runtime.storage.reopenBranchDocument(authority,runtime.scope.documentId);
+   if(!stored.ok)throw Error(stored.error?.code??stored.error);
+   base=stored.value;
+   if((base?.revision??null)!==expectedDocumentRevision)throw Error('STALE_DOCUMENT');
+  }
+  const selection=expected?{effects:selectedEffectIds,context:before.context,manifest:before.manifest}:before.selection;
+  const {reconstructSelected}=await import('./historical.mjs');
+  const objects=clone(input.objects),checkpoint=clone(input.checkpoint);
+  const result=await reconstructSelected({...input,objects,checkpoint,selectedEffectIds,review:expected?{...before,status:'selected',selection}:before});
+  const documentId=input.randomUUID?.()??crypto.randomUUID();
+  const saved=await this.#installLocalDraft(scopeId,reviewId,before,selection,{objects,checkpoint},{documentId,
+   sourceDocumentId:result.sourceDocumentId,sourceGeneration:result.sourceGeneration,publicationBaseDocumentId:runtime.scope.documentId,base,
+   snapshot:result.doc.export({mode:'snapshot'}),included:result.included,excluded:result.excluded,held:result.held});
   return {documentId,status:saved.status,included:result.included,excluded:result.excluded,held:result.held};
  }
 

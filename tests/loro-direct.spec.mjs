@@ -621,6 +621,35 @@ test('enrolled Settings devices share frozen signed incident evidence without ap
     expect(await scopeFingerprint(organizer,scope)).toEqual(savedReview);
     await expect(organizer.getByRole('button',{name:/^Review incident report /})).toHaveCount(1);
 
+    // Two honest operations depend on the suspect's creation. Retaining them
+    // alone should save the seed while reporting both operations as held.
+    const dependentRows = organizer.getByText('Depends on work by the reported device',{exact:true});
+    for(const row of await dependentRows.all())await row.locator('..').getByRole('checkbox').click();
+    const saveDraft = button(organizer,'Save clean draft with 2 selected operations');
+    await organizer.evaluate(()=>{
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function(value,key) {
+        const pending = put.call(this,value,key);
+        if(typeof key==='string'&&key.startsWith('["compromise-review"')&&value?.status==='local-draft') {
+          IDBObjectStore.prototype.put = put;
+          throw Error('injected clean draft write failure');
+        }
+        return pending;
+      };
+    });
+    await saveDraft.click();
+    await visible(organizer,'The incident report could not be opened or saved.');
+    expect(await scopeFingerprint(organizer,scope)).toEqual(savedReview);
+    await saveDraft.click();
+    await visible(organizer,'Clean draft saved on this device.');
+    const result = organizer.getByLabel('Saved clean draft',{exact:true});
+    await expect(result.getByText('Included operations · 0',{exact:true})).toBeVisible();
+    await expect(result.getByText('Omitted operations · 1',{exact:true})).toBeVisible();
+    await expect(result.getByText('Held operations · 2',{exact:true})).toBeVisible();
+    const savedDraft = await result.innerText();
+    expect(savedDraft).not.toContain('Suspect-authored marjoram');
+    expect(await normal(organizer)).toEqual(beforeReceiver);
+
     await organizer.goto(baseURL);
     await add(organizer,'Later signed tarragon');
     await saved(organizer);
@@ -629,6 +658,7 @@ test('enrolled Settings devices share frozen signed incident evidence without ap
     await organizer.getByRole('button',{name:/^Review incident report /}).click();
     await visible(organizer,'Frozen evidence · 3 signed operations');
     await expect(organizer.getByText('Depends on work by the reported device',{exact:true})).toHaveCount(2);
+    expect(await organizer.getByLabel('Saved clean draft',{exact:true}).innerText()).toBe(savedDraft);
 
     await button(organizer,`Prepare report for ${recipientId}`).click();
     await button(organizer,'Use verified household projection checkpoint').click();

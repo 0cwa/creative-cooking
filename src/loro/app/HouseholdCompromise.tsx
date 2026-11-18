@@ -28,9 +28,28 @@ const errors:Record<string,string> = {
   REPORT_BRANCH_UNAVAILABLE:'The report belongs to a different household or policy branch.',
   CHECKPOINT_UNAVAILABLE:'This device could not verify the report’s checkpoint.',
   CHECKPOINT_MISMATCH:'This device could not verify the report’s checkpoint.',
+  INVALID_CHECKPOINT:'The checkpoint could not be verified against these frozen originals.',
+  CHECKPOINT_MISSING_ANCESTOR:'The frozen originals do not contain the history required to verify this checkpoint.',
   STALE_REPORT_SELECTION:'Household authority or selection changed. Reopen incident reports.',
   STALE_AUTHORITY:'Household authority changed. Reopen incident reports.',
+  STALE_REVIEW:'The saved report changed. Reopen it before saving a clean draft.',
+  STALE_DOCUMENT:'The cooking workspace changed. Reopen the report and review your selection again.',
+  STALE_EVIDENCE:'Frozen evidence changed or became unavailable. Reopen the report.',
+  POLICY_BASELINE_UNAVAILABLE:'The frozen originals could not verify a signed policy checkout boundary.',
+  UNSUPPORTED_POLICY_LINEAGE:'An earlier policy change predates signed cooking checkout boundaries.',
+  BOUNDARY_EVIDENCE_UNAVAILABLE:'The selected operation could not be verified inside this report’s cooking history.',
+  UNSUPPORTED_SEED_BOUNDARY:'This report predates signed projection checkpoints for operation boundaries.',
   ORIGINAL_EVIDENCE_UNAVAILABLE:'Some frozen originals are unavailable.'
+};
+
+const heldReason:Record<string,string> = {
+  DEPENDENCY_EXCLUDED:'A required operation was omitted.',
+  MISSING_DEPENDENCY:'A required operation could not be replayed.',
+  MISSING_ANCESTOR:'Signed predecessor evidence is unavailable.',
+  OUTSIDE_POLICY_FRONTIER:'The operation falls outside the signed policy checkout boundary.',
+  OUTSIDE_POLICY_LINEAGE:'The operation belongs to another policy branch.',
+  CONFLICT:'The operation conflicts with another frozen original or a checkpoint identity.',
+  MISSING_EVIDENCE:'The selected operation could not be authenticated.'
 };
 
 export function HouseholdCompromise() {
@@ -44,6 +63,7 @@ export function HouseholdCompromise() {
   const [draft,setDraft] = useState<Draft|null>(null);
   const [boundary,setBoundary] = useState<Boundary|null>(null);
   const [review,setReview] = useState<Review|null>(null);
+  const [retained,setRetained] = useState<string[]>([]);
   const [status,setStatus] = useState('');
   const [busy,setBusy] = useState(false);
 
@@ -53,12 +73,17 @@ export function HouseholdCompromise() {
     setDraft(null);
     setBoundary(null);
     setReview(null);
+    setRetained([]);
     setStatus('');
   },[service]);
 
   if(!service)return null;
   const reports = service;
   const web = Platform.OS==='web';
+  function viewReview(value:Review|null) {
+    setReview(value);
+    setRetained([]);
+  }
   function run(task:(active:()=>boolean)=>Promise<void>) {
     if(busyRef.current)return;
     busyRef.current=true;
@@ -77,7 +102,7 @@ export function HouseholdCompromise() {
     setSession(null);
     setDraft(null);
     setBoundary(null);
-    setReview(null);
+    viewReview(null);
     setStatus('');
   }
   async function open(active:()=>boolean) {
@@ -89,7 +114,7 @@ export function HouseholdCompromise() {
   function show(confirmation:Session['confirmation'],id:string) {
     run(async active=>{
       const result=await reports.inspect(confirmation,id);
-      if(active())setReview(result);
+      if(active())viewReview(result);
     });
   }
 
@@ -103,7 +128,7 @@ export function HouseholdCompromise() {
     }
     const next = await reports.open();
     const result = await reports.inspect(session.confirmation,id);
-    if(active()) {setSession(next);setReview(result);}
+    if(active()) {setSession(next);viewReview(result);}
   }
 
   async function receive(active:()=>boolean) {
@@ -117,8 +142,17 @@ export function HouseholdCompromise() {
     const result = await reports.inspect(session.confirmation,reviewId);
     if(active()) {
       setSession(next);
-      setReview(result);
+      viewReview(result);
       setStatus(replayed?'This exact signed report was already saved.':'Signed report verified and available for review.');
+    }
+  }
+
+  async function saveCleanDraft(active:()=>boolean) {
+    if(!review)return;
+    const saved = await reports.saveCleanDraft(review,retained);
+    if(active()) {
+      viewReview(saved);
+      setStatus('Clean draft saved on this device.');
     }
   }
 
@@ -130,7 +164,7 @@ export function HouseholdCompromise() {
       <Text>Sign a judgment about a household device from a verified checkpoint or signed operation. Local quarantine has a separate confirmation.</Text>
       {devices.map(id=><Pressable key={id} accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
         const prepared = await reports.prepare(session.confirmation,id);
-        if(active()){setDraft(prepared);setBoundary(null);setReview(null);}
+        if(active()){setDraft(prepared);setBoundary(null);viewReview(null);}
       })}><Text>Prepare report for {id}</Text></Pressable>)}
       {!!draft&&<View style={{gap:6}}>
         <Text selectable>Report about {draft.suspectDevice}</Text>
@@ -139,7 +173,7 @@ export function HouseholdCompromise() {
           : <Text>No verified checkpoint or signed operation is available on this branch.</Text>}
         {draft.truncated&&<Text>The evidence limit was reached. Some retained originals are outside this batch.</Text>}
         {draft.checkpointOversized&&<Text>The verified checkpoint and this batch exceed the review limit.</Text>}
-        {draft.excluded>0&&<Text>Earlier policy branches or unavailable originals were omitted from the batch.</Text>}
+        {draft.excluded>0&&<Text>Originals outside this branch’s history or unavailable originals were omitted from the batch.</Text>}
         {!!draft.checkpoint&&<Pressable accessibilityRole="button" accessibilityState={{selected:boundary?.kind==='checkpoint'}} disabled={busy}
           onPress={()=>setBoundary({kind:'checkpoint'})}><Text>Use {draft.checkpoint.toLowerCase()}</Text></Pressable>}
         {draft.operations.map(op=><Pressable key={op.objectId} accessibilityRole="button" accessibilityState={{selected:boundary?.kind==='operation'&&boundary.ref===op.objectId}}
@@ -162,13 +196,42 @@ export function HouseholdCompromise() {
         <Text selectable>Reported device {review.suspectDeviceIds.join(', ')}</Text>
         <Text selectable>{review.boundary.kind==='checkpoint'?(review.checkpointLabel??'Signed checkpoint'):`Selected operation ${review.boundary.ref}`}</Text>
         {review.checkpointUnavailable&&<Text>The frozen checkpoint is unavailable.</Text>}
-        <Text>Evidence may be incomplete. This view checks signed dependencies within the selected policy branch. Dependencies across earlier policy branches remain unresolved.</Text>
+        <Text>Evidence may be incomplete. Inherited operations must match each signed policy checkout boundary.</Text>
+        {review.unsupported&&<Text>{errors.UNSUPPORTED_SEED_BOUNDARY}</Text>}
+        {review.canSave&&
+          <Text>Choose operations to retain in a separate local draft. A verified projection checkpoint is carried forward as a whole.</Text>}
         {review.rows.map(row=><View key={row.objectId}>
           <Text>{category[row.category]}</Text>
           <Text selectable>{row.kind} · device {row.authorDevice} · operation {row.objectId}</Text>
+          <Text selectable>Policy branch {row.sourceHead}</Text>
           {row.missingDependencies>0&&<Text>{row.missingDependencies} dependencies unavailable in this batch</Text>}
+          {review.canSave&&row.selectable&&
+            <Pressable accessibilityRole="checkbox" accessibilityLabel={`Retain operation ${row.objectId}`}
+              accessibilityState={{checked:retained.includes(row.effectId)}} disabled={busy}
+              onPress={()=>setRetained(ids=>ids.includes(row.effectId)?ids.filter(id=>id!==row.effectId):[...ids,row.effectId])}>
+              <Text>{retained.includes(row.effectId)?'Selected to retain':'Retain in clean draft'}</Text>
+            </Pressable>}
+          {review.canSave&&!row.selectable&&<Text>This effect identity also appears elsewhere in the evidence.</Text>}
         </View>)}
         {review.missing.map((item:{objectId:string})=><Text key={item.objectId}>Frozen original unavailable · {item.objectId}</Text>)}
+        {review.canSave&&
+          <Pressable accessibilityRole="button" disabled={busy} onPress={()=>run(saveCleanDraft)}>
+            <Text>Save clean draft with {retained.length} selected operations</Text>
+          </Pressable>}
+        {review.draft&&<View accessibilityLabel="Saved clean draft" style={{gap:6}}>
+          <Text selectable>Local draft {review.draft.documentId}</Text>
+          <Text>Included operations · {review.draft.included.length}</Text>
+          {review.draft.included.map(row=><Text key={row.objectId} selectable>Included · {row.kind} · {row.objectId}</Text>)}
+          <Text>Omitted operations · {review.draft.excluded.length}</Text>
+          {review.draft.excluded.map(row=><Text key={row.objectId} selectable>Omitted · {row.objectId}</Text>)}
+          <Text>Held operations · {review.draft.held.length}</Text>
+          {review.draft.held.map((row,index)=><Text key={index} selectable>
+            Held · {row.objectId??row.effectId} · {heldReason[row.reason??'']??'The operation could not be safely replayed.'}
+          </Text>)}
+          <Text>Pantry · {review.draft.pantry.join(', ')||'Empty'}</Text>
+          <Text>Recipes · {review.draft.recipes.join(', ')||'Empty'}</Text>
+          <Text>Shopping lists · {review.draft.shopping.join(', ')||'Empty'}</Text>
+        </View>}
         {review.reporterDevice===workspace.deviceId&&<>
           <Text>The file contains device IDs and encrypted cooking evidence. Share it with the intended household member.</Text>
           <Pressable accessibilityRole="button" disabled={busy||review.checkpointUnavailable||review.missing.length>0} onPress={()=>run(async active=>{

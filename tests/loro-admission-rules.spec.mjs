@@ -105,8 +105,8 @@ async function importUpdate(page, bytes, expectedError) {
   await page.goto('./');
 }
 
-async function retainedBranchState(page, scopeId) {
-  return page.evaluate(async scope => {
+async function retainedBranchState(page, scopeId, all=false) {
+  return page.evaluate(async ({scope,all}) => {
     const name = localStorage.getItem('creative-cooking-local-workspace-v1');
     const request = operation => new Promise((resolve,reject) => {
       operation.onsuccess = () => resolve(operation.result);
@@ -118,12 +118,41 @@ async function retainedBranchState(page, scopeId) {
       const keys = await request(storage.getAllKeys());
       const kept = keys.filter(key => {
         const [kind, first, second] = JSON.parse(key);
+        if(all)return kind==='local-master-catalog'||(kind==='pairing-authority'?first==='household'&&second===scope:
+          first===scope&&!['compromise-review','compromise-frozen-original'].includes(kind));
         return kind === 'pairing-authority' ? first === 'household' && second === scope : first === scope &&
           ['document','document-owner','object','policy-checkout-parent','policy-disclosure-head','disclosure-active'].includes(kind);
       });
       return Object.fromEntries(await Promise.all(kept.map(async key => [key,JSON.parse(JSON.stringify(await request(storage.get(key))))])));
     } finally { db.close(); }
-  }, scopeId);
+  }, {scope:scopeId,all});
+}
+
+async function holdOriginal(page,key,restore=false) {
+  await page.evaluate(async ({key,restore})=>{
+    const db=await new Promise((resolve,reject)=>{
+      const request=indexedDB.open(`${localStorage.getItem('creative-cooking-local-workspace-v1')}-records`);
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      await new Promise((resolve,reject)=>{
+        const tx=db.transaction('records','readwrite'),records=tx.objectStore('records');
+        tx.oncomplete=()=>resolve();
+        tx.onabort=()=>reject(tx.error);
+        if(restore) {
+          records.put(window.heldOriginal,key);
+          delete window.heldOriginal;
+        } else {
+          const request=records.get(key);
+          request.onsuccess=()=>{
+            window.heldOriginal=request.result;
+            records.delete(key);
+          };
+        }
+      });
+    } finally {db.close();}
+  },{key,restore});
 }
 
 async function reviewBranch(page, head) {
@@ -211,6 +240,18 @@ test('two adults retain competing rules and open isolated cooking branches expli
     await first.getByLabel('Ingredient and details').fill('Policy proof ginger');
     await first.getByLabel('Add ingredient').click();
     await expect(first.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    await first.goto('./shopping');
+    const shoppingSaved = first.getByTestId('shopping-local-persistence-status');
+    await first.getByLabel('New shopping list name').fill('Seeded market');
+    await button(first,'Create shopping list').click();
+    await expect(shoppingSaved).toHaveText('Saved on this device only.');
+    await first.getByLabel('Shopping item name').fill('Seeded carrot');
+    await first.getByLabel('Shopping quantity').fill('2');
+    await first.getByLabel('Shopping unit').fill('kg');
+    await button(first,'Add').click();
+    await expect(first.getByText('2 kg',{exact:true})).toBeVisible();
+    await expect(shoppingSaved).toHaveText('Saved on this device only.');
+    await first.goto('./');
     await enroll(first, second);
     const scopeId = (await text(first, 'Open household')).split(' · ')[1];
     const parentHead = (await first.getByText(/Current household head:/).textContent()).split(': ')[1];
@@ -391,6 +432,44 @@ test('two adults retain competing rules and open isolated cooking branches expli
     await expect(first.getByText('Parent-only fennel', {exact:true})).toHaveCount(0);
     await openRules(first);
     expect(await downloadUpdate(first)).toEqual(branchUpdate);
+
+    const beforeDraft=await retainedBranchState(first,scopeId,true);
+    const parentObjects=Object.entries(beforeDraft).filter(([key,value])=>JSON.parse(key)[0]==='object'&&value.branchHead===parentHead);
+    const [inherited]=parentObjects.find(([,value])=>Buffer.from(Object.values(value.bytes)).equals(parentUpdate));
+    const [outside]=parentObjects.find(([key])=>key!==inherited);
+    const inheritedId=JSON.parse(inherited)[2], outsideId=JSON.parse(outside)[2];
+    const siblingObject=Object.entries(beforeDraft).find(([key,value])=>JSON.parse(key)[0]==='object'&&value.branchHead===sibling.head);
+    const siblingId=JSON.parse(siblingObject[0])[2];
+    await button(second,'Show device identity').click();
+    const secondDevice=JSON.parse(await text(second,'Public device identity')).deviceId;
+    await button(first,'Open household incident reports').click();
+    await holdOriginal(first,inherited);
+    try {
+      const beforeMissing=await retainedBranchState(first,scopeId,true);
+      await button(first,`Prepare report for ${secondDevice}`).click();
+      await button(first,'Use verified household projection checkpoint').click();
+      await button(first,'Sign and freeze incident report').click();
+      await expect(first.getByRole('checkbox',{name:`Retain operation ${siblingId}`,exact:true})).toHaveCount(0);
+      await button(first,'Save clean draft with 0 selected operations').click();
+      await expect(notice(first,'The frozen originals could not verify a signed policy checkout boundary.')).toBeVisible();
+      await expect(first.getByLabel('Saved clean draft',{exact:true})).toHaveCount(0);
+      expect(await retainedBranchState(first,scopeId,true)).toEqual(beforeMissing);
+    } finally {await holdOriginal(first,inherited,true);}
+    await button(first,`Prepare report for ${secondDevice}`).click();
+    await expect(first.getByText('Originals outside this branch’s history or unavailable originals were omitted from the batch.',{exact:true})).toBeVisible();
+    await button(first,'Use verified household projection checkpoint').click();
+    await button(first,'Sign and freeze incident report').click();
+    await expect(first.getByText('Verified household projection checkpoint',{exact:true})).toBeVisible();
+    await expect(first.getByRole('checkbox',{name:`Retain operation ${siblingId}`,exact:true})).toHaveCount(0);
+    for(const id of [inheritedId,outsideId])await first.getByRole('checkbox',{name:`Retain operation ${id}`,exact:true}).click();
+    await button(first,'Save clean draft with 2 selected operations').click();
+    const draft=first.getByLabel('Saved clean draft',{exact:true});
+    await expect(draft.getByText(/^Pantry · (?=.*Policy proof ginger)(?=.*Signed frontier thyme)/)).toBeVisible();
+    await expect(draft.getByText('Shopping lists · Seeded market',{exact:true})).toBeVisible();
+    await expect(draft.getByText('Included operations · 1',{exact:true})).toBeVisible();
+    await expect(draft.getByText('Omitted operations · 2',{exact:true})).toBeVisible();
+    await expect(draft.getByText(`Held · ${outsideId} · The operation falls outside the signed policy checkout boundary.`,{exact:true})).toBeVisible();
+    expect(await retainedBranchState(first,scopeId,true)).toEqual(beforeDraft);
     await reviewBranch(first, sibling.head);
     await first.evaluate(()=>{
       const save=Storage.prototype.setItem;
