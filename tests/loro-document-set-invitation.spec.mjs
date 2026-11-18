@@ -25,8 +25,8 @@ const settings=async page=>{
  await button(page,'Invite or join a household').click();
 };
 
-test('Settings transfers and reopens a verified recipe document set',async({browser,baseURL})=>{
- test.setTimeout(120_000);
+test('Settings transfers and reopens a verified recipe document set and new recipes',async({browser,baseURL})=>{
+ test.setTimeout(180_000);
  const sponsorContext=await browser.newContext({baseURL,acceptDownloads:true});
  const newcomerContext=await browser.newContext({baseURL});
  try{
@@ -259,10 +259,6 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
   await checkCooking(sponsor,recipeTitle);
   await checkCooking(newcomer,recipeTitle);
   await newcomer.goto(app+'recipes');
-  await addRecipe(newcomer,'Blocked installed recipe');
-  await expect(newcomer.getByRole('alert')).toHaveText('Creating new recipes is not available in this household yet.');
-  await label(newcomer,'Cancel new recipe').click();
-  await expect(label(newcomer,'Open recipe Blocked installed recipe')).toHaveCount(0);
   await label(newcomer,'Open recipe '+recipeTitle).click();
   await label(newcomer,'Edit recipe '+recipeTitle).click();
   await label(newcomer,'Recipe title').fill(editedTitle);
@@ -303,6 +299,140 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
    await loaded;
   }
   await checkCooking(sponsor,editedTitle);
+
+  const added='Created after admission',edited='Edited after admission';
+  const interruptNextCatalogWrite=(page,loseAcknowledgement=false)=>page.evaluate(loseAcknowledgement=>{
+   const put=IDBObjectStore.prototype.put;
+   IDBObjectStore.prototype.put=function(value,key){
+    if(typeof key==='string'&&key.startsWith('["recipe-catalog",')){
+     IDBObjectStore.prototype.put=put;
+     if(loseAcknowledgement)this.transaction.oncomplete=this.transaction.onabort;
+     else throw Error('Interrupted recipe publication');
+    }
+    return put.call(this,value,key);
+   };
+  },loseAcknowledgement);
+  await reopened.goto(app+'recipes');
+  await interruptNextCatalogWrite(reopened);
+  await addRecipe(reopened,added);
+  await expect(label(reopened,'Retry new recipe save')).toBeEnabled();
+  await expect(label(reopened,'Open recipe '+added)).toHaveCount(0);
+  await interruptNextCatalogWrite(reopened,true);
+  await label(reopened,'Retry new recipe save').click();
+  await expect(reopened.getByRole('alert')).toHaveText('IO');
+  await expect(label(reopened,'Retry new recipe save')).toBeEnabled();
+  await label(reopened,'Retry new recipe save').click();
+  await expect(label(reopened,'Open recipe '+added)).toBeVisible();
+  await label(reopened,'Open recipe '+added).click();
+  await label(reopened,'Edit recipe '+added).click();
+  await label(reopened,'Recipe title').fill(edited);
+  await label(reopened,'Save recipe changes').click();
+  await expect(reopened.getByRole('dialog').getByText(edited,{exact:true})).toBeVisible();
+  await label(reopened,'Close recipe').click();
+  await reopened.getByRole('tab',{name:/Pantry/}).click();
+  await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:12_000});
+  await reopened.goto(app+'settings');
+  await button(reopened,'Exchange encrypted cooking files').click();
+  const downloads=reopened.getByRole('button',{name:/^Download encrypted update /});
+  await expect(downloads).toHaveCount(5);
+  const exported=[];
+  for(const control of await downloads.all()){
+   const pending=reopened.waitForEvent('download');
+   const objectId=(await control.textContent()).split(' ').at(-1);
+   await control.click();
+   const download=await pending;
+   const buffer=await readFile(await download.path());
+   await download.delete();
+   exported.push({objectId,buffer,envelope:JSON.parse(buffer)});
+  }
+  const creation=exported.find(x=>x.envelope.recipeDelivery?.version===1);
+  expect(creation.envelope.recipeDelivery.packets).toHaveLength(1);
+  const documentId=creation.envelope.header.documentId;
+  const edits=exported.filter(x=>x!==creation&&x.envelope.header.documentId===documentId)
+   .sort((a,b)=>a.envelope.header.deviceSequence-b.envelope.header.deviceSequence);
+  expect(edits).toHaveLength(2);
+  expect(edits[0].envelope.header.deviceSequence).toBeGreaterThan(creation.envelope.header.deviceSequence);
+  const openExchange=async()=>{
+   await sponsor.goto(app+'settings');
+   await button(sponsor,'Exchange encrypted cooking files').click();
+   await expect(button(sponsor,'Choose encrypted cooking update')).toBeEnabled();
+  };
+  const chooseUpdate=async buffer=>{
+   const pending=sponsor.waitForEvent('filechooser');
+   await button(sponsor,'Choose encrypted cooking update').click();
+   await (await pending).setFiles({name:'recipe-update.bin',mimeType:'application/octet-stream',buffer});
+  };
+  await openExchange();
+  await chooseUpdate(edits[0].buffer);
+  await expect(sponsor.getByText('Choose the encrypted file that created this recipe first, then choose this edit again.',{exact:true})).toBeVisible();
+  await interruptNextCatalogWrite(sponsor);
+  await chooseUpdate(creation.buffer);
+  await expect(sponsor.getByText('Update not applied: IO.',{exact:true})).toBeVisible();
+  await button(sponsor,'Refresh retained cooking updates').click();
+  const retry=button(sponsor,`Retry retained update ${creation.objectId}`);
+  await expect(retry).toBeEnabled();
+  const installedCreation=sponsor.waitForEvent('load');
+  await retry.click();
+  await installedCreation;
+  for(const {buffer} of edits){
+   await openExchange();
+   const loaded=sponsor.waitForEvent('load');
+   await chooseUpdate(buffer);
+   await loaded;
+  }
+  await openExchange();
+  await chooseUpdate(creation.buffer);
+  await expect(sponsor.getByText('This exact update was already applied. No new changes were made.',{exact:true})).toBeVisible();
+
+  const evidence=async(page,local)=>{
+   await page.goto('/');
+   return page.evaluate(async({documentId,objectId,local,head,scopeId,editIds})=>{
+    const request=q=>new Promise((resolve,reject)=>{
+     q.onsuccess=()=>resolve(q.result);
+     q.onerror=()=>reject(q.error);
+    });
+    const {default:initLoro,LoroDoc}=await import('loro-crdt/web/loro_wasm.js');
+    await initLoro('/src/loro/app/loro_wasm_bg.wasm');
+    const name=localStorage.getItem('creative-cooking-local-workspace-v1');
+    const db=await request(indexedDB.open(`${name}-records`));
+    try{
+     const store=db.transaction('records','readonly').objectStore('records');
+     const get=(...key)=>request(store.get(JSON.stringify(key)));
+     const keys=(await request(store.getAllKeys())).map(key=>JSON.parse(key));
+     const catalogKey=keys.find(key=>key[0]==='recipe-catalog'&&key[1]===scopeId&&key[2]===head);
+     const installedKeys=keys.filter(key=>key[0]==='local-key'&&key[2]===scopeId&&key[4]==='data');
+     const [catalog,child,object,receipt,editReceipts]=await Promise.all([
+      get(...catalogKey),get('document',scopeId,documentId),get(local?'object':'inbox',scopeId,objectId),
+      get('applied',scopeId,objectId),Promise.all(editIds.map(id=>get(local?'object':'applied',scopeId,id)))
+     ]);
+     const root=await get('document',scopeId,catalog.binding.sourceDocumentId);
+     const parent=new LoroDoc(),doc=new LoroDoc();
+     parent.import(root.bytes);
+     doc.import(child.bytes);
+     return {objectId:catalog.objectId,documentId:catalog.documentId,separate:catalog.documentId!==catalog.binding.sourceDocumentId,
+      rootHasRecipe:!!parent.getMap('recipe-index').get(catalog.recipeId),
+      title:doc.getMap('recipe:'+encodeURIComponent(catalog.recipeId)).get('title'),revision:child.revision,
+      keySlots:installedKeys.map(key=>key[5]),opaque:!new TextDecoder().decode(object.bytes).includes(catalog.recipeId),
+      applied:!!receipt,edits:editReceipts.every(Boolean)};
+    }finally{db.close();}
+   },{documentId,objectId:creation.objectId,local,head:creation.envelope.header.branchHead,
+    scopeId:creation.envelope.header.scopeId,editIds:edits.map(x=>x.objectId)});
+  };
+  const [storedAuthor,storedRecipient]=await Promise.all([evidence(reopened,true),evidence(sponsor,false)]);
+  for(const [stored,applied] of [[storedAuthor,false],[storedRecipient,true]]){
+   // The editor commits both commands together. File imports apply one at a time.
+   expect(stored).toMatchObject({documentId,objectId:creation.objectId,separate:true,rootHasRecipe:false,
+    title:edited,revision:applied?edits.length:1,opaque:true,applied,edits:true});
+   expect(new Set(stored.keySlots).size).toBeGreaterThanOrEqual(3);
+  }
+  const recheckSponsor=await sponsorContext.newPage();
+  const recheckNewcomer=await newcomerContext.newPage();
+  try{
+   await Promise.all([checkCooking(recheckSponsor,edited),checkCooking(recheckNewcomer,edited)]);
+  }finally{
+   await recheckSponsor.close();
+   await recheckNewcomer.close();
+  }
 
   await reopened.goto(app);
   await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');

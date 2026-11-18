@@ -1270,9 +1270,9 @@ test('selected recipe shopping copies and current-only admission survive durable
  const receiverRef=sodium.to_hex(newcomerSign.publicKey);
  const receiverKeys={use:(op,identity,fn)=>op==='test-signing'
   ?fn(newcomerSign.privateKey):newcomerCatalog.use(op,identity,fn)};
- const openPeer=async (storage,{resolved,installedSet,sequences:peerSequences=sequences},keys,publicKey)=>{
+ const openPeer=async (storage,{resolved,installedSet,sequences:peerSequences=sequences},keys,publicKey,wrapping)=>{
   const runtime=await openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin:a.root.head,
-   provider:a.provider,sodium,keys,signing:{publicKey,operationId:'test-signing'},LoroDoc,decodeImportBlobMeta});
+   provider:a.provider,sodium,keys,signing:{publicKey,operationId:'test-signing'},wrapping,LoroDoc,decodeImportBlobMeta});
   const service=disclosureService({storage,scope,rootPin:a.root.head,provider:a.provider,
    deviceId:runtime.scope.authorDevice,installedSet:{...installedSet,sodium,LoroDoc}});
   const householdContent=bindHouseholdContent({runtime,sequences:peerSequences,disclosure:service});
@@ -1325,6 +1325,129 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(cooking.recipes.find(recipe=>recipe.id===recipeId)?.title,'Edited on the sponsor');
   assert.ok(cooking.pantry.some(item=>item.name==='Chickpeas'));
  }
+
+ // Use the same Add Recipe binding as production with the fixture devices' real
+ // ceremony secrets, and durable LocalKeys for every installed data key.
+ await t.test('installed recipe creation publishes and imports its independent key atomically',async()=>{
+  const enable=(catalog,signer,wrap)=>Object.assign(Object.create(catalog),{
+   use:(op,identity,fn)=>op==='test-wrapping'?fn(wrap):op==='test-signing'?fn(signer):catalog.use(op,identity,fn),
+  });
+  const wrapping={operationId:'test-wrapping'};
+  const openCreatingSponsor=async()=>openPeer(a.storage,await resolveOriginalHousehold({...sealOptions,deviceId:a.deviceId}),
+   enable(sponsorCatalog,a.signingTestKey.privateKey,sponsorWrap.privateKey),signingRef,wrapping);
+  const openCreatingNewcomer=()=>openPeer(freshStorage,newcomerSelection,
+   enable(newcomerCatalog,newcomerSign.privateKey,newcomerWrap.privateKey),receiverRef,wrapping);
+  sponsor=await openCreatingSponsor();
+  newcomer=await openCreatingNewcomer();
+  const createId='create-after-v5',added={...recipe('new-member','Carrots'),title:'Created in the installed household'};
+  const dec=new TextDecoder();
+  const newDocumentId=await recipeDocumentId(sponsor.runtime.scope,a.root.head,a.provider,added.id);
+  const beforeCreation=a.rows();
+  let precommits=0;
+  for(const fault of ['recipe-key','recipe-catalog','disclosure-local']){
+   a.faultAt(fault);
+   await assert.rejects(()=>sponsor.householdContent.createRecipe(createId,added,()=>precommits++),/IO/);
+   a.reopen();
+   assert.deepEqual(a.rows(),beforeCreation);
+  }
+  a.faultAt(null);
+  const created=await sponsor.householdContent.createRecipe(createId,added,()=>precommits++);
+  assert.equal(precommits,4);
+  const afterCreation=a.rows();
+  const [creation]=must(await a.storage.getLocalOperation(scope.id,createId)).commit.outbound.map(x=>x.object);
+  const bytes=await sponsor.files.download(creation.id);
+  assert.equal(sponsor.runtime.scope.documentId===newDocumentId,false);
+  assert.equal(JSON.parse(dec.decode(bytes)).header.documentId,newDocumentId);
+  assert.equal(dec.decode(bytes).includes(added.id),false);
+  assert.ok(new Set([newDocumentId,...sponsorAuthority.members.map(x=>x.documentId)]).size===sponsorAuthority.members.length+1);
+  await assert.rejects(()=>sponsor.files.receive(bytes),/INVALID_AUTHORITY/);
+  a.reopen();
+  sponsor=await openCreatingSponsor();
+  assert.deepEqual(await sponsor.householdContent.createRecipe(createId,added,()=>assert.fail('replayed allergy check')),
+   {...created,replayed:true});
+  await assert.rejects(()=>sponsor.householdContent.createRecipe(createId,{...added,title:'Changed retry'}),/CONFLICT/);
+  await assert.rejects(()=>sponsor.householdContent.createRecipe('seed-collision',recipe(recipeId,'Duplicate baseline')),/INVALID_RECIPE_DOCUMENT/);
+  await assert.rejects(()=>sponsor.householdContent.createRecipe('child-collision',added),/CONFLICT/);
+  assert.deepEqual(a.rows(),afterCreation);
+
+  const document=await sponsor.householdContent.readRecipe(added.id);
+  const edited={...added,title:'Edited after installed creation'};
+  const editId='edit-after-v5';
+  const newMemberEdits=planRecipeAction({doc:document.doc,before:added,after:edited,actionId:editId,author:a.deviceId,at});
+  await sponsor.householdContent.execute(editId,newMemberEdits,added.id);
+  const [editBytes]=must(await a.storage.getLocalOperation(scope.id,editId)).commit.outbound.map(x=>x.object.bytes);
+  const beforeReceive=freshRows();
+  await assert.rejects(()=>newcomer.files.receive(editBytes),/RECIPE_CREATION_REQUIRED/);
+  const tampered=mutate=>{
+   const envelope=JSON.parse(dec.decode(bytes));
+   mutate(envelope);
+   return new TextEncoder().encode(JSON.stringify(envelope));
+  };
+  for(const mutate of [
+   value=>{value.recipeDelivery.version=2;},
+   value=>{value.header.branchHead=a.root.head;},
+   value=>{value.header.documentGeneration++;},
+   value=>{value.header.documentId=sponsor.runtime.scope.documentId;},
+   value=>{value.header.documentId=sponsorAuthority.members[1].documentId;},
+   value=>{value.recipeDelivery.packets.reverse();},
+   value=>{value.recipeDelivery.packets[0][1]=value.recipeDelivery.packets[1][1];},
+   value=>{value.encrypted=(value.encrypted[0]==='0'?'1':'0')+value.encrypted.slice(1);},
+  ])await assert.rejects(()=>newcomer.files.receive(tampered(mutate)),/INVALID_AUTHORITY|INVALID_PROOF|UNSUPPORTED_VERSION/);
+  const opened=await sponsor.runtime.codec.openContent(bytes,sponsorAuthority.signingKeyRefs);
+  const wrongRecipeId='other-member-slot';
+  const wrongRecipe=await sponsor.runtime.authority.recipeDelivery.create(sponsor.runtime,wrongRecipeId,worker=>
+   worker.codec.sealContent({...opened.header,documentId:worker.scope.documentId},opened.value,worker.keyRef,signingRef));
+  await assert.rejects(()=>newcomer.files.receive(wrongRecipe.bytes),/INVALID_RECIPE_DOCUMENT/);
+  assert.deepEqual(freshRows(),beforeReceive);
+  await newcomer.householdContent.createRecipe('competing-create',added);
+  const competing=must(await freshStorage.getLocalOperation(scope.id,'competing-create')).commit.outbound[0].object;
+  const sponsorBeforeConflict=a.rows();
+  await assert.rejects(()=>sponsor.files.receive(competing.bytes),/CONFLICT/);
+  assert.deepEqual(a.rows(),sponsorBeforeConflict);
+  // Use the other independently admitted recipient for the successful import.
+  const existingCatalog=b.storage.localKeys(existingMaster,sodium);
+  const openExisting=async()=>openPeer(b.storage,{resolved:await resolveInstalledSetAuthority({...existingOptions,
+   operationId,authorDevice:b.deviceId}),installedSet:{operationId}},
+   enable(existingCatalog,b.signingTestKey.privateKey,existingWrap.privateKey),sodium.to_hex(b.signingTestKey.publicKey),wrapping);
+  let existing=await openExisting();
+  const beforeImport=b.rows();
+  for(const fault of ['recipe-key','recipe-catalog','import-documents','import']){
+   b.faultAt(fault);
+   await assert.rejects(()=>existing.files.receive(bytes),/IO/);
+   b.reopen();
+   assert.equal(must(await b.storage.getInboxApplication(scope.id,creation.id)),null);
+   assert.equal(must(await b.storage.reopenDocument(scope.id,newDocumentId)),null);
+   const staged=new Set([JSON.stringify(['inbox',scope.id,creation.id]),JSON.stringify(['cursor',scope.id,`file:${creation.id}`])]);
+   assert.deepEqual(b.rows().filter(({key})=>!staged.has(key)),beforeImport);
+  }
+  b.faultAt(null);
+  assert.deepEqual(await existing.files.pending(),[{itemId:creation.id,reason:null}]);
+  const received=await existing.files.retry(creation.id);
+  assert.equal(received.replayed,false);
+  assert.deepEqual(await existing.files.receive(bytes),{...received,replayed:true});
+  await existing.files.receive(editBytes);
+  b.reopen();
+  existing=await openExisting();
+  const row=must(await b.storage.getInboxApplication(scope.id,creation.id));
+  assert.deepEqual(row.outcome,received.outcome);
+  assert.equal((await existing.householdContent.readCooking()).recipes.find(r=>r.id===added.id)?.title,edited.title);
+  assert.equal((await existing.runtime.document()).doc.getMap('recipe-index').get(added.id),undefined);
+  const keySlotFor=(now,before)=>JSON.parse(now.find(({key})=>JSON.parse(key)[0]==='local-key'&&
+   !before.some(row=>row.key===key)).key);
+  const inspectKey=(catalog,slot)=>catalog.useIdentity({version:1,scope,deviceId:slot[3],purpose:'data',epochId:slot[5]},
+   key=>sodium.to_hex(sodium.crypto_generichash(32,key)));
+  const newKey=await inspectKey(sponsorCatalog,keySlotFor(afterCreation,beforeCreation));
+  assert.equal(await inspectKey(existingCatalog,keySlotFor(b.rows(),beforeImport)),newKey);
+  assert.equal(distinctKeys.has(newKey),false);
+  assert.equal((await existing.files.receive(bytes)).replayed,true);
+  const expectedAuthority=await sponsor.runtime.authorize();
+  assert.deepEqual(await a.storage.compromise.quarantine(scope.id,b.deviceId,{expectedAuthority,localDeviceId:a.deviceId}),
+   {quarantined:true});
+  const quarantined=a.rows();
+  await assert.rejects(()=>sponsor.files.download(creation.id),/QUARANTINED/);
+  await assert.rejects(()=>sponsor.householdContent.createRecipe('quarantined-recipient',recipe('withheld','Carrots')),/QUARANTINED/);
+  assert.deepEqual(a.rows(),quarantined);
+ });
  newcomerSelection.sequences.close();
  rmSync(join(freshDatabase,`${joinName}-${joinId}.sqlite`));
  await assert.rejects(()=>joinStore.selection.openSelected(),/MISSING_SEQUENCES/);

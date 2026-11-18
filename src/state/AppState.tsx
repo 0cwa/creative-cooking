@@ -349,7 +349,6 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       return {refreshed:true};
     }
     if (!ensureSharedEditAllowed()) throw Error('This workspace is not available for editing.');
-    if (installedRecipeIds) throw Error('Creating new recipes is not available in this household yet.');
     let attempt = recipeCreation.current;
     if (input) {
       if (attempt) throw Error('Retry the pending recipe save first.');
@@ -384,7 +383,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       release();
     }
   }, [beginWorkspaceTransition, content.createRecipe, ensureSharedEditAllowed, flushCurrentWorkspace,
-    installedRecipeIds, prepareRecipe, refreshSharedCooking, saveRecipe, validateRecipe]);
+    prepareRecipe, refreshSharedCooking, saveRecipe, validateRecipe]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) return;

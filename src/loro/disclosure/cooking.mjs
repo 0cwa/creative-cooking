@@ -125,5 +125,5 @@ export async function commitCookingBatchWithPolicy({runtime,service,operationId,
   const publication=await runtime.recipePublication(items[0].command,commit.expectedAuthority);
   return runtime.storage.commitLocalWithDisclosurePolicy(commit,record?.policyHash??null,expectedActiveHash,publication,recipeSourceReceipts);
  };
- const worker=new OfflineRuntime({storage,codec,LoroDoc:runtime.LoroDoc,decodeImportBlobMeta:runtime.decodeImportBlobMeta,scope:runtime.scope,keyRef:runtime.keyRef,authority:runtime.authority,recipeId:runtime.recipeId});return worker.executeBatch({operationId,items},verifyRecipeSource);
+ const worker=new OfflineRuntime({storage,codec,LoroDoc:runtime.LoroDoc,decodeImportBlobMeta:runtime.decodeImportBlobMeta,scope:runtime.scope,keyRef:runtime.keyRef,authority:runtime.authority,recipeId:runtime.recipeId,recipeCreation:runtime.recipeCreation});return worker.executeBatch({operationId,items},verifyRecipeSource);
 }

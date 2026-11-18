@@ -4,6 +4,7 @@ import {installedDocumentSetContent} from '../pairing/household-document-set.mjs
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {localProvider} from './local-provider.mjs';
+import {installedRecipeDelivery} from './installed-recipe-delivery.mjs';
 
 // The original workspace has its own initialized sequence allocator. Joined
 // workspaces must use the separate, receipt-gated allocator instead.
@@ -23,7 +24,8 @@ export async function resolveOriginalHousehold({storage,scope,pin,provider,devic
  }
 }
 
-export async function openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin,provider,sodium,keys,signing,LoroDoc,decodeImportBlobMeta}) {
+export async function openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin,provider,sodium,keys,signing,
+ wrapping=/** @type {any} */(undefined),LoroDoc,decodeImportBlobMeta}) {
  resolved=structuredClone(resolved);
  const {scope}=resolved,householdScope={kind:'household',id:scope.scopeId};
  const installation=installedSet?{...installedSet,sodium,LoroDoc}:null;
@@ -33,10 +35,11 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  if(installation){
   for(const {documentId} of resolved.members)await content(scope.epochId,()=>{}, {...scope,documentId});
  }
- const codec=candidateCodec(localProvider(sodium,keys,{signing,content}));
+ const deliveries=installation&&wrapping?installedRecipeDelivery({sodium,keys,signing,wrapping,provider,pin,resolved,baselineContent:content}):null;
+ const codec=deliveries?.codec??candidateCodec(localProvider(sodium,keys,{signing,content}));
  const runtime=new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:scope.epochId,
   authority:{kind:'household',rootPin:pin,provider,selectionIndex:resolved.selectionIndex,
-   ...(installation?{installedSet:installation}:{})}});
+   ...(installation?{installedSet:{...installation,recipeCatalog:deliveries?.recipeCatalog},recipeDelivery:deliveries}:{})}});
  if(installation)await runtime.authorize();
  return runtime;
 }

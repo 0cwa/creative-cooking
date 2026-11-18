@@ -1,4 +1,5 @@
 import type { Bytes, Id, Result, StorageError, LocalCommit, LocalCommitGroup, AuthorityPrecondition, SavedOutcome } from './index.ts';
+import type { LocalKeyRecord, ReadyMasterCatalog } from '../storage/local-keys.ts';
 
 export type RecipeCatalogBinding = {
   version: 1;
@@ -29,6 +30,7 @@ export type RecipePublication = {
   binding: RecipeCatalogBinding;
   sourceRevision: number | null;
   recipeId: Id;
+  installedKey?: {record: LocalKeyRecord; catalog: ReadyMasterCatalog};
 };
 
 /** Authenticated recipe evidence to be checked again inside the consumer write. */

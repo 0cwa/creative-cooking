@@ -27,12 +27,18 @@ export function CookingExchange({quarantineChanged = 0}:{quarantineChanged?:numb
       if (error?.message === 'QUARANTINED') {
         setStatus('Update blocked by local device quarantine. No update was applied.');
         await refresh().catch(() => {});
+      } else if (error?.message === 'RECIPE_CREATION_REQUIRED') {
+        setStatus('Choose the encrypted file that created this recipe first, then choose this edit again.');
       } else setStatus(`${failure}${error instanceof Error ? `: ${error.message}` : ''}.`);
     })
       .finally(() => setBusy(false));
   }
   async function exportUpdate(id:string) {
-    const bytes = await workspace.cookingFiles.download(id);
+    const {selection,selectedHousehold} = workspace.householdPairing;
+    const download = () => workspace.cookingFiles.download(id);
+    const bytes = web
+      ? await selection.withCurrent(selectedHousehold ? workspace.household.scope.scopeId : null, download)
+      : await download();
     await saveExchangeFile('creative-cooking-update.bin','application/octet-stream',bytes);
     setStatus(web ? 'Encrypted update downloaded. This does not confirm that a peer received it.' : 'Encrypted update ready to share.');
   }

@@ -372,7 +372,17 @@ export async function resolveInstalledSetAuthority({storage,scope,pin,provider,a
  const installed=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId,LoroDoc});
  if(installed.publication.localKey.record.identity.deviceId!==authorDevice) throw Error('UNAUTHORIZED_DEVICE');
  const resolved=await resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,installed);
- return {...resolved,members:installed.item.admission.manifest.entries.map(({recipeId,documentId})=>({recipeId:recipeId??null,documentId}))};
+ const {ceremonies,existingCeremonies,manifest}=installed.item.admission, wrapping=new Map();
+ for(const {transcript} of decodeEvidence([...ceremonies,...existingCeremonies])){
+  for(const participant of [transcript.initiator,transcript.responder]){
+   const {deviceId,signingPublicKey,wrappingPublicKey}=participant;
+   const ref=hex(wrappingPublicKey);
+   if(!resolved.scope.acceptedRecipients.includes(deviceId)||resolved.signingKeyRefs[deviceId]!==hex(signingPublicKey))continue;
+   wrapping.set(deviceId,wrapping.has(deviceId)&&wrapping.get(deviceId)!==ref?null:ref);
+  }
+ }
+ return {...resolved,wrappingKeyRefs:Object.fromEntries(wrapping),
+  members:manifest.entries.map(({recipeId,documentId})=>({recipeId:recipeId??null,documentId}))};
 }
 
 /** Persist explicit acceptance at the currently selected frozen parent. */

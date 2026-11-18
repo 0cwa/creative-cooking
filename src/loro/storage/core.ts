@@ -503,11 +503,23 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if(p.documentSet){
       if(projectionKey(p)!==inputKey) return corrupt();
       const set=p.documentSet,head=p.nextAuthority.acceptedParent;
-      const selectedIds=new Set(set.catalog.map(entry=>entry.documentId));
+      const selectedIds=new Set(p.documents.map(entry=>entry.documentId));
+      const selectedRecipes=new Set(set.catalog.map(entry=>entry.recipeId));
       const catalogPrefix=key('recipe-catalog',scope,head).slice(0,-1)+',';
       const ownerPrefix=key('document-owner',scope).slice(0,-1)+',';
-      for(const slot of await tx.keys()){
-        if(slot.startsWith(catalogPrefix)) return corrupt();
+      const slots=await tx.keys();
+      for(const slot of slots.filter(slot=>slot.startsWith(catalogPrefix))){
+        const row=await tx.get(slot);
+        if(!row||!isRecipeDocumentId(row.documentId)||selectedIds.has(row.documentId)||selectedRecipes.has(row.recipeId)||
+           row.binding.sourceDocumentId!==p.documents[0].documentId||
+           row.binding.branchHead!==head||row.binding.scopeId!==scope||
+           row.binding.epochId!==p.epochId||row.binding.documentGeneration!==p.documents[0].generation||
+           slot!==key('recipe-catalog',scope,head,row.recipeId)||
+           await tx.get(key('document-owner',scope,row.documentId))!==head)return corrupt();
+        selectedIds.add(row.documentId);
+        selectedRecipes.add(row.recipeId);
+      }
+      for(const slot of slots){
         if(!slot.startsWith(ownerPrefix)) continue;
         const documentId=JSON.parse(slot)[2];
         if(isRecipeDocumentId(documentId)&&!selectedIds.has(documentId)&&await tx.get(slot)===head) return corrupt();
@@ -988,17 +1000,46 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     return validRecipeCatalogBinding(binding) && expected.scope.kind==='household' &&
       binding.scopeId===expected.scope.id && binding.branchHead===expected.record?.acceptedParent;
   }
-  private async publishRecipe(tx:Tx,publication:RecipePublication,c:LocalCommit|ImportCommit,objectId:string,header:any) {
-    const {binding,recipeId,sourceRevision}=publication;
+  private async publishRecipe(tx:Tx,publication:RecipePublication|undefined,c:LocalCommit|ImportCommit,objectId:string,envelope:any) {
+    const head=c.expectedAuthority.record?.acceptedParent;
+    const installed=head&&await tx.get(key('projection-document-set',c.scopeId,head));
+    if(!publication){
+      if(envelope.recipeDelivery!==undefined||installed&&c.commands.some(command=>command.kind==='recipe-create'))conflict();
+      return;
+    }
+    const {binding,recipeId,sourceRevision,installedKey}=publication;
+    const {header,recipeDelivery}=envelope;
     const [command]=c.commands,[child]=c.documents;
     if (!this.matchesRecipeCatalog(binding,c.expectedAuthority) || !validId(recipeId) || !validId(objectId) ||
-        c.documents.length!==1 || child.expectedRevision!==null || child.documentId===binding.sourceDocumentId ||
+        c.commands.length!==1 || c.documents.length!==1 || child.expectedRevision!==null || child.documentId===binding.sourceDocumentId ||
         command.kind!=='recipe-create' || command.documentId!==child.documentId || this.storedRecipeId(command)!==recipeId ||
         header?.documentGeneration!==binding.documentGeneration || header.epochId!==binding.epochId) conflict();
     const source=await this.checkoutDocument(tx,c.scopeId,{head:binding.branchHead,documentId:binding.sourceDocumentId});
     if ((source?.revision??null)!==sourceRevision) conflict();
     const slot=key('recipe-catalog',c.scopeId,binding.branchHead,recipeId);
     if (await tx.get(slot)!==undefined) conflict();
+    if (installed) {
+      const projected=await tx.get(key('projection-document',c.scopeId,binding.sourceDocumentId));
+      if(!installedKey||recipeDelivery?.version!==1||!isRecipeDocumentId(child.documentId)||
+         projected?.operationId!==installed.operationId||projected?.generation!==binding.documentGeneration||
+         installed.catalog.some((entry:any)=>entry.recipeId===recipeId||entry.documentId===child.documentId||
+           entry.documentId===binding.sourceDocumentId))return conflict();
+      const {record,catalog}=installedKey,{identity}=record;
+      if(identity.scope.kind!=='household'||identity.scope.id!==c.scopeId||identity.purpose!=='data'||
+         !denseArray(recipeDelivery.packets,(packet:any)=>Array.isArray(packet)&&packet.length===2&&validId(packet[0]))||
+         !recipeDelivery.packets.length||recipeDelivery.packets.length>32||
+         ('outbound' in c ? identity.deviceId!==header.authorDevice :
+            !recipeDelivery.packets.some((packet:any)=>packet[0]===identity.deviceId)))return conflict();
+      await this.requireIncomingAuthor(tx,c.scopeId,identity.deviceId);
+      if('outbound' in c){
+        for(const [deviceId] of recipeDelivery.packets)await this.requireIncomingAuthor(tx,c.scopeId,deviceId);
+      }
+      for(const documentId of [binding.sourceDocumentId,...installed.catalog.map((entry:any)=>entry.documentId)]){
+        await this.requireUnusedProjectionIdentity(tx,c.scopeId,{...command,documentId});
+      }
+      if((await installLocalKey(tx,record,catalog)).replayed)conflict();
+      this.fault?.('recipe-key');
+    }else if(installedKey||recipeDelivery!==undefined)conflict();
     await tx.put(slot,{binding,recipeId,sourceRevision,documentId:child.documentId,effectId:command.effectId,objectId});
     this.fault?.('recipe-catalog');
   }
@@ -1009,6 +1050,18 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return await this.run(false,async tx=>{
         await this.requireAuthority(tx,expected);
         return {ok:true as const,value:await hasSelectedRecipeChildren(tx,expected.scope.id,[expected.record!.acceptedParent])};
+      });
+    }catch(error){return fail(mapError(error));}
+  }
+  async checkRecipeDeliveryRecipients(expected:AuthorityExpectation,devices:string[]) {
+    expected=snapshot(expected);devices=snapshot(devices);
+    if(expected?.scope?.kind!=='household'||!expected.record||
+       !denseArray(devices,validId)||devices.length<2||devices.length>33||new Set(devices).size!==devices.length)return fail('MALFORMED');
+    try{
+      return await this.run(false,async tx=>{
+        await this.requireAuthority(tx,expected);
+        for(const device of devices)await this.requireIncomingAuthor(tx,expected.scope.id,device);
+        return {ok:true as const,value:undefined};
       });
     }catch(error){return fail(mapError(error));}
   }
@@ -1061,6 +1114,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     }
     if (!target) {
       const children=new Set(entries.map(entry=>entry.documentId));
+      const installed=await tx.get(key('projection-document-set',scopeId,branchHead));
+      for(const entry of installed?.catalog??[])children.add(entry.documentId);
       const ownerPrefix=key('document-owner',scopeId).slice(0,-1)+',';
       for(const slot of keys) {
         if(!slot.startsWith(ownerPrefix))continue;
@@ -1308,10 +1363,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       }
       if(receipts.size)conflict();
       const outcome=await this.local(tx,c,k.value);
-      if(publication) {
+      if(publication||c.commands.some(command=>command.kind==='recipe-create')) {
         const object=c.outbound[0].object;
-        const {header}=JSON.parse(new TextDecoder().decode(object.bytes));
-        await this.publishRecipe(tx,publication,c,object.id,header);
+        const envelope=JSON.parse(new TextDecoder().decode(object.bytes));
+        await this.publishRecipe(tx,publication,c,object.id,envelope);
       }
       this.fault?.('disclosure-local');for(const [effectId,source] of sources)await tx.put(key('disclosure-source',scope,effectId),source);return {ok:true as const,value:{outcome,replayed:false}}})}catch(e){return fail(mapError(e))}
   }
@@ -1534,7 +1589,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         envelope:inbox.bytes,origin:'import',objectId:c.itemId,...(signedIncomplete?{incomplete:true}:{})};
       if(JSON.stringify(source.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();
       if(await tx.get(key('command',scope,command.commandId))!==undefined||await tx.get(key('effect',scope,command.effectId))!==undefined)conflict();await this.requireUnusedProjectionIdentity(tx,scope,command,head);await this.requireDependencies(tx,scope,c.commands);const outcome=await this.documents(tx,scope,c.documents,head??null);
-      if(publication) await this.publishRecipe(tx,publication,c,c.itemId,header);
+      if(publication||command.kind==='recipe-create'||staged.recipeDelivery!==undefined)
+        await this.publishRecipe(tx,publication,c,c.itemId,staged);
       this.fault?.('import-documents');await tx.put(key('command',scope,command.commandId),k.value);await tx.put(key('effect',scope,command.effectId),k.value);await tx.put(key('disclosure-source',scope,command.effectId),source);await tx.put(key('applied',scope,c.itemId),c.operationId);await tx.put(op,{inputKey:k.value,outcome});this.fault?.('import');return {ok:true as const,value:{outcome,replayed:false}}})}catch(e){return fail(mapError(e))}
   }
   async commitImport(c: ImportCommit, incoming?:{authorDevice:string;bytes:Uint8Array}): Promise<CommitResult> {

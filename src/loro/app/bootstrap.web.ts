@@ -105,7 +105,7 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head;
   const {resolved:house,installedSet}=selected??originalHouse;
   const householdRuntime=await openWorkspaceHouseholdRuntime({storage:db.storage,resolved:house,installedSet,
-   pin:activePin,provider,sodium,keys,signing:{...signing,publicKey:signingRef},LoroDoc,decodeImportBlobMeta});
+   pin:activePin,provider,sodium,keys,signing:{...signing,publicKey:signingRef},wrapping,LoroDoc,decodeImportBlobMeta});
   const disclosure=disclosureService({storage:db.storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
    installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
   const originalRecipeDocuments=!selected&&!installedSet;
