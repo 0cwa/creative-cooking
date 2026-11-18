@@ -943,6 +943,18 @@ test('own-device household release and install roll back, reopen and preserve di
   const bytes=await fresh.cookingFiles.download(cooking[0].objectId);
   await sponsor.cookingFiles.receive(bytes);
   assert.deepEqual(await pantry(sponsor),['edited-basil']);
+  await adult.cookingFiles.receive(bytes);
+  assert.deepEqual(await pantry(adult),['edited-basil']);
+  for(const name of [sponsorName,adultName]){
+   for(const revision of ['0',undefined,-1]){
+    await withPairedDocument(name,record=>({...record,revision}),async()=>{
+     const saved=await readStore(name,storage=>storage.readHouseholdOwnDeviceRelease(scope,transition.event.proposalId,false));
+     assert.equal(saved.ok,false);
+     assert.equal(saved.error.code,'CORRUPT');
+     await assert.rejects(getNode(name),/INVALID_AUTHORITY/);
+    });
+   }
+  }
   await withPairedDocument(sponsorName,record=>({...record,revision:0}),async()=>{
    await assert.rejects(getNode(sponsorName),/INVALID_AUTHORITY/);
   });
