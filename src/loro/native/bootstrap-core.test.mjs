@@ -429,3 +429,220 @@ test('native bootstrap reopens and saves the rotated personal generation in SQLi
   assert.equal((await workspace.personal.document()).doc.getMap('personal-preferences').get('city'),'After rotation');
  }finally{workspace?.close();removeWorkspace(name)}
 });
+
+test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 history in SQLite',async()=>{
+ const {openSQLiteStorage}=await import('../storage/sqlite.ts');
+ const {parsePairingText,pairingText,openPersonalCopy,sealPersonalCopy}=await import('../pairing/personal-copy.mjs');
+ const {resolvePersonalAuthority}=await import('../authority/personal.mjs');
+ const names=['native-personal-pair-source','native-personal-pair-target','native-personal-pair-third','native-personal-pair-fourth'];
+ const workspaces=[], controllers=names.map(()=>({count:0,fail:0}));
+ const boot=async(i,create=false)=>{
+  const name=names[i],control=controllers[i];
+  workspaces[i]?.close();workspaces[i]=null;
+  workspaces[i]=await openNativeWorkspaceWith({...args(name,create),randomUUID,openDatabase:n=>{
+   const db=openDatabase(n);
+   if(n!==name)return db;
+   return {...db,executeSync(sql,params){
+    if(sql.startsWith('INSERT INTO loro_records')){
+     if(++control.count===control.fail)throw Error('injected SQLite write failure');
+    }
+    return db.executeSync(sql,params);
+   }};
+  }});
+  return workspaces[i];
+ };
+ const database=(i,fn)=>{
+  const db=openDatabase(names[i]);
+  try{return fn(db)}finally{db.close()}
+ };
+ const rows=i=>database(i,db=>db.executeSync('SELECT key,value FROM loro_records ORDER BY key').rows);
+ const preference=(id,value)=>({version:1,kind:'personal-preference-put',commandId:id,effectId:id,dependencyEffectIds:[],
+  data:{key:'city',value}});
+ const save=(workspace,id,value)=>executeAction(workspace.personal,workspace.sequences,id,[preference(id,value)]);
+ const saved=async workspace=>(await workspace.personal.document()).doc.getMap('personal-preferences').get('city');
+ const scopeOf=i=>({kind:'personal',id:workspaces[i].personal.scope.scopeId});
+ const getAuthority=i=>workspaces[i].personal.storage.readPairingAuthority(scopeOf(i)).then(result=>result.value);
+ const progress=async(i,j)=>{
+  const a=workspaces[i].personalPairing,b=workspaces[j].personalPairing,request=await b.request();
+  await assert.rejects(a.propose(request,'0'.repeat(64)),/OOB_REQUIRED/);
+  const proposal=await a.propose(request,b.fingerprint),review=await b.inspect(proposal.text);
+  assert.equal(review.code,proposal.code);
+  await assert.rejects(b.confirm('responder',proposal.text,a.fingerprint,b.rootPin,review.code),/OOB_REQUIRED/);
+  const offer=await a.confirm('initiator',proposal.text,b.fingerprint,a.rootPin,proposal.code);
+  let message=await b.confirm('responder',proposal.text,a.fingerprint,a.rootPin,review.code);
+  assert.equal(offer.complete,false);
+  await assert.rejects(a.publish(),/INCOMPLETE/);
+  for(const [role,number] of [['initiator',i],['responder',j],['initiator',i],['responder',j],['initiator',i]]){
+   message=await workspaces[number].personalPairing.accept(role,message.text);
+  }
+  assert.equal(message.complete,true);
+  return proposal;
+ };
+ const deviceKeys=async(i,purpose,use)=>{
+  const op='device-'+purpose,query='SELECT value FROM loro_records WHERE key=?';
+  const stored=JSON.parse(database(i,db=>db.executeSync(query,[JSON.stringify(['local-key-operation',op])]).rows[0].value));
+  return workspaces[i].personal.storage.localKeys(openMaster(names[i]),sodium).use(op,stored.identity,use);
+ };
+ try {
+  for(let i=0;i<names.length;i++)await boot(i,true);
+  const original=[workspaces[1].personal.scope.scopeId,workspaces[1].household.scope.scopeId];
+  const first=workspaces[0].personal.scope;
+  await save(workspaces[0],'before-pair','Source city');
+  await save(workspaces[1],'original-receiver','Original city');
+  // The full settings service resumes against real SQLite after re-open.
+  const proposal=await progress(0,1);
+  await boot(0);await boot(1);
+  assert.equal((await workspaces[0].personalPairing.resume('initiator')).progress.complete,true);
+  const sponsorBefore=rows(0),receiverBefore=rows(1);
+  const current=await getAuthority(0);
+  const stale={...current,revision:current.revision+1};
+  assert.equal((await workspaces[0].personal.storage.compareAndSwapPairingAuthority({expectedRevision:current.revision,record:stale})).ok,true);
+  await assert.rejects(workspaces[0].personalPairing.publish(),/CONFLICT/);
+  const originalAuthority=sponsorBefore.find(row=>row.key===JSON.stringify(['pairing-authority','personal',first.scopeId]));
+  database(0,db=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[originalAuthority.value,originalAuthority.key]));
+  // Change the durable document between reading it and entering publication.
+  const update=await workspaces[0].personal.prepare({operationId:'racing-write',deviceSequence:42,command:preference('race','Later city')});
+  const rawWrite=workspaces[0].personal.storage.commitPersonalAdmissionRelease.bind(workspaces[0].personal.storage);
+  workspaces[0].personal.storage.commitPersonalAdmissionRelease=async(...values)=>{
+   assert.equal((await workspaces[0].personal.storage.commitLocal(update.commit)).ok,true);
+   return rawWrite(...values);
+  };
+  await assert.rejects(workspaces[0].personalPairing.publish(),/CONFLICT/);
+  workspaces[0].personal.storage.commitPersonalAdmissionRelease=rawWrite;
+  const afterRace=rows(0);
+  assert.equal(afterRace.some(row=>JSON.parse(row.key)[0]==='personal-pairing-file'),false);
+  for(let fault=1;fault<=7;fault++){
+   controllers[0].fail=fault;controllers[0].count=0;
+   await assert.rejects(workspaces[0].personalPairing.publish(),/IO/);
+   assert.equal(controllers[0].count,fault);assert.deepEqual(rows(0),afterRace);
+  }
+  controllers[0].fail=0;
+  const release=await workspaces[0].personalPairing.publish();
+  await boot(0);
+  assert.deepEqual((await workspaces[0].personalPairing.publish()).file,release.file);
+
+  const publicProposal=parsePairingText(sodium,proposal.text);
+  const {transcript}=publicProposal;
+  const content=await deviceKeys(1,'wrapping',secret=>openPersonalCopy(sodium,release.file,proposal.code,transcript,secret));
+  assert.equal(content.document.revision,1);
+  assert.ok(content.document.frontier.length);
+  const wrongRoot=await getAuthority(2);
+  for(const mutate of [
+   bad=>{bad.parent=wrongRoot},
+   bad=>{bad.document.documentId=first.epochId},
+   bad=>{bad.document.epochId=workspaces[2].personal.scope.epochId},
+   bad=>{bad.document.revision=-1},
+   bad=>{bad.document.frontier=[]},
+   bad=>{bad.envelope.admission.admission.ownerId=workspaces[2].personal.scope.ownerId},
+   bad=>{bad.envelope.admission.admission.recipientWrappingKey='1'.repeat(64)}
+  ]){
+   const bad=structuredClone(content);mutate(bad);
+   const file=await deviceKeys(0,'signing',secret=>sealPersonalCopy(sodium,proposal.code,transcript.responder,secret,bad));
+   await assert.rejects(workspaces[1].personalPairing.install(file));
+   assert.deepEqual(rows(1),receiverBefore);
+  }
+  const wrongRecipient=parsePairingText(sodium,await workspaces[2].personalPairing.request()).request;
+  const differentWrappingKey=await deviceKeys(0,'signing',secret=>sealPersonalCopy(sodium,proposal.code,
+   {...transcript.responder,wrappingPublicKey:sodium.from_hex(wrongRecipient.wrappingKey)},secret,content));
+  await assert.rejects(workspaces[1].personalPairing.install(differentWrappingKey));
+  await assert.rejects(workspaces[2].personalPairing.inspect(pairingText(sodium,publicProposal)),/UNAUTHORIZED/);
+  await assert.rejects(workspaces[2].personalPairing.install(release.file),/OOB_REQUIRED/);
+  assert.deepEqual(rows(1),receiverBefore);
+
+  // Two prior commands produce four semantic-index writes. Probe every record
+  // write, including the final authority write, on the real SQLite adapter.
+  for(let fault=1;fault<=17;fault++){
+   controllers[1].fail=fault;controllers[1].count=0;
+   await assert.rejects(workspaces[1].personalPairing.install(release.file),/IO/);
+   assert.equal(controllers[1].count,fault);assert.deepEqual(rows(1),receiverBefore);
+  }
+  controllers[1].fail=0;
+  assert.equal((await workspaces[1].personalPairing.install(release.file)).replayed,false);
+  const wrappedMaster=openMaster(names[1]),storage=workspaces[1].personal.storage;
+  await storage.localKeys(wrappedMaster,sodium).useIdentity({version:1,scope:scopeOf(0),deviceId:workspaces[1].deviceId,
+   purpose:'data',epochId:first.epochId},key=>workspaces[0].personal.storage.localKeys(openMaster(names[0]),sodium)
+    .useIdentity({version:1,scope:scopeOf(0),deviceId:workspaces[0].deviceId,purpose:'data',epochId:first.epochId},
+     originalKey=>assert.deepEqual(key,originalKey)));
+  await boot(1);
+  assert.equal(workspaces[1].household.scope.scopeId,original[1]);
+  assert.equal(workspaces[1].personal.scope.epochId,first.epochId);
+  assert.equal(workspaces[1].personal.scope.documentId,first.documentId);
+  assert.equal(await saved(workspaces[1]),'Later city');
+  assert.deepEqual(workspaces[1].household.scope.acceptedAuthors,[workspaces[1].deviceId]);
+  const resolved=await resolvePersonalAuthority(workspaces[1].personal.storage,scopeOf(1),
+   workspaces[1].personalPairing.rootPin,workspaces[1].disclosureProvider,workspaces[1].deviceId);
+  assert.equal(resolved.scope.ownerId,first.ownerId);
+  await assert.rejects(save(workspaces[1],'before-pair','Duplicate'),/CONFLICT/);
+  await save(workspaces[1],'paired-save','Recipient edit');
+  const afterEdit=rows(1);
+  assert.equal((await workspaces[1].personalPairing.install(release.file)).replayed,true);
+  assert.deepEqual(rows(1),afterEdit);
+  assert.equal(await saved(workspaces[1]),'Recipient edit');
+
+  // A newer revision with unrelated bytes cannot satisfy contained replay.
+  const documentKey=JSON.stringify(['document',first.scopeId,first.documentId]);
+  const savedDocument=afterEdit.find(row=>row.key===documentKey);
+  const replacementDoc=new LoroDoc();
+  replacementDoc.setPeerId('99');
+  replacementDoc.getMap('personal-preferences').set('city','Unrelated history');
+  const unrelated=JSON.parse(savedDocument.value);
+  unrelated.revision++;
+  unrelated.bytes.__storageBytes=Array.from(replacementDoc.export({mode:'snapshot'}));
+  database(1,db=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(unrelated),documentKey]));
+  const unrelatedState=rows(1);
+  await assert.rejects(workspaces[1].personalPairing.install(release.file));
+  assert.deepEqual(rows(1),unrelatedState);
+  database(1,db=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[savedDocument.value,documentKey]));
+
+  await progress(1,2);
+  const second=await workspaces[1].personalPairing.publish();
+  await workspaces[2].personalPairing.install(second.file);
+  await boot(1);await boot(2);
+  assert.equal(JSON.parse(new TextDecoder().decode((await getAuthority(2)).authorityState)).version,2);
+  await assert.rejects(workspaces[1].personalPairing.install(release.file),/UNAUTHORIZED|CONFLICT/);
+  assert.equal(await saved(workspaces[2]),'Recipient edit');
+  await workspaces[1].personalPairing.returnToOriginal();
+  await boot(1);
+  assert.equal(workspaces[1].personal.scope.scopeId,original[0]);
+  assert.equal(await saved(workspaces[1]),'Original city');
+
+  const {personalRotation}=workspaces[2];
+  const reviewed=await personalRotation.review();
+  await personalRotation.publish(reviewed,reviewed.devices.filter(id=>id!==workspaces[2].deviceId));
+  await boot(2);
+  const rotation=await getAuthority(2);
+  const rotatedEpoch=workspaces[2].personal.scope.epochId;
+  await workspaces[3].personalPairing.request();
+  await progress(2,3);
+  const third=await workspaces[2].personalPairing.publish();
+  await workspaces[3].personalPairing.install(third.file);
+  await boot(3);
+  const state=record=>JSON.parse(new TextDecoder().decode(record.authorityState));
+  const history=state(await getAuthority(3)),prior=state(rotation);
+  assert.equal(history.version,3);
+  assert.deepEqual(history.base,prior.base);
+  assert.deepEqual(history.events.slice(0,-1),prior.events);
+  assert.equal(history.events.at(-1).admission.recipientDeviceId,workspaces[3].deviceId);
+  assert.equal(workspaces[3].personal.scope.epochId,rotatedEpoch);
+  assert.equal(await saved(workspaces[3]),'Recipient edit');
+  await save(workspaces[3],'after-v3','New private edit');
+  await boot(3);
+  assert.equal(await saved(workspaces[3]),'New private edit');
+
+  await workspaces[3].personalPairing.returnToOriginal();
+  await boot(3);
+  assert.equal((await workspaces[3].personal.document()).revision,null);
+  await workspaces[1].personalPairing.request(true);
+  await progress(3,1);
+  const empty=await workspaces[3].personalPairing.publish();
+  await workspaces[1].personalPairing.install(empty.file);
+  await boot(1);
+  assert.equal((await workspaces[1].personal.document()).revision,null);
+  await save(workspaces[1],'first-after-empty-copy','First saved edit');
+  assert.equal((await workspaces[1].personalPairing.install(empty.file)).replayed,true);
+  assert.equal(await saved(workspaces[1]),'First saved edit');
+ }finally{
+  for(const workspace of workspaces)workspace?.close();
+  for(const name of names)removeWorkspace(name);
+ }
+});

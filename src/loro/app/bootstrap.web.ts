@@ -9,6 +9,7 @@ import {openSessionStore} from '../pairing/session-indexeddb.mjs';
 import {createGuardianPreparation} from './guardians/guardian-preparation.mjs';
 import {workspaceRecoveryImport} from './workspace-recovery-import.mjs';
 import {workspaceRecovery} from './workspace-recovery.mjs';
+import {personalPairing} from './personal-pairing.mjs';
 import {personalRotation} from './personal-rotation.mjs';
 import {ownerGuardians,pinHolder,holderFingerprint,exportGuardianAuthority,acceptGuardianAuthority,initializeGuardianHolder,holderGuardians} from './guardians/guardian-workflow.mjs';
 import sodium from 'libsodium-wrappers';
@@ -112,6 +113,9 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const rotatePersonal=personalRotation({sodium,storage:db.storage,keys,provider,LoroDoc,deviceId:r.device,
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),
    selected:selectedPersonal,selection:personalSelection.value,recoveryImport,randomUUID:()=>crypto.randomUUID()});
+  const pairPersonal=personalPairing({sodium,storage:db.storage,recipient:db.recipient,store:ceremonyStore,provider,master,keys,
+   signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
+   original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID:()=>crypto.randomUUID()});
   const householdPairing=bindHouseholdPairing({name,sodium,storage:db.storage,master,provider,store:ceremonyStore,scope:activeScope,pin:activePin,deviceId:r.device,adultId:house.adultId,runtime:householdRuntime,service:disclosure,pins:householdPins,keys,signing,wrapping,signingKey:signingRef,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),continuity:{run:db.recoveryTransaction,personalScopeId:selectedPersonal.scopeId,personalPin:selectedPersonal.pin,recovery,recoveryImport},selection,selectedHousehold:!!selected,LoroDoc,prepareJoinedSequences,finalizeJoinedSequences,withCurrent:(use:()=>Promise<unknown>)=>selection.withCurrent(selectedId,use)});
   const guardianOwner=ownerGuardians({sodium,run:db.recoveryTransaction,storage:db.storage,authorityProvider:provider,scopeId:selectedPersonal.scopeId,owner:personal.scope.ownerId,deviceId:r.device,pin:selectedPersonal.pin,keys,signing,master,masterId:'workspace-master'});
   const guardianTrustStores:any[]=[];
@@ -122,7 +126,7 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   }};
 
   const withCurrent = <T,>(use:(revision:number)=>Promise<T>)=>selection.withCurrent(selectedId,use);
-  return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:{reserve:(scopeId:string,operationId:string)=>scopeId===selectedPersonal.scopeId?
+  return {recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing,householdCompromise:householdCompromise({runtime:householdRuntime,withCurrent}),householdLocalTrust:householdLocalTrust({runtime:householdRuntime,withCurrent}),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure,disclosureProvider:provider,needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:{reserve:(scopeId:string,operationId:string)=>scopeId===selectedPersonal.scopeId?
    sequences!.reserve(r.personal,operationId):selected&&scopeId===activeScope.id?
    joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId)},close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};
  } catch(error) {joinedSequences?.close();householdPins?.close();ceremonyStore?.close();sequences?.close();db.close();master.close();meta.close();throw error}

@@ -14,7 +14,7 @@ type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promis
 type RotationSourceGuard = {
   source:{documentId:string;bytes:Uint8Array;revision:number}|null;
 } & ({} | {reviewId:string;review:unknown;original:{checkpoint:Uint8Array;objects:Uint8Array[]}});
-type PersonalSelection = {scopeId:string;pin:string};
+export type PersonalSelection = {scopeId:string;pin:string};
 type PersonalRotationReceipt = {
   requestHash:string;
   transfer:null|{parent:string;item:unknown;senderWrappingKey:string;sealedSnapshot:string;packages:Record<string,string>};
@@ -78,9 +78,17 @@ export const denseArray = (v: unknown, check: (item: any) => boolean): v is any[
 const decodeKeyBytes = (x: unknown): Uint8Array => { if (!denseArray(x,n=>Number.isInteger(n) && n>=0 && n<=255)) return corrupt(); return new Uint8Array(x); };
 const revision = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
 const outcomeShape = (v: unknown): v is SavedOutcome => fields(v,['state','revisions']) && v.state === 'saved' && denseArray(v.revisions, (x: unknown) => fields(x,['documentId','revision']) && typeof x.documentId === 'string' && x.documentId.length > 0 && revision(x.revision)) && v.revisions.length > 0;
-const validPersonalSelection = (value:unknown): value is PersonalSelection =>
+export const validPersonalSelection = (value:unknown): value is PersonalSelection =>
   fields(value,['scopeId','pin']) && validId(value.scopeId) && hexOf(value.pin,64);
 const sameRecord = (a:unknown,b:unknown) => JSON.stringify(projectionCanonical(a))===JSON.stringify(projectionCanonical(b));
+type PersonalPairingPublication = {
+  expected:PairingAuthorityRecord;
+  source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
+  file:Uint8Array;
+  selection:{deviceId:string;expected:PersonalSelection|null};
+};
+const validPairingFile = (value:unknown): value is Uint8Array =>
+  value instanceof Uint8Array && value.length>112 && value.length<=7*1024*1024;
 const validPersonalReceipt = (value:unknown): value is PersonalRotationReceipt =>
   fields(value,['requestHash','transfer']) && hexOf(value.requestHash,64) &&
   (value.transfer===null || (fields(value.transfer,['parent','item','senderWrappingKey','sealedSnapshot','packages']) &&
@@ -123,6 +131,7 @@ const validateRecord = (k: string, v: any) => {
     case 'projection-outbox': valid = fields(v,['packageId','recipientDevice']) && typeof v.packageId==='string' && typeof v.recipientDevice==='string'; break;
     case 'projection-pending': valid = typeof v==='string'; break;
     case 'projection-document': valid = fields(v,['generation','operationId']) && revision(v.generation) && typeof v.operationId==='string'; break;
+    case 'personal-pairing-file': valid = validPairingFile(v); break;
     case 'personal-selection': valid = validPersonalSelection(v); break;
     case 'personal-rotation': valid = fields(v,['receipt','epochId','documentId','head']) && validPersonalReceipt(v.receipt) && [v.epochId,v.documentId,v.head].every(validId); break;
     case 'pairing-authority': valid = validatePairingAuthority(v).ok; break;
@@ -494,16 +503,84 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true,value:{release:snapshot(r),replayed:false}};
     }); } catch(e) { return fail(mapError(e)); }
   }
-  /** Caller verifies the signed personal admission and possession evidence before entry. */
-  async commitPersonalAdmissionRelease(r:PairingRelease,next:PairingAuthorityRecord):Promise<PairingReleaseResult> {
-    const checked=pairingReleaseKey(r), valid=validatePairingAuthority(next); if(!checked.ok||!valid.ok||r.transcript.action!=='pairOwnDevice'||r.transcript.scope.kind!=='personal'||next.scope.kind!=='personal'||next.scope.id!==r.transcript.scope.id||next.revision!==r.expectedAuthorityRevision+1||next.acceptedParent!==r.transcript.acceptedParent)return fail('MALFORMED');r=snapshot(r);next=snapshot(next);
-    try{return await this.run(true,async tx=>{const s=r.transcript.scope,op=key('pairing-release',s.kind,s.id,r.operationId),guard=key('pairing-guard',r.guard.guardId),packet=key('pairing-packet',s.kind,s.id,r.packet.id),outbox=key('pairing-outbox',s.kind,s.id,r.operationId),transition=key('personal-admission-release',s.id,r.operationId),authorityKey=key('pairing-authority',s.kind,s.id),old=await tx.get(op),authority=await tx.get(authorityKey),binding=JSON.stringify(projectionCanonical(next));
-      if(old!==undefined){if(old.inputKey!==checked.value||await tx.get(transition)!==binding||!authority||JSON.stringify(projectionCanonical(authority))!==binding)conflict();await this.pairingComplete(tx,old.release,old.inputKey);return {ok:true,value:{release:snapshot(old.release),replayed:true}};}
+  /** The authenticated file and exact source are optional for the earlier
+   * key-only caller. A product publication commits both with the successor. */
+  async commitPersonalAdmissionRelease(r:PairingRelease,next:PairingAuthorityRecord,publication?:PersonalPairingPublication):Promise<PairingReleaseResult> {
+    const checked=pairingReleaseKey(r), valid=validatePairingAuthority(next);
+    if(!checked.ok||!valid.ok||r.transcript.action!=='pairOwnDevice'||r.transcript.scope.kind!=='personal'||
+      next.scope.kind!=='personal'||next.scope.id!==r.transcript.scope.id||next.revision!==r.expectedAuthorityRevision+1||
+      next.acceptedParent!==r.transcript.acceptedParent)return fail('MALFORMED');
+    if(publication){
+      const {expected,source,file,selection}=publication;
+      if(!validatePairingAuthority(expected).ok||!sameRecord(expected.scope,r.transcript.scope)||
+        expected.revision!==r.expectedAuthorityRevision||expected.acceptedParent!==r.transcript.acceptedParent||
+        expected.authorizationSnapshot!==r.transcript.authorizationSnapshot||!validPairingFile(file)||
+        !selection||selection.deviceId!==r.transcript.initiator.deviceId||
+        (selection.expected!==null&&(!validPersonalSelection(selection.expected)||selection.expected.scopeId!==r.transcript.scope.id))||
+        !source||!validId(source.documentId)||isPolicyDocumentId(source.documentId)||
+        !(source.revision===null?source.bytes===null:revision(source.revision)&&source.bytes instanceof Uint8Array&&
+          source.bytes.length>0&&source.bytes.length<=2_097_152))return fail('MALFORMED');
+    }
+    r=snapshot(r);next=snapshot(next);publication=snapshot(publication);
+    try{return await this.run(true,async tx=>{
+      const s=r.transcript.scope,op=key('pairing-release',s.kind,s.id,r.operationId),guard=key('pairing-guard',r.guard.guardId);
+      const packet=key('pairing-packet',s.kind,s.id,r.packet.id),outbox=key('pairing-outbox',s.kind,s.id,r.operationId);
+      const transition=key('personal-admission-release',s.id,r.operationId),authorityKey=key('pairing-authority',s.kind,s.id);
+      const fileKey=key('personal-pairing-file',s.id,r.operationId),old=await tx.get(op),authority=await tx.get(authorityKey);
+      const binding=JSON.stringify(projectionCanonical(next));
+      if(old!==undefined){
+        if(old.inputKey!==checked.value||await tx.get(transition)!==binding||!sameRecord(authority,next))conflict();
+        await this.pairingComplete(tx,old.release,old.inputKey);
+        if(publication){const file=await tx.get(fileKey);if(!file||!sameBytes(file,publication.file))conflict();}
+        return {ok:true,value:{release:snapshot(old.release),replayed:true}};
+      }
       if(authority&&(authority.scope.kind!==s.kind||authority.scope.id!==s.id))corrupt();
-      if(!authority||authority.revision!==r.expectedAuthorityRevision||authority.acceptedParent!==r.transcript.acceptedParent||authority.authorizationSnapshot!==r.transcript.authorizationSnapshot||await tx.get(guard)!==undefined||await tx.get(packet)!==undefined||await tx.get(outbox)!==undefined||await tx.get(transition)!==undefined)conflict();
-      for(const [k,v] of [[guard,checked.value],[packet,checked.value],[outbox,checked.value],[op,{inputKey:checked.value,release:r}],[transition,binding],[authorityKey,next]] as const){await tx.put(k,v);this.fault?.('personal-admission-release');}return {ok:true,value:{release:snapshot(r),replayed:false}};
+      if(!authority||authority.revision!==r.expectedAuthorityRevision||authority.acceptedParent!==r.transcript.acceptedParent||
+        authority.authorizationSnapshot!==r.transcript.authorizationSnapshot)conflict();
+      for(const slot of [guard,packet,outbox,transition,fileKey])if(await tx.get(slot)!==undefined)conflict();
+      if(publication){
+        if(!sameRecord(authority,publication.expected)||
+          !sameRecord((await tx.get(key('personal-selection',publication.selection.deviceId)))??null,publication.selection.expected))conflict();
+        const {source}=publication,doc=await tx.get(key('document',s.id,source.documentId));
+        const owner=await tx.get(key('document-owner',s.id,source.documentId));
+        if(source.bytes?doc?.revision!==source.revision||owner!==authority.acceptedParent||
+          !sameBytes(doc.bytes,source.bytes):doc!==undefined||owner!==undefined)conflict();
+        await tx.put(fileKey,publication.file);this.fault?.('personal-admission-release');
+      }
+      for(const [k,v] of [[guard,checked.value],[packet,checked.value],[outbox,checked.value],[op,{inputKey:checked.value,release:r}],
+        [transition,binding],[authorityKey,next]] as const){await tx.put(k,v);this.fault?.('personal-admission-release');}
+      return {ok:true,value:{release:snapshot(r),replayed:false}};
     });}catch(e){return fail(mapError(e))}
   }
+
+  async readPersonalPairingFile(next:PairingAuthorityRecord,operationId:string):Promise<Result<Uint8Array,StorageError>> {
+    if(!validatePairingAuthority(next).ok||next.scope.kind!=='personal'||!validId(operationId))return {ok:false,error:'MALFORMED'};
+    next=snapshot(next);
+    try{return await this.run(false,async tx=>{
+      const {id}=next.scope;
+      const authority=await tx.get(key('pairing-authority','personal',id));
+      const transition=await tx.get(key('personal-admission-release',id,operationId));
+      if(!sameRecord(authority,next)||transition!==JSON.stringify(projectionCanonical(next)))return conflict();
+      const file=await tx.get(key('personal-pairing-file',id,operationId));
+      if(!file)return corrupt();
+      return {ok:true,value:snapshot(file)};
+    });}catch(e){return {ok:false,error:mapError(e)}}
+  }
+
+  async selectOriginalPersonal(deviceId:string,selected:PersonalSelection,original:PairingAuthorityRecord,pin:string):Promise<Result<void,StorageError>> {
+    if(!validId(deviceId)||!validPersonalSelection(selected)||!validatePairingAuthority(original).ok||
+      original.scope.kind!=='personal'||!hexOf(pin,64)||selected.scopeId===original.scope.id)return {ok:false,error:'MALFORMED'};
+    original=snapshot(original);selected=snapshot(selected);
+    try{return await this.run(true,async tx=>{
+      const slot=key('personal-selection',deviceId);
+      if(!sameRecord(await tx.get(slot),selected)||
+        !sameRecord(await tx.get(key('pairing-authority','personal',original.scope.id)),original))return conflict();
+      // The original root pin is supplied by bootstrap. The selection is always explicit.
+      await tx.put(slot,{scopeId:original.scope.id,pin});
+      return {ok:true,value:undefined};
+    });}catch(e){return {ok:false,error:mapError(e)}}
+  }
+
   async readPersonalSelection(deviceId:string):Promise<Result<PersonalSelection|null,StorageError>> {
     if(!validId(deviceId)) return {ok:false,error:'MALFORMED'};
     try {

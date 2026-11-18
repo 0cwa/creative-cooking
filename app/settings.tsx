@@ -12,6 +12,7 @@ import { CookingExchange } from '@/loro/app/CookingExchange';
 import { HouseholdInvitation } from '@/loro/app/HouseholdInvitation';
 import { HouseholdIdentity } from '@/loro/app/HouseholdIdentity';
 import { DisclosureControls } from '@/loro/app/DisclosureControls';
+import { PersonalDevicePairing } from '@/loro/app/PersonalDevicePairing';
 import { PersonalAuthority } from '@/loro/app/PersonalAuthority';
 import { RecoveryReminder } from '@/loro/app/RecoveryReminder';
 import { LoroWorkspaceStatus } from '@/loro/app/WorkspaceStatus';
@@ -548,6 +549,7 @@ export default function SettingsScreen() {
           {app.storageMode === 'fresh-local' && <>
             <LoroWorkspaceStatus revision={app.localPersistenceStatus} />
             {Platform.OS === 'web' && <RecoveryReminder />}
+            <PersonalDevicePairing />
             <PersonalAuthority />
             <HouseholdIdentity />
             <HouseholdInvitation />

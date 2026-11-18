@@ -3,7 +3,7 @@ import {
  personalDataCommitment,personalRotationBytes,preparePersonalRotation,resolvePersonalAuthority,verifyPersonalRecord
 } from '../authority/personal.mjs';
 import {makeKeyPackage,withOpenedKeyPackage} from '../pairing/key-package.mjs';
-import {assertCommandScope} from '../domain/personal-codec.mjs';
+import {personalCopyIdentities} from '../pairing/personal-copy.mjs';
 import {recoveryHash} from '../recovery/enrollment.mjs';
 
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
@@ -50,17 +50,6 @@ function packageContext(pin,head,r,recipient,senderSigningKey,senderWrappingKey)
   projectionId:r.documentId,manifestHash:head};
 }
 
-function retainedIdentities(doc){
- const markers=Object.entries(doc.getMap('domain-effects').toJSON());
- if(markers.length>4096)throw Error('TOO_LARGE');
- return markers.map(([effectId,marker])=>{
-  const command=marker?.command;
-  if(!command||command.effectId!==effectId||!id(command.commandId))throw Error('INVALID_SOURCE');
-  assertCommandScope(command.kind,'personal');
-  return {commandId:command.commandId,effectId};
- });
-}
-
 function freshSnapshot(LoroDoc,source,devices){
  const current=new LoroDoc();
  if(source)current.import(source);
@@ -75,7 +64,7 @@ function freshSnapshot(LoroDoc,source,devices){
      !name.startsWith('personal-messages:')&&!name.startsWith('chef-proposal:'))continue;
   for(const entry of Object.keys(state[name]).sort())fresh.getMap(name).set(entry,state[name][entry]);
  }
- const identities=retainedIdentities(fresh),bytes=fresh.export({mode:'snapshot'});
+ const identities=personalCopyIdentities(fresh),bytes=fresh.export({mode:'snapshot'});
  if(bytes.length>maxSnapshot)throw Error('TOO_LARGE');
  return {bytes,identities,seedPeerId:String(peer)};
 }
@@ -225,7 +214,7 @@ export function personalRotation({sodium,storage,keys,provider,LoroDoc,deviceId,
     try{
      if(await dataHash('snapshot',bytes)!==r.snapshotHash)throw Error('INVALID_PROOF');
      const doc=new LoroDoc();doc.import(bytes);
-     const identities=retainedIdentities(doc);
+     const identities=personalCopyIdentities(doc);
      const localKey=await keys.preparePairedDataKey('personal-rotation:'+r.operationId,identity(r.scopeId,r.epochId),key);
      const result=must(await storage.commitPersonalRotation({deviceId,operationId:r.operationId,expected,next,epochId:r.epochId,
       selection:{expected:selection,next:{scopeId:r.scopeId,pin:trustedPin}},document:{id:r.documentId,bytes},localKey,identities,

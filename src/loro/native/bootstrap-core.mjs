@@ -14,6 +14,7 @@ import {executeAction,subscribeActions} from '../app/action.mjs';
 import {cookingFiles} from '../app/cooking-file.mjs';
 import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
+import {personalPairing} from '../app/personal-pairing.mjs';
 import {personalRotation} from '../app/personal-rotation.mjs';
 import {openNativeSequences} from './sequences.mjs';
 import {initialAdmissionPolicy} from '../app/admission-rule.mjs';
@@ -125,8 +126,11 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const rotatePersonal=personalRotation({sodium,storage,keys,provider,LoroDoc,deviceId:r.device,
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),
    selected:selectedPersonal,selection:personalSelection.value,recoveryImport:null,randomUUID});
+  const pairPersonal=personalPairing({sodium,storage,recipient:storage.recipient,store,provider,master,keys,
+   signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
+   original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
   return {
-   personalRotation:rotatePersonal,
+   personalRotation:rotatePersonal,personalPairing:pairPersonal,
    householdCompromise:householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)}),
    householdLocalTrust:householdLocalTrust({runtime:household,withCurrent}),
    authorizeHousehold:active(()=>household.authorize()),
