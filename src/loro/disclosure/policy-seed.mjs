@@ -11,7 +11,21 @@ export async function preparePolicyProjection({runtime,service,provider,seedId,p
  if(![2,3,4].includes(version))throw Error('UNSUPPORTED_VERSION');const {context}=version===2?await service.active():{context:await service.authority()},{doc,revision,storedBytes}=await runtime.document();if(revision===null)throw Error('SOURCE_UNAVAILABLE');
  if(selectedSource && (version!==4 || selectedSource.revision!==revision || selectedSource.bytes.length!==storedBytes?.length ||
    !selectedSource.bytes.every((byte,index)=>byte===storedBytes[index])))throw Error('SOURCE_CHANGED');
- const projected=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:selectedSource?.bytes??doc.export({mode:'snapshot'}),seedId,peerId,includeLocalMapping:true,schemaVersion:version===4?4:1,omittedRecipeIds,childRecipeIngredients}),verify=createSourceVerifier({runtime,service,context,allowIncomplete:version>=3,selectedDocument:selectedSource&&runtime.recipeId!==null?doc:null}),policies=new Map(),entries=[];
+ let selectedSeedEffects=null;
+ if(selectedSource?.admitted){
+  const {verifiedSeedSources}=await import('./seed-source.mjs');
+  const {policyBaseline,verifyPolicyBaseline}=await import('../authority/policy-baseline.mjs');
+  const retained=await verifiedSeedSources({runtime,service,context});
+  await verifyPolicyBaseline(doc,runtime.LoroDoc,await policyBaseline(retained.seedDoc,provider),provider);
+  selectedSeedEffects=new Map();
+  for(const [effectId,policies] of retained.entries){
+   const marker=retained.seedDoc.getMap('domain-effects').get(effectId);
+   if(marker?.version!==3||!equal(Array.from(domain('seed-marker',marker)),
+    Array.from(domain('seed-marker',doc.getMap('domain-effects').get(effectId)))))throw Error('INVALID_SEED_PROOF');
+   selectedSeedEffects.set(effectId,{seedId:marker.seedId,policies,incomplete:true,sourceDependencies:[]});
+  }
+ }
+ const projected=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:selectedSource?.bytes??doc.export({mode:'snapshot'}),seedId,peerId,includeLocalMapping:true,schemaVersion:version===4?4:1,omittedRecipeIds,childRecipeIngredients}),verify=createSourceVerifier({runtime,service,context,allowIncomplete:version>=3,selectedDocument:selectedSource&&runtime.recipeId!==null?doc:null,selectedSeedEffects}),policies=new Map(),entries=[];
  for(const mapping of projected.localMapping){const proof=await verify(mapping.oldEffectId);entries.push({effectId:mapping.effectId,policyHashes:[...proof.policies],...(version>=3?{incomplete:!!proof.incomplete}:{})});for(const id of proof.policies){let record=await service.validateStored(id,context);while(record){if(policies.has(record.policyHash))break;policies.set(record.policyHash,record);record=record.policy.predecessor?await service.validateStored(record.policy.predecessor,context):null}}}
  entries.sort((a,b)=>cmp(a.effectId,b.effectId));const {localMapping,...seed}=projected;const bundle={version,scopeId:runtime.scope.scopeId,sourceHead:runtime.scope.branchHead,sourceDocumentId:runtime.scope.documentId,sourceRevision:revision,seedId,peerId,snapshotHash:await hash(provider,'seed-snapshot',Array.from(seed.snapshot)),entries,policies:[...policies.values()].sort((a,b)=>cmp(a.policyHash,b.policyHash))};return {seed,bundle,bundleHash:await hash(provider,'projection-policy-bundle',bundle)};
 }

@@ -623,10 +623,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
           if(!sameRecord(selectedSource.expectedAuthority,input.expectedAuthority) ||
             !this.matchesRecipeCatalog(selectedSource.binding,input.expectedAuthority)) conflict();
           const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(input.manifest.bytes));
-          if(selectedSource.catalogRevision!==manifest.catalog.sourceRevision ||
+          if(selectedSource.catalogRevision+(selectedSource.members?.length??0)!==manifest.catalog.sourceRevision ||
             selectedSource.binding.sourceDocumentId!==manifest.entries[0].sourceDocumentId ||
             (selectedSource.root?.revision??null)!==manifest.entries[0].sourceRevision ||
-            manifest.entries.slice(1).some((entry:any)=>!selectedSource!.entries.some(source=>
+            manifest.entries.slice(1).some((entry:any)=>![...selectedSource!.entries,...(selectedSource!.members??[])].some(source=>
               source.recipeId===entry.recipeId&&source.documentId===entry.sourceDocumentId&&source.revision===entry.sourceRevision))) conflict();
           await this.requireSelectedHouseholdSources(tx,selectedSource);
         }
@@ -1143,7 +1143,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     return {source,entries,catalogRevision:target ? null : slots.length};
   }
   private async requireSelectedHouseholdSources(tx:Tx,observation:SelectedHouseholdSources) {
-    const {binding,expectedAuthority,catalogRevision,root,entries}=observation;
+    const {binding,expectedAuthority,catalogRevision,root,entries,members}=observation;
     await this.requireAuthority(tx,expectedAuthority);
     const current=await this.selectedRecipeCatalog(tx,expectedAuthority,binding,undefined,MAX_SELECTED_CHILDREN);
     const observedRoot=current.source && {...current.source,documentId:binding.sourceDocumentId};
@@ -1151,6 +1151,19 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const currentEntries = current.entries.sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0);
     if(current.catalogRevision!==catalogRevision || !sameRecord(observedRoot,root) ||
       !sameRecord(currentEntries,comparedEntries)) conflict();
+    const installed=await tx.get(key('projection-document-set',binding.scopeId,binding.branchHead));
+    if (!!installed!==!!members) conflict();
+    if(members){
+      const catalog=[...installed.catalog].sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0);
+      const observed=[...members].sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0);
+      if(catalog.length!==observed.length)conflict();
+      for(const [index,member] of observed.entries()){
+        if(!sameRecord(catalog[index],{recipeId:member.recipeId,documentId:member.documentId}) ||
+          entries.some(entry=>entry.recipeId===member.recipeId||entry.documentId===member.documentId))conflict();
+        const stored=await this.checkoutDocument(tx,binding.scopeId,{head:binding.branchHead,documentId:member.documentId});
+        if(!sameRecord(stored,{bytes:member.bytes,revision:member.revision}))conflict();
+      }
+    }
   }
   /** Use the same check in a publication write transaction to fence projection
    * against both source revisions and catalog insertion. */
@@ -1158,7 +1171,8 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     observation=snapshot(observation);
     if(!observation?.expectedAuthority?.scope || !this.matchesRecipeCatalog(observation.binding,observation.expectedAuthority) ||
       !denseArray(observation.entries,entry=>object(entry)&&validId(entry.recipeId)) ||
-      observation.entries.length>MAX_SELECTED_CHILDREN || observation.catalogRevision!==observation.entries.length) return fail('MALFORMED');
+      observation.entries.length+(observation.members?.length??0)>MAX_SELECTED_CHILDREN || observation.catalogRevision!==observation.entries.length ||
+      observation.members!==undefined&&!denseArray(observation.members,member=>object(member)&&validId(member.recipeId)&&validId(member.documentId)&&revision(member.revision)&&member.bytes instanceof Uint8Array)) return fail('MALFORMED');
     try{
       return await this.run(false,async tx=>{
         await this.requireSelectedHouseholdSources(tx,observation);

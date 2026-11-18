@@ -53,9 +53,9 @@ export class OfflineRuntime {
     const catalog=this.authority.installedSet?.recipeCatalog;
     if(recipeId===null||!catalog||!(await catalog(this,auth,recipeId)).children.has(recipeId))throw Error('INVALID_RECIPE_DOCUMENT');
   }
-  assertRecipeCommand(command) {
+  assertRecipeCommand(command,{replay=false}={}) {
     if(this.authority?.installedSet&&
-      ((command.kind==='recipe-create')!==!!this.recipeCreation))throw Error('UNSUPPORTED_VERSION');
+      (!replay&&(command.kind==='recipe-create')!==!!this.recipeCreation))throw Error('UNSUPPORTED_VERSION');
     if (this.#recipeId !== null && commandRecipeId(command) !== this.#recipeId) throw Error('INVALID_RECIPE_DOCUMENT');
   }
   async authorization() {

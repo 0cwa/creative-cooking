@@ -1485,6 +1485,49 @@ test('selected recipe shopping copies and current-only admission survive durable
   const newMemberEdits=planRecipeAction({doc:document.doc,before:added,after:edited,actionId:editId,author:a.deviceId,at});
   await sponsor.householdContent.execute(editId,newMemberEdits,added.id);
   const [editBytes]=must(await a.storage.getLocalOperation(scope.id,editId)).commit.outbound.map(x=>x.object.bytes);
+  // An installed admission contains signed seed members as well as recipes
+  // created later under the selected head. Both must be captured after reopen.
+  const previousVerify=a.provider.verify;
+  a.provider.verify=(ref,data,signature)=>ref===sodium.to_hex(newcomerSign.publicKey)
+   ?sodium.crypto_sign_verify_detached(signature,data,newcomerSign.publicKey):previousVerify(ref,data,signature);
+  const nextRecipient=sodium.crypto_sign_keypair(),nextWrap=sodium.crypto_box_keypair();
+  t.after(()=>{nextRecipient.privateKey.fill(0);nextWrap.privateKey.fill(0);});
+  const nextEvent={...event,parentHead:eventHash,generation:2,epochId:event.subject.newEpochId,
+   proposalId:'next-set-invite',frozenAdultRoster:['adult','newcomer'],subject:{adultId:'third',devices:[{
+    deviceId:'third-device',peerId:'4',signingKeyRef:sodium.to_hex(nextRecipient.publicKey),
+    wrappingKeyRef:sodium.to_hex(nextWrap.publicKey)}],documentId:'next-cooking',newGeneration:3,newEpochId:'next-epoch'}};
+  const nextHash=await selectedSourceHash(a.provider,'event',nextEvent);
+  const nextApprovalBase={version:1,householdId:scope.id,eventHash:nextHash,parentHead:eventHash,
+   policyHash:a.root.policyHash,generation:2,epochId:event.subject.newEpochId};
+  const nextSigners=[{adultId:'adult',deviceId:a.deviceId},{adultId:'newcomer',deviceId:newcomerContext.recipientDeviceId}];
+  const nextItem={event:nextEvent,authorSignature:await signAdmission('event-signature',nextEvent),
+   approvals:nextSigners.map((signer,index)=>{const approval={...nextApprovalBase,...signer};return {...approval,
+    signature:sodium.to_hex(sodium.crypto_sign_detached(domain('approval-signature',approval),
+     index?newcomerSign.privateKey:a.signingTestKey.privateKey))};})};
+  const observedInstalled=await observeSelectedSourceSet(sponsor.runtime);
+  assert.equal(observedInstalled.signed.manifest.version,2);
+  assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===recipeId&&child.creationEffectId===null));
+  assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===added.id&&child.creationEffectId!==null));
+  const allocations=new Map();
+  const allocateNext=documentId=>{if(!allocations.has(documentId)){const n=allocations.size+1;
+   allocations.set(documentId,{seedId:`33333333-3333-4333-8333-${String(n).padStart(12,'0')}`,peerId:String(1000+n)});}
+   return allocations.get(documentId);};
+  const nextProjection=await prepareCurrentDocumentSet({runtime:sponsor.runtime,service:sponsor.service,item:nextItem,allocateSeed:allocateNext});
+  assert.ok(nextProjection.manifest.entries.some(entry=>entry.recipeId===recipeId));
+  assert.ok(nextProjection.manifest.entries.some(entry=>entry.recipeId===added.id));
+  const staleGuard=structuredClone(observedInstalled.guard);
+  staleGuard.members[0].revision++;
+  assert.equal((await a.storage.checkSelectedHouseholdSources(staleGuard)).error.code,'CONFLICT');
+  const tamperedObservation=structuredClone(observedInstalled.signed);
+  tamperedObservation.manifest.children[0].checkpointHash='0'.repeat(64);
+  await assert.rejects(()=>verifySelectedSourceSet({storage:a.storage,scope,pin:a.root.head,
+   provider:a.provider,signed:tamperedObservation}),/INVALID_SOURCE_SIGNATURE/);
+  const raceDoc=await sponsor.householdContent.readRecipe(added.id);
+  const raceCommands=planRecipeAction({doc:raceDoc.doc,before:edited,after:{...edited,title:'Revision race'},
+   actionId:'projection-source-race',author:a.deviceId,at});
+  await sponsor.householdContent.execute('projection-source-race',raceCommands,added.id);
+  assert.equal((await a.storage.checkSelectedHouseholdSources(observedInstalled.guard)).error.code,'CONFLICT');
+  a.provider.verify=previousVerify;
   const beforeReceive=freshRows();
   await assert.rejects(()=>newcomer.files.receive(editBytes),/RECIPE_CREATION_REQUIRED/);
   const tampered=mutate=>{
@@ -1605,6 +1648,20 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(await inspectKey(existingCatalog,keySlotFor(b.rows(),beforeImport)),newKey);
   assert.equal(distinctKeys.has(newKey),false);
   assert.equal((await existing.files.receive(bytes)).replayed,true);
+  a.provider.verify=(ref,data,signature)=>ref===sodium.to_hex(newcomerSign.publicKey)
+   ?sodium.crypto_sign_verify_detached(signature,data,newcomerSign.publicKey):previousVerify(ref,data,signature);
+  const inherited=await sponsor.householdContent.readRecipe(recipeId);
+  const liveInherited=projectCooking(inherited.doc).recipes.find(row=>row.id===recipeId);
+  const removal=planRecipeAction({doc:inherited.doc,before:liveInherited,after:null,
+   actionId:'remove-inherited-for-next-set',author:a.deviceId,at});
+  await sponsor.householdContent.execute('remove-inherited-for-next-set',removal,recipeId);
+  const redacted=await prepareCurrentDocumentSet({runtime:sponsor.runtime,service:sponsor.service,item:nextItem,allocateSeed:allocateNext});
+  assert.equal(redacted.manifest.entries.some(entry=>entry.recipeId===recipeId),false);
+  assert.ok(redacted.manifest.catalog.removed.length>0);
+  assert.ok(redacted.manifest.entries.some(entry=>entry.recipeId===added.id));
+  const redactedRoot=new LoroDoc();redactedRoot.import(redacted.documents[0].seed.snapshot);
+  assert.equal(projectCooking(redactedRoot).shopping.items.some(item=>item.recipeId===recipeId),false);
+  a.provider.verify=previousVerify;
   const expectedAuthority=await sponsor.runtime.authorize();
   assert.deepEqual(await a.storage.compromise.quarantine(scope.id,b.deviceId,{expectedAuthority,localDeviceId:a.deviceId}),
    {quarantined:true});

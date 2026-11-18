@@ -84,7 +84,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
   let payload;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(opened.value));}catch{throw Error('MALFORMED_UPDATE');}
   if(!payload || Object.keys(payload).sort().join(',')!=='command,update,version' || payload.version!==1 || (!dense(payload.update) || !payload.update.every(x=>Number.isInteger(x)&&x>=0&&x<=255))) throw Error('MALFORMED_UPDATE');
   const command=validate(payload.command),update=Uint8Array.from(payload.update),meta=runtime.inspectUpdate(update);
-  runtime.assertRecipeCommand(command);
+  runtime.assertRecipeCommand(command,{replay:true});
   if(command.data.author!==undefined && command.data.author!==h.authorDevice) throw Error('INVALID_AUTHORITY');
   if(command.effectId!==h.semanticEffectIds[0] || meta.peer!==scope.authorPeers[h.authorDevice] || !same(meta.predecessors,h.predecessorRefs)) throw Error('MALFORMED_UPDATE');
   let prior;try{prior=original.forkAt(meta.frontiers);}catch{throw Error('INSUFFICIENT_EVIDENCE');}

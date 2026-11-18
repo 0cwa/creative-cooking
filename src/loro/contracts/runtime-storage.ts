@@ -24,6 +24,7 @@ export type SelectedHouseholdSources = {
   catalogRevision:number;
   root:SelectedSourceDocument|null;
   entries:SelectedRecipeSource[];
+  members?: (SelectedSourceDocument & {recipeId:Id})[];
 };
 
 export type RecipePublication = {
