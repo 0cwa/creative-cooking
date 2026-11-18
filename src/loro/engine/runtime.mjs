@@ -132,9 +132,11 @@ export class OfflineRuntime {
     return {peer:[...ends.keys()][0],frontiers:meta.startFrontiers,predecessors:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort()};
   }
   async importItem(item) {
+    item=structuredClone(item);
+    if(!(item?.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
     const {expectedAuthority,signingKeyRefs}=await this.authorization();
-    const applied=required(await this.storage.getInboxApplication(this.scope.scopeId,item.itemId));
-    if (applied) return {replayed:true};
+    const applied=required(await this.storage.getInboxApplication(this.scope.scopeId,item.itemId,item.bytes));
+    if (applied) return {outcome:applied.outcome,replayed:true};
     const opened=await this.codec.openContent(item.bytes,signingKeyRefs), h=opened.header, s=this.scope;
     if(h.version!==1)throw Error('PROVENANCE_HANDLER_REQUIRED');
     if (!this.storage.compromise) throw Error('QUARANTINE_UNAVAILABLE');
@@ -162,7 +164,7 @@ export class OfflineRuntime {
     registry.checkShoppingCompatibility(doc,command);if(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h.version!==4)throw Error('UNSUPPORTED_VERSION');
     const status=doc.import(update);
     if (status.pending && status.pending.size) throw new Error('MISSING_DEPENDENCY');
-    return required(await this.storage.commitImport({version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds}));
+    return required(await this.storage.commitImport({version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds},{authorDevice:h.authorDevice,bytes:item.bytes}));
   }
   async recoverInbox() {
     const items=required(await this.storage.listStagedInbox(this.scope.scopeId));

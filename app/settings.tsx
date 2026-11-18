@@ -4,6 +4,7 @@ import { HouseholdDelegation } from '@/loro/app/HouseholdDelegation';
 import { HouseholdApproval } from '@/loro/app/HouseholdApproval';
 import { HouseholdAdmissionRule } from '@/loro/app/HouseholdAdmissionRule';
 import { CookingDirect } from '@/loro/app/CookingDirect';
+import { HouseholdLocalTrust } from '@/loro/app/HouseholdLocalTrust';
 import { CookingExchange } from '@/loro/app/CookingExchange';
 import { HouseholdInvitation } from '@/loro/app/HouseholdInvitation';
 import { HouseholdIdentity } from '@/loro/app/HouseholdIdentity';
@@ -69,6 +70,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ focus?: string }>();
   const app = useAppState();
+  const [quarantineChanged, setQuarantineChanged] = useState(0);
   const [allergyInput, setAllergyInput] = useState('');
   const [deviceTimeContext, setDeviceTimeContext] = useState<string | null>(null);
   const [browserDictationSupport, setBrowserDictationSupport] = useState<ReturnType<typeof getOnDeviceDictationSupport> | null>(null);
@@ -549,8 +551,9 @@ export default function SettingsScreen() {
             <HouseholdDelegation />
             <HouseholdGrantReview />
             <HouseholdExistingDevice />
+            <HouseholdLocalTrust onQuarantine={() => setQuarantineChanged(changed => changed + 1)} />
             <CookingDirect />
-            <CookingExchange />
+            <CookingExchange quarantineChanged={quarantineChanged} />
             {Platform.OS === 'web' && <DisclosureControls items={app.pantry} />}
           </>}
           {Platform.OS === 'web' && <Pressable accessibilityRole="button" accessibilityLabel={app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'} style={styles.smallButton} onPress={() => { void (async () => { let release: (() => void) | undefined; try { release=app.beginWorkspaceTransition(); if (app.localPersistenceStatus !== 'saved') throw new Error('Finish or retry local saving before switching.'); await app.flushCurrentWorkspace(); if (app.storageMode === 'fresh-local') globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy'); else { const name=globalThis.localStorage.getItem('creative-cooking-local-workspace-v1'); if(name)globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);else { globalThis.localStorage.removeItem('creative-cooking-legacy-preference-v1'); globalThis.localStorage.removeItem('creative-cooking-storage-choice-v1'); } } globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/$/,'')}/`); } catch(e) { release?.(); Alert.alert('Could not switch workspace',e instanceof Error?e.message:'Unknown error'); } })(); }}><Text style={styles.smallButtonText}>{app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'}</Text></Pressable>}

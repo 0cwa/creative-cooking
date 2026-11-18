@@ -16,11 +16,18 @@ export function cookingFiles({runtime,service}){
   const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
   validateCookingHeader(opened,expectedId??opened.object.id,runtime.scope);
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
-  return {object:opened.object,expectedAuthority:auth.expectedAuthority};
+  return {...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority};
  }
- async function verify(bytes,expectedId,expectedAuthor){return (await verifyUnderAuthority(bytes,expectedId,expectedAuthor)).object;}
  const applyStaged=item=>importCookingWithPolicy({runtime,service,item});
- async function receive(raw){if(!(raw instanceof Uint8Array))throw Error('MALFORMED');if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');const bytes=new Uint8Array(raw),{object:{id},expectedAuthority}=await verifyUnderAuthority(bytes),source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId)),expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id},expectedAuthority));return applyStaged({itemId:id,bytes});}
+ async function receive(raw){
+  if(!(raw instanceof Uint8Array))throw Error('MALFORMED');
+  if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');
+  const bytes=new Uint8Array(raw),{id,expectedAuthority,authorDevice}=await verifyUnderAuthority(bytes);
+  const source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId));
+  const expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;
+  must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id},expectedAuthority,authorDevice));
+  return applyStaged({itemId:id,bytes});
+ }
  async function pending(){
   await runtime.authorize();
   const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]);
@@ -29,7 +36,9 @@ export function cookingFiles({runtime,service}){
   for(const item of must(items)){
    if(!sources.has(item.itemId))continue;
    const {header}=JSON.parse(decode.decode(item.bytes));
-   if(onBranch(header)&&!must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))pending.push({itemId:item.itemId,reason:reasons.get(item.itemId)??null});
+   if(!onBranch(header)||must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))continue;
+   const quarantined=await runtime.storage.compromise.isQuarantined(scopeId,header.authorDevice);
+   pending.push({itemId:item.itemId,reason:quarantined?'QUARANTINED':reasons.get(item.itemId)??null});
   }
   return pending;
  }
@@ -48,5 +57,5 @@ export function cookingFiles({runtime,service}){
   pending.sort((a,b)=>a.attempts-b.attempts||a.sequence-b.sequence);
   return {objects:pending.slice(0,limit),more:pending.length>limit};
  }
- return {list,download,receive,pending,retry,verify,applyStaged,directBatch};
+ return {list,download,receive,pending,retry,verify:verifyUnderAuthority,applyStaged,directBatch};
 }

@@ -1,3 +1,4 @@
+import {readLocalQuarantine} from '../compromise/review.mjs';
 import {readContinuityHead} from './continuity-head.ts';
 import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
@@ -44,6 +45,7 @@ const validateRecord = (k: string, v: any) => {
   const namespace = JSON.parse(k)[0];
   let valid = false;
   switch (namespace) {
+    case 'compromise-quarantine': valid=typeof v==='boolean'; break;
     case 'disclosure-pending': valid=fields(v,['reason','objectId']) && v.reason==='POLICY_GOVERNANCE_UNPROVEN' && typeof v.objectId==='string' && !!v.objectId; break;
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
     case 'policy-checkout-parent': valid=validBranchDocument(v); break;
@@ -174,8 +176,18 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     let c:ImportCommit;try{const parsed=JSON.parse(old.inputKey);if(!Array.isArray(parsed)||parsed[0]!=='import'||parsed.length!==2)return corrupt();c=parsed[1];for(const d of c.documents)d.bytes=decodeKeyBytes(d.bytes);if(c.version===2&&Array.isArray(c.commands))for(const command of c.commands)command.payload=decodeKeyBytes(command.payload)}catch{return corrupt()}
     if(!Object.hasOwn(c,'expectedAuthority')||c.version!==2||!Object.hasOwn(c,'commands'))throw new StorageFailure('UNSUPPORTED_VERSION');const checked=storageOperationKey(c,'import');if(!checked.ok||checked.value!==old.inputKey||c.scopeId!==scopeId||c.itemId!==itemId||c.operationId!==op)return corrupt();validateOutcome(old.outcome,c.documents);try{await this.completedImport(tx,c,old.inputKey)}catch(e){if(e instanceof StorageFailure&&e.code==='CONFLICT')return corrupt();throw e}return {commit:snapshot(c),outcome:snapshot(old.outcome)};
   }
-  async getInboxApplication(scopeId:string,itemId:string):Promise<Result<{operationId:string;outcome:SavedOutcome}|null,StorageError>> {
-    if(![scopeId,itemId].every(validId))return {ok:false,error:'MALFORMED'};try{return await this.run(false,async tx=>{const found=await this.importedOperation(tx,scopeId,itemId);return {ok:true as const,value:found?{operationId:found.commit.operationId,outcome:found.outcome}:null}})}catch(e){return {ok:false,error:mapError(e)}}
+  async getInboxApplication(scopeId:string,itemId:string,bytes?:Uint8Array):Promise<Result<{operationId:string;outcome:SavedOutcome}|null,StorageError>> {
+    if (![scopeId,itemId].every(validId) || (bytes !== undefined && !(bytes instanceof Uint8Array))) {
+      return {ok:false,error:'MALFORMED'};
+    }
+    try {
+      return await this.run(false,async tx=>{
+        const found = await this.importedOperation(tx,scopeId,itemId);
+        if (!found) return {ok:true,value:null};
+        if (bytes !== undefined && !sameBytes((await tx.get(key('inbox',scopeId,itemId))).bytes,bytes)) conflict();
+        return {ok:true,value:{operationId:found.commit.operationId,outcome:found.outcome}};
+      });
+    } catch(e) { return {ok:false,error:mapError(e)}; }
   }
   async getDisclosureImport(scopeId:string,itemId:string) {
     if(![scopeId,itemId].every(validId))return fail('MALFORMED');try{return await this.run(false,async tx=>{const found=await this.importedOperation(tx,scopeId,itemId);if(!found)return {ok:true as const,value:null};if(found.commit.commands.length!==1)return corrupt();const source=await this.validatedDisclosureSource(tx,scopeId,found.commit.commands[0].effectId);if(!source||source.origin!=='import'||source.objectId!==itemId)return corrupt();return {ok:true as const,value:{...found,source:snapshot(source)}}})}catch(e){return fail(mapError(e))}
@@ -372,6 +384,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       for(const [k,v] of [[guard,checked.value],[packet,checked.value],[outbox,checked.value],[op,{inputKey:checked.value,release:r}],[transition,binding],[authorityKey,next]] as const){await tx.put(k,v);this.fault?.('personal-admission-release');}return {ok:true,value:{release:snapshot(r),replayed:false}};
     });}catch(e){return fail(mapError(e))}
   }
+  private async requireIncomingAuthor(tx: Tx, scopeId: string, authorDevice: string) {
+    if (!validId(authorDevice)) throw new StorageFailure('MALFORMED');
+    if (await readLocalQuarantine(tx,scopeId,authorDevice)) throw new StorageFailure('QUARANTINED');
+  }
   private async requireAuthority(tx: Tx, condition: LocalCommit['expectedAuthority']) {
     const {scope,record}=condition; const current=await tx.get(key('pairing-authority',scope.kind,scope.id));
     if (current && (current.scope.kind!==scope.kind || current.scope.id!==scope.id)) corrupt();
@@ -443,9 +459,9 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     return outcome;
   }
   async listDisclosurePending(scopeId:string) { try{return await this.run(false,async tx=>{const result:any[]=[];for(const raw of await tx.keys()){let k:any;try{k=JSON.parse(raw)}catch{continue}if(Array.isArray(k)&&k.length===3&&k[0]==='disclosure-pending'&&k[1]===scopeId){const v=await tx.get(raw);if(v.objectId!==k[2]||!await tx.get(key('inbox',scopeId,k[2])))corrupt();if(await tx.get(key('applied',scopeId,k[2]))===undefined)result.push(snapshot(v))}}return {ok:true as const,value:result}})}catch(e){return fail(mapError(e))} }
-  async markDisclosurePending(expectedAuthority:LocalCommit['expectedAuthority'],objectId:string,bytes:Uint8Array) {
+  async markDisclosurePending(expectedAuthority:LocalCommit['expectedAuthority'],objectId:string,bytes:Uint8Array,authorDevice:string) {
     if(!expectedAuthority||!validId(objectId)||!(bytes instanceof Uint8Array))return fail('MALFORMED');expectedAuthority=snapshot(expectedAuthority);bytes=copy(bytes);
-    try{return await this.run(true,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id,inbox=await tx.get(key('inbox',scope,objectId));if(expectedAuthority.scope.kind!=='household'||!inbox||!sameBytes(inbox.bytes,bytes)||await tx.get(key('applied',scope,objectId))!==undefined)conflict();await tx.put(key('disclosure-pending',scope,objectId),{objectId,reason:'POLICY_GOVERNANCE_UNPROVEN'});return {ok:true as const,value:undefined}})}catch(e){return fail(mapError(e))}
+    try{return await this.run(true,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id,inbox=await tx.get(key('inbox',scope,objectId));if(expectedAuthority.scope.kind!=='household'||!inbox||!sameBytes(inbox.bytes,bytes)||await tx.get(key('applied',scope,objectId))!==undefined)conflict();await this.requireIncomingAuthor(tx,scope,authorDevice);await tx.put(key('disclosure-pending',scope,objectId),{objectId,reason:'POLICY_GOVERNANCE_UNPROVEN'});return {ok:true as const,value:undefined}})}catch(e){return fail(mapError(e))}
   }
   async readDisclosureReview(scopeId:string,id:string) {try{return await this.run(false,async tx=>({ok:true as const,value:snapshot((await tx.get(key('disclosure-review',scopeId,id)))??null)}))}catch(e){return {ok:false as const,error:mapError(e)}}}
   async saveDisclosureReview(input:any) {
@@ -635,7 +651,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {
     try { return await this.run(false,async tx => { const d = await tx.get(key('document',scopeId,documentId)); return {ok:true,value:d === undefined ? null : {documentId,bytes:copy(d.bytes),revision:d.revision}}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
   }
-  async stageInbox(item: InboxItem, expectedAuthority?:AuthorityExpectation): Promise<Result<void,StorageError>> {
+  async stageInbox(item: InboxItem, expectedAuthority?:AuthorityExpectation, authorDevice?:string): Promise<Result<void,StorageError>> {
     const valid = validateInboxItem(item); if (!valid.ok) return valid; item = snapshot(item);
     if(expectedAuthority!==undefined&&(!validPairingScope(expectedAuthority?.scope)||expectedAuthority.scope.id!==item.scopeId||!expectedAuthority.record))return {ok:false,error:'MALFORMED'};
     expectedAuthority=snapshot(expectedAuthority);
@@ -643,6 +659,13 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(expectedAuthority)await this.requireAuthority(tx,expectedAuthority);
       const cursorKey = key('cursor',item.scopeId,item.source), itemKey = key('inbox',item.scopeId,item.object.id);
       const cursor = await tx.get(cursorKey), old = await tx.get(itemKey);
+      if (authorDevice !== undefined) {
+        // A completed duplicate can be reported without rewriting the cursor.
+        if (old && sameBytes(old.bytes,item.object.bytes) && await this.importedOperation(tx,item.scopeId,item.object.id)) {
+          return {ok:true,value:undefined};
+        }
+        await this.requireIncomingAuthor(tx,item.scopeId,authorDevice);
+      }
       if ((cursor === undefined ? null : cursor) !== item.expectedCursor || (old !== undefined && !sameBytes(old.bytes,item.object.bytes))) conflict();
       if (old === undefined) await tx.put(itemKey,{bytes:copy(item.object.bytes)});
       this.fault?.('inbox'); await tx.put(cursorKey,item.cursor); this.fault?.('cursor');
@@ -653,17 +676,20 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const k=storageOperationKey(c,'import');if(!k.ok)return fail(k.error);c=snapshot(c);header=snapshot(header);verified=snapshot(verified);if(!verified||verified.objectId!==c.itemId||!(verified.bytes instanceof Uint8Array)||c.commands.length!==1||(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(c.commands[0].kind)&&header?.version!==4)||!['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction'].includes(c.commands[0].kind)||c.expectedAuthority.scope.kind!=='household'||!object(header)||![2,3,4].includes(header.version)||(header.version===3&&header.disclosureIncomplete!==true||header.version===4&&typeof header.disclosureIncomplete!=='boolean')||!(validId(header.disclosurePolicyHash)||((header.version===3||header.version===4&&header.disclosureIncomplete)&&header.disclosurePolicyHash===null))||!(expectedActiveHash===null||validId(expectedActiveHash))||!denseArray(header.disclosurePolicyHashes,validId)||!denseArray(header.sourceEffectIds,validId))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{const scope=c.scopeId,head=c.expectedAuthority.record?.acceptedParent,command=c.commands[0],inbox=await tx.get(key('inbox',scope,c.itemId));if(!inbox||!sameBytes(inbox.bytes,verified.bytes))conflict();let staged:any;try{staged=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(inbox.bytes))}catch{conflict()}if(JSON.stringify(staged.header)!==JSON.stringify(header))conflict();if(header.scopeId!==scope||header.documentId!==command.documentId||header.branchHead!==head||JSON.stringify(header.semanticEffectIds)!==JSON.stringify([command.effectId])||JSON.stringify(header.sourceEffectIds)!==JSON.stringify([...command.dependencyEffectIds].sort()))conflict();
       const op=key('import',scope,c.operationId),old=await tx.get(op);if(old){if(old.inputKey!==k.value||!old.outcome)conflict();await this.completedImport(tx,c,k.value);const prior=await this.validatedDisclosureSource(tx,scope,command.effectId);if(!prior||prior.commandId!==command.commandId||prior.objectId!==verified.objectId||!sameBytes(prior.envelope,verified.bytes)||JSON.stringify(prior.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();validateOutcome(old.outcome,c.documents);return {ok:true as const,value:{outcome:old.outcome,replayed:true}}}
-      await this.requireAuthority(tx,c.expectedAuthority);if(await tx.get(key('applied',scope,c.itemId))!==undefined)conflict();if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if((header.version===2||header.version===4&&!header.disclosureIncomplete)&&expectedActiveHash!==header.disclosurePolicyHash)conflict();if(expectedActiveHash!==null){const activePolicy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!activePolicy||activePolicy.policyHash!==expectedActiveHash||activePolicy.policy?.scope?.id!==scope||((header.version===2||header.version===4&&!header.disclosureIncomplete)&&activePolicy.policy?.checkpoint!==head))conflict()}
+      await this.requireAuthority(tx,c.expectedAuthority);await this.requireIncomingAuthor(tx,scope,header.authorDevice);if(await tx.get(key('applied',scope,c.itemId))!==undefined)conflict();if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if((header.version===2||header.version===4&&!header.disclosureIncomplete)&&expectedActiveHash!==header.disclosurePolicyHash)conflict();if(expectedActiveHash!==null){const activePolicy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!activePolicy||activePolicy.policyHash!==expectedActiveHash||activePolicy.policy?.scope?.id!==scope||((header.version===2||header.version===4&&!header.disclosureIncomplete)&&activePolicy.policy?.checkpoint!==head))conflict()}
       const policies=new Set<string>(header.disclosurePolicyHash===null?[]:[header.disclosurePolicyHash]);let incomplete=header.disclosurePolicyHash===null;for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,command.documentId,dep);incomplete||=parent.incomplete===true;for(const h of parent.policyHashes)policies.add(h)}if(incomplete&&!(header.version===3||header.version===4&&header.disclosureIncomplete===true))conflict();const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,envelope:inbox.bytes,origin:'import',objectId:c.itemId,...(header.version===3||header.version===4&&header.disclosureIncomplete===true?{incomplete:true}:{})};if(JSON.stringify(source.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();
       if(await tx.get(key('command',scope,command.commandId))!==undefined||await tx.get(key('effect',scope,command.effectId))!==undefined)conflict();await this.requireUnusedProjectionIdentity(tx,scope,command);await this.requireDependencies(tx,scope,c.commands);const outcome=await this.documents(tx,scope,c.documents,head??null);this.fault?.('import-documents');await tx.put(key('command',scope,command.commandId),k.value);await tx.put(key('effect',scope,command.effectId),k.value);await tx.put(key('disclosure-source',scope,command.effectId),source);await tx.put(key('applied',scope,c.itemId),c.operationId);await tx.put(op,{inputKey:k.value,outcome});this.fault?.('import');return {ok:true as const,value:{outcome,replayed:false}}})}catch(e){return fail(mapError(e))}
   }
-  async commitImport(c: ImportCommit): Promise<CommitResult> {
-    const k = storageOperationKey(c,'import'); if (!k.ok) return fail(k.error); if(c.commands.some(x=>['shopping-item-create','shopping-item-field','shopping-list-field'].includes(x.kind)))return fail('MALFORMED'); c = snapshot(c);
+  async commitImport(c: ImportCommit, incoming?:{authorDevice:string;bytes:Uint8Array}): Promise<CommitResult> {
+    const k = storageOperationKey(c,'import'); if (!k.ok) return fail(k.error); if(c.commands.some(x=>['shopping-item-create','shopping-item-field','shopping-list-field'].includes(x.kind)))return fail('MALFORMED'); c = snapshot(c); incoming = snapshot(incoming);
     try { return await this.run(true,async tx => {
+      const inbox = await tx.get(key('inbox',c.scopeId,c.itemId));
+      if (incoming && (!inbox || !sameBytes(inbox.bytes,incoming.bytes))) conflict();
       const op = key('import',c.scopeId,c.operationId), old = await tx.get(op);
       if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome) conflict(); await this.completedImport(tx,c,k.value); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
       await this.requireAuthority(tx,c.expectedAuthority);
-      if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
+      if (incoming) await this.requireIncomingAuthor(tx,c.scopeId,incoming.authorDevice);
+      if (inbox === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
       for (const command of c.commands) {
         if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined) conflict();
         await this.requireUnusedProjectionIdentity(tx,c.scopeId,command);

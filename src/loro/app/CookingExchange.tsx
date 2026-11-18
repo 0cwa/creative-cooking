@@ -1,4 +1,4 @@
-import {useContext,useState} from 'react';
+import {useContext,useEffect,useState} from 'react';
 import {Platform,Pressable,Text,View} from 'react-native';
 import {useAppState} from '@/state/AppState';
 import {MAX_OBJECT} from '../transport/adapter.mjs';
@@ -6,7 +6,7 @@ import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 
 /** Explicit foreground file exchange. A file handoff does not provide a peer receipt. */
-export function CookingExchange() {
+export function CookingExchange({quarantineChanged = 0}:{quarantineChanged?:number}) {
   const workspace = useContext(LoroWorkspaceValue), app = useAppState();
   const [open,setOpen] = useState(false), [rows,setRows] = useState<any[]>([]), [pending,setPending] = useState<any[]>([]);
   const [status,setStatus] = useState(''), [busy,setBusy] = useState(false);
@@ -17,10 +17,18 @@ export function CookingExchange() {
     setRows(outbound);
     setPending(inbox);
   }
+  useEffect(() => {
+    if (open) void refresh().catch(() => setStatus('Could not list updates.'));
+  }, [quarantineChanged]);
   function run(fn:()=>Promise<void>, failure:string) {
     setStatus('');
     setBusy(true);
-    void fn().catch(error => setStatus(`${failure}${error instanceof Error ? `: ${error.message}` : ''}.`))
+    void fn().catch(async error => {
+      if (error?.message === 'QUARANTINED') {
+        setStatus('Update blocked by local device quarantine. No update was applied.');
+        await refresh().catch(() => {});
+      } else setStatus(`${failure}${error instanceof Error ? `: ${error.message}` : ''}.`);
+    })
       .finally(() => setBusy(false));
   }
   async function exportUpdate(id:string) {
@@ -28,7 +36,7 @@ export function CookingExchange() {
     await saveExchangeFile('creative-cooking-update.bin','application/octet-stream',bytes);
     setStatus(web ? 'Encrypted update downloaded. This does not confirm that a peer received it.' : 'Encrypted update ready to share.');
   }
-  async function applyUpdate(apply:()=>Promise<{status:string}>) {
+  async function applyUpdate(apply:()=>Promise<{status?:string;replayed?:boolean}>) {
     const {selection,selectedHousehold} = workspace.householdPairing;
     const update = async () => {
       const release = app.beginWorkspaceTransition();
@@ -37,8 +45,16 @@ export function CookingExchange() {
         if (app.localPersistenceStatus === 'error') throw Error('Retry local saving before receiving an update');
         await app.flushCurrentWorkspace();
         const result = await apply();
+        if (result.replayed) {
+          let message = 'This exact update was already applied. No new changes were made.';
+          try { await app.refreshSharedCooking?.(); }
+          catch { message += ' Retry cooking refresh to update this view.'; }
+          setStatus(message);
+          return;
+        }
         if (result.status === 'pending') {
           setStatus('The encrypted update is retained, awaiting policy governance proof.');
+          await refresh().catch(() => {});
           return;
         }
         if (web) {
@@ -83,10 +99,11 @@ export function CookingExchange() {
         </Pressable>
       </View>)}
       {pending.map(item => <View key={item.itemId}>
-        <Text>Retained update awaiting application: {item.itemId}{item.reason === 'POLICY_GOVERNANCE_UNPROVEN' ? ' · policy governance proof required' : ' · retry after any missing earlier updates'}</Text>
-        <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(() => applyUpdate(() => workspace.cookingFiles.retry(item.itemId)),'Could not apply retained update')}>
+        <Text>{item.reason === 'QUARANTINED' ? `Retained update blocked by local device quarantine: ${item.itemId}` :
+          `Retained update awaiting application: ${item.itemId}${item.reason === 'POLICY_GOVERNANCE_UNPROVEN' ? ' · policy governance proof required' : ' · retry after any missing earlier updates'}`}</Text>
+        {item.reason !== 'QUARANTINED' && <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(() => applyUpdate(() => workspace.cookingFiles.retry(item.itemId)),'Could not apply retained update')}>
           <Text>Retry retained update {item.itemId}</Text>
-        </Pressable>
+        </Pressable>}
       </View>)}
       <Pressable accessibilityRole="button" disabled={busy} onPress={() => run(choose,'Update not applied')}><Text>Choose encrypted cooking update</Text></Pressable>
       {!!status && <Text accessibilityRole="alert">{status}</Text>}

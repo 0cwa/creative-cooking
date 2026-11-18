@@ -68,7 +68,8 @@ export function cookingDirect({
   const peers = acceptedRecipients.filter(id => id !== localId);
   async function devicePair(otherId) {
     await assertSelected();
-    if (!peers.includes(otherId) || await runtime.storage.compromise.isQuarantined(scopeId, otherId)) throw Error('UNAUTHORIZED_PEER');
+    if (!peers.includes(otherId)) throw Error('UNAUTHORIZED_PEER');
+    if (await runtime.storage.compromise.isQuarantined(scopeId, otherId)) throw Error('QUARANTINED');
     const {signingKeyRefs} = await runtime.authorization();
     const local = {deviceId:localId, signingKey:signingKeyRefs[localId]};
     const peer = {deviceId:otherId, signingKey:signingKeyRefs[otherId]};
@@ -163,7 +164,11 @@ export function cookingDirect({
       sign: claims => provider.sign(local.signingKey, directDomain('receipt', claims)),
       verify: (claims, bytes) => provider.verify(peer.signingKey, directDomain('receipt', claims), bytes)
     };
-    const inbox = id => inboxAdapter({storage:runtime.storage, reader:runtime.storage, verifyObject:bytes => cooking.verify(bytes, id, peer.deviceId), receiptProvider, scopeId, source:`direct:${id}`, recipientId:localId, trustHead:head});
+    const inbox = id => inboxAdapter({
+      storage:runtime.storage, reader:runtime.storage, verifyObject:bytes => cooking.verify(bytes, id, peer.deviceId),
+      stageInbox:(item, verified) => runtime.storage.stageInbox(item, verified.expectedAuthority, verified.authorDevice),
+      receiptProvider, scopeId, source:`direct:${id}`, recipientId:localId, trustHead:head
+    });
     const sendReceipt = ({claims, bytes}) => control('receipt', {claims, signature:hex(bytes)});
 
     async function receiveObject(object) {

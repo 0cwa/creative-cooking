@@ -9,6 +9,7 @@ const household = scope => validPairingScope(scope) && scope.kind === 'household
 const hash = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const selectionKey = '["native-household-selection"]';
 const markerKey = '["native-household-selection-required"]';
+const revisionKey = '["native-household-selection-revision"]';
 const enrollmentKey = id => JSON.stringify(['native-household-enrollment', id]);
 const pinKey = id => JSON.stringify(['pin', id]);
 const pinAad = id => enc.encode(`creative-cooking/household-pin/v1/${id}`);
@@ -26,8 +27,11 @@ function lockWorkspace(name, operation, use) {
 }
 
 async function writeSelection(tx, value) {
+  const revision=(await tx.get(revisionKey))??0;
+  if(!Number.isSafeInteger(revision)||revision<0||revision===Number.MAX_SAFE_INTEGER)throw Error('SELECTION_CORRUPT');
   await tx.put(selectionKey, value);
   await tx.put(markerKey, value === null ? 0 : 1);
+  await tx.put(revisionKey, revision+1);
 }
 function saveSelection(run, value) {
   return run(true, tx => writeSelection(tx, value));
@@ -150,7 +154,8 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
     async function readSelection() {
       const state = await workspaceRun(false, async tx => {
         const value = await tx.get(selectionKey), marker = await tx.get(markerKey);
-        if (value !== undefined || marker !== undefined) return {value, marker};
+        const revision=await tx.get(revisionKey);
+        if (value !== undefined || marker !== undefined) return {value, marker, revision};
         // An unreleased build stored its selection beside the pins. Surviving
         // receipts can reveal that layout even when the companion database is lost.
         for (const key of await tx.keys()) {
@@ -159,18 +164,18 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
             throw Error('LEGACY_HOUSEHOLD_SELECTION');
           }
         }
-        return null;
+        return {revision};
       });
-      if (!state) {
+      if (state.value === undefined && state.marker === undefined) {
         await run(false, async tx => {
           if (await tx.get('["selection"]') != null || await tx.get('["selection-required"]') != null) {
             throw Error('LEGACY_HOUSEHOLD_SELECTION');
           }
         });
-        return [undefined, undefined];
+        return [undefined, undefined, state.revision];
       }
-      if (state.value === null && state.marker === 0) return [undefined, undefined];
-      return [state.value, state.marker];
+      if (state.value === null && state.marker === 0) return [undefined, undefined, state.revision];
+      return [state.value, state.marker, state.revision];
     }
     const lockSelection = (_mode, use) => lockWorkspace(name, 'selection', use);
     const controls = selectedHousehold({

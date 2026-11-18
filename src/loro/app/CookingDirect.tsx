@@ -19,6 +19,7 @@ const messages:Record<string,string> = {
   SIGNAL_TOO_LARGE:'This connection message is too large.',
   INVALID_FILE_SIZE:'The connection message file is empty or too large.',
   DIRECT_HOUSEHOLD_MISMATCH:'The connection message is for a different household, device or invitation.',
+  QUARANTINED:'Direct exchange is blocked on this device for the selected peer.',
   UNAUTHORIZED_PEER:'This device is no longer authorized for direct exchange in the open household.',
   INVALID_AUTHORITY:'The household authority changed. Reopen the household to continue.',
   HOUSEHOLD_SELECTION_CHANGED:'The open household changed. Reopen the app to continue.',

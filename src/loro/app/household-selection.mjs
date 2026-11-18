@@ -9,15 +9,16 @@ const household = scope => validPairingScope(scope) && scope.kind === 'household
  * opening or selecting an installed household. */
 export function selectedHousehold({readStored, writeStored, lock, openJoined, master, pins, storage, provider, sodium, deviceId}) {
   async function read() {
-    const [raw, marker] = await readStored();
-    if (raw === undefined && marker === undefined) return null;
+    const [raw, marker, revision = 0] = await readStored();
+    if (!Number.isSafeInteger(revision) || revision < 0) throw Error('SELECTION_CORRUPT');
+    if (raw === undefined && marker === undefined) return {scope:null,revision};
     if (raw === undefined || marker !== 1) throw Error('SELECTION_CORRUPT');
     let value;
     try { value = JSON.parse(dec.decode(await master.unwrap('workspace-master', raw, aad))); }
     catch { throw Error('SELECTION_CORRUPT'); }
     if (!value || Object.keys(value).sort().join(',') !== 'scope,version' ||
       value.version !== 1 || !household(value.scope)) throw Error('SELECTION_CORRUPT');
-    return value.scope;
+    return {scope:value.scope,revision};
   }
   async function open(scope) {
     const pin = (await pins.list()).find(value => value?.scope?.id === scope.id);
@@ -30,13 +31,15 @@ export function selectedHousehold({readStored, writeStored, lock, openJoined, ma
     return {...joined, scope, pin:pin.pin};
   }
   async function assertCurrent(id) {
-    if (((await read())?.id ?? null) !== id) throw Error('HOUSEHOLD_SELECTION_CHANGED');
+    const {scope,revision} = await read();
+    if ((scope?.id ?? null) !== id) throw Error('HOUSEHOLD_SELECTION_CHANGED');
+    return revision;
   }
   return {
     assertCurrent,
-    withCurrent: (id, use) => lock('shared', async () => { await assertCurrent(id); return use(); }),
+    withCurrent: (id, use) => lock('shared', async () => use(await assertCurrent(id))),
     async openSelected() {
-      const scope = await read();
+      const {scope} = await read();
       return scope ? open(scope) : null;
     },
     async available(scope) {

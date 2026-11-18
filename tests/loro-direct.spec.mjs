@@ -361,3 +361,190 @@ test('admitted browser devices independently verify their direct connection, ret
     await profiles.close();
   }
 });
+
+async function scopeFingerprint(page, scopeId, includeQuarantine = true) {
+  return page.evaluate(async ({scopeId,includeQuarantine}) => {
+    const name = localStorage.getItem('creative-cooking-local-workspace-v1');
+    const db = await new Promise((resolve,reject) => {
+      const request = indexedDB.open(`${name}-records`);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const rows = await new Promise((resolve,reject) => {
+        const rows = [], request = db.transaction('records').objectStore('records').openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return resolve(rows);
+          const [kind,scope] = JSON.parse(cursor.key);
+          if (scope === scopeId && (includeQuarantine || kind !== 'compromise-quarantine')) rows.push([cursor.key,cursor.value]);
+          cursor.continue();
+        };
+        request.onerror = () => reject(request.error);
+      });
+      const data = JSON.stringify(rows,(_key,value) => value instanceof Uint8Array ? Array.from(value) : value);
+      return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(data))));
+    } finally { db.close(); }
+  }, {scopeId,includeQuarantine});
+}
+
+async function downloadCooking(page) {
+  await button(page,'Exchange encrypted cooking files').click();
+  const buttons = page.getByRole('button',{name:/^Download encrypted update /});
+  await expect(buttons.first()).toBeVisible();
+  const files = [];
+  for (const entry of await buttons.all()) {
+    const download = page.waitForEvent('download');
+    await entry.click();
+    const bytes = await readFile(await (await download).path());
+    files.push({bytes,id:(await entry.innerText()).split(' ').at(-1)});
+  }
+  return files;
+}
+
+async function uploadCooking(page, bytes) {
+  const chooser = page.waitForEvent('filechooser');
+  await button(page,'Choose encrypted cooking update').click();
+  await (await chooser).setFiles({name:'cooking.bin',mimeType:'application/octet-stream',buffer:bytes});
+}
+
+test('local quarantine survives reopen, preserves direct receipts and rejects new signed cooking', async ({browser,baseURL}) => {
+  test.setTimeout(120_000);
+  const contexts = await Promise.all([0,1].map(() => browser.newContext({baseURL,acceptDownloads:true})));
+  const [a,b] = await Promise.all(contexts.map(context => openPage(context,baseURL)));
+  try {
+    await Promise.all([prepare(a,baseURL,true),prepare(b,baseURL,false)]);
+    const organizer = JSON.parse(await text(a,'Public device identity')).deviceId;
+    const recipient = JSON.parse(await text(b,'Public device identity')).deviceId;
+    expect(organizer).not.toBe(recipient);
+    await admit(a,b,baseURL);
+    await add(a,'Already applied shallot');
+    await saved(a);
+    await button(a,'Open settings').click();
+    const [prior] = await downloadCooking(a);
+    await button(b,'Open settings').click();
+    await button(b,'Exchange encrypted cooking files').click();
+    const loaded = b.waitForEvent('load');
+    await uploadCooking(b,prior.bytes);
+    await loaded;
+    await b.goto(baseURL);
+    await visible(b,'Already applied shallot');
+
+    await button(b,'Open settings').click();
+    const scope = (await text(b,'Open household')).split(' · ')[1];
+    const review = () => button(b,`Review local quarantine for ${organizer}`);
+    const confirm = () => button(b,'Quarantine on this device');
+    await button(b,'Review household devices').click();
+    await expect(label(b,`Household device ${recipient}`)).toContainText('This device');
+    await expect(button(b,`Review local quarantine for ${recipient}`)).toHaveCount(0);
+    await review().click();
+    const otherTab = await openPage(contexts[1],baseURL);
+    await button(otherTab,'Open settings').click();
+    await button(otherTab,'Show device identity').click();
+    await button(otherTab,'Return to original local household').click();
+    await saved(otherTab);
+    await button(otherTab,'Open settings').click();
+    await button(otherTab,'Show device identity').click();
+    await button(otherTab,'Open this shared household').click();
+    await visible(otherTab,'Already applied shallot');
+    await otherTab.close();
+    const beforeStale = await scopeFingerprint(b,scope);
+    await confirm().click();
+    await visible(b,'Could not verify the current household devices. Refresh the list and review the device again.');
+    expect(await scopeFingerprint(b,scope)).toEqual(beforeStale);
+
+    await a.goBack();
+    await add(a,'Retained direct scallion');
+    await saved(a);
+    await button(a,'Open settings').click();
+    for (const page of [a,b]) await button(page,'Exchange cooking updates directly').click();
+    await button(a,'Create connection offer').click();
+    await button(b,'Answer a connection').click();
+    await label(b,'Direct connection offer').fill(await text(a,'Outgoing direct connection message'));
+    await button(b,'Verify offer and create answer').click();
+    await label(a,'Direct connection answer').fill(await text(b,'Outgoing direct connection message'));
+    await button(a,'Verify connection answer').click();
+    const comparison = await text(a,'Direct verification code');
+    expect(await text(b,'Direct verification code')).toBe(comparison);
+    for (const page of [a,b]) {
+      await label(page,'Independently compared direct verification code').fill(comparison);
+      await button(page,'Confirm compared code').click();
+    }
+    for (const page of [a,b]) await visible(page,'Direct connection verified on both devices.');
+
+    // Force an application failure after the authenticated direct object is retained.
+    await b.evaluate(() => {
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function(value,key) {
+        if (typeof key === 'string' && key.startsWith('["applied",')) {
+          IDBObjectStore.prototype.put = put;
+          throw Error('Injected application failure');
+        }
+        return put.call(this,value,key);
+      };
+    });
+    await button(a,'Send cooking updates').click();
+    await visible(a,'1 update still waiting for the other device to apply. You can retry this batch.');
+    await visible(a,'Peer receipts for this connection: 2 stored, 1 applied.');
+    await visible(b,'Received here: 1 applied, 1 retained without applying.');
+    expect(await durable(b,scope)).toEqual({inbox:2,applied:1,'receipt-state':0,receipt:0});
+    const snapshot = await scopeFingerprint(b,scope,false);
+    const acknowledged = await scopeFingerprint(a,scope);
+
+    await button(b,'Refresh household devices').click();
+    await review().click();
+    await confirm().click();
+    await visible(b,'Device quarantined on this device.');
+    await expect(label(b,`Household device ${organizer}`)).toContainText('Quarantined on this device');
+    expect(await scopeFingerprint(b,scope,false)).toEqual(snapshot);
+    await button(a,'Send cooking updates').click();
+    await visible(b,'Direct exchange is blocked on this device for the selected peer.');
+    expect(await scopeFingerprint(a,scope)).toEqual(acknowledged);
+    expect(await scopeFingerprint(b,scope,false)).toEqual(snapshot);
+
+    await a.goBack();
+    await add(a,'Blocked fresh chives');
+    await saved(a);
+    await button(a,'Open settings').click();
+    const files = await downloadCooking(a);
+    expect(files).toHaveLength(3);
+    await button(b,'Exchange encrypted cooking files').click();
+    const retained = b.getByText(/^Retained update blocked by local device quarantine: /);
+    await expect(retained).toBeVisible();
+    const retainedId = (await retained.innerText()).split(' ').at(-1);
+    const fresh = files.find(({id}) => id !== prior.id && id !== retainedId);
+    expect(fresh).toBeDefined();
+    await expect(b.getByRole('button',{name:/^Retry retained update /})).toHaveCount(0);
+    const blocked = await scopeFingerprint(b,scope);
+    await uploadCooking(b,fresh.bytes);
+    await visible(b,'Update blocked by local device quarantine. No update was applied.');
+    expect(await scopeFingerprint(b,scope)).toEqual(blocked);
+    await uploadCooking(b,prior.bytes);
+    await visible(b,'This exact update was already applied. No new changes were made.');
+    expect(await scopeFingerprint(b,scope)).toEqual(blocked);
+
+    await b.goBack();
+    await visible(b,'Already applied shallot');
+    await expect(b.getByText('Blocked fresh chives',{exact:true})).toHaveCount(0);
+    await expect(b.getByText('Retained direct scallion',{exact:true})).toHaveCount(0);
+    await add(b,'Local dill after quarantine');
+    await saved(b);
+    await b.close();
+    const reopened = await openPage(contexts[1],baseURL);
+    await visible(reopened,'Already applied shallot');
+    await visible(reopened,'Local dill after quarantine');
+    await expect(reopened.getByText('Blocked fresh chives',{exact:true})).toHaveCount(0);
+    await button(reopened,'Open settings').click();
+    await button(reopened,'Review household devices').click();
+    await expect(label(reopened,`Household device ${organizer}`)).toContainText('Quarantined on this device');
+    await button(reopened,'Exchange encrypted cooking files').click();
+    await expect(reopened.getByText(/^Retained update blocked by local device quarantine: /)).toBeVisible();
+    await button(a,'Review household devices').click();
+    await expect(label(a,`Household device ${recipient}`)).toContainText('Verified household device');
+  } catch (error) {
+    for (const page of [a,b]) if (!page.isClosed()) {
+      console.error('Quarantine browser alerts',page.url(),await page.getByRole('alert').allTextContents());
+    }
+    throw error;
+  } finally { await Promise.all(contexts.map(context => context.close())); }
+});

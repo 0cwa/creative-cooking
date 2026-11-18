@@ -10,14 +10,34 @@ const bounded=(array,n)=>Array.isArray(array)&&array.length<=n&&Array.from({leng
 const validateContext=c=>c&&typeof c==='object'&&!Array.isArray(c)&&Object.keys(c).sort().join(',')==='authorityHead,authorityRevision,authoritySnapshot,checkpointHash,kind,scopeId'&&['household','personal'].includes(c.kind)&&id(c.scopeId)&&id(c.authorityHead)&&id(c.authoritySnapshot)&&Number.isSafeInteger(c.authorityRevision)&&c.authorityRevision>=0&&id(c.checkpointHash);
 const reviewKey=(scope,review)=>key('compromise-review',scope,review);
 const quarantineKey=(scope,device)=>key('compromise-quarantine',scope,device);
+export async function readLocalQuarantine(tx,scopeId,deviceId){
+ if(!id(scopeId)||!id(deviceId))throw Error('MALFORMED');
+ const value=await tx.get(quarantineKey(scopeId,deviceId));
+ if(value!==undefined&&typeof value!=='boolean')throw Error('CORRUPT');
+ return value===true;
+}
 const notifyKey=(scope,source,reason)=>key('compromise-notification',scope,source,reason);
 function checked(r){if(!r||r.version!==1||!id(r.reviewId)||!validateContext(r.context)||!Array.isArray(r.manifest)||r.manifest.length>MAX_OBJECTS||!Array.isArray(r.classifications)||!['frozen','classified','selected','local-draft'].includes(r.status))throw Error('CORRUPT');return r}
 /** runner is the same SQLite/IndexedDB transaction runner as normal storage. */
 export class CompromiseReviews {
  constructor(run,fault){if(typeof run!=='function')throw Error('MALFORMED');this.run=run;this.fault=fault}
  async put(tx,k,v){await tx.put(k,v);this.fault?.('write')}
- async quarantine(scopeId,deviceId){if(!id(scopeId)||!id(deviceId))throw Error('MALFORMED');return this.run(true,async tx=>{const k=quarantineKey(scopeId,deviceId),old=await tx.get(k);if(old!==undefined&&typeof old!=='boolean')throw Error('CORRUPT');if(!old)await this.put(tx,k,true);return {quarantined:true}})}
- async isQuarantined(scopeId,deviceId){if(!id(scopeId)||!id(deviceId))throw Error('MALFORMED');return this.run(false,async tx=>{const x=await tx.get(quarantineKey(scopeId,deviceId));if(x!==undefined&&typeof x!=='boolean')throw Error('CORRUPT');return x===true})}
+ async quarantine(scopeId,deviceId,{expectedAuthority,localDeviceId}={}){
+  if(!id(scopeId)||!id(deviceId)||localDeviceId===deviceId)throw Error('MALFORMED');
+  expectedAuthority=clone(expectedAuthority);
+  return this.run(true,async tx=>{
+   if(expectedAuthority){
+    const {scope,record}=expectedAuthority;
+    if(scope?.kind!=='household'||scope.id!==scopeId||!record||!id(localDeviceId))throw Error('MALFORMED');
+    const current=await tx.get(key('pairing-authority',scope.kind,scopeId));
+    if(current?.scope?.kind!==scope.kind||current.scope.id!==scopeId||current.revision!==record.revision||
+      current.acceptedParent!==record.acceptedParent||current.authorizationSnapshot!==record.authorizationSnapshot)throw Error('STALE_AUTHORITY');
+   }
+   if(!await readLocalQuarantine(tx,scopeId,deviceId))await this.put(tx,quarantineKey(scopeId,deviceId),true);
+   return {quarantined:true};
+  });
+ }
+ async isQuarantined(scopeId,deviceId){return this.run(false,tx=>readLocalQuarantine(tx,scopeId,deviceId))}
  /** Explicit bounded quarantine intake. Capacity never evicts acknowledged work. */
  async stageEvidence({scopeId,sourceId,objectId,bytes}){
   if(!id(scopeId)||!id(sourceId)||!id(objectId)||!(bytes instanceof Uint8Array))throw Error('MALFORMED');
