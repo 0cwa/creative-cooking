@@ -85,7 +85,7 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const originalHouse=await resolveRuntimeAuthority(db.storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(db.storage,{kind:'personal',id:r.personal},pin,provider,r.device);
   const runtime=(resolved:any,kind:'personal'|'household',rootPin:string)=>{
    const scopedProvider=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epochId:string,fn:any)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epochId),fn)});
-   return new OfflineRuntime({storage:db.storage,codec:candidateCodec(scopedProvider),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider}});
+   return new OfflineRuntime({storage:db.storage,codec:candidateCodec(scopedProvider),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider,selectionIndex:resolved.selectionIndex}});
   };
   householdPins=await openHouseholdPins(name,master);
   const selection=householdSelection({name,meta,master,pins:householdPins,storage:db.storage,provider,sodium,deviceId:r.device}),selected=await selection.openSelected();joinedSequences=selected?.sequences;

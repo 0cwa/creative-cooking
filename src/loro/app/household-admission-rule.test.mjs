@@ -3,11 +3,20 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 import sodium from 'libsodium-wrappers';
+import {LoroDoc, decodeImportBlobMeta} from 'loro-crdt';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
-import {initializeAuthority, policyId, readAuthority, rootPin, selectHead, resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {checkoutPolicyHead, initializeAuthority, policyId, readAuthority, rootPin, resolveRuntimeAuthority, selectHead} from '../authority/chain.mjs';
 import {domain, validateSuccessor} from '../authority/validator.mjs';
 import {prepareHouseholdInvite} from './household-invite.mjs';
 import {approveHouseholdAdmissionRule, householdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
+import {policyBaseline, recoverPolicyBaseline} from '../authority/policy-baseline.mjs';
+import {candidateCodec} from '../crypto/candidate.mjs';
+import {testProvider} from '../crypto/test-provider.mjs';
+import {OfflineRuntime} from '../engine/runtime.mjs';
+import {commitCookingWithPolicy} from '../disclosure/cooking.mjs';
+import {disclosureService} from '../disclosure/service.mjs';
+import {acceptInitialPolicy, prepareInitialPolicy} from '../disclosure/setup.mjs';
+import {createSourceVerifier} from '../disclosure/source-proof.mjs';
 
 await sodium.ready;
 
@@ -36,6 +45,7 @@ test('policy approval uses the selected frozen electorate and retains independen
     const drafts = new Map();
     const member = deviceId => ({storage, scope, pin:root.head, deviceId, adultId:deviceId[0], randomUUID,
       store:{transaction: fn => fn({get:key => drafts.get(key), put:(key, value) => drafts.set(key, value)})},
+      runtime:{scope:{branchHead:root.head},document:async()=>({doc:new LoroDoc()})},
       provider:{...provider, sign: async (key, message) => {
         assert.equal(key, deviceId);
         return sign(deviceId, message);
@@ -85,9 +95,7 @@ test('policy approval uses the selected frozen electorate and retains independen
     assert.deepEqual(status.policy, policy);
     assert.deepEqual(status.successors.map(({parentHead}) => parentHead), [root.head, root.head]);
 
-    const selection = {from:root.head, to:complete.eventHash, deviceId:a.deviceId, index:0};
-    const signature = sodium.to_hex(sign(a.deviceId, domain('select-head', {root:root.head, householdId:scope.id, ...selection})));
-    await selectHead(storage, scope, root.head, provider, {...selection, signature});
+    await checkoutPolicyHead({...a, LoroDoc, expectedHead:status.head, expectedRevision:status.revision, targetHead:complete.eventHash, explicit:true});
     const afterSelection = await readAuthority(storage, scope, root.head, provider);
     assert.deepEqual(await retain(a, complete), {eventHash:complete.eventHash, replayed:true});
     assert.deepEqual(await readAuthority(storage, scope, root.head, provider), afterSelection);
@@ -102,9 +110,9 @@ test('policy approval uses the selected frozen electorate and retains independen
     assert.equal(after.requiredApprovals, 1);
     assert.equal(after.item.approvals.length, 1);
     assert.equal(selected.head, after.item.event.parentHead);
-    assert.equal((await resolveRuntimeAuthority(storage, scope, root.head, provider, b.deviceId)).scope.documentId, root.runtime.documentId);
+    assert.equal((await resolveRuntimeAuthority(storage, scope, root.head, provider, b.deviceId)).scope.documentId, `policy-${complete.eventHash}`);
     await assert.rejects(approve(b, first.item, first.eventHash), /different household head/);
-    const successor = await proposeHouseholdAdmissionRule({...a, policy, expectedHead:selected.head, explicit:true});
+    const successor = await proposeHouseholdAdmissionRule({...a, runtime:{...a.runtime,scope:{branchHead:selected.head}}, policy, expectedHead:selected.head, explicit:true});
     const successorReview = await reviewHouseholdAdmissionRule({...a, item:successor});
     assert.equal((await validateSuccessor(successorReview.parent, after.item.event, after.item.authorSignature, after.item.approvals, provider)).reason, 'ADMISSION_AND_PROJECTION_REQUIRED');
     assert.equal((await approve(a, successor, successorReview.eventHash)).complete, true);
@@ -113,4 +121,123 @@ test('policy approval uses the selected frozen electorate and retains independen
     changed.event.nextPolicy = policy;
     assert.equal((await validateSuccessor(root, changed.event, changed.authorSignature, changed.approvals, provider)).reason,'INVALID_PROOF');
   } finally {database.close()}
+});
+
+test('the signed frontier commits to the same causal history across import order and later edits', async () => {
+  const provider = {hash: async message => sodium.crypto_generichash(32, message)};
+  const write = (peer, value) => {
+    const doc = new LoroDoc();
+    doc.setPeerId(peer);
+    doc.getMap('pantry').set(peer, value);
+    return doc.export({mode:'snapshot'});
+  };
+  const [mint, thyme, extra] = [write('1','mint'), write('2','thyme'), write('3','fennel')];
+  const proposer = new LoroDoc();
+  proposer.import(mint);
+  proposer.import(thyme);
+  const baseline = await policyBaseline(proposer, provider);
+
+  const recipient = new LoroDoc();
+  recipient.import(thyme);
+  await assert.rejects(recoverPolicyBaseline(LoroDoc, {bytes:recipient.export({mode:'snapshot'})}, baseline, provider), /POLICY_BASELINE_UNAVAILABLE/);
+  recipient.import(mint);
+  assert.deepEqual(await policyBaseline(recipient, provider), baseline);
+  recipient.import(extra);
+  recipient.setPeerId('1');
+  recipient.getMap('pantry').set('1','later change at the same peer');
+  const restored = new LoroDoc();
+  restored.import(await recoverPolicyBaseline(LoroDoc, {bytes:recipient.export({mode:'snapshot'})}, baseline, provider));
+  assert.deepEqual(restored.getMap('pantry').toJSON(), {1:'mint',2:'thyme'});
+  assert.deepEqual(await policyBaseline(restored, provider), baseline);
+  const conflicting = new LoroDoc();
+  conflicting.import(thyme);
+  conflicting.import(write('1','different operation at the same counter'));
+  await assert.rejects(recoverPolicyBaseline(LoroDoc, {bytes:conflicting.export({mode:'snapshot'})}, baseline, provider), /POLICY_BASELINE_UNAVAILABLE/);
+});
+
+test('checkout verifies inherited source envelopes only inside the signed causal boundary', async () => {
+  const database = new DatabaseSync(':memory:');
+  const signing = sodium.crypto_sign_keypair(), data = sodium.randombytes_buf(32);
+  try {
+    const provider = testProvider(sodium, {signing, publicSigning:signing.publicKey, initialKey:data});
+    const codec = candidateCodec(provider);
+    const storage = openSQLiteStorage({executeSync(sql, params = []) {
+      const query = database.prepare(sql);
+      return {rows: sql.startsWith('SELECT') ? query.all(...params) : (query.run(...params), [])};
+    }});
+    const deviceId = 'sender', adultId = 'adult', scope = {kind:'household', id:'household'};
+    const policy = {kind:'unanimous', fixedCount:null};
+    const root = {householdId:scope.id, head:'', policyHash:await policyId(provider,policy), generation:1, epochId:'epoch',
+      policy, roster:[adultId], devices:[{adultId,deviceId,active:true,signingKeyRef:deviceId}],
+      runtime:{documentId:'doc',authorPeers:{[deviceId]:'1'},acceptedRecipients:[deviceId]}};
+    const pin = root.head = await rootPin(provider, root);
+    await initializeAuthority(storage, root, pin, provider);
+    const member = {storage, scope, pin, provider, deviceId, adultId};
+    const service = disclosureService({...member,rootPin:pin});
+    const open = async () => {
+      const {scope:resolved,selectionIndex} = await resolveRuntimeAuthority(storage,scope,pin,provider,deviceId);
+      return new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope:resolved,keyRef:'data',authority:{rootPin:pin,provider,selectionIndex}});
+    };
+    const parent = await open();
+    const disclosure = await prepareInitialPolicy({service});
+    const accepted = await acceptInitialPolicy({service,provider,deviceId,policy:disclosure,explicit:true});
+    const at = '2026-01-01T00:00:00Z';
+    const create = (id, sequence) => ({operationId:id, deviceSequence:sequence,
+      command:{version:1,kind:'pantry-create',commandId:id,effectId:id,dependencyEffectIds:[],data:{itemId:id,name:id,preference:3,author:deviceId,at}}});
+    await parent.execute(create('legacy',1));
+    await commitCookingWithPolicy({runtime:parent,service,input:create('inside',2)});
+    const drafts = new Map();
+    const proposalInputs = {...member,runtime:parent,expectedHead:pin,
+      store:{transaction:fn=>fn({get:key=>drafts.get(key),put:(key,value)=>drafts.set(key,value)})},
+      randomUUID,policy:{kind:'allMinusOne',fixedCount:null},explicit:true};
+    const approveAndRetain = async item => {
+      const reviewed = await reviewHouseholdAdmissionRule({...member,item});
+      const approved = await approveHouseholdAdmissionRule({...member,item,confirmedEventHash:reviewed.eventHash,explicit:true});
+      return retainHouseholdAdmissionRule({...member,item:approved.item,confirmedEventHash:approved.eventHash,explicit:true});
+    };
+    const proposed = await proposeHouseholdAdmissionRule(proposalInputs);
+    const approved = await approveAndRetain(proposed);
+    const sibling = await approveAndRetain(await proposeHouseholdAdmissionRule({...proposalInputs,policy:{kind:'fixed',fixedCount:1}}));
+    const event = {...proposed.event,version:1,subject:null,proposalId:'legacy-proposal'};
+    const historical = await approveAndRetain({event,authorSignature:sodium.to_hex(await provider.sign(deviceId,domain('event-signature',event))),approvals:[]});
+    await commitCookingWithPolicy({runtime:parent,service,input:create('outside',3)});
+    const status = await householdAdmissionRule(member);
+    assert.equal(status.successors.find(item=>item.eventHash===historical.eventHash).legacy,true);
+    assert.equal(status.checkout.some(item=>item.head===historical.eventHash),false);
+    await assert.rejects(checkoutPolicyHead({...member,LoroDoc,expectedHead:pin,expectedRevision:status.revision,targetHead:historical.eventHash,explicit:true}), /INVALID_POLICY_CHECKOUT/);
+    await checkoutPolicyHead({...member,LoroDoc,expectedHead:pin,expectedRevision:status.revision,targetHead:approved.eventHash,explicit:true});
+    const branch = await open();
+    // On this branch, the new change can claim the same Loro peer counters
+    // as the later change retained on the parent.
+    await commitCookingWithPolicy({runtime:branch,service,input:create('branch-own',4)});
+    const context = await service.authority();
+    const verify = createSourceVerifier({runtime:branch,service,context,allowIncomplete:true});
+    assert.deepEqual((await verify('inside')).policies,[accepted.policyHash]);
+    assert.equal((await verify('legacy')).incomplete,true);
+    await assert.rejects(verify('outside'), /INVALID_SOURCE_PROOF|SOURCE_PROVENANCE_REQUIRED/);
+    await assert.rejects(createSourceVerifier({runtime:branch,service,context})('legacy'), /SOURCE_PROVENANCE_REQUIRED/);
+    await assert.rejects(createSourceVerifier({runtime:branch,service,context})('branch-own'), /INCOMPLETE_PROVENANCE/);
+    const forged = create('bad-dependency',5);
+    forged.command.dependencyEffectIds = ['outside'];
+    await assert.rejects(commitCookingWithPolicy({runtime:branch,service,input:forged}), /INVALID_SOURCE_PROOF|SOURCE_PROVENANCE_REQUIRED/);
+    assert.equal((await storage.getLocalOperation(scope.id,'bad-dependency')).value,null);
+
+    const back = await householdAdmissionRule(member);
+    await checkoutPolicyHead({...member,LoroDoc,expectedHead:back.head,expectedRevision:back.revision,targetHead:pin,explicit:true});
+    assert.equal((await service.active()).record.policyHash,accepted.policyHash);
+    await assert.rejects(parent.document(), /INVALID_AUTHORITY/);
+    assert.ok((await (await open()).document()).doc.getMap('domain-effects').get('outside'));
+
+    const selection = {from:pin,to:sibling.eventHash,deviceId,index:2};
+    const signature = sodium.to_hex(await provider.sign(deviceId,domain('select-head',{root:pin,householdId:scope.id,...selection})));
+    await selectHead(storage,scope,pin,provider,{...selection,signature});
+    const unprepared = await open();
+    await assert.rejects(unprepared.document(), /CHECKOUT_REQUIRED/);
+    await assert.rejects(unprepared.execute(create('unprepared',6)), /CHECKOUT_REQUIRED/);
+    assert.equal((await storage.getLocalOperation(scope.id,'unprepared')).value,null);
+  } finally {
+    signing.privateKey.fill(0);
+    data.fill(0);
+    database.close();
+  }
 });

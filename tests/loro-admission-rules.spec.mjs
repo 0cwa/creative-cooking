@@ -72,6 +72,72 @@ async function receive(page, signed) {
   await button(page, 'Review admission rule proposal').click();
 }
 
+async function addIngredient(page, ingredient) {
+  await page.getByLabel('Ingredient and details').fill(ingredient);
+  await page.getByLabel('Add ingredient').click();
+  await expect(page.getByText(ingredient, {exact:true})).toBeVisible();
+  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+}
+
+async function openRules(page) {
+  await button(page, 'Open settings').click();
+  await button(page, 'Manage adult admission rules').click();
+  await expect(page.getByLabel('Active adult admission rule')).toBeVisible();
+}
+
+async function downloadUpdate(page, objectId) {
+  await button(page, 'Exchange encrypted cooking files').click();
+  const item = objectId ? button(page, `Download encrypted update ${objectId}`) : page.getByRole('button', {name:/Download encrypted update /});
+  const transfer = page.waitForEvent('download');
+  await item.click();
+  return readFile(await (await transfer).path());
+}
+
+async function importUpdate(page, bytes, expectedError) {
+  await button(page, 'Open settings').click();
+  await button(page, 'Exchange encrypted cooking files').click();
+  const transfer = page.waitForEvent('filechooser');
+  await button(page, 'Choose encrypted cooking update').click();
+  const loaded = expectedError ? null : page.waitForEvent('load');
+  await (await transfer).setFiles({name:'cooking.bin', mimeType:'application/octet-stream', buffer:bytes});
+  if (expectedError) await expect(notice(page, expectedError)).toBeVisible();
+  else await loaded;
+  await page.goto('./');
+}
+
+async function retainedBranchState(page, scopeId) {
+  return page.evaluate(async scope => {
+    const name = localStorage.getItem('creative-cooking-local-workspace-v1');
+    const request = operation => new Promise((resolve,reject) => {
+      operation.onsuccess = () => resolve(operation.result);
+      operation.onerror = () => reject(operation.error);
+    });
+    const db = await request(indexedDB.open(`${name}-records`));
+    try {
+      const storage = db.transaction('records','readonly').objectStore('records');
+      const keys = await request(storage.getAllKeys());
+      const kept = keys.filter(key => {
+        const [kind, first, second] = JSON.parse(key);
+        return kind === 'pairing-authority' ? first === 'household' && second === scope : first === scope &&
+          ['document','document-owner','object','policy-checkout-parent','policy-disclosure-head','disclosure-active'].includes(kind);
+      });
+      return Object.fromEntries(await Promise.all(kept.map(async key => [key,JSON.parse(JSON.stringify(await request(storage.get(key))))])));
+    } finally { db.close(); }
+  }, scopeId);
+}
+
+async function reviewBranch(page, head) {
+  await button(page, `Review cooking branch ${head}`).click();
+  await expect(page.getByText(`Open cooking branch ${head} on this device?`)).toBeVisible();
+}
+
+async function confirmBranch(page) {
+  const opened = page.waitForURL(url => url.pathname.endsWith('/creative-cooking/'));
+  await button(page, 'Open this cooking branch').click();
+  await opened;
+  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+}
+
 test('fresh setup bounds fixed quorum by the actual electorate and preserves the choice on reload', async ({page}) => {
   await start(page, async () => {
     await page.getByRole('radio', {name:/Fixed number of adults/}).click();
@@ -135,8 +201,8 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 1 of 1 existing adults.');
 });
 
-test('two adults review, sign and retain alternative rules without changing the open household', async ({browser, baseURL}) => {
-  test.setTimeout(120_000);
+test('two adults retain competing rules and open isolated cooking branches explicitly', async ({browser, baseURL}) => {
+  test.setTimeout(180_000);
   const contexts = await Promise.all([0, 1].map(() => browser.newContext({baseURL, acceptDownloads:true})));
   try {
     const [first, second] = await Promise.all(contexts.map(context => context.newPage()));
@@ -146,6 +212,14 @@ test('two adults review, sign and retain alternative rules without changing the 
     await first.getByLabel('Add ingredient').click();
     await expect(first.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
     await enroll(first, second);
+    const scopeId = (await text(first, 'Open household')).split(' · ')[1];
+    const parentHead = (await first.getByText(/Current household head:/).textContent()).split(': ')[1];
+    await first.goto('./');
+    await addIngredient(first, 'Signed frontier thyme');
+    await openRules(first);
+    const parentUpdate = await downloadUpdate(first);
+    const parentHeader = JSON.parse(parentUpdate.toString()).header;
+    expect(parentHeader.branchHead).toBe(parentHead);
 
     async function retainAlternative(label, projected, quorum) {
       await first.getByRole('radio', {name:label}).click();
@@ -173,10 +247,10 @@ test('two adults review, sign and retain alternative rules without changing the 
       await receive(first, complete);
       await button(first, 'Retain approved admission rule').click();
       await expect(notice(first, 'Approved rule retained')).toBeVisible();
-      return {unsigned:JSON.stringify({...JSON.parse(signedByFirst), approvals:[]}), complete};
+      return {unsigned:JSON.stringify({...JSON.parse(signedByFirst), approvals:[]}), complete, head:JSON.parse(complete).approvals[0].eventHash};
     }
     const firstProposal = await retainAlternative(/All but one/, /proposed All but one .* requires 1 of 2/);
-    await retainAlternative(/Fixed number of adults/, /proposed Fixed quorum of 2 requires 2 of 2/, '2');
+    const sibling = await retainAlternative(/Fixed number of adults/, /proposed Fixed quorum of 2 requires 2 of 2/, '2');
     for (const page of [first, second]) {
       await page.goto('./');
       await expect(page.getByText('Policy proof ginger', {exact:true})).toBeVisible();
@@ -192,6 +266,119 @@ test('two adults review, sign and retain alternative rules without changing the 
     await receive(first, firstProposal.complete);
     await button(first, 'Retain approved admission rule').click();
     await expect(notice(first, 'This approved rule is already retained.')).toBeVisible();
+
+    await reviewBranch(second, firstProposal.head);
+    const missingBefore = await retainedBranchState(second, scopeId);
+    await button(second, 'Open this cooking branch').click();
+    await expect(notice(second, 'This device needs the cooking updates')).toBeVisible();
+    expect(await retainedBranchState(second, scopeId)).toEqual(missingBefore);
+    await second.goto('./');
+    await importUpdate(second, parentUpdate);
+    await expect(second.getByText('Signed frontier thyme', {exact:true})).toBeVisible();
+
+    await first.goto('./');
+    await addIngredient(first, 'Parent-only fennel');
+    await openRules(first);
+    const stale = await contexts[0].newPage();
+    await stale.goto('./');
+    await openRules(stale);
+    await reviewBranch(stale, sibling.head);
+    await reviewBranch(first, firstProposal.head);
+    const beforeFault = await retainedBranchState(first, scopeId);
+    await first.evaluate(target => {
+      const save = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function(value, slot) {
+        if (typeof slot === 'string' && JSON.parse(slot)[0] === 'pairing-authority' && value.acceptedParent === target) {
+          IDBObjectStore.prototype.put = save;
+          throw Error('injected policy checkout failure');
+        }
+        return save.call(this, value, slot);
+      };
+    }, firstProposal.head);
+    await button(first, 'Open this cooking branch').click();
+    await expect(notice(first, 'Could not save the branch switch')).toBeVisible();
+    expect(await retainedBranchState(first, scopeId)).toEqual(beforeFault);
+
+    await confirmBranch(first);
+    await openRules(second);
+    await reviewBranch(second, firstProposal.head);
+    await confirmBranch(second);
+    for (const page of [first, second]) {
+      await expect(page.getByText('Signed frontier thyme', {exact:true})).toBeVisible();
+      await expect(page.getByText('Policy proof ginger', {exact:true})).toBeVisible();
+      await expect(page.getByText('Parent-only fennel', {exact:true})).toHaveCount(0);
+    }
+    const afterCheckout = await retainedBranchState(first, scopeId);
+    for (const key of Object.keys(beforeFault).filter(key => ['document','document-owner','object'].includes(JSON.parse(key)[0]))) {
+      expect(afterCheckout[key]).toEqual(beforeFault[key]);
+    }
+    for (const page of [first, second]) {
+      const state = await retainedBranchState(page, scopeId);
+      expect(state[JSON.stringify(['document-owner',scopeId,`policy-${firstProposal.head}`])]).toBe(firstProposal.head);
+    }
+    await importUpdate(second, parentUpdate, 'INVALID_AUTHORITY');
+    await first.getByLabel('Remove Signed frontier thyme').click();
+    await expect(first.getByText('Signed frontier thyme', {exact:true})).toHaveCount(0);
+    await expect(first.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    await openRules(first);
+    const branchUpdate = await downloadUpdate(first);
+    const branchHeader = JSON.parse(branchUpdate.toString()).header;
+    expect(branchHeader.branchHead).toBe(firstProposal.head);
+    expect(branchHeader.documentId).toBe(`policy-${firstProposal.head}`);
+    expect(branchHeader.epochId).toBe(parentHeader.epochId);
+    expect(branchHeader.documentGeneration).toBe(parentHeader.documentGeneration);
+    expect(branchHeader.sourceEffectIds).toEqual(parentHeader.semanticEffectIds);
+    await importUpdate(second, branchUpdate);
+    await expect(second.getByText('Signed frontier thyme', {exact:true})).toHaveCount(0);
+    await second.getByLabel('Remove Policy proof ginger').click();
+    await expect(second.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    await openRules(second);
+    const seededEdit = await downloadUpdate(second);
+    const seededHeader = JSON.parse(seededEdit.toString()).header;
+    expect(seededHeader.documentId).toBe(branchHeader.documentId);
+    expect(seededHeader.disclosureIncomplete).toBe(true);
+    expect(seededHeader.disclosurePolicyHashes.length).toBeGreaterThan(0);
+    await first.goto('./');
+    await importUpdate(first, seededEdit);
+    await expect(first.getByText('Policy proof ginger', {exact:true})).toHaveCount(0);
+
+    await openRules(first);
+    await reviewBranch(first, sibling.head);
+    await confirmBranch(first);
+    await expect(first.getByText('Policy proof ginger', {exact:true})).toBeVisible();
+    await expect(first.getByText('Signed frontier thyme', {exact:true})).toBeVisible();
+    await addIngredient(first, 'Sibling-only parsley');
+    await openRules(first);
+    await reviewBranch(first, parentHead);
+    await confirmBranch(first);
+    await expect(first.getByText('Parent-only fennel', {exact:true})).toBeVisible();
+    await expect(first.getByText('Signed frontier thyme', {exact:true})).toBeVisible();
+    await expect(first.getByText('Sibling-only parsley', {exact:true})).toHaveCount(0);
+
+    const beforeStale = await retainedBranchState(first, scopeId);
+    await button(stale, 'Open this cooking branch').click();
+    await expect(notice(stale, 'The household changed')).toBeVisible();
+    expect(await retainedBranchState(first, scopeId)).toEqual(beforeStale);
+    await button(stale, 'Back').click();
+    await stale.getByLabel('Ingredient and details').fill('Stale-tab unsaved rosemary');
+    await stale.getByLabel('Add ingredient').click();
+    await expect(stale.getByTestId('pantry-local-persistence-status')).toHaveText('Local save failed');
+    await expect(stale.getByText('Stale-tab unsaved rosemary', {exact:true})).toBeVisible();
+    expect(await retainedBranchState(first, scopeId)).toEqual(beforeStale);
+    await stale.close();
+
+    await openRules(first);
+    await reviewBranch(first, firstProposal.head);
+    await confirmBranch(first);
+    await first.reload();
+    await expect(first.getByText('Policy proof ginger', {exact:true})).toHaveCount(0);
+    await expect(first.getByText('Signed frontier thyme', {exact:true})).toHaveCount(0);
+    await expect(first.getByText('Parent-only fennel', {exact:true})).toHaveCount(0);
+    await openRules(first);
+    expect(await downloadUpdate(first)).toEqual(branchUpdate);
+    await reviewBranch(first, sibling.head);
+    await confirmBranch(first);
+    await expect(first.getByText('Sibling-only parsley', {exact:true})).toBeVisible();
   } finally {
     await Promise.all(contexts.map(context => context.close()));
   }

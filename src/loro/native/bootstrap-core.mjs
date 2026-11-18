@@ -84,7 +84,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    sequences.close();db.close();master.close();
    return;
   }
-  const runtime=(resolved,kind,rootPin)=>{const p=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epoch,fn)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epoch),fn)});return new OfflineRuntime({storage,codec:candidateCodec(p),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider}})};
+  const runtime=(resolved,kind,rootPin)=>{const p=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epoch,fn)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epoch),fn)});return new OfflineRuntime({storage,codec:candidateCodec(p),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider,selectionIndex:resolved.selectionIndex}})};
   pairing=openNativeHouseholdPersistence({name,openDatabase,workspaceRun,master,storage,provider,sodium,deviceId:r.device});
   const {selection,pins,store,prepareJoinedSequences,finalizeJoinedSequences}=pairing;
   const selected=await selection.openSelected();

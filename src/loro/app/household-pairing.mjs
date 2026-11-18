@@ -10,6 +10,7 @@ import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mj
 import {householdSession} from './household-session.ts';
 import {reviewHouseholdInvite,approveHouseholdInvite,collectHouseholdInviteApproval} from './household-approval.mjs';
 import {householdAdmissionRule,proposeHouseholdAdmissionRule,reviewHouseholdAdmissionRule,approveHouseholdAdmissionRule,retainHouseholdAdmissionRule} from './household-admission-rule.mjs';
+import {checkoutPolicyHead} from '../authority/chain.mjs';
 
 /** Both apps use the current workspace identity and the same signed admission flow. */
 export function householdPairing({
@@ -39,10 +40,14 @@ export function householdPairing({
     identity, selection, selectedHousehold,
     admissionRule: {
       status: active(() => householdAdmissionRule(member)),
-      propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation})),
+      propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation, runtime})),
       review: active(item => reviewHouseholdAdmissionRule({...member, item})),
       approve: active(input => approveHouseholdAdmissionRule({...input, ...member})),
       retain: active(input => retainHouseholdAdmissionRule({...input, ...member})),
+      checkout: active(async input => {
+        await runtime.authorize();
+        return checkoutPolicyHead({...input, ...member, LoroDoc});
+      }),
     },
     transfer:{
       publish:active(transfer.publish),

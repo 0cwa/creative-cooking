@@ -1,41 +1,49 @@
-import {observeSuccessorWithOutcome, readAuthority, verifyAuthority} from '../authority/chain.mjs';
-import {admissionThreshold, domain, validateSuccessor} from '../authority/validator.mjs';
+import {observeSuccessorWithOutcome, policyCheckoutCandidates, readAuthority, verifyAuthority} from '../authority/chain.mjs';
+import {admissionThreshold, domain, validPolicyBaseline, validateSuccessor} from '../authority/validator.mjs';
+import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {requireAdmissionPolicy} from './admission-rule.mjs';
 
 const hex = bytes => Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
 const ordered = approvals => [...approvals].sort((a,b) => a.deviceId < b.deviceId ? -1 : a.deviceId > b.deviceId ? 1 : 0);
 
 async function context({storage, scope, pin, provider, adultId, deviceId}) {
-  const {state, activeHead} = await readAuthority(storage, scope, pin, provider);
-  const {nodes} = await verifyAuthority(state, pin, provider);
+  const {state, activeHead, revision} = await readAuthority(storage, scope, pin, provider);
+  const verified = await verifyAuthority(state, pin, provider);
+  const {nodes} = verified;
   const parent = nodes.get(activeHead);
   const device = parent.devices.find(d => d.active && d.adultId === adultId && d.deviceId === deviceId);
   if (!device) throw Error('INVALID_AUTHORITY');
-  return {state, nodes, parent, device};
+  return {...verified, revision, parent, device};
 }
 
 export async function householdAdmissionRule(args) {
-  const {state, parent} = await context(args);
+  const current = await context(args);
+  const {state, parent, revision, legacyPolicyHeads} = current;
+  const checkout = policyCheckoutCandidates(current).map(node => ({head:node.head, policy:node.policy}));
   const successors = [];
   for (const item of state.events) {
     if (item.event.kind !== 'changePolicy') continue;
     const eventHash = hex(await args.provider.hash(domain('event', item.event)));
-    successors.push({eventHash, parentHead: item.event.parentHead, policy: item.event.nextPolicy,
+    successors.push({eventHash, parentHead: item.event.parentHead, policy: item.event.nextPolicy, legacy:legacyPolicyHeads.has(eventHash),
       adultCount: item.event.frozenAdultRoster.length});
   }
-  return {head: parent.head, policy: parent.policy, required: admissionThreshold(parent.policy, parent.roster.length),
-    electorate: parent.roster, successors};
+  return {head: parent.head, revision, policy: parent.policy, required: admissionThreshold(parent.policy, parent.roster.length),
+    electorate: parent.roster, successors, checkout};
 }
 
 export async function proposeHouseholdAdmissionRule(args) {
-  const {provider, store, expectedHead, explicit, randomUUID} = args;
+  const {provider, store, runtime, expectedHead, explicit, randomUUID} = args;
   const requested = structuredClone(args.policy);
   if (explicit !== true) throw Error('CONFIRMATION_REQUIRED');
-  const {parent, device} = await context(args);
-  if (expectedHead !== parent.head) throw Error('CONFLICT');
+  const {parent, device, legacyPolicyHeads} = await context(args);
+  if (expectedHead !== parent.head || runtime.scope.branchHead !== expectedHead) throw Error('CONFLICT');
+  if (legacyPolicyHeads.has(parent.head)) throw Error('CHECKOUT_REQUIRED');
   const policy = requireAdmissionPolicy(requested, parent.roster.length);
   if (policy.kind === parent.policy.kind && policy.fixedCount === parent.policy.fixedCount) throw Error('Choose a different admission rule.');
-  const slot = JSON.stringify(['household-admission-rule', parent.head, device.deviceId, policy.kind, policy.fixedCount]);
+  const {doc} = await runtime.document();
+  const subject = await policyBaseline(doc, provider);
+  if (!validPolicyBaseline(subject)) throw Error('This cooking starting point exceeds the supported frontier size.');
+  const slot = JSON.stringify(['household-admission-rule', parent.head, device.deviceId, policy.kind, policy.fixedCount, subject.historyHash]);
   const proposalId = await store.transaction(tx => {
     const retained = tx.get(slot);
     if (retained !== undefined) return retained;
@@ -43,10 +51,10 @@ export async function proposeHouseholdAdmissionRule(args) {
     tx.put(slot, id);
     return id;
   });
-  const event = {version: 1, suiteId: 'candidate-ed25519-xchacha20-sealedbox-v1',
+  const event = {version: 3, suiteId: 'candidate-ed25519-xchacha20-sealedbox-v1',
     householdId: parent.householdId, parentHead: parent.head, policyHash: parent.policyHash,
     generation: parent.generation, epochId: parent.epochId, proposalId, kind: 'changePolicy',
-    authorDeviceId: device.deviceId, frozenAdultRoster: parent.roster, subject: null, nextPolicy: policy};
+    authorDeviceId: device.deviceId, frozenAdultRoster: parent.roster, subject, nextPolicy: policy};
   const authorSignature = hex(await provider.sign(device.signingKeyRef, domain('event-signature', event)));
   return {event, authorSignature, approvals: []};
 }

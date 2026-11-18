@@ -4,10 +4,11 @@ const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.co
 /** A user-selected encrypted object is staged durably before the authorized
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
 export function cookingFiles({runtime,service}){
- const scopeId=runtime.scope.scopeId;
- const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(x=>x.branchHead===runtime.scope.branchHead&&x.epochId===runtime.scope.epochId);
+ const {scopeId,branchHead,epochId}=runtime.scope;
+ const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;
+ const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(onBranch);
  const cookingSource=({source,cursor})=>source===`file:${cursor}`||source===`direct:${cursor}`;
- async function list(){return (await outbound()).map(x=>({objectId:x.objectId}));}
+ async function list(){await runtime.authorize();return (await outbound()).map(x=>({objectId:x.objectId}));}
  async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const row=(await outbound()).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
  async function verify(bytes,expectedId,expectedAuthor){
   if(!(bytes instanceof Uint8Array))throw Error('MALFORMED');
@@ -19,8 +20,19 @@ export function cookingFiles({runtime,service}){
  }
  const applyStaged=item=>importCookingWithPolicy({runtime,service,item});
  async function receive(raw){if(!(raw instanceof Uint8Array))throw Error('MALFORMED');if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');const bytes=new Uint8Array(raw),{id}=await verify(bytes),source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId)),expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id}));return applyStaged({itemId:id,bytes});}
- async function pending(){const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]),reasons=new Map(must(policyPending).map(x=>[x.objectId,x.reason])),sources=new Set(must(cursors).filter(cookingSource).map(x=>x.cursor)),pending=[];for(const item of must(items)){if(sources.has(item.itemId)&&!must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))pending.push({itemId:item.itemId,reason:reasons.get(item.itemId)??null})}return pending;}
- async function retry(itemId){const items=must(await runtime.storage.listStagedInbox(scopeId)),item=items.find(x=>x.itemId===itemId);if(!item)throw Error('MISSING_UPDATE');const sources=must(await runtime.storage.listCursors(scopeId));if(!sources.some(x=>x.cursor===itemId&&cookingSource(x)))throw Error('INVALID_AUTHORITY');return applyStaged(item);}
+ async function pending(){
+  await runtime.authorize();
+  const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]);
+  const reasons=new Map(must(policyPending).map(x=>[x.objectId,x.reason])),sources=new Set(must(cursors).filter(cookingSource).map(x=>x.cursor)),pending=[];
+  const decode=new TextDecoder('utf-8',{fatal:true});
+  for(const item of must(items)){
+   if(!sources.has(item.itemId))continue;
+   const {header}=JSON.parse(decode.decode(item.bytes));
+   if(onBranch(header)&&!must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))pending.push({itemId:item.itemId,reason:reasons.get(item.itemId)??null});
+  }
+  return pending;
+ }
+ async function retry(itemId){await runtime.authorize();const items=must(await runtime.storage.listStagedInbox(scopeId)),item=items.find(x=>x.itemId===itemId);if(!item)throw Error('MISSING_UPDATE');const sources=must(await runtime.storage.listCursors(scopeId));if(!sources.some(x=>x.cursor===itemId&&cookingSource(x)))throw Error('INVALID_AUTHORITY');return applyStaged(item);}
  async function directBatch(peerId,limit,attempts) {
   await runtime.authorize();
   const [rows,states]=await Promise.all([outbound(),runtime.storage.listReceiptStates(scopeId)]);
