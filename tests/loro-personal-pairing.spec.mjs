@@ -6,6 +6,9 @@ const button=(page,name)=>page.getByRole('button',{name,exact:true});
 const label=(page,name)=>page.getByLabel(name,{exact:true});
 const click=(page,name)=>button(page,name).click();
 const text=(page,name)=>label(page,name).textContent();
+async function reopenFromSettings(page,action){
+ await Promise.all([page.waitForURL(url=>!url.pathname.endsWith('/settings')),click(page,action)]);
+}
 const privateMessage='Private soup question from the first device';
 const recipientOriginal='The recipient’s original cooking notes';
 const recipientEdit='Saved by the verified second device';
@@ -206,7 +209,24 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await expect(source.getByText(/^Device authorization saved. The file could not be exported/)).toBeVisible();
    expect(await source.evaluate(()=>window.personalPairingWrites)).toBe(7);
    const authorized=await databaseState(source);
+   const swapInitiator=next=>source.evaluate(async replacement=>{
+    const get=request=>new Promise((resolve,reject)=>{
+     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+    });
+    const db=await get(indexedDB.open(localStorage.getItem('creative-cooking-local-workspace-v1')+'-household-ceremonies'));
+    try{
+     const tx=db.transaction('ceremony','readwrite'),store=tx.objectStore('ceremony');
+     const done=new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);});
+     const state=await get(store.get('state')),slot='personal-device-pairing/v1:initiator',prior=state[slot];
+     state[slot]=replacement;
+     store.put(state,'state');
+     await done;
+     return prior;
+    }finally{db.close()}
+   },next);
+   const original=await swapInitiator(null);
    const [download]=await Promise.all([source.waitForEvent('download'),click(source,buttonLabel)]);
+   await swapInitiator(original);
    expect(download.suggestedFilename()).toBe('creative-cooking-personal-pairing.ccpair');
    path=await download.path();
    encrypted=await readFile(path);
@@ -214,7 +234,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    expect(await databaseState(source)).toEqual(authorized);
    expect(encrypted.includes(privateMessage)).toBe(false);
    expect(encrypted.includes(credential)).toBe(false);
-   await click(source,'Reopen paired personal workspace');
+   await reopenFromSettings(source,'Reopen paired personal workspace');
    await source.goto('./settings');
    await click(source,'Show verified personal device history');
    await expect(source.getByText(`Paired ${receiverId} by ${sourceId}`)).toBeVisible();
@@ -242,8 +262,21 @@ test('Settings pairs independently provisioned personal devices and reopens the 
     expect(await databaseState(receiver)).toEqual(before);
    }
    await failWritesAt(receiver,0);
+   await receiver.evaluate(()=>{
+    const decrypt=crypto.subtle.decrypt;
+    crypto.subtle.decrypt=async function(...args){
+     crypto.subtle.decrypt=decrypt;
+     await new Promise(resolve=>{window.releasePairingInstall=resolve;});
+     return decrypt.apply(this,args);
+    };
+   });
    await click(receiver,select);
-   await expect(receiver.getByText(/^Verified private copy saved and selected/)).toBeVisible();
+   await expect.poll(()=>receiver.evaluate(()=>typeof window.releasePairingInstall)).toBe('function');
+   await click(receiver,'Back');
+   await button(receiver,'Open settings').last().click();
+   await expect(button(receiver,'Reopen paired personal workspace')).toHaveCount(0);
+   await receiver.evaluate(()=>window.releasePairingInstall());
+   await expect(button(receiver,'Reopen paired personal workspace')).toBeVisible();
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(originalPin);
    const selected=await databaseState(receiver);
    await click(receiver,'Back');
@@ -252,9 +285,28 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await expect(receiver.getByText('This edit must wait for the selected workspace',{exact:true})).toHaveCount(0);
    expect(await databaseState(receiver)).toEqual(selected);
    await button(receiver,'Open settings').last().click();
-   await click(receiver,'Reopen paired personal workspace');
+   await receiver.evaluate(()=>{
+    const write=Storage.prototype.setItem,key='creative-cooking-branch-reopen-v1';
+    Storage.prototype.setItem=function(name,value){
+     if(this===sessionStorage&&name===key){
+      write.call(this,'pairing-test-correct-reopen',value);
+      value=JSON.stringify({...JSON.parse(value),authorizationSnapshot:'0'.repeat(64)});
+     }
+     return write.call(this,name,value);
+    };
+   });
+   await reopenFromSettings(receiver,'Reopen paired personal workspace');
+   await expect(receiver.getByText(/^The personal branch changed before it could reopen/)).toBeVisible();
+   await receiver.reload();
+   await expect(receiver.getByText(/^The personal branch changed before it could reopen/)).toBeVisible();
+   await receiver.evaluate(()=>{
+    sessionStorage.setItem('creative-cooking-branch-reopen-v1',sessionStorage.getItem('pairing-test-correct-reopen'));
+    sessionStorage.removeItem('pairing-test-correct-reopen');
+   });
+   await receiver.reload();
    await receiver.goto('./settings');
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(sourcePin);
+   expect(await receiver.evaluate(()=>sessionStorage.getItem('creative-cooking-branch-reopen-v1'))).toBe(null);
    await expect(label(receiver,'Open household')).toHaveText(originalHousehold);
    await expect(receiver.getByText('Not connected',{exact:true})).toBeVisible();
    const installed=new LoroDoc();
@@ -280,11 +332,11 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await click(receiver,select);
    await expect(receiver.getByText(/^The same verified personal copy is selected/)).toBeVisible();
    expect(await databaseState(receiver)).toEqual(beforeRetry);
-   await click(receiver,'Reopen paired personal workspace');
+   await reopenFromSettings(receiver,'Reopen paired personal workspace');
    await receiver.goto('./chef');
    await expect(receiver.getByText(recipientEdit,{exact:true})).toBeVisible();
    await receiver.goto('./settings');
-   await click(receiver,'Return to original personal workspace');
+   await reopenFromSettings(receiver,'Return to original personal workspace');
    await receiver.goto('./settings');
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(originalPin);
    await expect(label(receiver,'Open household')).toHaveText(originalHousehold);

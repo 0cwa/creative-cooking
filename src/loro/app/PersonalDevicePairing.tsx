@@ -1,4 +1,4 @@
-import {useContext,useRef,useState} from 'react';
+import {useContext,useRef,useState,useSyncExternalStore} from 'react';
 import {Platform,Pressable,Text,TextInput,View} from 'react-native';
 import {useAppState} from '@/state/AppState';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
@@ -15,6 +15,12 @@ type Reopen={scopeId:string;head:string;authorizationSnapshot:string};
 // The app mutation gate survives leaving Settings. Keep its reopen target with
 // the mounted workspace so returning to Settings can finish the transition.
 const pendingReopens=new WeakMap<object,Reopen>();
+const reopenListeners=new Set<()=>void>();
+const subscribeReopen=(listener:()=>void)=>{
+ reopenListeners.add(listener);
+ return ()=>{reopenListeners.delete(listener)};
+};
+const noReopen=()=>null;
 
 export function PersonalDevicePairing(){
  const workspace=useContext(LoroWorkspaceValue),app=useAppState(),service=workspace?.personalPairing;
@@ -24,8 +30,10 @@ export function PersonalDevicePairing(){
  const [request,setRequest]=useState(''),[incoming,setIncoming]=useState(''),[proposal,setProposal]=useState<Proposal|null>(null);
  const [peerPin,setPeerPin]=useState(''),[root,setRoot]=useState(''),[code,setCode]=useState('');
  const [progress,setProgress]=useState<Progress|null>(null),[peerProof,setPeerProof]=useState('');
- const [file,setFile]=useState<Uint8Array|null>(null),[reopen,setReopen]=useState<Reopen|null>(()=>
-  workspace?pendingReopens.get(workspace)??null:null);
+ const [file,setFile]=useState<Uint8Array|null>(null),[publishedReopen,setPublishedReopen]=useState<Reopen|null>(null);
+ const [pendingExport,setPendingExport]=useState<{code:string;file:Uint8Array}|null>(null);
+ const selectedReopen=useSyncExternalStore(subscribeReopen,()=>workspace?pendingReopens.get(workspace)??null:null,noReopen);
+ const reopen=selectedReopen??publishedReopen;
  if(!service)return null;
  const run=(action:()=>Promise<void>)=>{
   if(working.current)return;
@@ -56,7 +64,7 @@ export function PersonalDevicePairing(){
  </View>;
  const reset=(next:Role)=>{
   setRole(next);setRequest('');setIncoming('');setPeerPin('');setRoot('');setCode('');
-  setProposal(null);setProgress(null);setPeerProof('');setFile(null);setReopen(null);
+  setProposal(null);setProgress(null);setPeerProof('');setFile(null);setPublishedReopen(null);setPendingExport(null);
  };
  const open=async(next:Role)=>{
   reset(next);
@@ -72,8 +80,8 @@ export function PersonalDevicePairing(){
    await app.flushCurrentWorkspace();
    const result=await select();
    pendingReopens.set(workspace,result);
-   setReopen(result);
    saved=true;
+   for(const listener of reopenListeners)listener();
    return result;
   }finally{if(!saved)finish()}
  };
@@ -85,16 +93,23 @@ export function PersonalDevicePairing(){
  };
  const save=async()=>{
   if(!proposal)throw Error('OOB_REQUIRED');
-  await transition(async()=>{
+  let committed=pendingExport?.code===proposal.code?pendingExport:null;
+  let replayed=!!committed;
+  if(!committed)await transition(async()=>{
    const result=await service.publish(proposal.code);
-   setReopen(result);
-   try{
-    await saveExchangeFile('creative-cooking-personal-pairing.ccpair','application/octet-stream',result.file);
-    setStatus(result.replayed?'The same encrypted pairing file is ready.':'Device authorization saved. Send the encrypted file to the verified device to finish on that screen.');
-   }catch{
-    setStatus('Device authorization saved. The file could not be exported. Use Save encrypted personal pairing file to retry.');
-   }
+   committed={code:proposal.code,file:result.file};
+   setPendingExport(committed);
+   setPublishedReopen(result);
+   replayed=result.replayed;
   });
+  if(!committed)throw Error('CONFLICT');
+  try{
+   await saveExchangeFile('creative-cooking-personal-pairing.ccpair','application/octet-stream',committed.file);
+   setPendingExport(null);
+   setStatus(replayed?'The same encrypted pairing file is ready.':'Device authorization saved. Send the encrypted file to the verified device to finish on that screen.');
+  }catch{
+   setStatus('Device authorization saved. The file could not be exported. Use Save encrypted personal pairing file to retry.');
+  }
  };
  return <View style={{gap:8}}>
   <Text accessibilityRole="header">Personal devices</Text>

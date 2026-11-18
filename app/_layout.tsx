@@ -189,7 +189,7 @@ export default function RootLayout() {
         return;
       }
       if(active)setChoice('choose');
-    }catch(e){if(active){pendingReopen.current=null;if(confirmation!==null)try{globalThis.sessionStorage.removeItem(branchReopenKey)}catch{}setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
+    }catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
   const legacy=async()=>{
@@ -238,7 +238,11 @@ export default function RootLayout() {
     }
   };
   if(choice==='loading')return <View><Text>Opening your cooking workspace…</Text></View>;
-  if(choice==='locked')return <SafeAreaProvider><LockedWorkspace error={error} onRetry={()=>{if(Platform.OS==='web')globalThis.location.reload();else reopenWorkspace()}} onLegacy={()=>setChoice('legacy')} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
+  if(choice==='locked')return <SafeAreaProvider><LockedWorkspace error={error} onRetry={()=>{
+    if(pendingReopen.current){setChoice('loading');setOpenAttempt(attempt=>attempt+1)}
+    else if(Platform.OS==='web')globalThis.location.reload();
+    else reopenWorkspace();
+  }} onLegacy={()=>setChoice('legacy')} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
   if(choice==='policy')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text>Your household policy applies to new cooking changes. Existing items are not automatically approved for external processing.</Text><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></ScrollView></SafeAreaProvider>;
   if(choice==='choose')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Your existing workspace remains available. A fresh local preview starts empty and keeps its data separately. The preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported.</Text>{error?<Text>{error}</Text>:null}<Button title="Open existing workspace" onPress={legacy}/>{Platform.OS==='web'?<RecoveryStart/>:null}{(Platform.OS==='web'||Platform.OS==='android')?<><AdmissionRulePicker draft={admissionRule} onChange={setAdmissionRule} adults={1}/><Button title="Start fresh local preview" disabled={!validAdmissionPolicy(admissionPolicy,1)} onPress={()=>void fresh()}/></>:<Text>The fresh local preview is not available on this platform.</Text>}</ScrollView></SafeAreaProvider>;
   return (
