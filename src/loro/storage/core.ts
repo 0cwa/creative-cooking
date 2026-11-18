@@ -8,7 +8,7 @@ import type { RecipeCatalogBinding, RecipePublication, RuntimeStorageReader } fr
 import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
 import {isPolicyDocumentId} from '../authority/validator.mjs';
-import {commandRecipeId} from '../domain/recipe-document.mjs';
+import {commandRecipeId,isRecipeDocumentId} from '../domain/recipe-document.mjs';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
 
 type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; keys(): Promise<string[]> };
@@ -816,30 +816,48 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     this.fault?.('recipe-catalog');
   }
   /** Read index, selected source and child snapshots at one durable revision. */
-  async readSelectedRecipeCatalog(expected:AuthorityExpectation,binding:RecipeCatalogBinding,recipeId?:string) {
-    expected=snapshot(expected);binding=snapshot(binding);
-    if (!expected?.scope || !this.matchesRecipeCatalog(binding,expected) || (recipeId!==undefined&&!validId(recipeId))) return fail('MALFORMED');
+  async readSelectedRecipeCatalog(expected:AuthorityExpectation,binding:RecipeCatalogBinding,target?:{recipeId:string;documentId:string}) {
+    expected=snapshot(expected);binding=snapshot(binding);target=snapshot(target);
+    if (!expected?.scope || !this.matchesRecipeCatalog(binding,expected) ||
+        (target!==undefined&&(!fields(target,['recipeId','documentId'])||!validId(target.recipeId)||!isRecipeDocumentId(target.documentId)))) return fail('MALFORMED');
     try {
       return await this.run(false,async tx=>{
         await this.requireAuthority(tx,expected);
         const {scopeId,branchHead,sourceDocumentId}=binding;
         const source=await this.checkoutDocument(tx,scopeId,{head:branchHead,documentId:sourceDocumentId});
         const prefix=key('recipe-catalog',scopeId,branchHead);
-        const slots=recipeId===undefined ? (await tx.keys()).filter(k=>k.startsWith(prefix.slice(0,-1)+',')) : [key('recipe-catalog',scopeId,branchHead,recipeId)];
+        const keys=target ? [] : await tx.keys();
+        const slots=target ? [key('recipe-catalog',scopeId,branchHead,target.recipeId)] : keys.filter(k=>k.startsWith(prefix.slice(0,-1)+','));
         const entries=[];
         for (const slot of slots.sort()) {
           const row=await tx.get(slot);
-          if (row===undefined && recipeId!==undefined) continue;
+          if (row===undefined && target) {
+            const retained=await this.checkoutDocument(tx,scopeId,{head:branchHead,documentId:target.documentId});
+            if (retained) throw new StorageFailure('UNSUPPORTED_VERSION');
+            continue;
+          }
           if (!row || !this.matchesRecipeCatalog(row.binding,expected) ||
               Object.entries(binding).some(([k,v])=>row.binding[k]!==v) ||
               slot!==key('recipe-catalog',scopeId,branchHead,row.recipeId) ||
-              row.documentId===sourceDocumentId ||
+              row.documentId===sourceDocumentId || (target&&row.documentId!==target.documentId) ||
               (row.sourceRevision!==null && (!source || row.sourceRevision>source.revision))) return corrupt();
           const child=await this.checkoutDocument(tx,scopeId,{head:branchHead,documentId:row.documentId});
           const proof=await this.validatedDisclosureSource(tx,scopeId,row.effectId);
           if (!child || !proof || proof.objectId!==row.objectId || proof.documentId!==row.documentId || proof.checkpoint!==branchHead) return corrupt();
           entries.push({recipeId:row.recipeId,documentId:row.documentId,effectId:row.effectId,revision:child.revision,
             bytes:child.bytes,objectId:row.objectId,envelope:proof.envelope});
+        }
+        if (!target) {
+          const children=new Set(entries.map(entry=>entry.documentId));
+          const ownerPrefix=key('document-owner',scopeId).slice(0,-1)+',';
+          for(const slot of keys) {
+            if(!slot.startsWith(ownerPrefix))continue;
+            const [, , documentId]=JSON.parse(slot);
+            if(documentId!==sourceDocumentId&&isRecipeDocumentId(documentId)&&!children.has(documentId)&&await tx.get(slot)===branchHead) {
+              if(!await tx.get(key('document',scopeId,documentId)))return corrupt();
+              throw new StorageFailure('UNSUPPORTED_VERSION');
+            }
+          }
         }
         return {ok:true as const,value:snapshot({source,entries})};
       });

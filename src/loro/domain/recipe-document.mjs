@@ -17,6 +17,8 @@ export function recipeCatalogBinding(scope, rootPin, sourceDocumentId = scope.do
   };
 }
 
+export const isRecipeDocumentId = value => typeof value === 'string' && /^recipe-v1-[0-9a-f]{64}$/.test(value);
+
 // The authority still signs the household root document. Derive each subordinate
 // document from that verified context and the recipe identity in the command.
 export async function recipeDocumentId(scope, rootPin, provider, recipeId) {

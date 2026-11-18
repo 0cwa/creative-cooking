@@ -75,7 +75,7 @@ export class OfflineRuntime {
     if (!same(current.expectedAuthority, expectedAuthority)) throw Error('CONFLICT');
     const binding = recipeCatalogBinding(this.scope,this.authority.rootPin,current.sourceDocumentId);
     if (command.kind !== 'recipe-create') {
-      const {entries}=required(await this.storage.readSelectedRecipeCatalog(expectedAuthority,binding,this.#recipeId));
+      const {entries}=required(await this.storage.readSelectedRecipeCatalog(expectedAuthority,binding,{recipeId:this.#recipeId,documentId:this.scope.documentId}));
       if (entries[0]?.documentId!==this.scope.documentId) throw Error('MISSING_DEPENDENCY');
       return undefined;
     }

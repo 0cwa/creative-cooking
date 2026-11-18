@@ -7,9 +7,12 @@ const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.co
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
 export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
  if(recipeCatalogVersion!==null && recipeCatalogVersion!==1)throw Error('UNSUPPORTED_VERSION');
- const {scopeId,branchHead,epochId}=runtime.scope;
+ const {scopeId,branchHead,epochId,documentId}=runtime.scope;
  const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;
- const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(onBranch);
+ const onRoute=header=>recipeCatalogVersion===1||header?.documentId===documentId;
+ const decoder=new TextDecoder('utf-8',{fatal:true});
+ const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(row=>
+  onBranch(row)&&(recipeCatalogVersion===1||onRoute(JSON.parse(decoder.decode(row.bytes)).header)));
  const cookingSource=({source,cursor})=>source===`file:${cursor}`||source===`direct:${cursor}`;
  async function list(){await runtime.authorize();return (await outbound()).map(x=>({objectId:x.objectId}));}
  async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const row=(await outbound()).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
@@ -51,11 +54,10 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
   await runtime.authorize();
   const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]);
   const reasons=new Map(must(policyPending).map(x=>[x.objectId,x.reason])),sources=new Set(must(cursors).filter(cookingSource).map(x=>x.cursor)),pending=[];
-  const decode=new TextDecoder('utf-8',{fatal:true});
   for(const item of must(items)){
    if(!sources.has(item.itemId))continue;
-   const {header}=JSON.parse(decode.decode(item.bytes));
-   if(!onBranch(header)||must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))continue;
+   const {header}=JSON.parse(decoder.decode(item.bytes));
+   if(!onBranch(header)||!onRoute(header)||must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))continue;
    const quarantined=await runtime.storage.compromise.isQuarantined(scopeId,header.authorDevice);
    pending.push({itemId:item.itemId,reason:quarantined?'QUARANTINED':reasons.get(item.itemId)??null});
   }
@@ -66,7 +68,6 @@ export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
   await runtime.authorize();
   const [rows,states]=await Promise.all([outbound(),runtime.storage.listReceiptStates(scopeId)]);
   const receipts=new Map(must(states).filter(x=>x.destination==='peer'&&x.recipientId===peerId).map(x=>[x.objectId,x.state]));
-  const decoder=new TextDecoder('utf-8',{fatal:true});
   const pending=rows.filter(row=>receipts.get(row.objectId)!=='applied').map(row=>{
    const {header}=JSON.parse(decoder.decode(row.bytes));
    if(header.authorDevice!==runtime.scope.authorDevice||!Number.isSafeInteger(header.deviceSequence))throw Error('CORRUPT');

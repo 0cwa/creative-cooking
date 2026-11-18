@@ -30,6 +30,7 @@ import {projectCooking} from '../domain/app-projection.mjs';
 import {projectCurrentSeed} from '../compromise/current-seed.mjs';
 import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {replayAuthenticated} from '../domain/replay.mjs';
+import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 test('retained updates distinguish policy evidence and other retry reasons',async()=>{
  const ok=value=>({ok:true,value});
@@ -206,6 +207,12 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.equal((await ar.document()).revision,null);
  await execute(a,ar,'create',create);
  const [initial]=await exported(a,'create');
+ const savedCreate=must(await a.storage.getLocalOperation(scope.id,'create')).commit.outbound[0].object.id;
+ assert.ok((await files(a).list()).some(row=>row.objectId===savedCreate));
+ assert.ok((await files(a).directBatch(b.deviceId,256,new Map())).objects.some(row=>row.objectId===savedCreate));
+ assert.ok(!(await a.cooking.list()).some(row=>row.objectId===savedCreate));
+ assert.ok(!(await a.cooking.directBatch(b.deviceId,256,new Map())).objects.some(row=>row.objectId===savedCreate));
+ await assert.rejects(()=>a.cooking.download(savedCreate),/INVALID_AUTHORITY/);
  await assert.rejects(()=>b.cooking.receive(initial),/INVALID_AUTHORITY/);
  b.faultAt('recipe-catalog');
  await assert.rejects(()=>files(b).receive(initial),/IO/);
@@ -223,6 +230,20 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.equal(selected.binding.sourceDocumentId,b.runtime.scope.documentId);
  assert.equal(selected.children.get('r').documentId,br.scope.documentId);
  assert.deepEqual(projectSelectedRecipes(selected).map(r=>r.id),['legacy','original','r']);
+ const storedChild=b.rows().find(row=>row.key===JSON.stringify(['document',scope.id,br.scope.documentId]));
+ const forgedChild=new LoroDoc(),signedMarker=selected.children.get('r').doc.getMap('domain-effects').get(create[0].effectId);
+ forgedChild.setPeerId(ar.scope.authorPeers[a.deviceId]);
+ apply(forgedChild,{...create[0],data:{...create[0].data,recipe:{...create[0].data.recipe,title:'Substituted creation'}}});
+ forgedChild.setPeerId('999');
+ forgedChild.getMap('domain-effects').set(create[0].effectId,signedMarker);
+ assert.equal(projectCooking(forgedChild).recipes[0].title,'Substituted creation');
+ b.replaceRow(storedChild.key,JSON.stringify({revision:0,bytes:{__storageBytes:[...forgedChild.export({mode:'snapshot'})]}}));
+ b.reopen();
+ try {
+  await assert.rejects(()=>openSelectedRecipeCatalog(b.runtime,'r'),/POLICY_BASELINE_UNAVAILABLE/);
+ } finally {
+  b.replaceRow(storedChild.key,storedChild.value);
+ }
  const retainedCreate=await execute(a,ar,'create',create);
  assert.equal(retainedCreate.replayed,true);
  assert.deepEqual(await exported(a,'create'),[initial]);
@@ -235,6 +256,8 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const [unrelatedEdit]=await exported(a,'unrelated-description');
  const unrelatedEnvelope=(await a.runtime.codec.openContent(unrelatedEdit,(await a.runtime.authorization()).signingKeyRefs)).object;
  await assert.rejects(()=>files(b).receive(unrelatedEdit),/MISSING_DEPENDENCY/);
+ assert.ok((await files(b).pending()).some(row=>row.itemId===unrelatedEnvelope.id));
+ assert.ok(!(await b.cooking.pending()).some(row=>row.itemId===unrelatedEnvelope.id));
  assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.has('unrelated'),false);
  await files(b).receive(unrelatedBytes);
  await files(b).retry(unrelatedEnvelope.id);
@@ -354,6 +377,26 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const staleCatalog=await b.storage.readSelectedRecipeCatalog(stale,selected.binding);
  assert.equal(staleCatalog.error?.code,'CONFLICT');
  assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.get('r').documentId,br.scope.documentId);
+});
+test('parent-format recipe children without catalog entries remain intact and require an explicit upgrade',async t=>{
+ const [peer]=await household(t,{onDisk:true});
+ const runtime=await peer.runtime.forRecipe('retained-child'),at='2026-01-01T00:00:00Z';
+ const command={version:1,kind:'recipe-create',commandId:'old-child',effectId:'old-child',dependencyEffectIds:[],
+  data:{recipe:{id:'retained-child',title:'Retained soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:peer.deviceId,at}};
+ const commit=peer.storage.commitLocalWithDisclosurePolicy.bind(peer.storage);
+ peer.storage.commitLocalWithDisclosurePolicy=(input,policy,active)=>commit(input,policy,active);
+ try {
+  await commitCookingWithPolicy({runtime,service:peer.service,input:{operationId:'old-child',command,deviceSequence:1}});
+ } finally {
+  peer.storage.commitLocalWithDisclosurePolicy=commit;
+ }
+ const retained=peer.rows();
+ peer.reopen();
+ await assert.rejects(()=>openSelectedRecipeCatalog(peer.runtime),/UNSUPPORTED_VERSION/);
+ await assert.rejects(()=>openSelectedRecipeCatalog(peer.runtime,'retained-child'),/UNSUPPORTED_VERSION/);
+ assert.equal((await openSelectedRecipeCatalog(peer.runtime,'different-recipe')).children.size,0);
+ assert.equal(projectCooking((await runtime.document()).doc).recipes[0].title,'Retained soup');
+ assert.deepEqual(peer.rows(),retained);
 });
 test('incomplete source replay uses the exact retained checkpoint',async t=>{
  const [peer]=await household(t);
