@@ -79,8 +79,12 @@ export function ownerGuardians({sodium,run,storage,authorityProvider,scopeId,own
   const replace=saved&&saved.requestHash!==requestHash&&saved.authorityPin===undefined&&published===undefined;
   if(replace){
    const old=await readDraft(operationId,saved),manifest=old.manifest;
+   const currentAuthority=resolved.rotation
+    ?manifest.version===2&&manifest.epochId===resolved.scope.epochId&&
+     manifest.authoritySnapshot===resolved.scope.authorizationSnapshot
+    :manifest.version===1;
    if(manifest.authorityPin!==pin||manifest.scopeId!==scopeId||manifest.owner!==owner||manifest.signerDevice!==deviceId||
-    manifest.threshold!==threshold||!equal(manifest.roster.map(row=>row.holder),holders)||
+    !currentAuthority||manifest.threshold!==threshold||!equal(manifest.roster.map(row=>row.holder),holders)||
     saved.requestHash!==recoveryHash(sodium,[catalog,personalKit,archive,holders,threshold,old.holderPins,pin,deviceId]))throw Error('CONFLICT');
   }
   if(saved===undefined||replace){
