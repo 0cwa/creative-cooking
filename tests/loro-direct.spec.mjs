@@ -281,7 +281,20 @@ test('admitted browser workspaces exchange offline recipe edits and explicitly r
           IDBObjectStore.prototype.get = get;
           const transaction = this.transaction, complete = transaction.oncomplete;
           transaction.oncomplete = function(event) {
-            globalThis.releaseRecipeHistory = () => complete.call(this,event);
+            globalThis.releaseRecipeHistory = () => new Promise(resolve => {
+              // A is the publisher. After the held document read, validating
+              // its retained seed ends with this publication transaction.
+              IDBObjectStore.prototype.get = function(seedKey) {
+                if (typeof seedKey === 'string' && seedKey.startsWith('["projection-publication",')) {
+                  IDBObjectStore.prototype.get = get;
+                  this.transaction.addEventListener('complete', () => {
+                    requestAnimationFrame(() => requestAnimationFrame(resolve));
+                  }, {once:true});
+                }
+                return get.call(this,seedKey);
+              };
+              complete.call(this,event);
+            });
           };
         }
         return get.call(this,key);
@@ -297,6 +310,7 @@ test('admitted browser workspaces exchange offline recipe edits and explicitly r
     await a.evaluate(() => globalThis.releaseRecipeHistory());
     await expect(a.getByText('No text edits recorded for this recipe.',{exact:true})).toBeVisible();
     await expect(a.getByText('Competing edit',{exact:true})).toHaveCount(0);
+    await expect(a.getByText(alternative,{exact:true})).toHaveCount(0);
 
     await b.evaluate(() => {
       const put = IDBObjectStore.prototype.put, get = IDBObjectStore.prototype.get;
@@ -320,7 +334,9 @@ test('admitted browser workspaces exchange offline recipe edits and explicitly r
     await expect(button(b,'Restore title edit')).toHaveCount(0);
     await button(b,'Retry recipe refresh').click();
     await visible(b,'Recipe edit saved.');
-    await expect(b.getByText(alternative,{exact:true}).first()).toBeVisible();
+    await expect(b.getByText('Current edit',{exact:true}).locator('..').filter({
+      has:b.getByText(alternative,{exact:true}),
+    })).toBeVisible();
     await expect(b.getByText('Competing edit',{exact:true})).toHaveCount(0);
     expect(await b.evaluate(() => globalThis.recipeRestoreWrites)).toBe(1);
     await exchange(b);
