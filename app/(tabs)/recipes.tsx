@@ -75,6 +75,7 @@ export default function RecipesScreen() {
     pantry,
     recipes,
     storageMode,
+    pendingRecipeTitle,
     createRecipe,
     updateRecipe,
     deleteRecipe,
@@ -91,6 +92,7 @@ export default function RecipesScreen() {
   const [newIngredients,setNewIngredients]=useState('');
   const [newSteps,setNewSteps]=useState('');
   const [creationError,setCreationError]=useState<string|null>(null);
+  const [creationSaved,setCreationSaved]=useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
   const [history, setHistory] = useState<RecipeHistoryEntry[] | null>(null);
@@ -101,28 +103,50 @@ export default function RecipesScreen() {
 
   const startCreating = () => {
     setCreationError(null);
+    setCreationSaved(false);
     setCreating(true);
   };
 
   const saveNewRecipe = async () => {
     if (!canEditSharedContent) return;
-    const title = newTitle.trim();
-    const ingredients = parseRecipeIngredientsText(newIngredients);
-    const steps = parseRecipeTextList(newSteps);
-    if (!title || !ingredients.length || !steps.length) {
-      setCreationError('Add a title, ingredient and cooking step.');
-      return;
+    let submission: RecipeDraft | undefined;
+    if (pendingRecipeTitle===null) {
+      const title = newTitle.trim();
+      const ingredients = parseRecipeIngredientsText(newIngredients);
+      const steps = parseRecipeTextList(newSteps);
+      if (!title || !ingredients.length || !steps.length) {
+        setCreationError('Add a title, ingredient and cooking step.');
+        return;
+      }
+      submission={title,portions:2,ingredients,steps};
     }
 
     setCreationError(null);
     try {
-      await createRecipe({title,portions:2,ingredients,steps});
+      const {refreshed}=await createRecipe(submission);
+      setCreationSaved(!refreshed);
       setCreating(false);
       setNewTitle('');
       setNewIngredients('');
       setNewSteps('');
     } catch (error) {
       setCreationError(error instanceof Error ? error.message : 'Could not save recipe.');
+    }
+  };
+
+  const retryCookingRefresh = async () => {
+    if (!refreshSharedCooking) return;
+    setCreationError(null);
+    try {
+      const release=beginWorkspaceTransition();
+      try {
+        await flushCurrentWorkspace();
+        await refreshSharedCooking();
+      } finally {
+        release();
+      }
+    } catch (error) {
+      setCreationError(error instanceof Error ? error.message : 'Could not refresh recipes.');
     }
   };
 
@@ -240,11 +264,16 @@ export default function RecipesScreen() {
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
         <View style={styles.headerActions}>
-          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
+          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" disabled={!canEditSharedContent} onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
           <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
         </View>
       </View>
+      {creationSaved && <Text accessibilityLiveRegion="polite" style={styles.line}>{sharedCookingRefreshPending ? 'Recipe saved. Refresh cooking to see it.' : 'Recipe saved.'}</Text>}
+      {sharedCookingRefreshPending && <Pressable accessibilityRole="button" onPress={() => void retryCookingRefresh()} style={styles.shoppingLink}>
+        <Text style={styles.shoppingLinkText}>Retry cooking refresh</Text>
+      </Pressable>}
+      {!creating && sharedCookingRefreshPending && creationError && <Text accessibilityRole="alert" style={styles.line}>{creationError}</Text>}
 
       <FlashList
         data={recipes}
@@ -263,21 +292,22 @@ export default function RecipesScreen() {
         contentContainerStyle={{ paddingBottom: 30 }}
       />
 
-      <Modal visible={creating} animationType="slide" onRequestClose={()=>setCreating(false)}>
+      <Modal visible={creating} animationType="slide" onRequestClose={()=>{if(canEditSharedContent)setCreating(false);}}>
         <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.recipeDetail}>
           <View style={styles.detailHeader}>
             <Pressable accessibilityRole="button" accessibilityLabel="Cancel new recipe" disabled={!canEditSharedContent} onPress={()=>setCreating(false)} style={styles.detailAction}>
               <Text style={styles.close}>Cancel</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Save new recipe" disabled={!canEditSharedContent} onPress={saveNewRecipe} style={styles.primaryAction}>
-              <Text style={styles.primaryActionText}>Save recipe</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={pendingRecipeTitle===null?'Save new recipe':'Retry new recipe save'} disabled={!canEditSharedContent} onPress={saveNewRecipe} style={styles.primaryAction}>
+              <Text style={styles.primaryActionText}>{pendingRecipeTitle===null?'Save recipe':'Retry save'}</Text>
             </Pressable>
           </View>
           {creationError && <Text accessibilityRole="alert" style={styles.line}>{creationError}</Text>}
+          {pendingRecipeTitle!==null && <Text style={styles.line}>Resolve the save for {pendingRecipeTitle} before submitting another recipe.</Text>}
           <Text style={styles.editorIntroTitle}>New recipe</Text>
-          <TextInput accessibilityLabel="New recipe title" editable={canEditSharedContent} placeholder="Recipe title" value={newTitle} onChangeText={setNewTitle} style={styles.editorTitleInput}/>
-          <TextInput accessibilityLabel="New recipe ingredients" editable={canEditSharedContent} placeholder="One ingredient per line" value={newIngredients} onChangeText={setNewIngredients} multiline style={styles.editorTitleInput}/>
-          <TextInput accessibilityLabel="New recipe steps" editable={canEditSharedContent} placeholder="One step per line" value={newSteps} onChangeText={setNewSteps} multiline style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe title" editable={canEditSharedContent&&pendingRecipeTitle===null} placeholder="Recipe title" value={newTitle} onChangeText={setNewTitle} style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe ingredients" editable={canEditSharedContent&&pendingRecipeTitle===null} placeholder="One ingredient per line" value={newIngredients} onChangeText={setNewIngredients} multiline style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe steps" editable={canEditSharedContent&&pendingRecipeTitle===null} placeholder="One step per line" value={newSteps} onChangeText={setNewSteps} multiline style={styles.editorTitleInput}/>
         </ScrollView>
       </Modal>
 

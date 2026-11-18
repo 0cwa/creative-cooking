@@ -139,7 +139,8 @@ type AppStateApi = PersistedState & {
   setPantryPreferenceByName(name: string, preference: IngredientPreference): boolean;
   validateRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   saveRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Recipe;
-  createRecipe(recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Promise<void>;
+  pendingRecipeTitle: string | null;
+  createRecipe(recipe?: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): Promise<{refreshed:boolean}>;
   updateRecipe(id: string, recipe: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>): void;
   deleteRecipe(id: string): void;
   createShoppingList(input: NewShoppingList): void;
@@ -181,7 +182,8 @@ function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace
 }
 function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
   const transitionInProgress=useRef(false);
-  const recipeCreation=useRef<{input:string;actionId:string;recipe:Recipe}|null>(null);
+  const recipeCreation=useRef<{actionId:string;recipe:Recipe}|null>(null);
+  const [pendingRecipeTitle,setPendingRecipeTitle]=useState<string|null>(null);
   const [mutationsPaused,setMutationsPaused]=useState(false);
   const [sharedCookingRefreshPending,setSharedCookingRefreshPending]=useState(false);
   const beginWorkspaceTransition=useCallback(()=>{if(transitionInProgress.current)throw Error('A workspace switch is already in progress.');transitionInProgress.current=true;setMutationsPaused(true);let released=false;return()=>{if(released)return;released=true;transitionInProgress.current=false;setMutationsPaused(false)}},[]);
@@ -340,31 +342,40 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
     return recipe;
   }, [ensureSharedEditAllowed, installedRecipeIds, prepareRecipe, updateAppState, validateRecipe]);
 
-  const createRecipe = useCallback(async (input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const createRecipe = useCallback(async (input?: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!content.createRecipe) {
+      if (!input) throw Error('There is no pending recipe save.');
       saveRecipe(input);
-      return;
+      return {refreshed:true};
     }
     if (!ensureSharedEditAllowed()) throw Error('This workspace is not available for editing.');
     if (installedRecipeIds) throw Error('Creating new recipes is not available in this household yet.');
-    validateRecipe(input);
+    let attempt = recipeCreation.current;
+    if (input) {
+      if (attempt) throw Error('Retry the pending recipe save first.');
+      validateRecipe(input);
+      attempt = {actionId:randomUUID(),recipe:prepareRecipe(input)};
+    }
+    if (!attempt) throw Error('There is no pending recipe save.');
     const release = beginWorkspaceTransition();
     try {
       await flushCurrentWorkspace();
-      const key = JSON.stringify(input);
-      const attempt = recipeCreation.current?.input === key
-        ? recipeCreation.current
-        : {input:key,actionId:randomUUID(),recipe:prepareRecipe(input)};
       recipeCreation.current = attempt;
-      const next = await content.createRecipe(attempt.actionId,attempt.recipe);
-      appStateRef.current = next;
-      pantryRef.current = next.pantry;
+      setPendingRecipeTitle(attempt.recipe.title);
+      await content.createRecipe(attempt.actionId,attempt.recipe);
       recipeCreation.current = null;
+      setPendingRecipeTitle(null);
+      try {
+        await refreshSharedCooking();
+        return {refreshed:true};
+      } catch {
+        return {refreshed:false};
+      }
     } finally {
       release();
     }
   }, [beginWorkspaceTransition, content.createRecipe, ensureSharedEditAllowed, flushCurrentWorkspace,
-    installedRecipeIds, prepareRecipe, saveRecipe, validateRecipe]);
+    installedRecipeIds, prepareRecipe, refreshSharedCooking, saveRecipe, validateRecipe]);
 
   const updateRecipe = useCallback((id: string, input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) return;
@@ -641,6 +652,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       setPantryPreferenceByName,
       validateRecipe,
       saveRecipe,
+      pendingRecipeTitle,
       createRecipe,
       updateRecipe,
       deleteRecipe,
@@ -688,6 +700,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       setPantryPreferenceByName,
       validateRecipe,
       saveRecipe,
+      pendingRecipeTitle,
       createRecipe,
       updateRecipe,
       deleteRecipe,

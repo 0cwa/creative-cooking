@@ -192,7 +192,7 @@ export function CookingDirect() {
       {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
     </>}
     {app.sharedCookingRefreshPending && <>
-      <Text accessibilityRole="alert">Received updates are saved, but this view could not refresh.</Text>
+      <Text accessibilityRole="alert">Cooking changes are saved, but this view could not refresh.</Text>
       {button('Retry cooking refresh', () => run(retryRefresh), busy)}
     </>}
   </View>;

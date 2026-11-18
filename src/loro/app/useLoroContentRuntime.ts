@@ -128,7 +128,6 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
  },[setState,workspace]);
  const createRecipe=useCallback(async(actionId:string,recipe:Recipe)=>{
   await workspace.householdContent.createRecipe(actionId,recipe);
-  return refreshSharedCooking();
- },[refreshSharedCooking,workspace]);
+ },[workspace]);
  return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current,sharedEditDeniedMessage:'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,readRecipeHistory,restoreRecipeEdit,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},separateRecipeIds,createRecipe,refreshSharedCooking,retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError('The local workspace is opening.')};
 }

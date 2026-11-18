@@ -320,3 +320,60 @@ test('Settings transfers and reopens a verified recipe document set',async({brow
   await sponsorContext.close();
  }
 });
+
+test('Recipe creation preserves the original submission and retries a saved recipe refresh without writing again',async({page})=>{
+ const title='Retry market soup';
+ await page.goto(app);
+ await button(page,'Start fresh local preview').click();
+ await button(page,'Review household policy').click();
+ await button(page,'Accept this household policy').click();
+ await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await page.goto(app+'recipes');
+ await expect(label(page,'Add recipe')).toBeEnabled();
+
+ await page.evaluate(()=>{
+  const put=IDBObjectStore.prototype.put,getAllKeys=IDBObjectStore.prototype.getAllKeys;
+  const writes=[];
+  let failRefresh=false,readFaults=0;
+  IDBObjectStore.prototype.put=function(value,key){
+   if(typeof key==='string'&&key.startsWith('["recipe-catalog",')){
+    writes.push([key,value.effectId]);
+    if(writes.length===1)throw Error('Injected recipe publication failure');
+    if(writes.length===2)failRefresh=true;
+   }
+   return put.call(this,value,key);
+  };
+  IDBObjectStore.prototype.getAllKeys=function(...args){
+   if(failRefresh&&this.name==='records'&&this.transaction.mode==='readonly'){
+    failRefresh=false;
+    readFaults++;
+    throw Error('Injected recipe refresh failure');
+   }
+   return getAllKeys.apply(this,args);
+  };
+  globalThis.recipeSaveProof=()=>({writes,readFaults});
+ });
+
+ await addRecipe(page,title);
+ await expect(label(page,'Retry new recipe save')).toBeEnabled();
+ await expect(label(page,'New recipe title')).not.toBeEditable();
+ await expect(page.getByText(`Resolve the save for ${title} before submitting another recipe.`)).toBeVisible();
+ await label(page,'Cancel new recipe').click();
+ await label(page,'Add recipe').click();
+ await label(page,'Retry new recipe save').click();
+ await expect(page.getByText('Recipe saved. Refresh cooking to see it.',{exact:true})).toBeVisible();
+ await expect(label(page,'New recipe title')).toHaveCount(0);
+ await expect(label(page,'Add recipe')).toBeDisabled();
+ const beforeRefresh=await page.evaluate(()=>globalThis.recipeSaveProof());
+ expect(beforeRefresh.readFaults).toBe(1);
+ expect(beforeRefresh.writes).toHaveLength(2);
+ expect(beforeRefresh.writes[1]).toEqual(beforeRefresh.writes[0]);
+
+ await button(page,'Retry cooking refresh').click();
+ await expect(label(page,'Open recipe '+title)).toHaveCount(1);
+ await expect(page.getByText('Recipe saved.',{exact:true})).toBeVisible();
+ expect(await page.evaluate(()=>globalThis.recipeSaveProof())).toEqual(beforeRefresh);
+
+ await page.reload();
+ await expect(label(page,'Open recipe '+title)).toHaveCount(1);
+});

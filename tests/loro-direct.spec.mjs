@@ -546,7 +546,7 @@ test('admitted browser devices independently verify their direct connection, ret
     await visible(a,'Peer receipts for this connection: 1 stored, 1 applied.');
     expect(await durable(b,bHousehold)).toEqual({inbox:1, applied:1, 'receipt-state':0, receipt:0});
     expect(await a.evaluate(() => Promise.all(globalThis.receiptSelectionLocks))).toEqual([true,true]);
-    const refreshError = b.getByText('Received updates are saved, but this view could not refresh.', {exact:true});
+    const refreshError = b.getByText('Cooking changes are saved, but this view could not refresh.', {exact:true});
     await expect(refreshError).toBeVisible();
     await button(a,'Send cooking updates').click();
     await visible(a,'No local updates are waiting for this device.');
