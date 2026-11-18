@@ -79,6 +79,7 @@ export type ContentRuntimeSnapshot = {
   prepareAccountExit(): Promise<void>;
   applyProposalEffect(conversationId: string, proposal: ChefToolProposal, before: PersistedState, after: PersistedState): Promise<'applied' | 'queued'>;
   flushCurrentWorkspace(target?: PersistedState): Promise<void>;
+  refreshSharedCooking?(): Promise<PersistedState>;
   retryStorage(): Promise<boolean>;
   exportWorkspaceRecovery(): Promise<string>;
   reportEditDenied(): void;

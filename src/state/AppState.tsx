@@ -124,6 +124,7 @@ type AppStateApi = PersistedState & {
   keepGuestContent(): Promise<void>;
   prepareAccountExit(): Promise<void>;
   flushCurrentWorkspace(): Promise<void>;
+  refreshSharedCooking?(): Promise<void>;
   beginWorkspaceTransition(): () => void;
   exportWorkspaceRecovery(): Promise<string>;
   reportContentEditDenied(): void;
@@ -198,6 +199,10 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
   const storageError = content.storageError;
   const retryStorage = content.retryStorage;
   const flushCurrentWorkspace=useCallback(()=>content.flushCurrentWorkspace(storageMode==='fresh-local'?appStateRef.current:undefined),[content.flushCurrentWorkspace,storageMode]);
+  const refreshSharedCooking=useCallback(async()=>{
+    const next=await content.refreshSharedCooking?.();
+    if(next){appStateRef.current=next;pantryRef.current=next.pantry;}
+  },[content.refreshSharedCooking]);
 
   const ensureSharedEditAllowed = useCallback(() => {
     if(transitionInProgress.current)return false;
@@ -550,6 +555,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       keepGuestContent: content.keepGuestContent,
       prepareAccountExit: content.prepareAccountExit,
       flushCurrentWorkspace,
+      refreshSharedCooking,
       beginWorkspaceTransition,
       exportWorkspaceRecovery: content.exportWorkspaceRecovery,
       reportContentEditDenied: content.reportEditDenied,
@@ -592,6 +598,7 @@ function AppStateBody({children,state,setState,content,storageMode}:PropsWithChi
       mutationsPaused,
       beginWorkspaceTransition,
       flushCurrentWorkspace,
+      refreshSharedCooking,
       saveAttemptedRecipeAsCopy,
       keepWorkspaceRecipeVersion,
       retryStorage,

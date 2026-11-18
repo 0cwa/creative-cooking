@@ -5,10 +5,35 @@ const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.co
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
 export function cookingFiles({runtime,service}){
  const scopeId=runtime.scope.scopeId;
- async function list(){const rows=must(await runtime.storage.listOutboundObjects(scopeId));return rows.filter(x=>x.branchHead===runtime.scope.branchHead&&x.epochId===runtime.scope.epochId).map(x=>({objectId:x.objectId}));}
- async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const rows=must(await runtime.storage.listOutboundObjects(scopeId)),row=rows.find(x=>x.objectId===objectId);if(!row||row.branchHead!==runtime.scope.branchHead||row.epochId!==runtime.scope.epochId)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
- async function receive(raw){if(!(raw instanceof Uint8Array))throw Error('MALFORMED');if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');const bytes=new Uint8Array(raw),auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs),id=opened.object.id;validateCookingHeader(opened,id,runtime.scope);const source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId)),expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id}));return importCookingWithPolicy({runtime,service,item:{itemId:id,bytes}});}
- async function pending(){const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]),reasons=new Map(must(policyPending).map(x=>[x.objectId,x.reason])),sources=new Set(must(cursors).filter(x=>x.source===`file:${x.cursor}`).map(x=>x.cursor)),pending=[];for(const item of must(items)){if(sources.has(item.itemId)&&!must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))pending.push({itemId:item.itemId,reason:reasons.get(item.itemId)??null})}return pending;}
- async function retry(itemId){const items=must(await runtime.storage.listStagedInbox(scopeId)),item=items.find(x=>x.itemId===itemId);if(!item)throw Error('MISSING_UPDATE');const sources=must(await runtime.storage.listCursors(scopeId));if(!sources.some(x=>x.source===`file:${itemId}`&&x.cursor===itemId))throw Error('INVALID_AUTHORITY');return importCookingWithPolicy({runtime,service,item});}
- return {list,download,receive,pending,retry};
+ const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(x=>x.branchHead===runtime.scope.branchHead&&x.epochId===runtime.scope.epochId);
+ const cookingSource=({source,cursor})=>source===`file:${cursor}`||source===`direct:${cursor}`;
+ async function list(){return (await outbound()).map(x=>({objectId:x.objectId}));}
+ async function download(objectId){if(typeof objectId!=='string'||!objectId)throw Error('MALFORMED');await runtime.authorize();const row=(await outbound()).find(x=>x.objectId===objectId);if(!row)throw Error('INVALID_AUTHORITY');return new Uint8Array(row.bytes);}
+ async function verify(bytes,expectedId,expectedAuthor){
+  if(!(bytes instanceof Uint8Array))throw Error('MALFORMED');
+  if(bytes.length>MAX_OBJECT)throw Error('TOO_LARGE');
+  const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
+  validateCookingHeader(opened,expectedId??opened.object.id,runtime.scope);
+  if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
+  return opened.object;
+ }
+ const applyStaged=item=>importCookingWithPolicy({runtime,service,item});
+ async function receive(raw){if(!(raw instanceof Uint8Array))throw Error('MALFORMED');if(raw.length>MAX_OBJECT)throw Error('TOO_LARGE');const bytes=new Uint8Array(raw),{id}=await verify(bytes),source=`file:${id}`,cursors=must(await runtime.storage.listCursors(scopeId)),expectedCursor=cursors.find(x=>x.source===source)?.cursor??null;must(await runtime.storage.stageInbox({scopeId,object:{id,bytes},source,expectedCursor,cursor:id}));return applyStaged({itemId:id,bytes});}
+ async function pending(){const [cursors,items,policyPending]=await Promise.all([runtime.storage.listCursors(scopeId),runtime.storage.listStagedInbox(scopeId),runtime.storage.listDisclosurePending(scopeId)]),reasons=new Map(must(policyPending).map(x=>[x.objectId,x.reason])),sources=new Set(must(cursors).filter(cookingSource).map(x=>x.cursor)),pending=[];for(const item of must(items)){if(sources.has(item.itemId)&&!must(await runtime.storage.getInboxApplication(scopeId,item.itemId)))pending.push({itemId:item.itemId,reason:reasons.get(item.itemId)??null})}return pending;}
+ async function retry(itemId){const items=must(await runtime.storage.listStagedInbox(scopeId)),item=items.find(x=>x.itemId===itemId);if(!item)throw Error('MISSING_UPDATE');const sources=must(await runtime.storage.listCursors(scopeId));if(!sources.some(x=>x.cursor===itemId&&cookingSource(x)))throw Error('INVALID_AUTHORITY');return applyStaged(item);}
+ async function directBatch(peerId,limit,attempts) {
+  await runtime.authorize();
+  const [rows,states]=await Promise.all([outbound(),runtime.storage.listReceiptStates(scopeId)]);
+  const receipts=new Map(must(states).filter(x=>x.destination==='peer'&&x.recipientId===peerId).map(x=>[x.objectId,x.state]));
+  const decoder=new TextDecoder('utf-8',{fatal:true});
+  const pending=rows.filter(row=>receipts.get(row.objectId)!=='applied').map(row=>{
+   const {header}=JSON.parse(decoder.decode(row.bytes));
+   if(header.authorDevice!==runtime.scope.authorDevice||!Number.isSafeInteger(header.deviceSequence))throw Error('CORRUPT');
+   return {...row,sequence:header.deviceSequence,attempts:attempts.get(row.objectId)??(receipts.get(row.objectId)==='stored'?1:0)};
+  });
+  // Keep each pass in writer order while giving untried updates a turn.
+  pending.sort((a,b)=>a.attempts-b.attempts||a.sequence-b.sequence);
+  return {objects:pending.slice(0,limit),more:pending.length>limit};
+ }
+ return {list,download,receive,pending,retry,verify,applyStaged,directBatch};
 }

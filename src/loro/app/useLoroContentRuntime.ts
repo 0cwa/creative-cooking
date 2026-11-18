@@ -18,7 +18,9 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
  const [hydrated,setHydrated]=useState(false),[error,setError]=useState<string|null>(null),[status,setStatus]=useState<'saving'|'saved'|'error'>('saving');
  const unresolved=useRef<(()=>Promise<void>)|null>(null);
  const initialize=useRef<(()=>Promise<boolean>)|null>(null);
- const actionIds=useRef(new Map<string,{id:string,commands:any[]}>()),current=useRef(state),committed=useRef<PersistedState|null>(null),queue=useRef<Promise<void>>(Promise.resolve()),revision=useRef(0),pending=useRef(0);current.current=state;
+ const actionIds=useRef(new Map<string,{id:string,commands:any[]}>()),current=useRef(state),committed=useRef<PersistedState|null>(null),queue=useRef<Promise<unknown>>(Promise.resolve()),revision=useRef(0),pending=useRef(0);
+ const projection=useRef({generation:0,replaced:null as PersistedState|null});
+ if(state!==projection.current.replaced)current.current=state;
  useEffect(()=>{let active=true;const open=async()=>{if(!active)return false;setStatus('saving');setError(null);try{const {doc}=await workspace.household.document();const cooking=projectCooking(doc);const personal=projectPersonal((await workspace.personal.document()).doc);const {mealContext,activeConversationId,recoveryReminderDismissed: _recoveryReminderDismissed,...settings}=personal.preferences;const selectedConversation=personal.conversations.find((c:any)=>c.id===activeConversationId);const initial={...DEFAULT_STATE,...cooking,settings:{...DEFAULT_STATE.settings,...settings},mealContext:mealContext??DEFAULT_STATE.mealContext,activeConversationId:selectedConversation?.id??null,chatMessages:selectedConversation?.messages??[],chatHistory:personal.conversations.filter((c:any)=>c.id!==selectedConversation?.id)};if(active){committed.current=initial;current.current=initial;setState(initial);setStatus('saved');setHydrated(true);return true}return false}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error');setHydrated(true)}return false}};initialize.current=open;void open();return()=>{active=false;if(initialize.current===open)initialize.current=null}},[workspace,setState]);
  const save=useCallback(async(target:PersistedState)=>{
   // Resolve the exact earlier action before deriving a later target from disk.
@@ -42,8 +44,25 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   };
   await unresolved.current();unresolved.current=null;
  },[workspace]);
- const schedule=useCallback((target:PersistedState)=>{const number=++revision.current;pending.current++;setStatus('saving');const next=queue.current.catch(()=>{}).then(()=>save(target));queue.current=next;void next.then(()=>{pending.current--;if(number===revision.current){setStatus('saved');setError(null)}},e=>{pending.current--;if(number===revision.current){setStatus('error');setError(e instanceof Error?e.message:'Could not save local changes')}});return next},[save]);
- useEffect(()=>{if(!hydrated||!committed.current)return;if(same(state,committed.current)&&pending.current===0){setStatus('saved');return}void schedule(state).catch(()=>{});},[state,hydrated,schedule]);
+ const schedule=useCallback((target:PersistedState)=>{const number=++revision.current,generation=projection.current.generation;pending.current++;setStatus('saving');const next=queue.current.catch(()=>{}).then(async()=>{if(generation===projection.current.generation)await save(target)});queue.current=next;void next.then(()=>{pending.current--;if(number===revision.current){setStatus('saved');setError(null)}},e=>{pending.current--;if(number===revision.current){setStatus('error');setError(e instanceof Error?e.message:'Could not save local changes')}});return next},[save]);
+ useEffect(()=>{if(!hydrated||!committed.current||state===projection.current.replaced)return;if(same(state,committed.current)&&pending.current===0){setStatus('saved');return}void schedule(state).catch(()=>{});},[state,hydrated,schedule]);
  const retryStorage=useCallback(async()=>{if(!committed.current)return await initialize.current?.()??false;try{await schedule(current.current);return true}catch{return false}},[schedule]);
- return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current,sharedEditDeniedMessage:'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError('The local workspace is opening.')};
+ const refreshSharedCooking=useCallback(async()=>{
+  if(!committed.current)throw Error('The local workspace has not opened.');
+  // The caller has paused edits and flushed the latest target. Drain any
+  // duplicate React saves before replacing the projection from the same disk.
+  const refresh=queue.current.then(async()=>{
+   const {doc}=await workspace.household.document();
+   if(!committed.current)throw Error('The local workspace has not opened.');
+   const next={...committed.current,...projectCooking(doc)};
+   projection.current={generation:projection.current.generation+1,replaced:current.current};
+   committed.current=next;
+   current.current=next;
+   setState(next);
+   return next;
+  });
+  queue.current=refresh;
+  return refresh;
+ },[setState,workspace]);
+ return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current,sharedEditDeniedMessage:'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},refreshSharedCooking,retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError('The local workspace is opening.')};
 }
