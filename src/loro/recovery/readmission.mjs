@@ -2,6 +2,7 @@
 // accept an actual recovery-device transition before releasing household keys or votes.
 import {domain} from '../authority/validator.mjs';
 import {readAuthority,verifyAuthority} from '../authority/chain.mjs';
+import {guardianWrappingFingerprint} from './recovery.mjs';
 const e=new TextEncoder(),hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 const bytes=(purpose,x)=>e.encode(JSON.stringify(['creative-cooking/recovery-readmission/v1',purpose,canonical(x)]));
@@ -27,7 +28,23 @@ export function answerRecoveryChallenge(sodium,claim,sealed,wrappingPublic,wrapp
 export async function verifyRecoveryClaim({sodium,storage,scope,pin,provider,claim,continuitySignature,deviceSignature,continuityBinding,continuityBindingSignature,continuityRegistry}){
  claim=structuredClone(claim);check(claim);if(scope?.kind!=='household'||scope.id!==claim.householdId)throw Error('INVALID_CONTEXT');const authority=await readAuthority(storage,scope,pin,provider),verified=await verifyAuthority(authority.state,pin,provider),parent=verified.nodes.get(authority.activeHead);if(!parent||claim.checkpoint!==authority.activeHead||claim.policyHash!==parent.policyHash||!parent.roster.includes(claim.owner)||parent.devices.some(x=>x.deviceId===claim.deviceId))throw Error('INVALID_CONTEXT');const registered=await continuityRegistry.current({sodium,storage,scope,pin,provider,owner:claim.owner});if(!registered)throw Error('CONTINUITY_NOT_REGISTERED');const binding=structuredClone(continuityBinding);if(!exact(binding,['version','householdId','owner','checkpoint','signerDevice','generation','continuityKey'])||binding.version!==1||binding.householdId!==scope.id||binding.owner!==claim.owner||binding.continuityKey!==claim.continuityKey||binding.generation!==claim.recoveryGeneration||!id(binding.checkpoint)||!id(binding.signerDevice)||!Number.isSafeInteger(binding.generation)||binding.generation<0||continuityBindingHash(sodium,binding)!==registered.bindingHash||JSON.stringify(canonical(binding))!==JSON.stringify(canonical(registered.binding))||continuityBindingSignature!==registered.bindingSignature)throw Error('INVALID_CONTEXT');const boundParent=verified.nodes.get(binding.checkpoint),boundSigner=boundParent?.devices.find(x=>x.active&&x.deviceId===binding.signerDevice&&x.adultId===binding.owner);if(!boundSigner||!await provider.verify(boundSigner.signingKeyRef,continuityBindingBytes(binding),unhex(continuityBindingSignature,64)))throw Error('INVALID_PROOF');const payload=recoveryClaimBytes(claim);if(!sodium.crypto_sign_verify_detached(unhex(continuitySignature,64),payload,unhex(binding.continuityKey,32))||!sodium.crypto_sign_verify_detached(unhex(deviceSignature,64),payload,unhex(claim.signingKey,32)))throw Error('INVALID_PROOF');
  if(!await recoveryBindingOnAncestry(provider,authority.state.events,claim.checkpoint,binding.checkpoint))throw Error('INVALID_CONTEXT');
+ assertFreshRecoveryWrappingKey(sodium,verified.wrappingHistory,parent.head,claim.wrappingKey);
  return {authority,parent,nodes:verified.nodes,registered,claimHash:recoveryClaimHash(sodium,claim)};
+}
+export function assertFreshRecoveryWrappingKey(sodium,history,head,wrappingKey,fingerprints=new Map()){
+ const candidate=guardianWrappingFingerprint(sodium,unhex(wrappingKey,32));
+ fingerprints.set(wrappingKey,candidate);
+ for(let edge=history.get(head);edge;edge=history.get(edge.parent)){
+  for(const prior of edge.keys){
+   if(!fingerprints.has(prior)){
+    let fingerprint=null;
+    try{fingerprint=guardianWrappingFingerprint(sodium,unhex(prior,32));}
+    catch{/* An unusable prior encoding has no decryption capability. */}
+    fingerprints.set(prior,fingerprint);
+   }
+   if(fingerprints.get(prior)===candidate)throw Error('REUSED_WRAPPING_KEY');
+  }
+ }
 }
 export async function recoveryBindingOnAncestry(provider,events,head,checkpoint){
  const parents=new Map(await Promise.all(events.map(async ({event})=>[

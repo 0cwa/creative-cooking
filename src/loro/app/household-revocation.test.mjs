@@ -16,7 +16,7 @@ import {householdCompromise} from './household-compromise.mjs';
 import {householdReadmission} from './household-readmission.mjs';
 import {householdTransfer} from './household-transfer.mjs';
 import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
-import {continuityBindingBytes,continuityPublicKey} from '../recovery/readmission.mjs';
+import {continuityBindingBytes,continuityBindingHash,continuityPublicKey,recoveryClaimBytes} from '../recovery/readmission.mjs';
 import {householdRevocation} from './household-revocation.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {localProvider} from './local-provider.mjs';
@@ -66,6 +66,7 @@ async function withRotationFixture({owners,policy,guest},run){
    };
    const participant={deviceId,adultId,fault:null,close:()=>database?.close(),rows:()=>database.prepare('SELECT * FROM loro_records ORDER BY key').all()};
    participant.replaceRow=(key,value)=>database.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,key);
+   participant.deleteRow=key=>database.prepare('DELETE FROM loro_records WHERE key=?').run(key);
    participants.push(participant);
    participant.open=()=>{
     database=new DatabaseSync(path);
@@ -504,8 +505,8 @@ test('SQLite adult removal uses unanimity on the frozen parent and handles an em
 
 test('SQLite registered readmission consumes its challenge atomically, rolls back recipient install and reopens fresh household writes',async()=>{
  await withRotationFixture({
-  owners:{alpha:'alpha',beta:'beta',gamma:'gamma'},policy:{kind:'fixed',fixedCount:2},guest:'fresh'
- },async([a,b,c,fresh],root,pin)=>{
+  owners:{alpha:'alpha',beta:'beta',gamma:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2},guest:'fresh'
+ },async([a,b,c,_tablet,fresh],root,pin)=>{
   const credential0=sodium.to_hex(sodium.randombytes_buf(32)),credential=sodium.to_hex(sodium.randombytes_buf(32));
   const binding=async(generation,seed)=>{
    const binding={version:1,householdId:scope.id,owner:'gamma',checkpoint:pin,signerDevice:'gamma',generation,
@@ -521,14 +522,25 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
    assert.equal((await service.retainRegistration({message:latest,explicit:true})).replayed,true);
    await assert.rejects(service.retainRegistration({message:first,explicit:true}),/CONFLICT/);
   }
+  const draftFor=async deviceId=>{
+   const token=(await a.compromise.open()).confirmation;
+   const report=await a.compromise.prepare(token,deviceId);
+   const id=await a.compromise.sign(report,{kind:'checkpoint'});
+   await a.compromise.saveCleanDraft(await a.compromise.inspect(token,id),[]);
+   return id;
+  };
+  const historicalBinding=await c.service.binding();
+  const earlier=await approve(b,await approve(a,await a.service.prepare({
+   reviewId:await draftFor('tablet'),bindings:[await b.service.binding(),historicalBinding],explicit:true
+  })));
+  await a.service.publish(confirm(earlier));
+  await b.service.install({...confirm(earlier),bytes:await a.service.seal({operationId:earlier.proposal.item.event.proposalId,recipientDevice:'beta'})});
+  await Promise.all([reopen(a,pin),reopen(b,pin)]);
   await apply(a.runtime,1,'pantry-create','current',{itemId:'p',name:'Archived original saffron',preference:3,author:a.deviceId,at});
   await apply(a.runtime,2,'pantry-create','delete',{itemId:'d',name:'Deleted continuity canary',preference:2,author:a.deviceId,at});
   await apply(a.runtime,3,'pantry-field','removed',{itemId:'d',field:'removedAt',value:at,author:a.deviceId,at},['delete']);
-  const active=(await a.compromise.open()).confirmation,report=await a.compromise.prepare(active,'gamma');
-  const reviewId=await a.compromise.sign(report,{kind:'checkpoint'});
-  await a.compromise.saveCleanDraft(await a.compromise.inspect(active,reviewId),[]);
   const retired=await approve(b,await approve(a,await a.service.prepare({
-   reviewId,bindings:[await b.service.binding()],explicit:true
+   reviewId:await draftFor('gamma'),bindings:[await b.service.binding()],explicit:true
   })));
   await a.service.publish(confirm(retired));
   await b.service.install({...confirm(retired),bytes:await a.service.seal({operationId:retired.proposal.item.event.proposalId,recipientDevice:'beta'})});
@@ -548,6 +560,22 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
   await assert.rejects(serviceA().issue({request:old,explicit:true}),/INVALID_CONTEXT/);
   assert.deepEqual(a.rows(),beforeOld);
   const request=await draftRequest(freshService()), beforeIssue=a.rows();
+  const signWithRetiredWrapping=async wrappingKey=>{
+   const claim={...request.claim,wrappingKey};
+   const bytes=recoveryClaimBytes(claim), seed=sodium.from_hex(credential);
+   const key=sodium.crypto_sign_seed_keypair(seed);
+   try{
+    return {claim,continuitySignature:sodium.to_hex(sodium.crypto_sign_detached(bytes,key.privateKey)),
+     deviceSignature:sodium.to_hex(await fresh.provider.sign(fresh.signingKey,bytes))};
+   }finally{seed.fill(0);key.privateKey.fill(0);}
+  };
+  const alias=sodium.from_hex(historicalBinding.wrappingKey);
+  alias[31]^=128;
+  for(const wrappingKey of [historicalBinding.wrappingKey,sodium.to_hex(alias)]){
+   const reused=await signWithRetiredWrapping(wrappingKey);
+   await assert.rejects(serviceA().issue({request:reused,explicit:true}),/REUSED_WRAPPING_KEY/);
+  }
+  assert.deepEqual(a.rows(),beforeIssue);
   const challenge=await serviceA().issue({request,explicit:true});
   await reopen(a,pin);
   assert.deepEqual(await serviceA().issue({request,explicit:true}),challenge);
@@ -586,8 +614,35 @@ test('SQLite registered readmission consumes its challenge atomically, rolls bac
   assert.equal((await install()).replayed,true);
   const memberFile=await serviceA().seal({operationId:publication,recipientDevice:'beta'});
   assert.notDeepEqual(memberFile,file);
+  const memberInput={proposal:decision.proposal,bytes:memberFile,fresh:false,explicit:true};
   await serviceB().reviewRecipient({proposal:decision.proposal,fresh:false});
-  assert.equal((await serviceB().install({proposal:decision.proposal,bytes:memberFile,fresh:false,explicit:true})).acceptedHead,decision.eventHash);
+  const laterBinding=await binding(2,sodium.to_hex(sodium.randombytes_buf(32)));
+  const bindingHash=continuityBindingHash(sodium,laterBinding.binding);
+  const bindingSlot=JSON.stringify(['continuity-binding',scope.id,'gamma','2']);
+  const headSlot=JSON.stringify(['continuity-head',scope.id,'gamma']);
+  const beforeMember=b.rows(), oldHead=beforeMember.find(row=>row.key===headSlot);
+  const advanceLocalRegistration=()=>b.storage.compromise.run(true,async tx=>{
+   await tx.put(bindingSlot,{version:1,...laterBinding,bindingHash});
+   await tx.put(headSlot,{generation:2,bindingHash});
+  });
+  const installMember=b.storage.householdRecipient.install.bind(b.storage.householdRecipient);
+  b.storage.householdRecipient.install=async (...args)=>{
+   await advanceLocalRegistration();
+   return installMember(...args);
+  };
+  try{
+   await assert.rejects(serviceB().install(memberInput),/CONFLICT/);
+   assert.deepEqual(b.rows().filter(row=>row.key!==bindingSlot&&row.key!==headSlot),beforeMember.filter(row=>row.key!==headSlot));
+  }finally{
+   b.storage.householdRecipient.install=installMember;
+   b.deleteRow(bindingSlot);
+   b.replaceRow(headSlot,oldHead.value);
+  }
+  assert.equal((await serviceB().install(memberInput)).acceptedHead,decision.eventHash);
+  await advanceLocalRegistration();
+  const installedMember=b.rows();
+  assert.equal((await serviceB().install(memberInput)).replayed,true);
+  assert.deepEqual(b.rows(),installedMember);
   await Promise.all([reopen(a,pin),reopen(b,pin),reopen(fresh,pin)]);
   const newKey=await fresh.keys().useIdentity(keyIdentity('fresh',currentEpoch),secret=>new Uint8Array(secret));
   try{

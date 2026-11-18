@@ -47,7 +47,7 @@ export async function installHouseholdRecipient({sodium,storage,scope,pin,provid
     return {replayed:true,receipt,acceptedHead:proof.nextAuthority.acceptedParent,generation:context.generation};
    }
    await prepareEnrollment?.();
-   const result=await storage.householdRecipient.install(input);if(!result.ok)throw Error(result.error);return {...result.value,acceptedHead:proof.nextAuthority.acceptedParent,generation:context.generation};
+   const result=await storage.householdRecipient.install(input,proof.continuity);if(!result.ok)throw Error(result.error);return {...result.value,acceptedHead:proof.nextAuthority.acceptedParent,generation:context.generation};
   });
  }finally{privateKeys.signingSecret.fill(0);privateKeys.wrappingSecret.fill(0)}
 }

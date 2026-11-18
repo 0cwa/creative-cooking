@@ -48,6 +48,7 @@ export async function verifyRevocationRecipient({
     documentId:p.document.documentId,generation:p.document.generation,manifest:p.manifest,seed,snapshot:p.document.bytes,packet:p.packet});
   if (confirmedGrantHash!==context.grantHash || p.grantHash!==context.grantHash || hex(keys.signingSecret.subarray(32))!==context.recipientSigningKey ||
       hex(sodium.crypto_scalarmult_base(keys.wrappingSecret))!==context.recipientWrappingKey) throw Error('INVALID_RECIPIENT');
-  return {kind:recovery?'recovery':'revocation',fresh,expectedAuthority:record,guardId,context,packet:p.packet,snapshot:p.document.bytes,
+  const continuity=recovery?{owner:item.event.subject.owner,generation:item.event.subject.bindingGeneration,bindingHash:item.event.subject.bindingHash}:undefined;
+  return {kind:recovery?'recovery':'revocation',fresh,continuity,expectedAuthority:record,guardId,context,packet:p.packet,snapshot:p.document.bytes,
     nextAuthority:{scope,revision:record.revision+1,acceptedParent:eventHash,authorizationSnapshot:await digest(provider,'authority-state',next),authorityState:encode(next)}};
 }

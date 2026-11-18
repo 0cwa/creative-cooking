@@ -28,7 +28,8 @@ export async function verifyAuthority(state,pin,provider) {
  if (!validParent(state.root) || state.root.devices.some(d=>!state.root.roster.includes(d.adultId)) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
- const policyParents=new Map(), legacyPolicyHeads=new Set(), seedSchemas=new Map();
+ const policyParents=new Map(), legacyPolicyHeads=new Set(), seedSchemas=new Map(), wrappingHistory=new Map();
+ const wrappingFingerprints=new Map();
  for(const item of state.events) {
   if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
@@ -55,7 +56,8 @@ export async function verifyAuthority(state,pin,provider) {
      const sender=sub.devices.find(d=>d.deviceId===rotation.localDeviceId),proof=rotation.recoveryProof;
      if(sender?.signingKeyRef!==proof?.senderSigningKey||sender?.wrappingKeyRef!==proof?.senderWrappingKey)throw Error('INVALID_RECOVERY_PROOF');
      await verifyRecoveryProof({sodium,parent,nodes,event:item.event,proof,provider});
-     const {recoveryBindingOnAncestry}=await import('../recovery/readmission.mjs');
+     const {assertFreshRecoveryWrappingKey,recoveryBindingOnAncestry}=await import('../recovery/readmission.mjs');
+     assertFreshRecoveryWrappingKey(sodium,wrappingHistory,parent.head,sub.wrappingKeyRef,wrappingFingerprints);
      const votes=rows=>rows.map(({adultId,deviceId})=>[adultId,deviceId]);
      if(hex(bytes(votes(item.approvals)))!==hex(bytes(votes(proof.confirmations)))||
         !await recoveryBindingOnAncestry(provider,state.events.slice(0,state.events.indexOf(item)),parent.head,proof.binding.checkpoint))throw Error('INVALID_RECOVERY_PROOF');
@@ -102,6 +104,14 @@ export async function verifyAuthority(state,pin,provider) {
    if(!validParent(child)) throw Error('INVALID_ADMISSION');nodes.set(r.eventHash,child);
    if(a.manifest.version===4)seedSchemas.set(r.eventHash,4);
   } else throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
+  const wrappingKeys=new Set((item.event.subject?.devices??[]).map(d=>d.wrappingKeyRef));
+  for(const ceremony of [...(item.admission?.ceremonies??[]),...(item.admission?.existingCeremonies??[]),...(item.rotation?.ceremonies??[])]){
+   for(const role of ['initiator','responder']){
+    const key=decodeEvidence(ceremony.transcript[role].wrappingPublicKey);
+    if(key instanceof Uint8Array)wrappingKeys.add(hex(key));
+   }
+  }
+  wrappingHistory.set(r.eventHash,{parent:parent.head,keys:wrappingKeys});
  }
  const agreements=state.agreements ?? [];
  if(!Array.isArray(agreements) || agreements.length>128 || !Array.from({length:agreements.length},(_,i)=>Object.hasOwn(agreements,i)).every(Boolean)) throw Error('MALFORMED');
@@ -121,7 +131,7 @@ export async function verifyAuthority(state,pin,provider) {
   active=selection.to;
  }
  if(active!==state.activeHead)throw Error('MISSING_ACTIVE_HEAD');
- return {nodes,state,policyParents,legacyPolicyHeads,seedSchemas};
+ return {nodes,state,policyParents,legacyPolicyHeads,seedSchemas,wrappingHistory};
 }
 // Hash excludes head so genesis is not self-referential.
 export async function rootPin(provider,root) { const r=copy(root); delete r.head; return digest(provider,'root',r); }
