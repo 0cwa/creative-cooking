@@ -401,3 +401,31 @@ test('return to original requires an established workspace and creates no identi
   } finally { db.close(); }
  } finally { removeWorkspace(name); }
 });
+
+test('native bootstrap reopens and saves the rotated personal generation in SQLite',async()=>{
+ const name='native-personal-rotation';
+ const options={...args(name,true),randomUUID};
+ let workspace;
+ const command=(id,city)=>({version:1,kind:'personal-preference-put',commandId:id,effectId:id,
+  dependencyEffectIds:[],data:{key:'city',value:city}});
+ try{
+  workspace=await openNativeWorkspaceWith(options);
+  const original=workspace.personal.scope;
+  const house=workspace.household.scope;
+  await executeAction(workspace.personal,workspace.sequences,'old-city',[command('old-city','Before rotation')]);
+  const review=await workspace.personalRotation.review();
+  const result=await workspace.personalRotation.publish(review,[]);
+  await assert.rejects(()=>workspace.personal.authorize(),/INVALID_AUTHORITY/);
+  workspace.close();workspace=null;
+  workspace=await openNativeWorkspaceWith({...options,create:false});
+  assert.equal(workspace.personal.scope.branchHead,result.head);
+  assert.notEqual(workspace.personal.scope.epochId,original.epochId);
+  assert.notEqual(workspace.personal.scope.documentId,original.documentId);
+  assert.equal(workspace.household.scope.branchHead,house.branchHead);
+  assert.equal((await workspace.personal.document()).doc.getMap('personal-preferences').get('city'),'Before rotation');
+  await executeAction(workspace.personal,workspace.sequences,'new-city',[command('new-city','After rotation')]);
+  workspace.close();workspace=null;
+  workspace=await openNativeWorkspaceWith({...options,create:false});
+  assert.equal((await workspace.personal.document()).doc.getMap('personal-preferences').get('city'),'After rotation');
+ }finally{workspace?.close();removeWorkspace(name)}
+});

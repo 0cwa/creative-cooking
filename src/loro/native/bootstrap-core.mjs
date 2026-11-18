@@ -14,6 +14,7 @@ import {executeAction,subscribeActions} from '../app/action.mjs';
 import {cookingFiles} from '../app/cooking-file.mjs';
 import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
 import {workspaceRecovery} from '../app/workspace-recovery.mjs';
+import {personalRotation} from '../app/personal-rotation.mjs';
 import {openNativeSequences} from './sequences.mjs';
 import {initialAdmissionPolicy} from '../app/admission-rule.mjs';
 const enc=new TextEncoder(),dec=new TextDecoder('utf-8',{fatal:true});
@@ -79,7 +80,12 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const ensure=async(scope,initialize)=>{const old=await storage.readPairingAuthority(scope);if(!old.ok)throw Error(old.error);if(!old.value){if(ready)throw Error('MISSING_AUTHORITY');try{await initialize()}catch(e){const raced=await storage.readPairingAuthority(scope);if(!raced.ok||!raced.value)throw e}}};
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
-  const originalHouse=await resolveRuntimeAuthority(storage,{kind:'household',id:r.house},root.head,provider,r.device),personal=await resolvePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,r.device);
+  const originalHouse=await resolveRuntimeAuthority(storage,{kind:'household',id:r.house},root.head,provider,r.device);
+  const originalPersonal={scopeId:r.personal,pin},personalSelection=await storage.readPersonalSelection(r.device);
+  if(!personalSelection.ok)throw Error(personalSelection.error);
+  const selectedPersonal=personalSelection.value??originalPersonal;
+  const personal=await resolvePersonalAuthority(storage,{kind:'personal',id:selectedPersonal.scopeId},selectedPersonal.pin,provider,r.device);
+  await keys.useIdentity(identity('personal',selectedPersonal.scopeId,'data',personal.scope.epochId),()=>{});
   const workspaceRun=openSQLiteTransaction(db);
   if(returnToOriginal){
    await returnToOriginalHousehold(name,workspaceRun);
@@ -115,8 +121,12 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    });
   } catch { /* Direct transfer is optional. Offline storage and file exchange stay available. */ }
   if(!ready)await transaction(db,async()=>{const now=load();if(!now||!['sealed','ready'].includes(now.stage))throw Error('LOCKED');const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(now.data),aad));if(decoded.stage!==now.stage)throw Error('LOCKED');const {stage,...current}=decoded;if(JSON.stringify(current)!==JSON.stringify(r))throw Error('LOCKED');if(now.stage==='sealed'){const complete=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['ready',complete])}});
-  const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
+  const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:selectedPersonal.scopeId,deviceId:r.device,pin:selectedPersonal.pin,provider});
+  const rotatePersonal=personalRotation({sodium,storage,keys,provider,LoroDoc,deviceId:r.device,
+   signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),
+   selected:selectedPersonal,selection:personalSelection.value,recoveryImport:null,randomUUID});
   return {
+   personalRotation:rotatePersonal,
    householdCompromise:householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)}),
    householdLocalTrust:householdLocalTrust({runtime:household,withCurrent}),
    authorizeHousehold:active(()=>household.authorize()),
@@ -126,7 +136,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
     listOutboundObjects:active(()=>storage.listOutboundObjects(activeScope.id)),
     subscribe:listener=>subscribeActions(household,listener)
    },
-   personal:runtime(personal,'personal',pin),householdPairing,cookingFiles:activeMethods(cooking),direct,
+   personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing,cookingFiles:activeMethods(cooking),direct,
    executeHouseholdAction(id,commands){
     const input=structuredClone(commands);
     return withCurrent(()=>executeAction(household,joinedSequences??sequences,id,input,disclosure));
@@ -135,8 +145,8 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
    sequences:{reserve:(scopeId,operationId)=>{
-    if(scopeId!==r.personal)throw Error('INVALID_AUTHORITY');
-    return sequences.reserve(scopeId,operationId);
+    if(scopeId!==selectedPersonal.scopeId)throw Error('INVALID_AUTHORITY');
+    return sequences.reserve(r.personal,operationId);
    }},
    close:()=>{joinedSequences?.close();pairing.close();sequences.close();db.close();master.close()}
   };

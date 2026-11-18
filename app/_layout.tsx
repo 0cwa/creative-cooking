@@ -90,18 +90,19 @@ const webChoiceLock = 'creative-cooking/web-workspace-choice/v1';
 const webWorkspaceKey = 'creative-cooking-local-workspace-v1';
 const branchReopenKey = 'creative-cooking-branch-reopen-v1';
 const pendingPrefix = 'pending:';
-type BranchReopen = {scopeId:string;head:string};
+type BranchReopen = {scopeId:string;head:string;kind?:'personal'};
 
 async function verifyBranchReopen(workspace:any, expected:BranchReopen|null) {
   if(!expected)return;
-  const scope=workspace?.household?.scope;
-  if(scope?.scopeId!==expected.scopeId||scope.branchHead!==expected.head) {
-    throw Error('The household branch changed before it could reopen. Retry to review the current workspace.');
-  }
+  const personal=expected.kind==='personal';
+  const scope=personal?workspace?.personal?.scope:workspace?.household?.scope;
+  const error=()=>Error(`The ${personal?'personal':'household'} branch changed before it could reopen. Retry to review the current workspace.`);
+  if(scope?.scopeId!==expected.scopeId||scope.branchHead!==expected.head)throw error();
   try {
-    await workspace.authorizeHousehold();
+    if(personal)await workspace.personal.authorize();
+    else await workspace.authorizeHousehold();
   } catch {
-    throw Error('The household branch changed before it could reopen. Retry to review the current workspace.');
+    throw error();
   }
 }
 

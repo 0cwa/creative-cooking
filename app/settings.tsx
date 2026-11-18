@@ -12,6 +12,7 @@ import { CookingExchange } from '@/loro/app/CookingExchange';
 import { HouseholdInvitation } from '@/loro/app/HouseholdInvitation';
 import { HouseholdIdentity } from '@/loro/app/HouseholdIdentity';
 import { DisclosureControls } from '@/loro/app/DisclosureControls';
+import { PersonalAuthority } from '@/loro/app/PersonalAuthority';
 import { RecoveryReminder } from '@/loro/app/RecoveryReminder';
 import { LoroWorkspaceStatus } from '@/loro/app/WorkspaceStatus';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -547,6 +548,7 @@ export default function SettingsScreen() {
           {app.storageMode === 'fresh-local' && <>
             <LoroWorkspaceStatus revision={app.localPersistenceStatus} />
             {Platform.OS === 'web' && <RecoveryReminder />}
+            <PersonalAuthority />
             <HouseholdIdentity />
             <HouseholdInvitation />
             <HouseholdApproval />
@@ -606,7 +608,7 @@ export default function SettingsScreen() {
             <Pressable accessibilityRole="button" onPress={() => void importData()} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
           </View>
           <Pressable accessibilityRole="button" onPress={resetData} style={styles.textButton}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
-        </Section> : <Section title="Data & Storage" subtitle="The fresh local preview stores data on this device."><Text style={styles.help}>Encrypted export, recovery and retention controls are not available yet. Your existing workspace remains separate.</Text>{app.localPersistenceStatus === 'error' ? <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable> : null}</Section>}
+        </Section> : <Section title="Data & Storage" subtitle="The fresh local preview stores data on this device."><Text style={styles.help}>Your existing workspace remains separate.</Text>{app.localPersistenceStatus === 'error' ? <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable> : null}</Section>}
 
         <Section title="Master instructions" subtitle="Customize Chef’s style and priorities. Tool behavior, safety constraints, and app mechanics are managed separately and cannot be edited here.">
           <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
