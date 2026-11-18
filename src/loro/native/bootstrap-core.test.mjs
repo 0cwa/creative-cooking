@@ -441,6 +441,10 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   workspaces[i]?.close();workspaces[i]=null;
   workspaces[i]=await openNativeWorkspaceWith({...args(name,create),randomUUID,openDatabase:n=>{
    const db=openDatabase(n);
+   if(n===name+'-pairing')return {...db,executeSync(sql,params){
+    if(sql==='BEGIN IMMEDIATE')control.beforePairingWrite?.(db);
+    return db.executeSync(sql,params);
+   }};
    if(n!==name)return db;
    return {...db,executeSync(sql,params){
     if(sql.startsWith('INSERT INTO loro_records')){
@@ -503,14 +507,29 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   }finally{recipientStorage.readPersonalSelection=readSelection;}
   const candidate=await sponsor.propose(await receiver.request(),receiver.fingerprint);
   await receiver.confirm('responder',candidate.text,sponsor.fingerprint,sponsor.rootPin,candidate.code);
+  const candidateOffer=await sponsor.confirm('initiator',candidate.text,receiver.fingerprint,sponsor.rootPin,candidate.code);
   const pairingDb=openDatabase(names[1]+'-pairing'),ceremonyKey='["ceremony"]';
   const readCeremony=()=>JSON.parse(pairingDb.executeSync('SELECT value FROM loro_records WHERE key=?',[ceremonyKey]).rows[0].value);
   try{
-   const responderSlot='personal-device-pairing/v1:responder',previous=readCeremony()[responderSlot];
+   const responderSlot='personal-device-pairing/v1:responder',confirmed=readCeremony(),previous=confirmed[responderSlot];
    await receiver.request(true);
+   const renewed=readCeremony();
+   const writeCeremony=(db,state)=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(state),ceremonyKey]);
+   writeCeremony(pairingDb,confirmed);
+   let writes=0;
+   controllers[1].beforePairingWrite=db=>{
+    // The competing renewal commits after initialization and before response.
+    if(++writes===2)writeCeremony(db,renewed);
+   };
+   try{await assert.rejects(()=>receiver.accept('responder',candidateOffer.text),/CONFLICT|OOB_REQUIRED/);}
+   finally{controllers[1].beforePairingWrite=null;}
+   assert.equal(writes,2);
+   const sessionKey='session:'+parsePairingText(sodium,candidate.text).transcript.sessionId;
+   assert.equal(readCeremony()[sessionKey].revision,renewed[sessionKey].revision);
+   assert.deepEqual(readCeremony(),renewed);
    // Model an older interrupted writer leaving a confirmation for a replaced request.
    const staleCeremony={...readCeremony(),[responderSlot]:previous};
-   pairingDb.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(staleCeremony),ceremonyKey]);
+   writeCeremony(pairingDb,staleCeremony);
    await assert.rejects(()=>receiver.resume('responder'),/CONFLICT/);
    assert.deepEqual(readCeremony(),staleCeremony);
    await receiver.request(true);
@@ -546,6 +565,24 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
   const release=await workspaces[0].personalPairing.publish();
   await boot(0);
   assert.deepEqual((await workspaces[0].personalPairing.publish()).file,release.file);
+
+  const installPairingDb=openDatabase(names[1]+'-pairing');
+  const savedCeremony=()=>installPairingDb.executeSync('SELECT value FROM loro_records WHERE key=?',[ceremonyKey]).rows[0].value;
+  const restoreCeremony=(db,state)=>db.executeSync('UPDATE loro_records SET value=? WHERE key=?',[state,ceremonyKey]);
+  const completedCeremony=savedCeremony();
+  try{
+   await workspaces[1].personalPairing.request(true);
+   const renewedCeremony=savedCeremony();
+   restoreCeremony(installPairingDb,completedCeremony);
+   controllers[1].beforePairingWrite=db=>restoreCeremony(db,renewedCeremony);
+   await assert.rejects(()=>workspaces[1].personalPairing.install(release.file),/CONFLICT/);
+   assert.equal(savedCeremony(),renewedCeremony);
+   assert.deepEqual(rows(1),receiverBefore);
+  }finally{
+   controllers[1].beforePairingWrite=null;
+   restoreCeremony(installPairingDb,completedCeremony);
+   installPairingDb.close();
+  }
 
   const publicProposal=parsePairingText(sodium,proposal.text);
   const {transcript}=publicProposal;

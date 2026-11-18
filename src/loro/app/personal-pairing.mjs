@@ -143,13 +143,14 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   const pins=Object.fromEntries(roles.map(role=>[role,bundle(transcript[role])]));
   if(pinFingerprint(pins[role])!==pinFingerprint(own)||pinFingerprint(pins[remoteRole(role)])!==peerFingerprint)throw Error('OOB_REQUIRED');
   const oob={hash:code(proposal),pins};
-  return withKeys(async secrets=>{
-   if(role==='responder')await store.transaction(tx=>{
+  const sessionStore=role==='responder'?{
+   transaction:(apply,options)=>store.transaction(tx=>{
     if(!same(tx.get(slot(role)),saved)||!matchesRequest(proposal,tx.get(slot('request'))))throw Error('CONFLICT');
-   },{readOnly:true});
-   return use({proposal,context,transcript,guard,oob,secrets,
-    session:durableSession(s,store,secrets,transcript,guard,role,oob)});
-  });
+    return apply(tx);
+   },options)
+  }:store;
+  return withKeys(secrets=>use({proposal,context,transcript,guard,oob,secrets,sessionStore,
+   session:durableSession(s,sessionStore,secrets,transcript,guard,role,oob)}));
  }
  async function progress(role){
   return withSession(role,async({session})=>{
@@ -174,8 +175,8 @@ export function personalPairing({sodium:s,storage,recipient,store,provider,maste
   return progress(role);
  }
  function ceremony(args,role,offeredParent){
-  const {transcript,guard,oob,secrets,context}=args;
-  return openPersonalPairing({sodium:s,storage,sessionStore:store,keys:secrets,transcript,guard,role,oob,
+  const {transcript,guard,oob,secrets,context,sessionStore}=args;
+  return openPersonalPairing({sodium:s,storage,sessionStore,keys:secrets,transcript,guard,role,oob,
    rootPin:context.rootPin,ownerId:context.ownerId,provider,offeredParent});
  }
  async function publish(){
