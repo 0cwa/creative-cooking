@@ -78,10 +78,13 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   });
   const cooking=cookingFiles({runtime:household,service:disclosure});
   const selectedId=selected?.scope.id??null;
-  const direct=openDirect?.({
-   runtime:household,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),
-   withSelected:use=>selection.withCurrent(selectedId,use)
-  });
+  let direct;
+  try {
+   direct=await openDirect?.({
+    runtime:household,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),
+    withSelected:use=>selection.withCurrent(selectedId,use)
+   });
+  } catch { /* Direct transfer is optional. Offline storage and file exchange stay available. */ }
   if(!ready)await transaction(db,async()=>{const now=load();if(!now||!['sealed','ready'].includes(now.stage))throw Error('LOCKED');const decoded=decode(await master.unwrap('workspace-master',new Uint8Array(now.data),aad));if(decoded.stage!==now.stage)throw Error('LOCKED');const {stage,...current}=decoded;if(JSON.stringify(current)!==JSON.stringify(r))throw Error('LOCKED');if(now.stage==='sealed'){const complete=await master.wrap('workspace-master',enc.encode(JSON.stringify({...r,stage:'ready'})),aad);exec(db,'UPDATE loro_bootstrap SET stage=?,data=? WHERE id=1',['ready',complete])}});
   const recovery=workspaceRecovery({sodium,keys,run:storage.recoveryTransaction,storage,master,masterId:'workspace-master',scopeId:r.personal,deviceId:r.device,pin,provider});
   return {

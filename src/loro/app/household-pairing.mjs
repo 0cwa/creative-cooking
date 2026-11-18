@@ -32,7 +32,10 @@ export function householdPairing({
     identity, selection, selectedHousehold,
     transfer:{...transfer, install:async input => {
       const result = await transfer.install(input);
-      for (const listener of installed) listener();
+      for (const listener of [...installed]) {
+        try { void Promise.resolve(listener()).catch(() => {}); }
+        catch { /* A failed notification cannot undo an installed household. */ }
+      }
       return result;
     }},
     onInstalled(listener) {

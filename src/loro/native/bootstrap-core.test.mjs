@@ -18,7 +18,7 @@ function removeWorkspace(name) {
 test('native bootstrap creates signed authorities and restores a real personal action',async()=>{const name='native-bootstrap-test';try {await assert.rejects(openNativeWorkspaceWith(args(name,false)),/MISSING_BOOTSTRAP/);let w=await openNativeWorkspaceWith(args(name,true));const device=w.deviceId;const c={version:1,kind:'personal-preference-put',commandId:'one',effectId:'one',dependencyEffectIds:[],data:{key:'systemPrompt',value:'Stockholm'}};await executeAction(w.personal,w.sequences,'action',[c]);assert.equal((await w.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');w.close();
  // An upgraded installation has its established workspace but no pairing metadata database.
  rmSync(join(dir,`${name}-pairing.sqlite`));
- w=await openNativeWorkspaceWith(args(name,false));assert.equal(w.deviceId,device);
+ w=await openNativeWorkspaceWith({...args(name,false),openDirect:async()=>{throw Error('DIRECT_UNAVAILABLE')}});assert.equal(w.deviceId,device);assert.equal(w.direct,undefined);
  assert.equal(w.householdPairing.selectedHousehold,false);
  assert.deepEqual(await w.householdPairing.acceptedParents(),[]);assert.equal((await w.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');assert.equal(await w.sequences.reserve(w.personal.scope.scopeId,JSON.stringify(['action','one'])),1);w.close();masters.delete(keyname(name,'workspace-master'));await assert.rejects(openNativeWorkspaceWith(args(name,true)),/LOCKED/);}finally{removeWorkspace(name)}});
 test('established workspace refuses missing reservation, sequences and authority',async()=>{for(const target of ['reservation','sequence','authority']){const name='native-missing-'+target,path=join(dir,`${name}.sqlite`);try{const w=await openNativeWorkspaceWith(args(name,true));const scope=w.household.scope.scopeId;w.close();const db=new DatabaseSync(path);if(target==='reservation')db.exec('DELETE FROM loro_bootstrap');if(target==='sequence')db.exec('DELETE FROM loro_sequence_counters');if(target==='authority')db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['pairing-authority','household',scope]));db.close();await assert.rejects(openNativeWorkspaceWith(args(name,true)),target==='sequence'?/MISSING_SEQUENCES/:target==='authority'?/MISSING_AUTHORITY/:/LOCKED/);}finally{removeWorkspace(name)}}});
@@ -110,8 +110,12 @@ test('fresh native workspaces use the signed invitation and recover interrupted 
   recipient.close();
   failEnrollment = false;
   recipient = await openRecipient(false);
+  let notified = false;
+  recipient.householdPairing.onInstalled(() => { throw Error('STALE_LISTENER'); });
+  recipient.householdPairing.onInstalled(() => { notified = true; });
   const result = await recipient.householdPairing.transfer.install({scope,bytes});
   assert.equal(result.replayed,true);
+  assert.equal(notified,true);
   assert.equal(await recipient.householdPairing.selection.available(scope),true);
   await recipient.householdPairing.selection.select(scope);
   await assert.rejects(recipient.householdPairing.selection.assertCurrent(null),/HOUSEHOLD_SELECTION_CHANGED/);
