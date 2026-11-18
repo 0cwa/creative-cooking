@@ -105,6 +105,8 @@ export async function verifyAuthority(state,pin,provider) {
    if(a.manifest.version===4)seedSchemas.set(r.eventHash,4);
   } else throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
   const wrappingKeys=new Set((item.event.subject?.devices??[]).map(d=>d.wrappingKeyRef));
+  // Legacy recovery could authenticate a package sender key separately from the roster.
+  if(item.event.kind==='recoverDevice')wrappingKeys.add(item.rotation.recoveryProof.senderWrappingKey);
   for(const ceremony of [...(item.admission?.ceremonies??[]),...(item.admission?.existingCeremonies??[]),...(item.rotation?.ceremonies??[])]){
    for(const role of ['initiator','responder']){
     const key=decodeEvidence(ceremony.transcript[role].wrappingPublicKey);
