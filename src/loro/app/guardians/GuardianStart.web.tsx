@@ -1,7 +1,7 @@
 import React,{useState} from 'react';
 import {Pressable,Text,View} from 'react-native';
 import {GuardianRestore} from './GuardianRestore';
-export function GuardianStart(){
+export function GuardianStart({restoreIntoWorkspace}:{restoreIntoWorkspace?:(archive:unknown,code:string,pkg:unknown)=>Promise<any>}={}){
  const [setup,setSetup]=useState<any>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const start=async()=>{setBusy(true);try{
   const [{default:sodium},{default:initLoro,LoroDoc},{openIndexedDBStorage},{openBrowserMaster},workflow]=await Promise.all([import('libsodium-wrappers'),import('loro-crdt/web/loro_wasm.js'),import('../../storage/indexeddb.ts'),import('../../storage/browser-master.ts'),import('./guardian-workflow.mjs')]);
@@ -12,5 +12,5 @@ export function GuardianStart(){
   const openDestination=async(archive:unknown)=>{requireTrust();const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(archive)))),name=`guardian-restored-${pin}-${Array.from(digest,x=>x.toString(16).padStart(2,'0')).join('')}`,master=await openBrowserMaster(`${name}-master`),db=await openIndexedDBStorage(`${name}-records`);try{const keys=db.localKeys(master,sodium);await keys.provision('recovery-master');return {master,keys,storage:db.storage,run:db.recoveryTransaction,masterId:'recovery-master',close:()=>{db.close();master.close()}}}catch(e){db.close();master.close();throw e}};
   setSetup({actions,sodium,LoroDoc,openDestination});
  }catch(e){setError(e instanceof Error?e.message:'Could not open guardian recovery.')}finally{setBusy(false)}};
- return <View style={{gap:8}}><Text accessibilityRole="header">Restore with guardians</Text><Text>Verify the owner root pin and every guardian fingerprint independently. You also need the separately retained encrypted archive.</Text>{!setup?<Pressable accessibilityRole="button" disabled={busy} onPress={()=>void start()}><Text>Open guardian recovery</Text></Pressable>:<GuardianRestore {...setup}/>} {error?<Text accessibilityRole="alert">{error}</Text>:null}</View>;
+ return <View style={{gap:8}}><Text accessibilityRole="header">Restore with guardians</Text><Text>Verify the owner root pin and every guardian fingerprint independently. You also need the separately retained encrypted archive.</Text>{!setup?<Pressable accessibilityRole="button" disabled={busy} onPress={()=>void start()}><Text>Open guardian recovery</Text></Pressable>:<GuardianRestore {...setup} restoreIntoWorkspace={restoreIntoWorkspace}/>} {error?<Text accessibilityRole="alert">{error}</Text>:null}</View>;
 }

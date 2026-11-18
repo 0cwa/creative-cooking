@@ -52,12 +52,13 @@ export function selectedHousehold({readStored, writeStored, lock, openJoined, ma
       (await open(scope)).sequences.close();
       return true;
     },
-    select(scope) {
+    select(scope, expectedHead=undefined) {
       scope = structuredClone(scope);
       if (!household(scope)) throw Error('MALFORMED');
       return lock('exclusive', async () => {
         const verified = await open(scope);
         try {
+          if(expectedHead!==undefined&&verified.resolved.scope.branchHead!==expectedHead)throw Error('STALE_AUTHORITY');
           await writeStored(await master.wrap('workspace-master', enc.encode(JSON.stringify({version:1, scope})), aad));
         } finally { verified.sequences.close(); }
       });

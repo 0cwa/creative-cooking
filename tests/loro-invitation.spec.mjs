@@ -250,9 +250,17 @@ test(`three enrolled devices preserve and explicitly reopen household admissions
  await expect(c.getByText('Third device thyme',{exact:true})).toBeVisible();
  await c.getByRole('button',{name:'Open settings'}).click();
  await expect(c.getByLabel('Household document generation')).toHaveText('Household generation 3');
+ const recoveryKits=adultRemoval?null:await test.step('register two personal continuity generations with current adults',()=>
+  registerRecovery(a,b,c));
  await test.step(`approve, publish, install and reopen ${decision} through Settings`,async()=>{
   await routedRevocation({a,b,c,existingId,thirdId,thirdAdult:JSON.parse(thirdIdentity).adultId,scope,publishedHead:published.head,adultRemoval});
  });
+ if(recoveryKits){
+  const freshContext=await browser.newContext({baseURL,acceptDownloads:true});
+  try{await test.step('restore privately, then authorize and install household readmission',()=>
+   routedReadmission(a,b,c,freshContext,setup,scope,recoveryKits));}
+  finally{await freshContext.close();}
+ }
  await c.getByRole('button',{name:'Show device identity'}).click();
  await c.getByRole('button',{name:'Return to original local household'}).click();
  await expect(c.getByText('Newcomer local basil',{exact:true})).toBeVisible();
@@ -616,4 +624,193 @@ async function routedRevocation({a,b,c,existingId,thirdId,thirdAdult,scope,publi
  await expect(a.getByText('Fresh-epoch coriander',{exact:true})).toBeVisible();
  await b.reload();
  await expect(b.getByLabel('Household document generation')).toHaveText('Household generation 4');
+}
+
+const recoveryButton=(page,name)=>page.getByRole('button',{name,exact:true});
+const recoveryInput=page=>page.getByLabel('Incoming recovery message');
+const recoveryOutput=page=>page.getByLabel('Outgoing recovery message',{exact:true});
+const recoverSend=async(page,message,action)=>{
+ await recoveryInput(page).fill(typeof message==='string'?message:JSON.stringify(message));
+ await recoveryButton(page,action).click();
+};
+async function registerRecovery(a,b,c){
+ await c.goto('./chef');
+ await c.getByLabel('Message Chef').fill('Private continuity dinner');
+ await c.getByLabel('Save private message').click();
+ await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();
+ await c.goto('./settings');
+ await recoveryButton(c,'Set up household recovery continuity').click();
+ for(const page of [a,b]){
+  await page.goto('./settings');
+  await recoveryButton(page,'Authorize household readmission').click();
+  await expect(recoveryInput(page)).toBeVisible();
+ }
+ const kits=[];
+ for(const generation of [0,1]){
+  await recoveryButton(c,'Create archive for continuity registration').click();
+  const link=c.getByRole('link',{name:'Download encrypted archive'});
+  await expect(link).toBeVisible().catch(async error=>{console.error('CONTINUITY EXPORT',await c.getByRole('alert').allTextContents());throw error;});
+  const [download]=await Promise.all([c.waitForEvent('download'),link.click()]);
+  const bytes=await readFile(await download.path()),code=await c.getByLabel('Recovery code',{exact:true}).inputValue();
+  expect(bytes.includes(Buffer.from('Private continuity dinner'))).toBe(false);
+  await c.getByLabel('Code for continuity registration').fill(code);
+  await c.getByLabel('Choose encrypted archive file').last().setInputFiles({name:'personal.json',mimeType:'application/json',buffer:bytes});
+  await recoveryButton(c,'Register this personal archive').click();
+  await expect(c.getByText(/^Continuity registered locally/)).toBeVisible();
+  const binding=JSON.parse(await recoveryOutput(c).textContent());
+  expect(binding.binding.generation).toBe(generation);
+  for(const page of [a,b]){
+   await recoverSend(page,binding,'Retain signed continuity registration');
+   await expect(page.getByText('Signed continuity generation retained on this device.')).toBeVisible();
+  }
+  kits.push({bytes,code,binding});
+  // Remount to ensure the next export has a new link and uses durable registration.
+  await recoveryButton(c,'Close recovery continuity').click();
+  if(generation===0)await recoveryButton(c,'Set up household recovery continuity').click();
+ }
+ return kits;
+}
+
+async function routedReadmission(a,b,lost,context,setup,scope,kits){
+ const fresh=await context.newPage();
+ fresh.setDefaultTimeout(15000);
+ await setup(fresh);
+ await fresh.goto('./settings');
+ for(const page of [a,b]){
+  await page.goto('./settings');
+  await recoveryButton(page,'Authorize household readmission').click();
+ }
+ await recoveryButton(fresh,'Recover personal data and request readmission').click();
+ const restore=async({code,bytes})=>{
+  await fresh.getByLabel('Recovery code',{exact:true}).fill(code);
+  await fresh.getByLabel('Choose encrypted archive file').setInputFiles({name:'personal.json',mimeType:'application/json',buffer:bytes});
+  await recoveryButton(fresh,'Restore personal archive').click();
+  await expect(fresh.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
+  await expect(fresh.getByText(/Recoverable personal keys: 1. Available encrypted updates on this device: 0./)).toBeVisible();
+ };
+ await restore(kits[0]);
+ await fresh.reload();
+ await recoveryButton(fresh,'Recover personal data and request readmission').click();
+ await expect(fresh.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
+ await fresh.getByLabel('Verified household ID').fill(scope.id);
+ await recoveryButton(fresh,'Create signed recovery request').click();
+ await expect(fresh.getByText(/^Independently verify the current household root/)).toBeVisible();
+ await expect(recoveryOutput(fresh)).toHaveCount(0);
+ for(const page of [a,fresh])await recoveryButton(page,'Show device identity').click();
+ await recoveryButton(a,'Show public household authority').click();
+ const bundle=await a.getByLabel('Public household authority',{exact:true}).textContent();
+ const {rootPin,selectedHead}=JSON.parse(bundle);
+ await fresh.getByLabel('Household authority bundle').fill(bundle);
+ await fresh.getByLabel('Confirmed household root').fill(rootPin);
+ await fresh.getByLabel('Confirmed household head').fill('0'.repeat(64));
+ await recoveryButton(fresh,'Verify and accept public authority').click();
+ await expect(fresh.getByText('CONFIRMATION_REQUIRED',{exact:true})).toBeVisible();
+ await fresh.getByLabel('Confirmed household head').fill(selectedHead);
+ await recoveryButton(fresh,'Verify and accept public authority').click();
+ await expect(fresh.getByText('Public authority accepted. No access or keys have been granted.')).toBeVisible();
+ await expect(recoveryButton(fresh,'Open this shared household')).toHaveCount(0);
+
+ async function request(){
+  await recoveryButton(fresh,'Create signed recovery request').click();
+  await expect(fresh.getByText(/^Send this signed request/)).toBeVisible();
+  return JSON.parse(await recoveryOutput(fresh).textContent());
+ }
+ const old=await request();
+ expect(old.claim.recoveryGeneration).toBe(0);
+ await recoverSend(a,old,'Issue recovery challenge');
+ await expect(a.getByText(/^The request does not match the current head/)).toBeVisible();
+ await expect(recoveryOutput(a)).toHaveCount(0);
+ await restore(kits[1]);
+ const current=await request();
+ expect(current.claim.recoveryGeneration).toBe(1);
+ const wrongHead=structuredClone(current);
+ wrongHead.claim.checkpoint=kits[1].binding.binding.checkpoint;
+ await recoverSend(a,wrongHead,'Issue recovery challenge');
+ await expect(a.getByText(/^The request does not match the current head/)).toBeVisible();
+ await recoverSend(a,current,'Issue recovery challenge');
+ await expect(a.getByText(/^Send the sealed challenge/)).toBeVisible();
+ const challenge=JSON.parse(await recoveryOutput(a).textContent());
+ await recoverSend(a,current,'Issue recovery challenge');
+ await expect(recoveryOutput(a)).toHaveText(JSON.stringify(challenge));
+ await recoverSend(fresh,{...challenge,sponsorDevice:kits[1].binding.binding.signerDevice},'Answer recovery challenge');
+ await expect(fresh.getByText('INVALID_PROOF',{exact:true})).toBeVisible();
+ await expect(recoveryOutput(fresh)).toHaveCount(0);
+ await recoverSend(fresh,challenge,'Answer recovery challenge');
+ await expect(fresh.getByText(/^Send this proof of the new device/)).toBeVisible();
+ const response=JSON.parse(await recoveryOutput(fresh).textContent());
+ await recoverSend(b,response,'Prepare readmission decision');
+ await expect(b.getByText('INVALID_SPONSOR',{exact:true})).toBeVisible();
+ await recoveryButton(b,'Show readmission recipient binding').click();
+ await expect(recoveryOutput(b)).toBeVisible();
+ const memberBinding=await recoveryOutput(b).textContent();
+ await recoverSend(a,response,'Prepare readmission decision');
+ await expect(a.getByText('RECIPIENT_BINDINGS_REQUIRED',{exact:true})).toBeVisible();
+ await a.getByLabel('Other current device bindings').fill(memberBinding);
+ await recoverSend(a,response,'Prepare readmission decision');
+ await expect(a.getByText(/0 of 2 required adults/)).toBeVisible();
+ await expect(recoveryButton(a,'Publish readmission and rotate household key')).toBeDisabled();
+ await recoveryButton(a,'Approve this readmission').click();
+ await expect(a.getByText(/1 of 2 required adults/)).toBeVisible();
+ await recoverSend(b,await recoveryOutput(a).textContent(),'Review readmission for approval');
+ await expect(b.getByText(/1 of 2 required adults/)).toBeVisible();
+ await recoveryButton(b,'Approve this readmission').click();
+ await expect(b.getByText(/2 of 2 required adults/)).toBeVisible();
+ const proposal=JSON.parse(await recoveryOutput(b).textContent());
+ expect(proposal.item.event.kind).toBe('recoverDevice');
+ expect(proposal.grant.recipients).toHaveLength(3);
+ expect(proposal.grant.recipients).not.toContain(kits[1].binding.binding.signerDevice);
+ expect(proposal.manifest.seedSchemaVersion).toBe(4);
+ await recoverSend(a,proposal,'Review readmission for approval');
+ await expect(a.getByText(/2 of 2 required adults/)).toBeVisible();
+ await recoveryButton(a,'Publish readmission and rotate household key').click();
+ await expect(recoveryButton(a,'Reopen household after readmission')).toBeVisible();
+ await expect(a.getByLabel('Household document generation')).toHaveText('Household generation 4');
+ const file=await downloadFile(a,`Download readmission for ${current.claim.deviceId}`);
+ const bFile=await downloadFile(a,`Download readmission for ${JSON.parse(memberBinding).deviceId}`);
+ expect(file.includes(Buffer.from('Fresh-epoch coriander'))).toBe(false);
+ expect(file.includes(Buffer.from('Private continuity dinner'))).toBe(false);
+ expect(file).not.toEqual(bFile);
+ await recoveryButton(a,'Reopen household after readmission').click();
+ await expect(a.getByText('Fresh-epoch coriander',{exact:true})).toBeVisible();
+ await a.goto('./settings');
+ await recoveryButton(a,'Authorize household readmission').click();
+ expect(await downloadFile(a,`Download readmission for ${current.claim.deviceId}`)).toEqual(file);
+ await recoverSend(a,current,'Issue recovery challenge');
+ await expect(a.getByText(/^The request does not match the current head/)).toBeVisible();
+ await recoverSend(b,proposal,'Review household access file decision');
+ await expect(recoveryButton(b,'Install verified readmission file')).toBeVisible();
+ await uploadFile(b,'Install verified readmission file',bFile);
+ await recoveryButton(b,'Reopen household after readmission').click();
+ await expect(b.getByText('Fresh-epoch coriander',{exact:true})).toBeVisible();
+
+ await recoverSend(fresh,proposal,'Review household access file decision');
+ await expect(recoveryButton(fresh,'Install verified readmission file')).toBeVisible();
+ await uploadFile(fresh,'Install verified readmission file',bFile);
+ await expect(fresh.getByText(/^This encrypted file could not be opened/)).toBeVisible();
+ await expect(recoveryButton(fresh,'Open readmitted household')).toHaveCount(0);
+ await uploadFile(fresh,'Install verified readmission file',file);
+ await expect(recoveryButton(fresh,'Open readmitted household')).toBeVisible();
+ await expect(fresh.getByLabel('Open household')).toContainText('Original local household');
+ await uploadFile(fresh,'Install verified readmission file',file);
+ await expect(fresh.getByText('This exact readmission is already installed.')).toBeVisible();
+ await fresh.reload();
+ await recoveryButton(fresh,'Recover personal data and request readmission').click();
+ await expect(fresh.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
+ await recoveryButton(fresh,'Open readmitted household').click();
+ await expect(fresh.getByText('Fresh-epoch coriander',{exact:true})).toBeVisible();
+ await expect(fresh.getByText('Third device thyme',{exact:true})).toHaveCount(0);
+ await addPantry(fresh,'Readmitted device sumac');
+ await fresh.reload();
+ await expect(fresh.getByText('Readmitted device sumac',{exact:true})).toBeVisible();
+ await fresh.goto('./settings');
+ await expect(fresh.getByLabel('Household document generation')).toHaveText('Household generation 5');
+ await recoveryButton(fresh,'Exchange encrypted cooking files').click();
+ const update=await downloadFile(fresh,await fresh.getByRole('button',{name:/^Download encrypted update /}).textContent());
+ await recoveryButton(a,'Exchange encrypted cooking files').click();
+ const importReopen=a.waitForEvent('load',{timeout:15000});
+ await uploadFile(a,'Choose encrypted cooking update',update);
+ await importReopen;
+ await a.goto('./');
+ await expect(a.getByText('Readmitted device sumac',{exact:true})).toBeVisible();
+ await expect(lost.getByLabel('Household document generation')).toHaveText('Household generation 3');
 }

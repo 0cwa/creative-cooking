@@ -33,23 +33,25 @@ export async function checkRecipientBinding(parent, binding, provider) {
 }
 
 export const ADULT_REMOVAL_SOURCE='adult-removal-source';
+export const RECOVERY_SOURCE='recovery-source';
 
 export async function verifyRevocation({provider,parent,item,grant,manifest,recipientBindings,requireQuorum=true}) {
-  if (!exact(item,'event,authorSignature,approvals') || !isRemoval(item.event?.kind)) throw Error('INVALID_REVOCATION');
+  if (!exact(item,'event,authorSignature,approvals') || (!isRemoval(item.event?.kind) && item.event?.kind!=='recoverDevice')) throw Error('INVALID_REVOCATION');
   const check = await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
-  if (!['QUORUM_REQUIRED','ROTATION_DISTRIBUTION_REQUIRED'].includes(check.reason)) throw Error(check.reason);
+  if (!['QUORUM_REQUIRED','ROTATION_DISTRIBUTION_REQUIRED','RECOVERY_DISTRIBUTION_REQUIRED'].includes(check.reason)) throw Error(check.reason);
   const event = item.event, s = event.subject, publisher = event.authorDeviceId;
   if (publisher === s.deviceId || !s.devices.some(d => d.deviceId === publisher)) throw Error('INVALID_REVOCATION');
-  const adultRemoval=event.kind==='removeAdult';
+  const recovery=event.kind==='recoverDevice', adultRemoval=event.kind==='removeAdult', liveSource=recovery||adultRemoval;
+  if(recovery && parent.devices.some(d=>d.signingKeyRef===s.signingKeyRef || d.active && (d.adultId===s.owner || !parent.runtime.acceptedRecipients.includes(d.deviceId)))) throw Error('INELIGIBLE_RECOVERY');
   const commonFields='version,scopeId,authorizationSnapshot,sourceDocumentId,sourceRevision,sourceHash,newDocumentId,newGeneration,newEpochId,draftHash,seedId,seedPeerId,seedSchemaVersion,seedIdentitiesHash';
-  if (!exact(manifest,adultRemoval?commonFields+',kind':commonFields+',reviewId,evidenceDocumentId,evidenceGeneration,reportHash,selectionHash,archiveHash') ||
-      manifest.version !== 1 || (adultRemoval&&manifest.kind!==ADULT_REMOVAL_SOURCE) || manifest.seedSchemaVersion !== 4 || manifest.scopeId !== parent.householdId ||
+  if (!exact(manifest,liveSource?commonFields+',kind':commonFields+',reviewId,evidenceDocumentId,evidenceGeneration,reportHash,selectionHash,archiveHash') ||
+      manifest.version !== 1 || (liveSource&&manifest.kind!==(recovery?RECOVERY_SOURCE:ADULT_REMOVAL_SOURCE)) || manifest.seedSchemaVersion !== 4 || manifest.scopeId !== parent.householdId ||
       manifest.sourceDocumentId !== parent.runtime.documentId || (manifest.sourceRevision!==null && (!Number.isSafeInteger(manifest.sourceRevision) || manifest.sourceRevision < 0)) ||
       manifest.newDocumentId !== s.documentId || manifest.newGeneration !== s.newGeneration || manifest.newEpochId !== s.newEpochId ||
       !id(manifest.seedId) || ![manifest.authorizationSnapshot,manifest.sourceHash,manifest.draftHash,manifest.seedIdentitiesHash].every(key) ||
       typeof manifest.seedPeerId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(manifest.seedPeerId) || BigInt(manifest.seedPeerId)>18446744073709551615n ||
       [...Object.values(parent.runtime.authorPeers),...s.devices.map(d=>d.peerId)].includes(manifest.seedPeerId)) throw Error('INVALID_MANIFEST');
-  if (!adultRemoval && (![manifest.reviewId,manifest.evidenceDocumentId].every(id) ||
+  if (!liveSource && (![manifest.reviewId,manifest.evidenceDocumentId].every(id) ||
       !Number.isSafeInteger(manifest.evidenceGeneration) || manifest.evidenceGeneration < 0 ||
       ![manifest.reportHash,manifest.selectionHash,manifest.archiveHash].every(key))) throw Error('INVALID_MANIFEST');
   const others = s.devices.filter(d => d.deviceId !== publisher);
@@ -62,10 +64,11 @@ export async function verifyRevocation({provider,parent,item,grant,manifest,reci
       !Array.from(grant.packageRefs).every(id) || grant.disclosure !== 'current-state-only' ||
       !same(grant.contentClasses,['pantry','recipe','shopping']) || !Array.isArray(grant.signatures) ||
       grant.signatures.length !== item.approvals.length) throw Error('INVALID_GRANT');
-  if (!Array.isArray(recipientBindings) || recipientBindings.length !== s.devices.length ||
+  const existing=s.devices.filter(d=>!recovery||d.deviceId!==s.deviceId);
+  if (!Array.isArray(recipientBindings) || recipientBindings.length !== existing.length ||
       new Set(s.devices.map(d=>d.wrappingKeyRef)).size !== s.devices.length) throw Error('INVALID_RECIPIENT');
   for (const [index, binding] of recipientBindings.entries()) {
-    const device = await checkRecipientBinding(parent,binding,provider), target = s.devices[index];
+    const device = await checkRecipientBinding(parent,binding,provider), target = existing[index];
     if (device.deviceId !== target.deviceId || binding.wrappingKey !== target.wrappingKeyRef) throw Error('INVALID_RECIPIENT');
   }
   const body = grantBody(grant), voters = new Set();
@@ -87,7 +90,8 @@ export async function revocationPackage({provider,parent,item,recipientDevice}) 
   const index=devices.filter(d=>d.deviceId!==localDeviceId).findIndex(d=>d.deviceId===recipientDevice);
   if (index<0 || !sender) throw Error('INVALID_RECIPIENT');
   const recipient=devices.find(d=>d.deviceId===recipientDevice), releaseId=grant.packageRefs[index];
-  const transcriptHash=await digest(provider,'revocation-package-binding',{
+  const recovered=item.event.kind==='recoverDevice'&&recipientDevice===item.event.subject.deviceId;
+  const transcriptHash=recovered?item.event.subject.claimHash:await digest(provider,'revocation-package-binding',{
     eventHash:grant.eventHash, sender:recipientBindings.find(d=>d.deviceId===localDeviceId),
     recipient:recipientBindings.find(d=>d.deviceId===recipientDevice)
   });

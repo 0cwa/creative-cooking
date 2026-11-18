@@ -1,7 +1,8 @@
-import {publishHouseholdAdmission,readAuthority} from '../authority/chain.mjs';
+import {publishHouseholdAdmission,readAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {sealHouseholdFile,installHouseholdFile} from '../pairing/household-file.mjs';
 import {durableSession} from '../pairing/durable-session.mjs';
+import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {validPairingScope} from '../contracts/pairing.ts';
 const enc=new TextEncoder(),hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const dec=new TextDecoder('utf-8',{fatal:true});
@@ -75,7 +76,42 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   const result=await withSecrets(secret=>installHouseholdFile({sodium,bytes,keys:secret,storage,scope:ownScope,pin,provider,sessionStore,recipientDevice:deviceId,LoroDoc,master,recipientKind:'existing',identify:eventHash=>existingDeviceIds(sodium,ownScope,deviceId,eventHash)}));
   return {replayed:result.replayed,acceptedHead:result.acceptedHead,generation:result.generation};
  }
- return {publish,seal,publishedFiles,install,installExisting,completedProof(input){
+ async function readRecoveryParent(confirmed){
+  const {operationId}=householdReceiverIds(sodium,confirmed.scope,deviceId);
+  const prior=await storage.householdRecipient.find(confirmed.scope.id,operationId);
+  if(!prior.ok)throw Error(prior.error);
+  const input=prior.value?{readPairingAuthority:async()=>({ok:true,value:prior.value.expectedAuthority})}:storage;
+  const verified=await verifyPublicParent(input,confirmed.scope,confirmed.pin,provider);
+  if(verified.state.activeHead!==confirmed.head)throw Error('STALE_AUTHORITY');
+  return {...verified,parent:verified.nodes.get(confirmed.head)};
+ }
+ async function installedRecovery(confirmed){
+  const {operationId}=householdReceiverIds(sodium,confirmed.scope,deviceId);
+  const receipt=await storage.householdRecipient.find(confirmed.scope.id,operationId);
+  if(!receipt.ok)throw Error(receipt.error);
+  if(!receipt.value||receipt.value.expectedAuthority.acceptedParent!==confirmed.head)return null;
+  const {scope,adultId}=await resolveRuntimeAuthority(storage,confirmed.scope,confirmed.pin,provider,deviceId);
+  return {scope:confirmed.scope,acceptedHead:scope.branchHead,adultId};
+ }
+ async function installRecovery({scope:sc,bytes,claimHash,eventHash,grantHash,fresh,decisionHash}){
+  bytes=checkedBytes(bytes);
+  const confirmed=fresh?(await keys.list()).find(x=>x.scope.id===sc.id):{pin,scope:ownScope};
+  if(!confirmed||!fresh&&sc.id!==ownScope.id)throw Error('CONFIRMATION_REQUIRED');
+  const ids=fresh?householdReceiverIds(sodium,sc,deviceId):existingDeviceIds(sodium,sc,deviceId,eventHash);
+  const joined={name,storage,scope:sc,pin:confirmed.pin,provider,deviceId,operationId:ids.operationId};
+  const install=()=>withSecrets(secret=>installHouseholdFile({sodium,bytes,keys:secret,storage,scope:sc,pin:confirmed.pin,provider,recipientDevice:deviceId,LoroDoc,master,
+   ...ids,recipientKind:'recovery',confirmedClaimHash:claimHash,confirmedDecisionHash:decisionHash,confirmedEventHash:eventHash,confirmedGrantHash:grantHash,
+   confirmedParent:fresh?confirmed.head:undefined,prepareEnrollment:fresh?()=>prepareJoinedSequences(joined):undefined}));
+  let result;
+  try{result=await install();}
+  catch(error){
+   if(error.message!=='CONFLICT'||!(await storage.householdRecipient.find(sc.id,ids.operationId)).value)throw error;
+   result=await install();
+  }
+  if(fresh){const opened=await finalizeJoinedSequences(joined);opened.sequences.close();}
+  return {...result,scope:sc};
+ }
+ return {publish,seal,publishedFiles,install,installExisting,installRecovery,installedRecovery,readRecoveryParent,completedProof(input){
   const proof=structuredClone(input);
   return withSecrets(secret=>completedOrganizerProof(proof,secret));
  }};

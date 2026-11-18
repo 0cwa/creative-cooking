@@ -23,5 +23,6 @@ export async function openIndexedDBStorage(name: string, fault?: (boundary: stri
     } catch(e) { try { transaction.abort(); } catch {} await done.catch(() => {}); throw e; }
   };
   const compromise=new CompromiseReviews(run,fault),localKeys=(master: ConstructorParameters<typeof LocalKeys>[1], sodium: any, afterCommit?: () => void) => new LocalKeys(run,master,sodium,afterCommit);
-  return {storage:Object.assign(new TransactionalStorage(run,fault),{compromise,localKeys,householdRecipient:new HouseholdRecipientTransaction(run,fault)}),recoveryTransaction:recoveryTransaction(run),continuity:new ContinuityRegistry(run,fault),compromise,recipient:new RecipientRecords(run,fault),localKeys,close:() => db.close()};
+  const continuity=new ContinuityRegistry(run,fault);
+  return {storage:Object.assign(new TransactionalStorage(run,fault),{compromise,continuity,localKeys,householdRecipient:new HouseholdRecipientTransaction(run,fault)}),recoveryTransaction:recoveryTransaction(run),continuity,compromise,recipient:new RecipientRecords(run,fault),localKeys,close:() => db.close()};
 }

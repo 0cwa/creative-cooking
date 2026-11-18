@@ -1,6 +1,6 @@
-import {publishReviewedRevocation, readAuthority, resolveHistoricalAuthority, verifyAuthority, verifiedRevocationDraft} from '../authority/chain.mjs';
+import {publishHouseholdRecovery, publishReviewedRevocation, readAuthority, resolveHistoricalAuthority, verifyAuthority, verifiedRevocationDraft} from '../authority/chain.mjs';
 import {domain, remainingRotationDevices, removedDevice, validAdmissionPolicy} from '../authority/validator.mjs';
-import {ADULT_REMOVAL_SOURCE, digest, exact, grantBody, hex, same, verifyRevocation, verifySignature, checkRecipientBinding, projectRemovalSeed} from '../compromise/revocation.mjs';
+import {ADULT_REMOVAL_SOURCE, RECOVERY_SOURCE, digest, exact, grantBody, hex, same, verifyRevocation, verifySignature, checkRecipientBinding, projectRemovalSeed} from '../compromise/revocation.mjs';
 import {projectCurrentSeed} from '../compromise/current-seed.mjs';
 import {canonicalReportBytes, evidenceSha256, manifestDigest, validateReport, verifyReport} from '../compromise/report.mjs';
 import {sealHouseholdFile, installHouseholdFile} from '../pairing/household-file.mjs';
@@ -28,14 +28,14 @@ export function householdRevocation({
     return {...current,nodes,parent:nodes.get(current.activeHead)};
   }
   async function review(proposal, historical=false, requireQuorum=false) {
-    if(!exact(proposal,'item,grant,manifest,recipientBindings'))throw Error('INVALID_REVOCATION');
+    if(!exact(proposal,proposal?.item?.event?.kind==='recoverDevice'?'item,grant,manifest,recipientBindings,recoveryProof':'item,grant,manifest,recipientBindings'))throw Error('INVALID_REVOCATION');
     const current=await authority(), parent=historical?current.nodes.get(proposal.item?.event?.parentHead):current.parent;
     if(!parent || parent.head!==proposal.item?.event?.parentHead)throw Error('STALE_AUTHORITY');
     const verified=await verifyRevocation({provider,parent,...proposal,requireQuorum});
     const local=parent.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId);
     const canApprove=!!local && !proposal.item.approvals.some(v=>v.adultId===adultId);
     const removal=proposal.item.event.kind==='removeAdult';
-    const confirmation=await digest(provider,removal?'reviewed-adult-removal':'reviewed-device-revocation',{eventHash:verified.eventHash,grantHash:verified.grantHash});
+    const confirmation=await digest(provider,removal?'reviewed-adult-removal':proposal.item.event.kind==='recoverDevice'?'reviewed-household-readmission':'reviewed-device-revocation',{eventHash:verified.eventHash,grantHash:verified.grantHash});
     const excludedDevices=parent.devices.filter(d=>d.active&&removedDevice(proposal.item.event,d)).map(d=>d.deviceId);
     return {...verified,confirmation,canApprove,excludedDevices,parentHead:parent.head,selected:current.activeHead===verified.eventHash};
   }
@@ -73,7 +73,7 @@ export function householdRevocation({
     async status(){
       const current=await authority();
       const {parent,state,activeHead}=current;
-      const published=state.events.find(e=>e.rotation?.grant?.version===2&&e.rotation.grant.eventHash===activeHead&&e.rotation.localDeviceId===deviceId);
+      const published=state.events.find(e=>e.rotation?.grant?.version===2&&e.event.kind!=='recoverDevice'&&e.rotation.grant.eventHash===activeHead&&e.rotation.localDeviceId===deviceId);
       const retained=await notices(), branches=[];
       for(const proposal of retained){
         const verified=await review(proposal,true,true);
@@ -101,15 +101,20 @@ export function householdRevocation({
           recipients:parent.runtime.acceptedRecipients.filter(id=>id!==deviceId)}};
     },
     binding,
-    /** @param {{reviewId?:string,targetAdultId?:string,bindings:any[],explicit:boolean}} input */
-    async prepare({reviewId,targetAdultId,bindings,explicit}){
+    /** @param {{reviewId?:string,targetAdultId?:string,recovery?:any,bindings:any[],explicit:boolean}} input */
+    async prepare({reviewId,targetAdultId,recovery,bindings,explicit}){
       if(explicit!==true||!Array.isArray(bindings)||bindings.length>127)throw Error('CONFIRMATION_REQUIRED');
       const adultRemoval=targetAdultId!==undefined;
       const a=await runtime.authorize();
       const {parent,revision}=await authority();
       if(a.record.revision!==revision||a.record.acceptedParent!==parent.head)throw Error('STALE_AUTHORITY');
       let saved, draft, original, eventKind, target;
-      if(adultRemoval){
+      if(recovery){
+        if(reviewId!==undefined||adultRemoval)throw Error('INVALID_CONTEXT');
+        eventKind='recoverDevice';
+        const {claim,claimHash,bindingHash}=recovery;
+        target={owner:claim.owner,deviceId:claim.deviceId,signingKeyRef:claim.signingKey,wrappingKeyRef:claim.wrappingKey,claimHash,bindingHash,bindingGeneration:claim.recoveryGeneration};
+      }else if(adultRemoval){
         if(reviewId!==undefined||targetAdultId===adultId||!parent.roster.includes(targetAdultId))throw Error('INVALID_ADULT');
         if(!validAdmissionPolicy(parent.policy,parent.roster.length-1))throw Error('FIXED_RULE_TOO_HIGH');
         eventKind='removeAdult';
@@ -141,10 +146,14 @@ export function householdRevocation({
         if(removedDevice(removal,d)||byDevice.has(d.deviceId))throw Error('INVALID_RECIPIENT');
         byDevice.set(d.deviceId,binding);
       }
-      const remaining=remainingRotationDevices(parent,removal);
+      const remaining=recovery?parent.devices.filter(d=>d.active).sort((a,b)=>a.deviceId<b.deviceId?-1:a.deviceId>b.deviceId?1:0):remainingRotationDevices(parent,removal);
       if(remaining.some(d=>!byDevice.has(d.deviceId)))throw Error('RECIPIENT_BINDINGS_REQUIRED');
       const recipientBindings=remaining.map(d=>byDevice.get(d.deviceId));
       const devices=remaining.map(({deviceId,signingKeyRef})=>({deviceId,signingKeyRef,wrappingKeyRef:byDevice.get(deviceId).wrappingKey,peerId:freshPeer(peers)}));
+      if(recovery){
+        devices.push({deviceId:target.deviceId,signingKeyRef:target.signingKeyRef,wrappingKeyRef:target.wrappingKeyRef,peerId:freshPeer(peers)});
+        devices.sort((a,b)=>a.deviceId<b.deviceId?-1:a.deviceId>b.deviceId?1:0);
+      }
       const subject={...target,documentId:draft?.documentId??randomUUID(),newGeneration:parent.generation+1,newEpochId:randomUUID(),devices};
       const event={version:2,suiteId,householdId:scope.id,parentHead:parent.head,policyHash:parent.policyHash,
         generation:parent.generation,epochId:parent.epochId,proposalId:randomUUID(),kind:eventKind,authorDeviceId:deviceId,
@@ -153,7 +162,7 @@ export function householdRevocation({
       const seedId=randomUUID(),seedPeerId=freshPeer(peers);
       const seed=draft?projectCurrentSeed({LoroDoc,source:draft.snapshot,seedId,peerId:seedPeerId,schemaVersion:4}):
         projectRemovalSeed({LoroDoc,source,seedId,peerId:seedPeerId});
-      const manifest={version:1,...(adultRemoval?{kind:ADULT_REMOVAL_SOURCE}:{}),scopeId:scope.id,authorizationSnapshot:a.record.authorizationSnapshot,sourceDocumentId:parent.runtime.documentId,sourceRevision:source?.revision??null,
+      const manifest={version:1,...(recovery?{kind:RECOVERY_SOURCE}:adultRemoval?{kind:ADULT_REMOVAL_SOURCE}:{}),scopeId:scope.id,authorizationSnapshot:a.record.authorizationSnapshot,sourceDocumentId:parent.runtime.documentId,sourceRevision:source?.revision??null,
         sourceHash:await digest(provider,'rotation-source-snapshot',hex(source?.bytes??new Uint8Array())),
         newDocumentId:subject.documentId,newGeneration:subject.newGeneration,newEpochId:subject.newEpochId,draftHash:await digest(provider,'rotation-draft-snapshot',hex(seed.snapshot)),
         seedId,seedPeerId,seedSchemaVersion:4,seedIdentitiesHash:await digest(provider,'projection-seed-identities',seed.identities)};
@@ -168,7 +177,7 @@ export function householdRevocation({
         packageRefs:devices.filter(d=>d.deviceId!==deviceId).map(()=>randomUUID()),contentClasses:['pantry','recipe','shopping'],
         disclosure:'current-state-only',signatures:[]};
       const proposal={item,grant,manifest,recipientBindings};
-      return {proposal,...await review(proposal)};
+      return {proposal,...await review(recovery?{...proposal,recoveryProof:null}:proposal)};
     },
     review,
     async approve({proposal,confirmed,explicit}){
@@ -186,7 +195,7 @@ export function householdRevocation({
       return {proposal,...await review(proposal)};
     },
     async retain({proposal,confirmed,explicit}){
-      if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
+      if(proposal?.item?.event?.kind==='recoverDevice'||explicit!==true)throw Error('CONFIRMATION_REQUIRED');
       const verified=await review(proposal,true,true);
       if(verified.confirmation!==confirmed)throw Error('REVIEW_CHANGED');
       return store.transaction(tx=>{
@@ -198,16 +207,18 @@ export function householdRevocation({
         return {replayed:false};
       });
     },
-    async publish({proposal,confirmed,explicit}){
+    /** @param {{proposal:any,confirmed:string,explicit:boolean,recoveryRun?:Function,continuityRegistry?:any}} input */
+    async publish({proposal,confirmed,explicit,recoveryRun,continuityRegistry}){
       if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
       const checked=await review(proposal,true,true);
       if(checked.confirmation!==confirmed)throw Error('REVIEW_CHANGED');
-      return withSecrets(({signingSecret})=>publishReviewedRevocation({
-        ...proposal,storage,scope,pin,provider,master,deviceId,signingSecret,runtime,sha256
+      const publish=proposal.item.event.kind==='recoverDevice'?publishHouseholdRecovery:publishReviewedRevocation;
+      return withSecrets(({signingSecret,wrappingSecret})=>publish({
+        ...proposal,storage,scope,pin,provider,master,deviceId,signingSecret,wrappingSecret,runtime,sha256,recoveryRun,continuityRegistry
       }));
     },
-    seal:({operationId,recipientDevice})=>withSecrets(keys=>sealHouseholdFile({
-      sodium,storage,scope,pin,provider,keys,operationId,recipientDevice,LoroDoc,kind:'revocation'
+    seal:({operationId,recipientDevice,kind='revocation'})=>withSecrets(keys=>sealHouseholdFile({
+      sodium,storage,scope,pin,provider,keys,operationId,recipientDevice,LoroDoc,kind
     })),
     async install({bytes,proposal,confirmed,explicit}){
       if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');

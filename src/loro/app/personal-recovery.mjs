@@ -55,3 +55,12 @@ export function personalRecovery({sodium,keys,run,storage,master,masterId,owner,
   }
  };
 }
+
+/** Use the imported seed only within the destination workspace. */
+export async function withRecoveredContinuity({run,master,masterId,owner,scopeId,operationId},use){
+ const record=await run(false,tx=>tx.get(recordKey(owner,operationId)));
+ if(!record||record.version!==1||record.scopeId!==scopeId||!(record.wrapped instanceof Uint8Array))throw Error('MISSING_RECOVERY');
+ const plain=await master.unwrap(masterId,record.wrapped,aad(owner,scopeId,operationId));
+ try{return await use(new TextDecoder('utf-8',{fatal:true}).decode(plain))}
+ finally{plain.fill(0)}
+}

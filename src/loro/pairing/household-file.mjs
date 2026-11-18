@@ -19,8 +19,8 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
   if(!saved.ok||!saved.value)throw Error('MISSING_PUBLICATION');
   const p=saved.value;
   if(current.activeHead!==p.nextAuthority.acceptedParent)throw Error('STALE_AUTHORITY');
-  const rotation=kind==='revocation',item=current.state.events.find(x=>rotation ?
-    x.rotation?.grant?.version===2&&x.rotation.operationId===operationId :
+  const rotation=kind==='revocation'||kind==='recovery',item=current.state.events.find(x=>rotation ?
+    x.rotation?.grant?.version===2&&x.rotation.operationId===operationId&&(x.event.kind==='recoverDevice')===(kind==='recovery') :
     x.admission?.operationId===operationId&&x.event?.kind==='inviteAdult');
   const transition=rotation?item?.rotation:item?.admission;
   if(!transition)throw Error('INVALID_AUTHORITY');
@@ -76,5 +76,5 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
  * against the independently accepted local parent and completed session. */
 export async function installHouseholdFile({sodium,bytes,keys,identify,...args}){
  if(!(bytes instanceof Uint8Array)||bytes.length<48||bytes.length>MAX+48)throw Error('MALFORMED');const signingSecret=new Uint8Array(keys.signingSecret),wrappingSecret=new Uint8Array(keys.wrappingSecret),cipher=new Uint8Array(bytes);let plain;
- try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==(args.recipientKind==='revocation'?2:1)||raw.version===2&&raw.policyBundle!==null)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
+ try{const wrappingPublic=sodium.crypto_scalarmult_base(wrappingSecret);try{plain=sodium.crypto_box_seal_open(cipher,wrappingPublic,wrappingSecret)}catch{throw Error('INVALID_FILE')}if(!(plain instanceof Uint8Array)||plain.length>MAX)throw Error('INVALID_FILE');let raw;try{raw=revive(JSON.parse(decoder.decode(plain)))}catch{throw Error('INVALID_FILE')}if(!raw||Object.keys(raw).sort().join(',')!=='policyBundle,publication,seed,version'||raw.version!==((args.recipientKind==='revocation'||args.recipientKind==='recovery')?2:1)||raw.version===2&&raw.policyBundle!==null)throw Error('INVALID_FILE');const identifiers=identify?identify(raw.publication?.admissionEventHash):{};return await installHouseholdRecipient({sodium,...args,...identifiers,keys:{signingSecret,wrappingSecret},publication:raw.publication,seed:raw.seed,policyBundle:raw.policyBundle})}finally{plain?.fill(0);signingSecret.fill(0);wrappingSecret.fill(0)}
 }

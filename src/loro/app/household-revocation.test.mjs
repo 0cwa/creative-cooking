@@ -13,6 +13,10 @@ import {checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRu
 import {domain} from '../authority/validator.mjs';
 import {approveHouseholdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
 import {householdCompromise} from './household-compromise.mjs';
+import {householdReadmission} from './household-readmission.mjs';
+import {householdTransfer} from './household-transfer.mjs';
+import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
+import {continuityBindingBytes,continuityPublicKey} from '../recovery/readmission.mjs';
 import {householdRevocation} from './household-revocation.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {localProvider} from './local-provider.mjs';
@@ -41,13 +45,13 @@ const bind=state=>({
  }
 });
 
-async function withRotationFixture({owners,policy},run){
+async function withRotationFixture({owners,policy,guest},run){
  const base=join(homedir(),'agent-scratch','creative-cooking','routed-adult-removal');
  await mkdir(base,{recursive:true});
  const directory=await mkdtemp(join(base,'sqlite-'));
  const participants=[];
  try{
-  for(const [deviceId,adultId] of Object.entries(owners)){
+  for(const [deviceId,adultId] of Object.entries(guest?{...owners,[guest]:guest}:owners)){
    const path=join(directory,deviceId+'.sqlite'), states=new Map();
    let database,storage,secret;
    const master={
@@ -86,19 +90,27 @@ async function withRotationFixture({owners,policy},run){
     const statement=database.prepare(q);
     return {rows:q.startsWith('SELECT')?statement.all(...args):(statement.run(...args),[])};
    }});
-   await tx(true,runner=>installLocalKey(runner,oldKey.record,oldKey.catalog));
+   if(deviceId!==guest)await tx(true,runner=>installLocalKey(runner,oldKey.record,oldKey.catalog));
    participant.signingKey=signingKey;
    participant.keys=keys;
    participant.provider=localProvider(sodium,{
     use:(...args)=>keys().use(...args)
    },{signing:{...signing,publicKey:signingKey},content:(epoch,use)=>keys().useIdentity(keyIdentity(deviceId,epoch),use)});
+   const withSecrets=use=>keys().use(signing.operationId,signing.identity,signingSecret=>
+    keys().use(wrapping.operationId,wrapping.identity,wrappingSecret=>use({signingSecret,wrappingSecret})));
+   participant.readmission=(pin,{confirmed,credential,generation=1}={})=>{
+    const {provider,runtime,service:rotation={}}=participant;
+    const pins={list:async()=>confirmed?[confirmed]:[]};
+    const transfer=householdTransfer({storage,scope,pin,provider,deviceId,master,sodium,LoroDoc,withSecrets,keys:pins,
+     prepareJoinedSequences:async()=>{},finalizeJoinedSequences:async()=>({sequences:{close(){}}})});
+    return householdReadmission({storage,scope,pin,provider,sodium,runtime,rotation,deviceId,signingKey,wrappingPublicKey,withSecrets,
+     run:storage.recoveryTransaction,transfer,pins,recoveryImport:{useContinuity:use=>use({owner:'gamma',generation},credential)}});
+   };
    participant.configure=async pin=>{
     const provider=participant.provider;
     const auth=await resolveRuntimeAuthority(storage,scope,pin,provider,deviceId);
     const runtime=new OfflineRuntime({storage,LoroDoc,decodeImportBlobMeta,scope:auth.scope,codec:candidateCodec(provider),
      keyRef:auth.scope.epochId,authority:{rootPin:pin,provider,selectionIndex:auth.selectionIndex}});
-    const withSecrets=use=>keys().use(signing.operationId,signing.identity,signingSecret=>
-     keys().use(wrapping.operationId,wrapping.identity,wrappingSecret=>use({signingSecret,wrappingSecret})));
     runtime.disclosure=disclosureService({storage,scope,rootPin:pin,provider,deviceId});
     Object.assign(participant,{runtime,service:householdRevocation({
      storage,scope,pin,provider,sodium,master,runtime,deviceId,adultId,signingKey,wrappingPublicKey,store:bind(states),
@@ -108,10 +120,10 @@ async function withRotationFixture({owners,policy},run){
   }
   const roster=[...new Set(Object.values(owners))].sort(), devices=Object.keys(owners).sort();
   const root={householdId:scope.id,head:'',generation:1,epochId:'old-epoch',roster,policy,policyHash:await policyId(participants[0].provider,policy),
-   devices:participants.map(({deviceId,adultId,signingKey})=>({adultId,deviceId,signingKeyRef:signingKey,active:true})),
+   devices:participants.filter(p=>p.deviceId!==guest).map(({deviceId,adultId,signingKey})=>({adultId,deviceId,signingKeyRef:signingKey,active:true})),
    runtime:{documentId:'old-cooking',authorPeers:Object.fromEntries(devices.map((id,index)=>[id,String(index+1)])),acceptedRecipients:devices}};
   const pin=root.head=await rootPin(participants[0].provider,root);
-  for(const participant of participants){
+  for(const participant of participants.filter(p=>p.deviceId!==guest)){
    await initializeAuthority(participant.storage,root,pin,participant.provider);
    await participant.configure(pin);
   }
@@ -487,5 +499,112 @@ test('SQLite adult removal uses unanimity on the frozen parent and handles an em
   const original=a.rows();
   await assert.rejects(a.service.prepare({targetAdultId:'gamma',bindings:[],explicit:true}),/FIXED_RULE_TOO_HIGH/);
   assert.deepEqual(a.rows(),original);
+ });
+});
+
+test('SQLite registered readmission consumes its challenge atomically, rolls back recipient install and reopens fresh household writes',async()=>{
+ await withRotationFixture({
+  owners:{alpha:'alpha',beta:'beta',gamma:'gamma'},policy:{kind:'fixed',fixedCount:2},guest:'fresh'
+ },async([a,b,c,fresh],root,pin)=>{
+  const credential0=sodium.to_hex(sodium.randombytes_buf(32)),credential=sodium.to_hex(sodium.randombytes_buf(32));
+  const binding=async(generation,seed)=>{
+   const binding={version:1,householdId:scope.id,owner:'gamma',checkpoint:pin,signerDevice:'gamma',generation,
+    continuityKey:continuityPublicKey(sodium,seed)};
+   return {binding,bindingSignature:sodium.to_hex(await c.provider.sign(c.signingKey,continuityBindingBytes(binding)))};
+  };
+  const first=await binding(0,credential0), latest=await binding(1,credential);
+  for(const p of [a,b]){
+   const service=p.readmission(pin);
+   await assert.rejects(service.retainRegistration({message:latest,explicit:true}),/CONFLICT/);
+   await service.retainRegistration({message:first,explicit:true});
+   await service.retainRegistration({message:latest,explicit:true});
+   assert.equal((await service.retainRegistration({message:latest,explicit:true})).replayed,true);
+   await assert.rejects(service.retainRegistration({message:first,explicit:true}),/CONFLICT/);
+  }
+  await apply(a.runtime,1,'pantry-create','current',{itemId:'p',name:'Archived original saffron',preference:3,author:a.deviceId,at});
+  await apply(a.runtime,2,'pantry-create','delete',{itemId:'d',name:'Deleted continuity canary',preference:2,author:a.deviceId,at});
+  await apply(a.runtime,3,'pantry-field','removed',{itemId:'d',field:'removedAt',value:at,author:a.deviceId,at},['delete']);
+  const active=(await a.compromise.open()).confirmation,report=await a.compromise.prepare(active,'gamma');
+  const reviewId=await a.compromise.sign(report,{kind:'checkpoint'});
+  await a.compromise.saveCleanDraft(await a.compromise.inspect(active,reviewId),[]);
+  const retired=await approve(b,await approve(a,await a.service.prepare({
+   reviewId,bindings:[await b.service.binding()],explicit:true
+  })));
+  await a.service.publish(confirm(retired));
+  await b.service.install({...confirm(retired),bytes:await a.service.seal({operationId:retired.proposal.item.event.proposalId,recipientDevice:'beta'})});
+  await Promise.all([reopen(a,pin),reopen(b,pin)]);
+  assert.equal((await apply(a.runtime,4,'pantry-create','current-v4',
+   {itemId:'current-v4',name:'Current saffron',preference:3,author:a.deviceId,at})).outcome.state,'saved');
+  const publicBundle=await exportHouseholdParent({storage:a.storage,scope,pin,provider:a.provider});
+  const confirmed={scope,pin,head:retired.eventHash};
+  const freshService=(seed=credential,generation=1)=>fresh.readmission(pin,{confirmed,credential:seed,generation});
+  await assert.rejects(freshService().request({householdId:scope.id,explicit:true}),/INVALID_AUTHORITY/);
+  await acceptHouseholdParent({storage:fresh.storage,provider:fresh.provider,bundle:publicBundle,
+   confirmedRootPin:pin,confirmedSelectedHead:retired.eventHash,explicit:true});
+  const draftRequest=async api=>api.request({householdId:scope.id,explicit:true});
+  const old=await draftRequest(freshService(credential0,0));
+  const serviceA=()=>a.readmission(pin),serviceB=()=>b.readmission(pin);
+  const beforeOld=a.rows();
+  await assert.rejects(serviceA().issue({request:old,explicit:true}),/INVALID_CONTEXT/);
+  assert.deepEqual(a.rows(),beforeOld);
+  const request=await draftRequest(freshService()), beforeIssue=a.rows();
+  const challenge=await serviceA().issue({request,explicit:true});
+  await reopen(a,pin);
+  assert.deepEqual(await serviceA().issue({request,explicit:true}),challenge);
+  assert.notDeepEqual(a.rows(),beforeIssue);
+  const answer=message=>freshService().answer({householdId:scope.id,message,explicit:true});
+  await assert.rejects(answer({...challenge,sponsorDevice:'gamma'}),/INVALID_PROOF/);
+  const response=await answer(challenge),bindings=[await serviceB().binding()];
+  await assert.rejects(serviceB().prepare({response,bindings,explicit:true}),/INVALID_SPONSOR/);
+  await assert.rejects(serviceA().prepare({response:{...response,possession:null},bindings,explicit:true}),/INVALID_PROOF/);
+  let decision=await serviceA().prepare({response,bindings,explicit:true});
+  decision=await serviceA().approve(confirm(decision));
+  await assert.rejects(serviceA().publish(confirm(decision)),/QUORUM_REQUIRED/);
+  decision=await serviceB().approve(confirm(decision));
+  const publication=decision.proposal.item.event.proposalId, currentEpoch=decision.proposal.item.event.subject.newEpochId;
+  const beforeA=a.rows(),beforeFresh=fresh.rows();
+  a.fault=()=>{if(a.rows().some(row=>row.key.startsWith('["recovery-challenge-consumed",')))throw Error('interrupt after consumption');};
+  await assert.rejects(serviceA().publish(confirm(decision)),/IO/);
+  a.fault=null;
+  await reopen(a,pin);
+  assert.deepEqual(a.rows(),beforeA);
+  assert.equal((await serviceA().publish(confirm(decision))).acceptedHead,decision.eventHash);
+  const published=a.rows();
+  assert.equal(published.filter(row=>row.key.startsWith('["recovery-challenge-consumed",')).length,1);
+  assert.equal((await serviceA().publish(confirm(decision))).replayed,true);
+  assert.deepEqual(a.rows(),published);
+  await assert.rejects(serviceA().issue({request,explicit:true}),/INVALID_CONTEXT/);
+  const file=await serviceA().seal({operationId:publication,recipientDevice:'fresh'});
+  assert.deepEqual(await serviceA().seal({operationId:publication,recipientDevice:'fresh'}),file);
+  await assert.rejects(serviceA().seal({operationId:publication,recipientDevice:'gamma'}),/INVALID_RECIPIENT/);
+  const install=()=>freshService().install({proposal:decision.proposal,bytes:file,fresh:true,explicit:true});
+  fresh.fault=()=>{if(fresh.rows().some(row=>row.key.startsWith('["recipient-admission",')))throw Error('interrupt after recipient receipt');};
+  await assert.rejects(install(),/IO/);
+  fresh.close();fresh.fault=null;fresh.open();
+  assert.deepEqual(fresh.rows(),beforeFresh);
+  assert.equal((await install()).acceptedHead,decision.eventHash);
+  assert.equal((await install()).replayed,true);
+  const memberFile=await serviceA().seal({operationId:publication,recipientDevice:'beta'});
+  assert.notDeepEqual(memberFile,file);
+  await serviceB().reviewRecipient({proposal:decision.proposal,fresh:false});
+  assert.equal((await serviceB().install({proposal:decision.proposal,bytes:memberFile,fresh:false,explicit:true})).acceptedHead,decision.eventHash);
+  await Promise.all([reopen(a,pin),reopen(b,pin),reopen(fresh,pin)]);
+  const newKey=await fresh.keys().useIdentity(keyIdentity('fresh',currentEpoch),secret=>new Uint8Array(secret));
+  try{
+   await a.keys().useIdentity(keyIdentity('alpha',currentEpoch),secret=>assert.deepEqual(secret,newKey));
+   await b.keys().useIdentity(keyIdentity('beta',currentEpoch),secret=>assert.deepEqual(secret,newKey));
+   assert.notDeepEqual(newKey,rawKey);
+  }finally{newKey.fill(0);}
+  await assert.rejects(fresh.keys().useIdentity(keyIdentity('fresh','old-epoch'),()=>{}),/NOT_FOUND/);
+  await assert.rejects(c.keys().useIdentity(keyIdentity('gamma',currentEpoch),()=>{}),/NOT_FOUND/);
+  assert.deepEqual(projectCooking((await fresh.runtime.document()).doc).pantry.map(x=>x.name),['Current saffron']);
+  assert.equal(Buffer.from((await fresh.runtime.document()).doc.export({mode:'snapshot'})).includes(Buffer.from('Deleted continuity canary')),false);
+  const saved=await apply(fresh.runtime,1,'pantry-create','after',{itemId:'new',name:'Fresh sumac',preference:3,author:'fresh',at});
+  assert.equal(saved.outcome.state,'saved');
+  await reopen(fresh,pin);
+  assert.ok(projectCooking((await fresh.runtime.document()).doc).pantry.some(x=>x.name==='Fresh sumac'));
+  for(const original of beforeA.filter(row=>JSON.parse(row.key)[0]==='document')){
+   assert.deepEqual(a.rows().find(row=>row.key===original.key),original);
+  }
  });
 });
