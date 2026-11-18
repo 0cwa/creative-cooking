@@ -5,9 +5,21 @@ import type { ProjectionPublication, ProjectionAtomicStorage } from '../contract
 import type { RuntimeStorageReader } from '../contracts/runtime-storage.ts';
 import type { PairingAtomicStorage, PairingAuthorityRecord, PairingAuthorityWrite, PairingRelease, PairingReleaseResult, PairingScope } from '../contracts/pairing.ts';
 import { storageOperationKey, storageGroupKey, validateInboxItem, validateStorageReceipt } from '../contracts/index.ts';
+import {isPolicyDocumentId} from '../authority/validator.mjs';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
 
 type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; keys(): Promise<string[]> };
+type AuthorityExpectation = LocalCommit['expectedAuthority'];
+type BranchDocument = {head:string;documentId:string};
+type BranchRevision = BranchDocument & {revision:number|null};
+type PolicyCheckout = {
+  expectedAuthority:AuthorityExpectation;
+  nextAuthority:PairingAuthorityRecord;
+  from:BranchRevision;
+  target:BranchRevision;
+  parent:BranchRevision|null;
+  baseline:Uint8Array|null;
+};
 export type TransactionRunner = <T>(write: boolean, body: (tx: Tx) => Promise<T>) => Promise<T>;
 const key = (...parts: string[]) => JSON.stringify(parts);
 const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
@@ -33,7 +45,8 @@ const validateRecord = (k: string, v: any) => {
   let valid = false;
   switch (namespace) {
     case 'disclosure-pending': valid=fields(v,['reason','objectId']) && v.reason==='POLICY_GOVERNANCE_UNPROVEN' && typeof v.objectId==='string' && !!v.objectId; break;
-    case 'disclosure-active': valid=typeof v==='string' && !!v; break;
+    case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
+    case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
     case 'disclosure-source': valid=(fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId']) || (fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId','incomplete']) && v.incomplete===true)) && v.envelope instanceof Uint8Array && ['local','import'].includes(v.origin) && typeof v.objectId==='string' && !!v.objectId && denseArray(v.policyHashes,(x:any)=>typeof x==='string' && !!x) && typeof v.checkpoint==='string' && !!v.checkpoint && typeof v.documentId==='string' && !!v.documentId && typeof v.commandId==='string' && !!v.commandId; break;
     case 'disclosure-review': valid=(fields(v,['record','state']) || (fields(v,['record','state','context']) && object(v.context))) && object(v.record) && ['reviewed','unknown','sent','failed'].includes(v.state); break;
@@ -72,6 +85,8 @@ const validateOutcome = (outcome: SavedOutcome, docs: LocalCommit['documents']) 
 const fail = (code: StorageError): {ok:false;error:{code:StorageError;recovery:'reload-durable-state'}} => ({ok:false,error:{code,recovery:'reload-durable-state'}});
 
 const validId = (x: unknown): x is string => typeof x==='string' && !!x && new TextEncoder().encode(x).length<=256;
+const validBranchDocument = (x: unknown): x is BranchDocument => fields(x,['head','documentId']) && validId(x.head) && validId(x.documentId);
+const validBranchRevision = (x: unknown): x is BranchRevision => fields(x,['head','documentId','revision']) && validId(x.head) && validId(x.documentId) && (x.revision===null || revision(x.revision));
 const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
 function projectionKey(x: unknown,allowUnboundV2=false): string | null {
  if(object(x)&&Object.hasOwn(x,'policySeed')){const {policySeed,...rest}=x;if(!fields(policySeed,['bundle','bundleHash'])||!object(policySeed.bundle)||!validId(policySeed.bundleHash)||!rest.seed||!rest.sourceDocument||!rest.manifest||!(rest.manifest.bytes instanceof Uint8Array))return null;let m:any;try{m=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(rest.manifest.bytes))}catch{return null}const b:any=policySeed.bundle;if(!fields(b,['version','scopeId','sourceHead','sourceDocumentId','sourceRevision','seedId','peerId','snapshotHash','entries','policies'])||![2,3,4].includes(b.version)||m.version!==b.version||m.policyBundleHash!==policySeed.bundleHash||m.sourceRevision!==b.sourceRevision||m.sourceDocument!==b.sourceDocumentId||b.sourceDocumentId!==rest.sourceDocument.documentId||b.sourceRevision!==rest.sourceDocument.revision||b.sourceHead!==rest.expectedAuthority?.record?.acceptedParent||b.scopeId!==rest.expectedAuthority?.scope?.id||b.seedId!==rest.seed.seedId||m.schemaVersion!==`registry-seed-v${b.version}|${b.seedId}|${b.peerId}`||!validId(b.snapshotHash)||!denseArray(b.entries,(e:any)=>(b.version===2?fields(e,['effectId','policyHashes']):fields(e,['effectId','policyHashes','incomplete'])&&typeof e.incomplete==='boolean')&&validId(e.effectId)&&denseArray(e.policyHashes,validId)&&(e.policyHashes.length>0||b.version>=3&&e.incomplete===true)&&e.policyHashes.length<=64&&e.policyHashes.every((h:string,i:number)=>!i||e.policyHashes[i-1]<h))||b.entries.length>256||!denseArray(b.policies,(p:any)=>fields(p,['policy','policyHash','approvals'])&&object(p.policy)&&validId(p.policyHash)&&Array.isArray(p.approvals))||b.policies.length>64||!Array.isArray(rest.seed.identities)||JSON.stringify(b.entries.map((e:any)=>e.effectId))!==JSON.stringify(rest.seed.identities.map((e:any)=>e.effectId).sort())||projectionKey(rest,true)===null)return null;const encoded=JSON.stringify(projectionCanonical(x));return new TextEncoder().encode(encoded).length<=2500000?encoded:null;}
@@ -186,6 +201,70 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if (write.record.revision !== (write.expectedRevision === null ? 0 : write.expectedRevision + 1)) return {ok:false,error:'MALFORMED'};
     write = snapshot(write);
     try { return await this.run(true,async tx => { const r=write.record, k=key('pairing-authority',r.scope.kind,r.scope.id), old=await tx.get(k); if (old && (old.scope.kind !== r.scope.kind || old.scope.id !== r.scope.id)) corrupt(); if ((old === undefined ? null : old.revision) !== write.expectedRevision) conflict(); await tx.put(k,r); return {ok:true,value:undefined}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  private async checkoutDocument(tx:Tx,scope:string,{head,documentId}:BranchDocument,allowUninstalled=false):Promise<{bytes:Uint8Array;revision:number}|null> {
+    const doc=await tx.get(key('document',scope,documentId)), owner=await tx.get(key('document-owner',scope,documentId));
+    if(isPolicyDocumentId(documentId)) {
+      const parent=await tx.get(key('policy-checkout-parent',scope,documentId));
+      if(documentId!==`policy-${head}` || (!parent && (!allowUninstalled || doc || owner!==undefined))) throw new StorageFailure('CHECKOUT_REQUIRED');
+      if(parent && !doc) return corrupt();
+    }
+    if(doc ? owner!==head : owner!==undefined) throw new StorageFailure('CHECKOUT_REQUIRED');
+    return doc??null;
+  }
+  /** These read-only observations are for the verified checkout path only. */
+  async readPolicyCheckoutDocuments(expected:AuthorityExpectation,from:BranchDocument,target:BranchDocument,parent:BranchDocument|null) {
+    if(expected?.scope?.kind!=='household'||!validBranchDocument(from)||!validBranchDocument(target)||
+      expected.record?.acceptedParent!==from.head||from.head===target.head||from.documentId===target.documentId||
+      (parent!==null&&!validBranchDocument(parent))) return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      await this.requireAuthority(tx,expected);
+      const scope=expected.scope.id;
+      const source=await this.checkoutDocument(tx,scope,from);
+      const destination=await this.checkoutDocument(tx,scope,target,parent!==null);
+      const parentDocument=parent && !destination ? await this.checkoutDocument(tx,scope,parent) : null;
+      return {ok:true as const,value:{fromRevision:source?.revision??null,targetRevision:destination?.revision??null,parentDocument:snapshot(parentDocument)}};
+    })}catch(e){return fail(mapError(e));}
+  }
+  /** Install the exact reconstructed baseline and publish the local selection together. */
+  async commitPolicyCheckout(input:PolicyCheckout) {
+    input=snapshot(input);
+    const {expectedAuthority,nextAuthority,from,target,parent,baseline}=input;
+    if(expectedAuthority?.scope?.kind!=='household'||!expectedAuthority.record||!validatePairingAuthority(nextAuthority).ok||
+      nextAuthority.scope.kind!=='household'||nextAuthority.scope.id!==expectedAuthority.scope.id||
+      nextAuthority.revision!==expectedAuthority.record.revision+1||!validBranchRevision(from)||!validBranchRevision(target)||
+      expectedAuthority.record.acceptedParent!==from.head||nextAuthority.acceptedParent!==target.head||
+      from.head===target.head||from.documentId===target.documentId||
+      (parent===null ? isPolicyDocumentId(target.documentId) : !validBranchRevision(parent)||target.documentId!==`policy-${target.head}`||parent.documentId===target.documentId)||
+      (parent!==null&&target.revision===null ? !(baseline instanceof Uint8Array)||!baseline.length : baseline!==null)) return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      await this.requireAuthority(tx,expectedAuthority);
+      const scope=expectedAuthority.scope.id;
+      const source=await this.checkoutDocument(tx,scope,from), destination=await this.checkoutDocument(tx,scope,target,parent!==null);
+      if((source?.revision??null)!==from.revision||(destination?.revision??null)!==target.revision) conflict();
+      if(parent) {
+        const expectedParent={head:parent.head,documentId:parent.documentId};
+        if(baseline) {
+          const retained=await this.checkoutDocument(tx,scope,parent);
+          if((retained?.revision??null)!==parent.revision) conflict();
+          await tx.put(key('document-owner',scope,target.documentId),target.head);
+          await tx.put(key('document',scope,target.documentId),{bytes:copy(baseline),revision:0});
+          await tx.put(key('policy-checkout-parent',scope,target.documentId),expectedParent);
+        } else {
+          const saved=await tx.get(key('policy-checkout-parent',scope,target.documentId));
+          if(saved?.head!==parent.head||saved?.documentId!==parent.documentId) return corrupt();
+        }
+      }
+      const active=(await tx.get(key('disclosure-active',scope)))??null;
+      await tx.put(key('policy-disclosure-head',scope,from.head),active);
+      let next=await tx.get(key('policy-disclosure-head',scope,target.head));
+      if(next===undefined&&parent&&baseline) next=await tx.get(key('policy-disclosure-head',scope,parent.head));
+      if(next===undefined) return corrupt();
+      await tx.put(key('disclosure-active',scope),next);
+      await tx.put(key('pairing-authority','household',scope),nextAuthority);
+      this.fault?.('policy-checkout');
+      return {ok:true as const,value:undefined};
+    })}catch(e){return fail(mapError(e));}
   }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
     const scope=p.expectedAuthority.scope.id;
@@ -302,7 +381,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   private async identities(tx: Tx, c: LocalCommit) {
     const ids = [key('local',c.scopeId,c.operationId), ...c.commands.flatMap(x => [key('command',c.scopeId,x.commandId), key('effect',c.scopeId,x.effectId)]), ...c.outbound.map(x => key('object',c.scopeId,x.object.id))];
     for (const id of ids) if (await tx.get(id) !== undefined) conflict();
-    for(const x of c.commands)if(await tx.get(key('projection-seed-command',c.scopeId,x.documentId,x.commandId))!==undefined||await tx.get(key('projection-seed-effect',c.scopeId,x.documentId,x.effectId))!==undefined)conflict();
+    for(const command of c.commands)await this.requireUnusedProjectionIdentity(tx,c.scopeId,command);
   }
   private async completedLocal(tx: Tx, c: LocalCommit, inputKey: string) {
     for (const command of c.commands) {
@@ -326,6 +405,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     for (const d of docs) {
       const old = await tx.get(key('document',scope,d.documentId));
       const oldOwner=await tx.get(key('document-owner',scope,d.documentId));
+      if (owner && isPolicyDocumentId(d.documentId) && (!old || !await tx.get(key('policy-checkout-parent',scope,d.documentId)))) throw new StorageFailure('CHECKOUT_REQUIRED');
       if (owner && old && oldOwner!==owner) throw new StorageFailure('CHECKOUT_REQUIRED');
       if (owner && !old && oldOwner!==undefined) return corrupt();
       if ((old === undefined ? null : old.revision) !== d.expectedRevision || old?.revision === Number.MAX_SAFE_INTEGER) conflict();
@@ -334,11 +414,19 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     for (let i=0;i<docs.length;i++) { if (owner && docs[i].expectedRevision===null) await tx.put(key('document-owner',scope,docs[i].documentId),owner); await tx.put(key('document',scope,docs[i].documentId), {bytes:copy(docs[i].bytes),revision:revisions[i].revision}); }
     return {state:'saved',revisions};
   }
+  private async requireUnusedProjectionIdentity(tx:Tx,scope:string,command:LocalCommit['commands'][number]) {
+    const origin=await this.projectionOrigin(tx,scope,command.documentId);
+    if(await tx.get(key('projection-seed-command',scope,origin.documentId,command.commandId))!==undefined||
+      await tx.get(key('projection-seed-effect',scope,origin.documentId,command.effectId))!==undefined) conflict();
+  }
   /** Dependencies are scope-local and must precede their consumer in the transaction. */
   private async requireDependencies(tx:Tx,scopeId:string,commands:readonly {documentId:string;effectId:string;dependencyEffectIds:readonly string[]}[]) {
     const prior=new Set<string>();
     for(const command of commands) {
-      for(const dep of command.dependencyEffectIds) if(!prior.has(dep) && await tx.get(key('effect',scopeId,dep))===undefined && await tx.get(key('projection-seed-effect',scopeId,command.documentId,dep))===undefined) conflict();
+      for(const dep of command.dependencyEffectIds) if(!prior.has(dep) && await tx.get(key('effect',scopeId,dep))===undefined) {
+        const origin=await this.projectionOrigin(tx,scopeId,command.documentId);
+        if(await tx.get(key('projection-seed-effect',scopeId,origin.documentId,dep))===undefined) conflict();
+      }
       prior.add(command.effectId);
     }
   }
@@ -368,7 +456,22 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     input=snapshot(input);if(!fields(input,['expectedAuthority','policyHash','documentId','documentRevision','reviewId','from','to'])||!validId(input.policyHash)||!validId(input.documentId)||!revision(input.documentRevision)||!validId(input.reviewId)||!((input.from==='reviewed'&&input.to==='unknown')||(input.from==='unknown'&&['sent','failed'].includes(input.to))))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{const scope=input.expectedAuthority.scope.id,slot=key('disclosure-review',scope,input.reviewId),stored=await tx.get(slot);if(!stored||stored.state!==input.from||!stored.context||stored.context.policyHash!==input.policyHash||stored.context.documentId!==input.documentId||stored.context.documentRevision!==input.documentRevision||JSON.stringify(projectionCanonical(stored.context.expectedAuthority))!==JSON.stringify(projectionCanonical(input.expectedAuthority)))conflict();if(input.from==='reviewed'){await this.requireAuthority(tx,input.expectedAuthority);const head=input.expectedAuthority.record?.acceptedParent,doc=await tx.get(key('document',scope,input.documentId)),owner=await tx.get(key('document-owner',scope,input.documentId));if((await tx.get(key('disclosure-active',scope)))!==input.policyHash||!doc||doc.revision!==input.documentRevision||owner!==head||stored.record.checkpoint!==head)conflict()}await tx.put(slot,{record:stored.record,state:input.to,context:stored.context});this.fault?.('disclosure-transition');return {ok:true as const,value:undefined}})}catch(e){return fail(mapError(e))}
   }
-  async readDisclosureActive(scopeId:string) {try{return await this.run(false,async tx=>{const active=(await tx.get(key('disclosure-active',scopeId)))??null;for(const raw of await tx.keys()){let parts:any;try{parts=JSON.parse(raw)}catch{continue}if(Array.isArray(parts)&&parts.length===3&&parts[0]==='disclosure-policy'&&parts[1]===scopeId){const record=await tx.get(raw);if(record.policy?.predecessor===active&&record.policyHash!==active)conflict();if(record.policyHash!==parts[2])corrupt()}}return {ok:true as const,value:active}})}catch(e){return {ok:false as const,error:mapError(e)}}}
+  async readDisclosureActive(scopeId:string) {
+    try{return await this.run(false,async tx=>{
+      const active=(await tx.get(key('disclosure-active',scopeId)))??null;
+      const authority=await tx.get(key('pairing-authority','household',scopeId));
+      for(const raw of await tx.keys()){
+        let parts:any;try{parts=JSON.parse(raw)}catch{continue}
+        if(!Array.isArray(parts)||parts.length!==3||parts[0]!=='disclosure-policy'||parts[1]!==scopeId)continue;
+        const record=await tx.get(raw);
+        if(record.policyHash!==parts[2])corrupt();
+        const checkpoint=record.policy?.checkpoint;
+        if(validId(checkpoint)&&checkpoint!==authority?.acceptedParent&&await tx.get(key('policy-disclosure-head',scopeId,checkpoint))!==undefined)continue;
+        if(record.policy?.predecessor===active&&record.policyHash!==active)conflict();
+      }
+      return {ok:true as const,value:active};
+    })}catch(e){return {ok:false as const,error:mapError(e)}}
+  }
   async readArchivedDisclosurePolicy(scopeId:string,policyHash:string) {try{return await this.run(false,async tx=>({ok:true as const,value:snapshot((await tx.get(key('disclosure-policy-archive',scopeId,policyHash))) ?? null)}))}catch(e){return {ok:false as const,error:mapError(e)}}}
   async readDisclosurePolicy(scopeId:string,policyHash:string) {try{return await this.run(false,async tx=>({ok:true as const,value:snapshot((await tx.get(key('disclosure-policy',scopeId,policyHash))) ?? null)}))}catch(e){return {ok:false as const,error:mapError(e)}}}
   private async validatedDisclosureSource(tx:Tx,scopeId:string,effectId:string,governingPolicyHash?:string|null) {
@@ -381,12 +484,44 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   private async disclosureDependency(tx:Tx,scope:string,documentId:string,effectId:string,visiting=new Set<string>()):Promise<{policyHashes:string[],incomplete:boolean}>{
     if(visiting.has(effectId)||visiting.size>=256)corrupt();visiting.add(effectId);const source=await this.validatedDisclosureSource(tx,scope,effectId);if(source)return {policyHashes:source.policyHashes,incomplete:source.incomplete===true};
-    const old=await tx.get(key('effect',scope,effectId)),seedId=await tx.get(key('projection-seed-effect',scope,documentId,effectId));if(old===undefined&&seedId===undefined)conflict();let hashes:string[]=[];
-    if(old!==undefined){let parsed:any;try{parsed=JSON.parse(old)}catch{return corrupt()}const command=parsed?.[1]?.commands?.find((c:any)=>c.effectId===effectId&&c.documentId===documentId);if(!command||await tx.get(key('command',scope,command.commandId))!==old||!denseArray(command.dependencyEffectIds,validId))return corrupt();const inherited=new Set<string>();for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,documentId,dep,new Set(visiting));for(const h of parent.policyHashes)inherited.add(h)}hashes=[...inherited].sort()}
-    if(seedId!==undefined){const sidecar=await tx.get(key('projection-policy-seed',scope,documentId));if(sidecar!==undefined){if(sidecar.bundle?.scopeId!==scope||sidecar.bundle?.seedId!==seedId||!Array.isArray(sidecar.bundle?.entries))return corrupt();const matching=sidecar.bundle.entries.filter((x:any)=>x.effectId===effectId);if(matching.length!==1||!denseArray(matching[0].policyHashes,validId))return corrupt();hashes=matching[0].policyHashes}}
+    const lineage=await this.projectionLineage(tx,scope,documentId),origin=lineage.at(-1)!;
+    const old=await tx.get(key('effect',scope,effectId)),seedId=await tx.get(key('projection-seed-effect',scope,origin.documentId,effectId));if(old===undefined&&seedId===undefined)conflict();let hashes:string[]=[];
+    if(old!==undefined){let parsed:any;try{parsed=JSON.parse(old)}catch{return corrupt()}const command=parsed?.[1]?.commands?.find((c:any)=>c.effectId===effectId&&lineage.some(branch=>branch.documentId===c.documentId));if(!command||await tx.get(key('command',scope,command.commandId))!==old||!denseArray(command.dependencyEffectIds,validId))return corrupt();const inherited=new Set<string>();for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,documentId,dep,new Set(visiting));for(const h of parent.policyHashes)inherited.add(h)}hashes=[...inherited].sort()}
+    if(seedId!==undefined){const sidecar=await tx.get(key('projection-policy-seed',scope,origin.documentId));if(sidecar!==undefined){if(sidecar.bundle?.scopeId!==scope||sidecar.bundle?.seedId!==seedId||!Array.isArray(sidecar.bundle?.entries))return corrupt();const matching=sidecar.bundle.entries.filter((x:any)=>x.effectId===effectId);if(matching.length!==1||!denseArray(matching[0].policyHashes,validId))return corrupt();hashes=matching[0].policyHashes}}
     return {policyHashes:hashes,incomplete:true};
   }
   async readDisclosureSource(scopeId:string,effectId:string) {try{return await this.run(false,async tx=>({ok:true as const,value:snapshot(await this.validatedDisclosureSource(tx,scopeId,effectId))}))}catch(e){return {ok:false as const,error:mapError(e)}}}
+  /** Legacy envelopes authenticate edits but carry no disclosure policy evidence. */
+  async readLegacyCookingSource(expectedAuthority:AuthorityExpectation,effectId:string) {
+    if(expectedAuthority?.scope?.kind!=='household'||!validId(effectId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      await this.requireAuthority(tx,expectedAuthority);
+      const scope=expectedAuthority.scope.id,inputKey=await tx.get(key('effect',scope,effectId));
+      if(inputKey===undefined)return {ok:true as const,value:null};
+      let parsed:any;
+      try{parsed=JSON.parse(inputKey)}catch{return corrupt();}
+      let objectId:string,envelope:Uint8Array,command:LocalCommit['commands'][number]|undefined;
+      if(parsed?.[0]==='local') {
+        const saved=await this.localOperation(tx,scope,parsed[1]?.operationId);
+        if(!saved)return corrupt();
+        const index=saved.commit.commands.findIndex(c=>c.effectId===effectId);
+        command=saved.commit.commands[index];
+        const entry=saved.commit.outbound[index];
+        if(!entry)return corrupt();
+        ({id:objectId,bytes:envelope}=entry.object);
+      } else if(parsed?.[0]==='import') {
+        objectId=parsed[1]?.itemId;
+        const saved=await this.importedOperation(tx,scope,objectId);
+        command=saved?.commit.commands.find(c=>c.effectId===effectId);
+        envelope=(await tx.get(key('inbox',scope,objectId)))?.bytes;
+      } else return corrupt();
+      if(!command||!(envelope instanceof Uint8Array))return corrupt();
+      let header:any;
+      try{header=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(envelope)).header}catch{return corrupt();}
+      if(header?.version!==1||header.scopeId!==scope||header.documentId!==command.documentId||!validId(header.branchHead))return corrupt();
+      return {ok:true as const,value:{checkpoint:header.branchHead,documentId:command.documentId,commandId:command.commandId,objectId,envelope:copy(envelope),policyHashes:[]}};
+    })}catch(e){return fail(mapError(e))}
+  }
   async publishDisclosurePolicy(input:any) {
     input=snapshot(input);if(!fields(input,['expectedAuthority','expectedPolicyHash','record'])||!fields(input.record,['policy','policyHash','approvals'])||!validId(input.record.policyHash)||!(input.expectedPolicyHash===null||validId(input.expectedPolicyHash)))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{await this.requireAuthority(tx,input.expectedAuthority);const scope=input.expectedAuthority.scope.id,head=input.expectedAuthority.record?.acceptedParent;if(input.expectedAuthority.scope.kind!=='household'||input.record.policy?.scope?.id!==scope||input.record.policy?.checkpoint!==head||input.record.policy?.predecessor!==input.expectedPolicyHash)conflict();const active=(await tx.get(key('disclosure-active',scope)))??null;if(active!==input.expectedPolicyHash)conflict();const slot=key('disclosure-policy',scope,input.record.policyHash);if(await tx.get(slot)!==undefined)conflict();await tx.put(slot,input.record);this.fault?.('disclosure-policy');await tx.put(key('disclosure-active',scope),input.record.policyHash);return {ok:true as const,value:undefined}})}catch(e){return fail(mapError(e))}
@@ -436,6 +571,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     expectedAuthority=snapshot(expectedAuthority);
     try { return await this.run(false,async tx=>{ await this.requireAuthority(tx,expectedAuthority); const scope=expectedAuthority.scope.id, doc=await tx.get(key('document',scope,documentId));
       const owner=await tx.get(key('document-owner',scope,documentId));
+      if(isPolicyDocumentId(documentId) && (!doc || !await tx.get(key('policy-checkout-parent',scope,documentId)))) throw new StorageFailure('CHECKOUT_REQUIRED');
       if (!doc) { if(owner!==undefined) return corrupt(); return {ok:true,value:null}; }
       if (owner!==expectedAuthority.record!.acceptedParent) throw new StorageFailure('CHECKOUT_REQUIRED');
       return {ok:true,value:{documentId,bytes:copy(doc.bytes),revision:doc.revision}};
@@ -447,14 +583,54 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   async readRetainedProjectionSeed(scopeId:string,documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array;head:string}|null,StorageError>> {
     if(!validId(scopeId)||!validId(documentId))return {ok:false,error:'MALFORMED'};
-    try{const found=await this.run(false,async tx=>{const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const p=await this.getProjectionPublication(scopeId,found.operationId);if(p.ok&&!p.value){const recipient=await this.readRecipientProjection(scopeId,found.operationId,documentId);if(recipient)return {ok:true,value:{seed:found.seed,snapshot:copy(recipient.documents[0].bytes),head:recipient.nextAuthority.acceptedParent}};}if(!p.ok||!p.value||p.value.documents.length!==1||p.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(p.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(p.value.documents[0].bytes),head:p.value.nextAuthority.acceptedParent}}}catch(e){return {ok:false,error:mapError(e)}}
+    try{const found=await this.run(false,async tx=>{const seed=await tx.get(key('projection-seed',scopeId,documentId)),meta=await tx.get(key('projection-document',scopeId,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const p=await this.getProjectionPublication(scopeId,found.operationId);if(p.ok&&!p.value){const recipient=await this.readRecipientProjection(scopeId,found.operationId,documentId);if(recipient&&JSON.stringify(projectionCanonical(recipient.seed))===JSON.stringify(projectionCanonical(found.seed)))return {ok:true,value:{seed:found.seed,snapshot:copy(recipient.documents[0].bytes),head:recipient.nextAuthority.acceptedParent}};}if(!p.ok||!p.value||p.value.documents.length!==1||p.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(p.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(p.value.documents[0].bytes),head:p.value.nextAuthority.acceptedParent}}}catch(e){return {ok:false,error:mapError(e)}}
   }
-  async readProjectionSeed(expectedAuthority: LocalCommit['expectedAuthority'],documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array}|null,StorageError>> {
+  private async projectionLineage(tx:Tx,scope:string,documentId:string,head?:string) {
+    let current={documentId,head};
+    const lineage=[current];
+    for(let i=0;isPolicyDocumentId(current.documentId);i++) {
+      if(i>=128 || (current.head!==undefined && current.documentId!==`policy-${current.head}`)) return corrupt();
+      const parent=await tx.get(key('policy-checkout-parent',scope,current.documentId));
+      if(!parent) throw new StorageFailure('CHECKOUT_REQUIRED');
+      current=parent;
+      lineage.push(current);
+    }
+    return lineage;
+  }
+  private async projectionOrigin(tx:Tx,scope:string,documentId:string,head?:string) {
+    return (await this.projectionLineage(tx,scope,documentId,head)).at(-1)!;
+  }
+  async readProjectionSeed(expectedAuthority: AuthorityExpectation,documentId:string):Promise<Result<{seed:{seedId:string;identities:{commandId:string;effectId:string}[]};snapshot:Uint8Array}|null,StorageError>> {
     if(!validId(documentId))return {ok:false,error:'MALFORMED'};
-    try {const found=await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id,seed=await tx.get(key('projection-seed',scope,documentId)),meta=await tx.get(key('projection-document',scope,documentId));if(seed===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {seed:snapshot(seed),operationId:meta.operationId}});if(!found)return {ok:true,value:null};const pub=await this.getProjectionPublication(expectedAuthority.scope.id,found.operationId);if(pub.ok&&!pub.value){const recipient=await this.readRecipientProjection(expectedAuthority.scope.id,found.operationId,documentId,expectedAuthority.record?.acceptedParent);if(recipient&&JSON.stringify(projectionCanonical(recipient.seed))===JSON.stringify(projectionCanonical(found.seed)))return {ok:true,value:{seed:found.seed,snapshot:copy(recipient.documents[0].bytes)}};}if(!pub.ok||!pub.value||pub.value.nextAuthority.acceptedParent!==expectedAuthority.record?.acceptedParent||pub.value.documents.length!==1||pub.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(pub.value.seed))!==JSON.stringify(projectionCanonical(found.seed)))return {ok:false,error:'CORRUPT'};return {ok:true,value:{seed:found.seed,snapshot:copy(pub.value.documents[0].bytes)}}}catch(e){return {ok:false,error:mapError(e)}}
+    try {
+      const scope=expectedAuthority.scope.id;
+      const origin=await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);return this.projectionOrigin(tx,scope,documentId,expectedAuthority.record?.acceptedParent)});
+      const result=await this.readRetainedProjectionSeed(scope,origin.documentId);
+      if(result.ok&&result.value&&result.value.head!==origin.head)return {ok:false,error:'CORRUPT'};
+      return result;
+    }catch(e){return {ok:false,error:mapError(e)}}
   }
-  async readProjectionPolicySeed(expectedAuthority:LocalCommit['expectedAuthority'],documentId:string) {
-    if(!validId(documentId))return fail('MALFORMED');try{const found=await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scope=expectedAuthority.scope.id,meta=await tx.get(key('projection-document',scope,documentId)),sidecar=await tx.get(key('projection-policy-seed',scope,documentId));if(sidecar===undefined)return null;if(!meta||!validId(meta.operationId))return corrupt();return {operationId:meta.operationId,sidecar:snapshot(sidecar)}});if(!found)return {ok:true as const,value:null};const published=await this.getProjectionPublication(expectedAuthority.scope.id,found.operationId);if(published.ok&&!published.value){const recipient=await this.readRecipientProjection(expectedAuthority.scope.id,found.operationId,documentId,expectedAuthority.record?.acceptedParent);if(recipient&&JSON.stringify(projectionCanonical(recipient.policySeed))===JSON.stringify(projectionCanonical(found.sidecar)))return {ok:true as const,value:{publication:recipient,policySeed:found.sidecar}};}if(!published.ok||!published.value||published.value.nextAuthority.acceptedParent!==expectedAuthority.record?.acceptedParent||published.value.documents.length!==1||published.value.documents[0].documentId!==documentId||JSON.stringify(projectionCanonical(published.value.policySeed))!==JSON.stringify(projectionCanonical(found.sidecar)))return fail('CORRUPT');return {ok:true as const,value:{publication:published.value,policySeed:found.sidecar}}}catch(e){return fail(mapError(e))}
+  async readProjectionPolicySeed(expectedAuthority: AuthorityExpectation,documentId:string) {
+    if(!validId(documentId))return fail('MALFORMED');
+    try{
+      const scope=expectedAuthority.scope.id;
+      const found=await this.run(false,async tx=>{
+        await this.requireAuthority(tx,expectedAuthority);
+        const origin=await this.projectionOrigin(tx,scope,documentId,expectedAuthority.record?.acceptedParent);
+        const meta=await tx.get(key('projection-document',scope,origin.documentId)),sidecar=await tx.get(key('projection-policy-seed',scope,origin.documentId));
+        if(sidecar===undefined)return null;
+        if(!meta||!validId(meta.operationId))return corrupt();
+        return {origin,operationId:meta.operationId,sidecar:snapshot(sidecar)};
+      });
+      if(!found)return {ok:true as const,value:null};
+      const {origin,operationId,sidecar}=found,published=await this.getProjectionPublication(scope,operationId);
+      if(published.ok&&!published.value){
+        const recipient=await this.readRecipientProjection(scope,operationId,origin.documentId,origin.head);
+        if(recipient&&JSON.stringify(projectionCanonical(recipient.policySeed))===JSON.stringify(projectionCanonical(sidecar)))return {ok:true as const,value:{publication:recipient,policySeed:sidecar}};
+      }
+      if(!published.ok||!published.value||published.value.nextAuthority.acceptedParent!==origin.head||published.value.documents.length!==1||published.value.documents[0].documentId!==origin.documentId||JSON.stringify(projectionCanonical(published.value.policySeed))!==JSON.stringify(projectionCanonical(sidecar)))return fail('CORRUPT');
+      return {ok:true as const,value:{publication:published.value,policySeed:sidecar}};
+    }catch(e){return fail(mapError(e))}
   }
   async reopenDocument(scopeId: string, documentId: string): Promise<Result<({documentId:string;bytes:Uint8Array;revision:number}) | null,StorageError>> {
     try { return await this.run(false,async tx => { const d = await tx.get(key('document',scopeId,documentId)); return {ok:true,value:d === undefined ? null : {documentId,bytes:copy(d.bytes),revision:d.revision}}; }); } catch(e) { return {ok:false,error:mapError(e)}; }
@@ -476,7 +652,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const op=key('import',scope,c.operationId),old=await tx.get(op);if(old){if(old.inputKey!==k.value||!old.outcome)conflict();await this.completedImport(tx,c,k.value);const prior=await this.validatedDisclosureSource(tx,scope,command.effectId);if(!prior||prior.commandId!==command.commandId||prior.objectId!==verified.objectId||!sameBytes(prior.envelope,verified.bytes)||JSON.stringify(prior.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();validateOutcome(old.outcome,c.documents);return {ok:true as const,value:{outcome:old.outcome,replayed:true}}}
       await this.requireAuthority(tx,c.expectedAuthority);if(await tx.get(key('applied',scope,c.itemId))!==undefined)conflict();if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if((header.version===2||header.version===4&&!header.disclosureIncomplete)&&expectedActiveHash!==header.disclosurePolicyHash)conflict();if(expectedActiveHash!==null){const activePolicy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!activePolicy||activePolicy.policyHash!==expectedActiveHash||activePolicy.policy?.scope?.id!==scope||((header.version===2||header.version===4&&!header.disclosureIncomplete)&&activePolicy.policy?.checkpoint!==head))conflict()}
       const policies=new Set<string>(header.disclosurePolicyHash===null?[]:[header.disclosurePolicyHash]);let incomplete=header.disclosurePolicyHash===null;for(const dep of command.dependencyEffectIds){const parent=await this.disclosureDependency(tx,scope,command.documentId,dep);incomplete||=parent.incomplete===true;for(const h of parent.policyHashes)policies.add(h)}if(incomplete&&!(header.version===3||header.version===4&&header.disclosureIncomplete===true))conflict();const source={policyHashes:[...policies].sort(),checkpoint:head,documentId:command.documentId,commandId:command.commandId,envelope:inbox.bytes,origin:'import',objectId:c.itemId,...(header.version===3||header.version===4&&header.disclosureIncomplete===true?{incomplete:true}:{})};if(JSON.stringify(source.policyHashes)!==JSON.stringify(header.disclosurePolicyHashes))conflict();
-      if(await tx.get(key('command',scope,command.commandId))!==undefined||await tx.get(key('effect',scope,command.effectId))!==undefined||await tx.get(key('projection-seed-command',scope,command.documentId,command.commandId))!==undefined||await tx.get(key('projection-seed-effect',scope,command.documentId,command.effectId))!==undefined)conflict();await this.requireDependencies(tx,scope,c.commands);const outcome=await this.documents(tx,scope,c.documents,head??null);this.fault?.('import-documents');await tx.put(key('command',scope,command.commandId),k.value);await tx.put(key('effect',scope,command.effectId),k.value);await tx.put(key('disclosure-source',scope,command.effectId),source);await tx.put(key('applied',scope,c.itemId),c.operationId);await tx.put(op,{inputKey:k.value,outcome});this.fault?.('import');return {ok:true as const,value:{outcome,replayed:false}}})}catch(e){return fail(mapError(e))}
+      if(await tx.get(key('command',scope,command.commandId))!==undefined||await tx.get(key('effect',scope,command.effectId))!==undefined)conflict();await this.requireUnusedProjectionIdentity(tx,scope,command);await this.requireDependencies(tx,scope,c.commands);const outcome=await this.documents(tx,scope,c.documents,head??null);this.fault?.('import-documents');await tx.put(key('command',scope,command.commandId),k.value);await tx.put(key('effect',scope,command.effectId),k.value);await tx.put(key('disclosure-source',scope,command.effectId),source);await tx.put(key('applied',scope,c.itemId),c.operationId);await tx.put(op,{inputKey:k.value,outcome});this.fault?.('import');return {ok:true as const,value:{outcome,replayed:false}}})}catch(e){return fail(mapError(e))}
   }
   async commitImport(c: ImportCommit): Promise<CommitResult> {
     const k = storageOperationKey(c,'import'); if (!k.ok) return fail(k.error); if(c.commands.some(x=>['shopping-item-create','shopping-item-field','shopping-list-field'].includes(x.kind)))return fail('MALFORMED'); c = snapshot(c);
@@ -485,7 +661,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if (old !== undefined) { if (old.inputKey !== k.value || !old.outcome) conflict(); await this.completedImport(tx,c,k.value); validateOutcome(old.outcome,c.documents); return {ok:true,value:{outcome:old.outcome,replayed:true}}; }
       await this.requireAuthority(tx,c.expectedAuthority);
       if (await tx.get(key('inbox',c.scopeId,c.itemId)) === undefined || await tx.get(key('applied',c.scopeId,c.itemId)) !== undefined) conflict();
-      for (const command of c.commands) if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined || await tx.get(key('projection-seed-command',c.scopeId,command.documentId,command.commandId))!==undefined || await tx.get(key('projection-seed-effect',c.scopeId,command.documentId,command.effectId))!==undefined) conflict();
+      for (const command of c.commands) {
+        if (await tx.get(key('command',c.scopeId,command.commandId)) !== undefined || await tx.get(key('effect',c.scopeId,command.effectId)) !== undefined) conflict();
+        await this.requireUnusedProjectionIdentity(tx,c.scopeId,command);
+      }
       await this.requireDependencies(tx,c.scopeId,c.commands);
       const outcome = await this.documents(tx,c.scopeId,c.documents,c.expectedAuthority.record?.acceptedParent ?? null); this.fault?.('import-documents');
       for (const command of c.commands) { await tx.put(key('command',c.scopeId,command.commandId),k.value); await tx.put(key('effect',c.scopeId,command.effectId),k.value); }

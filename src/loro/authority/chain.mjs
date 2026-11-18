@@ -1,6 +1,7 @@
 // Experimental authority chain. The separately provisioned root pin and provider
 // are trust inputs; this module does not perform human identity enrollment.
-import {validateSuccessor, validParent, domain} from './validator.mjs';
+import {validateSuccessor, validParent, domain, isPolicyDocumentId} from './validator.mjs';
+import {recoverPolicyBaseline} from './policy-baseline.mjs';
 import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import sodium from 'libsodium-wrappers';
@@ -23,9 +24,10 @@ const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
 export async function verifyAuthority(state,pin,provider) {
  state=copy(state);
  if (!state || Array.isArray(state) || !['activeHead,events,root,selections,version','activeHead,agreements,events,root,selections,version'].includes(Object.keys(state).sort().join(',')) || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
- if (!validParent(state.root) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
+ if (!validParent(state.root) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
+ const policyParents=new Map(), legacyPolicyHeads=new Set();
  for(const item of state.events) {
   if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
@@ -33,14 +35,19 @@ export async function verifyAuthority(state,pin,provider) {
   if(item.event.kind==='changePolicy') {
    if(r.status!=='validated' || Object.hasOwn(item,'admission') || Object.hasOwn(item,'rotation')) throw Error(r.reason || 'UNSUPPORTED_TRANSITION');
    if(nodes.has(r.eventHash)) throw Error('DUPLICATE_EVENT');
-   nodes.set(r.eventHash,{...copy(parent),head:r.eventHash,policy:copy(item.event.nextPolicy),policyHash:await policyId(provider,item.event.nextPolicy)});
+   const child={...copy(parent),head:r.eventHash,policy:copy(item.event.nextPolicy),policyHash:await policyId(provider,item.event.nextPolicy)};
+   if (item.event.version===3) {
+    child.runtime.documentId=`policy-${r.eventHash}`;
+    policyParents.set(r.eventHash,{head:parent.head,baseline:item.event.subject});
+   } else legacyPolicyHeads.add(r.eventHash);
+   nodes.set(r.eventHash,child);
   } else if(['revokeDevice','recoverDevice'].includes(item.event.kind) && item.event.version===2 && ['ROTATION_DISTRIBUTION_REQUIRED','RECOVERY_DISTRIBUTION_REQUIRED'].includes(r.reason)) {
    const rotation=item.rotation,sub=item.event.subject;
    if(!rotation||![ 'authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId','authorizationSnapshot,ceremonies,grant,localDeviceId,manifest,operationId,recoveryProof'].includes(Object.keys(rotation).sort().join(','))||(item.event.kind==='recoverDevice')!==Object.hasOwn(rotation,'recoveryProof')||rotation.grant?.eventHash!==r.eventHash||!parent.runtime.acceptedRecipients.includes(rotation.localDeviceId)||rotation.localDeviceId===sub.deviceId||await digest(provider,'rotation-manifest',rotation.manifest)!==rotation.grant.manifestHash||rotation.manifest?.newDocumentId!==sub.documentId||rotation.manifest?.newGeneration!==sub.newGeneration||rotation.manifest?.newEpochId!==sub.newEpochId)throw Error('INVALID_ROTATION');
    const {checkRotationEvidence}=await import('../compromise/rotation-proof.mjs');await sodium.ready;
    await checkRotationEvidence({sodium,parent,authorizationSnapshot:rotation.authorizationSnapshot,item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},grant:rotation.grant,ceremonies:decodeEvidence(rotation.ceremonies),localDeviceId:rotation.localDeviceId,provider});
    if(item.event.kind==='recoverDevice'){const {verifyRecoveryProof}=await import('../compromise/recovery-proof.mjs');await verifyRecoveryProof({sodium,parent,nodes,event:item.event,proof:rotation.recoveryProof,provider})}
-   if(nodes.has(r.eventHash)||[...nodes.values()].some(n=>n.epochId===sub.newEpochId||n.runtime.documentId===sub.documentId))throw Error('INVALID_ROTATION');
+   if(nodes.has(r.eventHash)||isPolicyDocumentId(sub.documentId)||[...nodes.values()].some(n=>n.epochId===sub.newEpochId||n.runtime.documentId===sub.documentId))throw Error('INVALID_ROTATION');
    const child=copy(parent);child.head=r.eventHash;child.epochId=sub.newEpochId;child.generation=sub.newGeneration;if(item.event.kind==='revokeDevice')child.devices=child.devices.map(d=>d.deviceId===sub.deviceId?{...d,active:false}:d);else child.devices.push({adultId:sub.owner,deviceId:sub.deviceId,signingKeyRef:sub.signingKeyRef,active:true});child.runtime.documentId=sub.documentId;child.runtime.authorPeers=Object.fromEntries(sub.devices.map(d=>[d.deviceId,d.peerId]));child.runtime.acceptedRecipients=sub.devices.map(d=>d.deviceId);if(!validParent(child))throw Error('INVALID_ROTATION');nodes.set(r.eventHash,child);
   } else if(item.event.kind==='inviteAdult' && item.event.version===2 && r.reason==='ADMISSION_AND_PROJECTION_REQUIRED') {
    const a=item.admission,subject=item.event.subject;
@@ -55,7 +62,7 @@ export async function verifyAuthority(state,pin,provider) {
    if([...ceremonies,...existing].some(e=>e.context.sponsorDeviceId!==a.localDeviceId)) throw Error('INVALID_ADMISSION');
    if(subject.devices.some((d,i)=>d.deviceId!==verified[i]?.deviceId || d.signingKeyRef!==verified[i]?.signingKeyRef || d.wrappingKeyRef!==verified[i]?.wrappingKeyRef) || JSON.stringify(oldDevices.map(d=>d.deviceId).sort())!==JSON.stringify(parent.runtime.acceptedRecipients.filter(d=>d!==a.localDeviceId)) || new Set([...verified,...oldDevices].map(d=>d.guardId)).size!==verified.length+oldDevices.length) throw Error('INVALID_ADMISSION');
    if(nodes.has(r.eventHash)) throw Error('DUPLICATE_EVENT');
-   if([...nodes.values()].some(n=>n.epochId===subject.newEpochId || n.runtime.documentId===subject.documentId)) throw Error('INVALID_ADMISSION');
+   if(isPolicyDocumentId(subject.documentId)||[...nodes.values()].some(n=>n.epochId===subject.newEpochId || n.runtime.documentId===subject.documentId)) throw Error('INVALID_ADMISSION');
    const child=copy(parent);child.head=r.eventHash;child.generation=subject.newGeneration;child.epochId=subject.newEpochId;child.roster=[...parent.roster,subject.adultId].sort();
    child.devices.push(...subject.devices.map(d=>({adultId:subject.adultId,deviceId:d.deviceId,signingKeyRef:d.signingKeyRef,active:true})));
    child.runtime.documentId=subject.documentId;for(const d of subject.devices) child.runtime.authorPeers[d.deviceId]=d.peerId;
@@ -81,7 +88,7 @@ export async function verifyAuthority(state,pin,provider) {
   active=selection.to;
  }
  if(active!==state.activeHead)throw Error('MISSING_ACTIVE_HEAD');
- return {nodes,state};
+ return {nodes,state,policyParents,legacyPolicyHeads};
 }
 // Hash excludes head so genesis is not self-referential.
 export async function rootPin(provider,root) { const r=copy(root); delete r.head; return digest(provider,'root',r); }
@@ -172,6 +179,40 @@ export async function selectHead(storage,scope,pin,provider,selection) {
  state.selections.push(selection); state.activeHead=selection.to;
  await verifyAuthority(state,pin,provider); await save(storage,record,state,provider);
 }
+
+/** Traverse only signed policy edges. Each component has one retained starting workspace. */
+export function policyCheckoutCandidates({nodes,state,policyParents,legacyPolicyHeads}) {
+ const base=head=>{while(policyParents.has(head))head=policyParents.get(head).head;return head;};
+ const activeBase=base(state.activeHead);
+ return [...nodes.values()].filter(node=>node.head!==state.activeHead && base(node.head)===activeBase && !legacyPolicyHeads.has(activeBase));
+}
+
+export async function checkoutPolicyHead({storage,scope,pin,provider,LoroDoc,adultId,deviceId,expectedHead,expectedRevision,targetHead,explicit}) {
+ if (explicit!==true) throw Error('CONFIRMATION_REQUIRED');
+ scope=copy(scope);
+ const verified=await load(storage,scope,pin,provider),{record,state,nodes,policyParents}=verified;
+ if (state.activeHead!==expectedHead || record.revision!==expectedRevision) throw Error('CONFLICT');
+ const from=nodes.get(expectedHead),device=from.devices.find(d=>d.active && d.adultId===adultId && d.deviceId===deviceId);
+ if (!device || !policyCheckoutCandidates(verified).some(node=>node.head===targetHead)) throw Error('INVALID_POLICY_CHECKOUT');
+ const location=node=>({head:node.head,documentId:node.runtime.documentId});
+ const edge=policyParents.get(targetHead), target=location(nodes.get(targetHead));
+ const parent=edge ? location(nodes.get(edge.head)) : null;
+ const expectedAuthority={version:2,scope,record:{revision:record.revision,acceptedParent:expectedHead,authorizationSnapshot:record.authorizationSnapshot}};
+ const opened=await storage.readPolicyCheckoutDocuments(expectedAuthority,location(from),target,parent);
+ if (!opened.ok) throw Error(opened.error.code);
+ const {fromRevision,targetRevision,parentDocument}=opened.value;
+ const baseline=edge && targetRevision===null ? await recoverPolicyBaseline(LoroDoc,parentDocument,edge.baseline,provider) : null;
+
+ const selection={from:expectedHead,to:targetHead,deviceId,index:state.selections.length};
+ const signature=hex(await provider.sign(device.signingKeyRef,domain('select-head',{root:pin,householdId:scope.id,...selection})));
+ state.selections.push({...selection,signature}); state.activeHead=targetHead;
+ await verifyAuthority(state,pin,provider);
+ const nextAuthority={scope,revision:record.revision+1,acceptedParent:targetHead,authorizationSnapshot:await snapshotId(provider,state),authorityState:bytes(state)};
+ const result=await storage.commitPolicyCheckout({expectedAuthority,nextAuthority,from:{...location(from),revision:fromRevision},
+  target:{...target,revision:targetRevision}, parent:parent && {...parent,revision:parentDocument?.revision??null}, baseline});
+ if (!result.ok) throw Error(result.error.code);
+ return {head:targetHead};
+}
 /** Resolve only from a pinned and replayed selected head, never from runtime options. */
 export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorDevice) {
  const {record,state,nodes}=await load(storage,scope,pin,provider), selected=nodes.get(state.activeHead);
@@ -179,7 +220,7 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
  if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
  const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};
  const signingKeyRefs=Object.freeze(Object.fromEntries(selected.devices.filter(d=>d.active).map(d=>[d.deviceId,d.signingKeyRef]).sort(([a],[b])=>a.localeCompare(b))));
- return {scope:runtimeScope,signingKeyRefs,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
+ return {scope:runtimeScope,signingKeyRefs,selectionIndex:state.selections.length,expectedAuthority:{version:2,scope:copy(scope),record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}}};
 }
 
 /** Persist explicit acceptance at the currently selected frozen parent. */

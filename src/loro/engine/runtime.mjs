@@ -37,6 +37,7 @@ export class OfflineRuntime {
       if (!['household','personal'].includes(kind)) throw new Error('INVALID_AUTHORITY_CONFIG');
       const resolver=kind==='personal' ? resolvePersonalAuthority : resolveRuntimeAuthority;
       const resolved=await resolver(this.storage,{kind,id:s.scopeId},this.authority.rootPin,this.authority.provider,s.authorDevice);
+      if (this.authority.selectionIndex!==undefined && resolved.selectionIndex!==this.authority.selectionIndex) throw new Error('INVALID_AUTHORITY');
       const expected={...resolved.scope,authorizationSnapshot:s.authorizationSnapshot};
       if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
