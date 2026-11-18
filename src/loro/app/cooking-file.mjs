@@ -1,10 +1,12 @@
 import {MAX_OBJECT} from '../transport/adapter.mjs';
 import {decodeCookingPayload,importCookingWithPolicy,validateCookingHeader} from '../disclosure/cooking.mjs';
 import {commandRecipeId} from '../domain/recipe-document.mjs';
+import {openSelectedRecipeCatalog} from './selected-recipe-catalog.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 /** A user-selected encrypted object is staged durably before the authorized
  * runtime applies it. Staged bytes survive missing dependencies and failures. */
-export function cookingFiles({runtime,service,recipeDocuments=false}){
+export function cookingFiles({runtime,service,recipeCatalogVersion=null}){
+ if(recipeCatalogVersion!==null && recipeCatalogVersion!==1)throw Error('UNSUPPORTED_VERSION');
  const {scopeId,branchHead,epochId}=runtime.scope;
  const onBranch=value=>value?.branchHead===branchHead&&value?.epochId===epochId;
  const outbound=async()=>must(await runtime.storage.listOutboundObjects(scopeId)).filter(onBranch);
@@ -15,19 +17,25 @@ export function cookingFiles({runtime,service,recipeDocuments=false}){
   if(!(bytes instanceof Uint8Array))throw Error('MALFORMED');
   if(bytes.length>MAX_OBJECT)throw Error('TOO_LARGE');
   const auth=await runtime.authorization(),opened=await runtime.codec.openContent(bytes,auth.signingKeyRefs);
-  let target=runtime;
-  if(recipeDocuments&&opened.header.documentId!==runtime.scope.documentId){
+  let target=runtime,recipe=null;
+  if(recipeCatalogVersion===1&&opened.header.documentId!==runtime.scope.documentId){
    const {command}=decodeCookingPayload(opened),recipeId=commandRecipeId(command);
    if(!recipeId||command.data.author!==opened.header.authorDevice)throw Error('INVALID_RECIPE_DOCUMENT');
    target=await runtime.forRecipe(recipeId);
+   recipe={id:recipeId,create:command.kind==='recipe-create'};
   }
   validateCookingHeader(opened,expectedId??opened.object.id,target.scope);
   if(expectedAuthor!==undefined&&opened.header.authorDevice!==expectedAuthor)throw Error('INVALID_AUTHORITY');
-  return {target,object:{...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority}};
+  return {target,recipe,object:{...opened.object,authorDevice:opened.header.authorDevice,expectedAuthority:auth.expectedAuthority}};
  }
  const verifyUnderAuthority=async(...args)=>(await verifyRoute(...args)).object;
  const applyStaged=async item=>{
-  const target=recipeDocuments?(await verifyRoute(item.bytes,item.itemId)).target:runtime;
+  if(recipeCatalogVersion===null)return importCookingWithPolicy({runtime,service,item});
+  const {target,recipe}=await verifyRoute(item.bytes,item.itemId);
+  if(recipe&&!recipe.create){
+   const selected=await openSelectedRecipeCatalog(runtime,recipe.id);
+   if(!selected.children.has(recipe.id))throw Error('MISSING_DEPENDENCY');
+  }
   return importCookingWithPolicy({runtime:target,service,item});
  };
  async function receive(raw){

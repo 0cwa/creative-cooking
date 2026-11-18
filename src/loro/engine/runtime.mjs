@@ -2,7 +2,7 @@ import {assertCommandScope} from '../domain/personal-codec.mjs';
 import {resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {resolvePersonalAuthority} from '../authority/personal.mjs';
 import * as registry from '../domain/registry.mjs';
-import {commandRecipeId,recipeDocumentId} from '../domain/recipe-document.mjs';
+import {commandRecipeId,recipeCatalogBinding,recipeDocumentId} from '../domain/recipe-document.mjs';
 // Minimal offline engine. The caller supplies a LoroDoc constructor and an explicitly
 // preaccepted scope; product pairing and authority management are not implemented here.
 const FIXTURE=Symbol('fixture authority');
@@ -59,7 +59,7 @@ export class OfflineRuntime {
       if (this.#recipeId !== null) expected.documentId=await recipeDocumentId(resolved.scope,this.authority.rootPin,this.authority.provider,this.#recipeId);
       if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
-      return {expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs};
+      return {expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs,sourceDocumentId:resolved.scope.documentId};
     }
     const record=required(await this.storage.readPairingAuthority({kind:'household',id:s.scopeId}));
     if (!record || record.acceptedParent !== s.branchHead || record.authorizationSnapshot !== s.authorizationSnapshot) throw new Error('INVALID_AUTHORITY');
@@ -68,6 +68,27 @@ export class OfflineRuntime {
     return {expectedAuthority:{version:2,scope:record.scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}},signingKeyRefs:Object.fromEntries(s.acceptedAuthors.map(a=>[a,a]))};
   }
   async authorize() { return (await this.authorization()).expectedAuthority; }
+  async recipePublication(command, expectedAuthority) {
+    if (this.#recipeId === null) return undefined;
+    this.assertRecipeCommand(command);
+    const current = await this.authorization();
+    if (!same(current.expectedAuthority, expectedAuthority)) throw Error('CONFLICT');
+    const binding = recipeCatalogBinding(this.scope,this.authority.rootPin,current.sourceDocumentId);
+    if (command.kind !== 'recipe-create') {
+      const {entries}=required(await this.storage.readSelectedRecipeCatalog(expectedAuthority,binding,this.#recipeId));
+      if (entries[0]?.documentId!==this.scope.documentId) throw Error('MISSING_DEPENDENCY');
+      return undefined;
+    }
+    const source = required(await this.storage.reopenBranchDocument(expectedAuthority,current.sourceDocumentId));
+    const doc = new this.LoroDoc();
+    if (source) doc.import(source.bytes);
+    if (doc.getMap('recipe-index').get(this.#recipeId)) throw Error('CONFLICT');
+    return {
+      binding,
+      recipeId: this.#recipeId,
+      sourceRevision: source?.revision ?? null
+    };
+  }
   async document() {
     const expectedAuthority=await this.authorize();
     const stored=required(await this.storage.reopenBranchDocument(expectedAuthority,this.scope.documentId));

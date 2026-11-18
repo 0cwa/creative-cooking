@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 import {cookingFiles} from './cooking-file.mjs';
 import {MAX_OBJECT} from '../transport/adapter.mjs';
 import {DatabaseSync} from 'node:sqlite';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
 import {initializeAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,rootPin} from '../authority/chain.mjs';
@@ -27,6 +30,7 @@ import {projectCooking} from '../domain/app-projection.mjs';
 import {projectCurrentSeed} from '../compromise/current-seed.mjs';
 import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {replayAuthenticated} from '../domain/replay.mjs';
+import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 test('retained updates distinguish policy evidence and other retry reasons',async()=>{
  const ok=value=>({ok:true,value});
  const header=(branchHead,epochId='epoch')=>new TextEncoder().encode(JSON.stringify({header:{branchHead,epochId,authorDevice:'peer'}}));
@@ -48,7 +52,7 @@ const must = result => {
   assert.equal(result.ok,true,JSON.stringify(result.error));
   return result.value;
 };
-async function household(t) {
+async function household(t,{onDisk=false}={}) {
   await sodium.ready;
   const dataKey = sodium.randombytes_buf(32);
   const signing = [sodium.crypto_sign_keypair(),sodium.crypto_sign_keypair()];
@@ -65,9 +69,16 @@ async function household(t) {
     runtime:{documentId:'cooking',authorPeers:{'device-0':'1','device-1':'2'},acceptedRecipients:['device-0','device-1']}
   };
   root.head = await rootPin(provider,root);
+  const directory=onDisk ? mkdtempSync(join(tmpdir(),'recipe-catalog-')) : null;
+  const connections=new Set();
+  t.after(()=>{
+    for(const db of connections)db.close();
+    if(directory)rmSync(directory,{recursive:true});
+  });
   return Promise.all(signing.map(async (_pair,index) => {
-    const db = new DatabaseSync(':memory:');
-    t.after(() => db.close());
+    const path=directory?join(directory,`peer-${index}.sqlite`):':memory:';
+    let db = new DatabaseSync(path);
+    connections.add(db);
     let fault;
     const storage = openSQLiteStorage({executeSync(sql,params = []) {
       const statement = db.prepare(sql);
@@ -85,6 +96,14 @@ async function household(t) {
       deviceId,storage,runtime,trust,cooking,service,root,provider,
       faultAt: boundary => {fault=boundary;},
       rows:() => db.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),
+      replaceRow:(key,value)=>db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,key),
+      reopen() {
+        assert.ok(directory);
+        db.close();
+        connections.delete(db);
+        db=new DatabaseSync(path);
+        connections.add(db);
+      },
       async edit(name,sequence,{legacy = false,preview = false} = {}) {
         const input = {operationId:name,deviceSequence:sequence,command:{
           version:1,kind:'pantry-create',commandId:name,effectId:name,dependencyEffectIds:[],
@@ -112,8 +131,8 @@ async function household(t) {
 }
 
 test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{
- const [a,b]=await household(t);
- const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeDocuments:true});
+ const [a,b]=await household(t,{onDisk:true});
+ const files=peer=>cookingFiles({runtime:peer.runtime,service:peer.service,recipeCatalogVersion:1});
  const recipes=(runtime)=>runtime.document().then(({doc})=>projectCooking(doc).recipes);
  const at='2026-01-01T00:00:00Z';
  const makeRecipe=(id,title)=>({id,title,portions:2,ingredients:[{id:'i',name:'Carrot'}],steps:['Slice'],stepIds:['s'],createdAt:at,updatedAt:at});
@@ -138,6 +157,15 @@ test('pinned recipe documents retain competing encrypted edits independently and
  await execute(a,a.runtime,'legacy',legacy);
  for(const bytes of await exported(a,'legacy')) await files(b).receive(bytes);
  assert.equal((await recipes(b.runtime))[0].title,'Legacy soup');
+ const oldRecipe=await change(a,a.runtime,'original-signed-recipe',makeRecipe('original','Original signed recipe'));
+ await a.runtime.execute({operationId:'original-signed-recipe',deviceSequence:++sequence,command:oldRecipe[0]});
+ const [originalBytes]=await exported(a,'original-signed-recipe');
+ const original=(await a.runtime.codec.openContent(originalBytes,(await a.runtime.authorization()).signingKeyRefs)).object;
+ await stage(b,{itemId:original.id,bytes:originalBytes},'legacy');
+ await b.runtime.importItem({itemId:original.id,bytes:originalBytes});
+ const beforeCatalog=await openSelectedRecipeCatalog(b.runtime);
+ assert.equal(beforeCatalog.children.size,0);
+ assert.deepEqual(projectSelectedRecipes(beforeCatalog).map(r=>r.id),['legacy','original']);
  const legacyBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),b.runtime.scope.documentId));
  const anotherLegacy=await change(a,a.runtime,'legacy-second',makeRecipe('legacy-second','Legacy second soup'));
  await execute(a,a.runtime,'legacy-second',anotherLegacy);
@@ -157,22 +185,68 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const create=await change(a,ar,'create',makeRecipe('r','Soup'));
  await assert.rejects(()=>execute(a,other,'wrong-recipe',create),/INVALID_RECIPE_DOCUMENT/);
  const beforeCreate=a.rows();
- a.faultAt('disclosure-local');
- await assert.rejects(()=>execute(a,ar,'create',create),/IO/);
- assert.equal((await ar.document()).revision,null);
- assert.equal(must(await a.storage.getLocalOperation(scope.id,'create')),null);
- assert.deepEqual(a.rows(),beforeCreate);
+ for(const fault of ['recipe-catalog','disclosure-local']){
+  a.faultAt(fault);
+  await assert.rejects(()=>execute(a,ar,'create',create),/IO/);
+  assert.equal((await ar.document()).revision,null);
+  assert.equal(must(await a.storage.getLocalOperation(scope.id,'create')),null);
+  assert.equal((await openSelectedRecipeCatalog(a.runtime)).children.size,0);
+  assert.deepEqual(a.rows(),beforeCreate);
+ }
  a.faultAt(null);
+ const commitPublication=a.storage.commitLocalWithDisclosurePolicy.bind(a.storage);
+ a.storage.commitLocalWithDisclosurePolicy=async (...args)=>{
+  a.storage.commitLocalWithDisclosurePolicy=commitPublication;
+  assert.ok(args[3]);
+  await a.edit('concurrent-pantry',++sequence);
+  return commitPublication(...args);
+ };
+ await assert.rejects(()=>execute(a,ar,'create',create),/CONFLICT/);
+ assert.equal((await openSelectedRecipeCatalog(a.runtime)).children.size,0);
+ assert.equal((await ar.document()).revision,null);
  await execute(a,ar,'create',create);
  const [initial]=await exported(a,'create');
  await assert.rejects(()=>b.cooking.receive(initial),/INVALID_AUTHORITY/);
- await files(b).receive(initial);
+ b.faultAt('recipe-catalog');
+ await assert.rejects(()=>files(b).receive(initial),/IO/);
+ const [stagedCreate]=must(await b.storage.listStagedInbox(scope.id)).filter(row=>Buffer.from(row.bytes).equals(initial));
+ assert.ok(stagedCreate);
+ assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.size,0);
+ assert.equal((await br.document()).revision,null);
+ assert.equal(must(await b.storage.getInboxApplication(scope.id,stagedCreate.itemId)),null);
+ b.reopen();
+ b.faultAt(null);
+ const created=await files(b).retry(stagedCreate.itemId);
+ assert.deepEqual(await files(b).receive(initial),{...created,replayed:true});
+ const selected=await openSelectedRecipeCatalog(b.runtime);
+ assert.equal(selected.binding.version,1);
+ assert.equal(selected.binding.sourceDocumentId,b.runtime.scope.documentId);
+ assert.equal(selected.children.get('r').documentId,br.scope.documentId);
+ assert.deepEqual(projectSelectedRecipes(selected).map(r=>r.id),['legacy','original','r']);
+ const retainedCreate=await execute(a,ar,'create',create);
+ assert.equal(retainedCreate.replayed,true);
+ assert.deepEqual(await exported(a,'create'),[initial]);
+ const duplicate=await change(b,b.runtime,'duplicate-legacy',makeRecipe('r','Duplicate legacy recipe'));
+ await assert.rejects(()=>execute(b,b.runtime,'duplicate-legacy',duplicate),/CONFLICT/);
  const unrelated=await change(a,other,'unrelated',makeRecipe('unrelated','Unrelated canary'));
  await execute(a,other,'unrelated',unrelated);
  const [unrelatedBytes]=await exported(a,'unrelated');
+ await execute(a,other,'unrelated-description',await change(a,other,'unrelated-description',{id:'unrelated',description:'Independent child description'}));
+ const [unrelatedEdit]=await exported(a,'unrelated-description');
+ const unrelatedEnvelope=(await a.runtime.codec.openContent(unrelatedEdit,(await a.runtime.authorization()).signingKeyRefs)).object;
+ await assert.rejects(()=>files(b).receive(unrelatedEdit),/MISSING_DEPENDENCY/);
+ assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.has('unrelated'),false);
  await files(b).receive(unrelatedBytes);
+ await files(b).retry(unrelatedEnvelope.id);
  const otherB=await b.runtime.forRecipe('unrelated');
  const unrelatedBefore=must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),otherB.scope.documentId));
+ const row=b.rows().find(r=>JSON.parse(r.key).at(-1)==='r'&&JSON.parse(r.key)[0]==='recipe-catalog');
+ assert.ok(row);
+ for(const override of [{documentId:otherB.scope.documentId},{binding:{...selected.binding,documentGeneration:2}}]){
+  b.replaceRow(row.key,JSON.stringify({...JSON.parse(row.value),...override}));
+  await assert.rejects(()=>openSelectedRecipeCatalog(b.runtime),/CORRUPT|INVALID_RECIPE_DOCUMENT/);
+ }
+ b.replaceRow(row.key,row.value);
  for(const runtime of [a.runtime,ar,other,b.runtime,br,otherB]){
   const {doc,storedBytes}=await runtime.document();
   const replay=await replayAuthenticated({runtime,checkpoint:storedBytes});
@@ -234,7 +308,7 @@ test('pinned recipe documents retain competing encrypted edits independently and
  assert.deepEqual(must(await b.storage.reopenBranchDocument(await b.runtime.authorize(),otherB.scope.documentId)),unrelatedBefore);
  assert.ok(must(await a.storage.listBranchLocalOperations(await ar.authorize())).some(row=>row.operationId==='a-edit'));
 
- const {doc}=await (await b.runtime.forRecipe('r')).document();
+ const {doc}= (await openSelectedRecipeCatalog(b.runtime,'r')).children.get('r');
  const history=readRecipeHistory(doc,'r');
  const loser=history.find(row=>row.field==='title'&&row.status==='competing');
  assert.ok(loser);
@@ -244,6 +318,15 @@ test('pinned recipe documents retain competing encrypted edits independently and
  for(const bytes of await exported(b,'restore')) await files(a).receive(bytes);
  assert.equal((await recipes(await a.runtime.forRecipe('r')))[0].title,loser.value);
  assert.equal((await recipes(br))[0].title,loser.value);
+ a.reopen();
+ b.reopen();
+ for(const peer of [a,b]){
+  const reopened=await openSelectedRecipeCatalog(peer.runtime);
+  assert.equal(reopened.children.get('r').documentId,ar.scope.documentId);
+  assert.equal(projectSelectedRecipes(reopened).find(r=>r.id==='r').title,loser.value);
+  assert.equal(projectSelectedRecipes(reopened).find(r=>r.id==='unrelated').title,'Unrelated canary');
+  assert.equal(projectSelectedRecipes(reopened).find(r=>r.id==='original').title,'Original signed recipe');
+ }
 
  // The existing live-state codec can redact an isolated source. This checks
  // the bytes, independently of the future multi-document publication format.
@@ -265,6 +348,12 @@ test('pinned recipe documents retain competing encrypted edits independently and
  const item={itemId:childId,bytes:legacyChild},applied=await br.importItem(item);
  assert.deepEqual(await br.importItem(item),{...applied,replayed:true});
  await assert.rejects(()=>otherB.importItem(item),/INVALID_AUTHORITY/);
+
+ const stale=await b.runtime.authorize(),record=must(await b.storage.readPairingAuthority(scope));
+ must(await b.storage.compareAndSwapPairingAuthority({expectedRevision:record.revision,record:{...record,revision:record.revision+1}}));
+ const staleCatalog=await b.storage.readSelectedRecipeCatalog(stale,selected.binding);
+ assert.equal(staleCatalog.error?.code,'CONFLICT');
+ assert.equal((await openSelectedRecipeCatalog(b.runtime)).children.get('r').documentId,br.scope.documentId);
 });
 test('incomplete source replay uses the exact retained checkpoint',async t=>{
  const [peer]=await household(t);

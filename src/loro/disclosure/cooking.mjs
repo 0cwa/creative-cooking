@@ -23,7 +23,8 @@ export async function commitCookingWithPolicy({runtime,service,input}) {
  const version=['shopping-item-create','shopping-item-field','shopping-list-field'].includes(input.command.kind)?4:incomplete?3:2;const header={...opened.header,version,disclosurePolicyHash:record?.policyHash??null,disclosurePolicyHashes:[...policies].sort(),sourceEffectIds:sourceEffects,...(version===4?{disclosureIncomplete:incomplete}:incomplete?{disclosureIncomplete:true}:{})};
  const object=await runtime.codec.sealContent(header,opened.value,runtime.keyRef,context.resolved.signingKeyRefs[runtime.scope.authorDevice]);
  prepared.commit.outbound[0].object=object;
- return must(await runtime.storage.commitLocalWithDisclosurePolicy(prepared.commit,record?.policyHash??null,expectedActiveHash));
+ const publication=await runtime.recipePublication(input.command,prepared.commit.expectedAuthority);
+ return must(await runtime.storage.commitLocalWithDisclosurePolicy(prepared.commit,record?.policyHash??null,expectedActiveHash,publication));
 }
 /** Complete authenticated cooking header binding, before retaining incoming bytes. */
 export function validateCookingHeader(opened,itemId,s){
@@ -65,7 +66,8 @@ export async function importCookingWithPolicy({runtime,service,item}) {
  const update=Uint8Array.from(encodedUpdate),meta=runtime.inspectUpdate(update);if(meta.peer!==s.authorPeers[h.authorDevice]||!same(meta.predecessors,h.predecessorRefs))throw Error('MALFORMED_UPDATE');
  const {doc,revision}=await runtime.document();let prior;try{prior=doc.forkAt(meta.frontiers)}catch{throw Error('MISSING_DEPENDENCY')};const verifier=prior.forkAt(meta.frontiers),start=verifier.oplogVersion(),checked=verifier.import(update);if(checked.pending?.size)throw Error('MISSING_DEPENDENCY');registry.validateOperations(command,verifier.exportJsonUpdates(start,undefined,false).changes);registry.checkPreconditions(prior,command,{importing:true});registry.checkShoppingCompatibility(doc,command);if(['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)&&h.version!==4)throw Error('UNSUPPORTED_VERSION');const verifySource=createSourceVerifier({runtime,service,context,allowIncomplete:h.version===3||h.version===4&&h.disclosureIncomplete,allowOwnDeviceBaseline:true});for(const dep of command.dependencyEffectIds){const source=await verifySource(dep);if(source.incomplete&&!(h.version===3||h.version===4&&h.disclosureIncomplete))throw Error('INCOMPLETE_PROVENANCE')}const imported=doc.import(update);if(imported.pending?.size)throw Error('MISSING_DEPENDENCY');
  const commit={version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority:auth.expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:registry.bytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds};
- return must(await runtime.storage.commitImportWithDisclosurePolicy(commit,h,{objectId:opened.object.id,bytes:new Uint8Array(item.bytes)},expectedActiveHash));
+ const publication=await runtime.recipePublication(command,auth.expectedAuthority);
+ return must(await runtime.storage.commitImportWithDisclosurePolicy(commit,h,{objectId:opened.object.id,bytes:new Uint8Array(item.bytes)},expectedActiveHash,publication));
 }
 /** Ordered actions in one document retain every command's signed source policy
  * ancestry while the final document and all outbound objects commit together. */
@@ -74,6 +76,10 @@ export async function commitCookingBatchWithPolicy({runtime,service,operationId,
  if(!Array.isArray(items)||!items.length||items.some(i=>!cookingKinds.has(i?.command?.kind)))throw Error('INVALID_AUTHORITY');
  const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId,items});if(previous)return previous;const {context,record,expectedActiveHash}=await writeContext(runtime,service);
  const staged=new Map(),verifySource=createSourceVerifier({runtime,service,context,allowIncomplete:true,allowOwnDeviceBaseline:true}),codec={...runtime.codec,sealContent:async(header,payload,keyRef,signingKeyRef)=>{let decoded;try{decoded=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(payload))}catch{throw Error('MALFORMED_UPDATE')};const command=registry.validate(decoded.command);if(!cookingKinds.has(command.kind)||command.effectId!==header.semanticEffectIds[0])throw Error('INVALID_AUTHORITY');const policies=new Set(record?[record.policyHash]:[]),deps=[...command.dependencyEffectIds].sort();let incomplete=!record;for(const id of deps){const source=staged.get(id)??await verifySource(id);const inherited=source.policyHashes??source.policies;incomplete||=!!source.incomplete;for(const hash of inherited)policies.add(hash)}const values=[...policies].sort();staged.set(command.effectId,{policyHashes:values,incomplete});const version=['shopping-item-create','shopping-item-field','shopping-list-field'].includes(command.kind)?4:incomplete?3:2;return runtime.codec.sealContent({...header,version,disclosurePolicyHash:record?.policyHash??null,disclosurePolicyHashes:values,sourceEffectIds:deps,...(version===4?{disclosureIncomplete:incomplete}:incomplete?{disclosureIncomplete:true}:{})},payload,keyRef,signingKeyRef)}};
- const storage=Object.create(runtime.storage);storage.commitLocal=c=>runtime.storage.commitLocalWithDisclosurePolicy(c,record?.policyHash??null,expectedActiveHash);
+ const storage=Object.create(runtime.storage);
+ storage.commitLocal=async commit=>{
+  const publication=await runtime.recipePublication(items[0].command,commit.expectedAuthority);
+  return runtime.storage.commitLocalWithDisclosurePolicy(commit,record?.policyHash??null,expectedActiveHash,publication);
+ };
  const worker=new OfflineRuntime({storage,codec,LoroDoc:runtime.LoroDoc,decodeImportBlobMeta:runtime.decodeImportBlobMeta,scope:runtime.scope,keyRef:runtime.keyRef,authority:runtime.authority,recipeId:runtime.recipeId});return worker.executeBatch({operationId,items});
 }

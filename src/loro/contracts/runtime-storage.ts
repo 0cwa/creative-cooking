@@ -1,4 +1,20 @@
 import type { Bytes, Id, Result, StorageError, LocalCommit, LocalCommitGroup, AuthorityPrecondition, SavedOutcome } from './index.ts';
+
+export type RecipeCatalogBinding = {
+  version: 1;
+  rootPin: Id;
+  scopeId: Id;
+  branchHead: Id;
+  sourceDocumentId: Id;
+  documentGeneration: number;
+  epochId: Id;
+};
+export type RecipePublication = {
+  binding: RecipeCatalogBinding;
+  sourceRevision: number | null;
+  recipeId: Id;
+};
+
 /** Copied durable data, always unauthenticated. These reads do not provide a transactional snapshot across calls. */
 export interface RuntimeStorageReader {
   reopenBranchDocument(expectedAuthority: AuthorityPrecondition, documentId: Id): Promise<Result<{documentId: Id; bytes: Bytes; revision: number} | null, StorageError>>;

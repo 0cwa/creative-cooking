@@ -6,14 +6,18 @@ const member=(kind,parent,id)=>named(kind,JSON.stringify([parent,id]));
 const values=(doc,name)=>doc.getMap(name).toJSON();
 const ordered=items=>items.sort((a,b)=>(a.position??0)-(b.position??0)||a.id.localeCompare(b.id));
 
-export function projectCooking(doc) {
- const recipes=Object.keys(values(doc,'recipe-index')).sort().flatMap(id=>{
+export function projectRecipes(doc) {
+ return Object.keys(values(doc,'recipe-index')).sort().flatMap(id=>{
   const record=values(doc,named('recipe',id));
   if(record.removed)return [];
   const ingredients=ordered(Object.keys(values(doc,named('recipe-ingredient-index',id))).map(ingredientId=>({id:ingredientId,...values(doc,member('recipe-ingredient',id,ingredientId))})).filter(x=>!x.removed));
   const steps=ordered(Object.keys(values(doc,named('recipe-step-index',id))).map(stepId=>({id:stepId,...values(doc,member('recipe-step',id,stepId))})).filter(x=>!x.removed));
   return [{id,...record,ingredients:ingredients.map(({position,removed,...item})=>item),steps:steps.map(x=>x.text),stepIds:steps.map(x=>x.id)}];
  });
+}
+
+export function projectCooking(doc) {
+ const recipes=projectRecipes(doc);
  const pantry=Object.keys(values(doc,'pantry-index')).sort().flatMap(id=>{
   const item=values(doc,named('pantry',id));return item.removed||item.removedAt?[]:[{id,...item}];
  });

@@ -10,6 +10,13 @@ export function commandRecipeId(command) {
   return (command.kind === 'recipe-create' ? command.data?.recipe?.id : command.data?.recipeId) ?? null;
 }
 
+export function recipeCatalogBinding(scope, rootPin, sourceDocumentId = scope.documentId) {
+  return {
+    version: 1, rootPin, scopeId: scope.scopeId, branchHead: scope.branchHead,
+    sourceDocumentId, documentGeneration: scope.documentGeneration, epochId: scope.epochId,
+  };
+}
+
 // The authority still signs the household root document. Derive each subordinate
 // document from that verified context and the recipe identity in the command.
 export async function recipeDocumentId(scope, rootPin, provider, recipeId) {
