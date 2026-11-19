@@ -67,6 +67,30 @@ const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
 export class StorageFailure extends Error { readonly code: StorageError; constructor(code: StorageError) { super(code); this.code = code; } }
 const mapError = (e: unknown): StorageError => e instanceof StorageFailure ? e.code : e instanceof Error && e.message==='LOCKED' ? 'LOCKED' : e instanceof Error && e.message==='CONFLICT' ? 'CONFLICT' : e instanceof Error && (e.name === 'QuotaExceededError' || /SQLITE_FULL|database or disk is full/i.test(e.message)) ? 'CAPACITY' : 'IO';
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+/** Compare the actual receipt verified by the application with the transaction's
+ * retained receipt. This does not authenticate signatures or authorize a write. */
+export function sameRetainedPolicyProvenance(stored:unknown, verified:unknown):boolean {
+  return validPolicyProvenance(stored) && validPolicyProvenance(verified) &&
+    stored.signature===verified.signature && sameBytes(stored.statement,verified.statement);
+}
+/** Extract only dependencies in the authenticated statement's exact recipe row.
+ * Caller must authenticate the statement and signature before passing it in. */
+export function retainedRecipeDependencies(provenance:PolicyProvenance, documentId:string, recipeId:string, effects:readonly string[]): Map<string,{policyHashes:string[],incomplete:true}> | null {
+  try {
+    const envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(provenance.statement));
+    if(!Array.isArray(envelope)||envelope.length!==3||envelope[0]!=='creative-cooking/authority-candidate/v1'||envelope[1]!=='policy-provenance-receipt-v1'||!Array.isArray(envelope[2]?.rows))return null;
+    const rows=envelope[2].rows.filter((r:any)=>r.targetDocumentId===documentId && r.recipeId===recipeId);
+    if(rows.length!==1||!Array.isArray(rows[0].identities)||!Array.isArray(rows[0].sources)||new Set(effects).size!==effects.length)return null;
+    const result=new Map<string,{policyHashes:string[],incomplete:true}>();
+    for(const effect of effects){
+      const identities=rows[0].identities.filter((x:any)=>x.effectId===effect);
+      const sources=rows[0].sources.filter((x:any)=>x.effectId===effect);
+      if(identities.length!==1||sources.length!==1||sources[0].incomplete!==true||!denseArray(sources[0].policyHashes,validId)||new Set(sources[0].policyHashes).size!==sources[0].policyHashes.length)return null;
+      result.set(effect,{policyHashes:[...sources[0].policyHashes],incomplete:true});
+    }
+    return result;
+  } catch { return null; }
+}
 const copy = (v: Uint8Array) => new Uint8Array(v);
 const snapshot = <T>(v: T): T => (v instanceof Uint8Array ? copy(v) : Array.isArray(v) ? v.map(snapshot) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,snapshot(x)])) : v) as T;
 const corrupt = (): never => { throw new StorageFailure('CORRUPT'); };
@@ -1731,11 +1755,21 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     input=snapshot(input);if(!fields(input,['expectedAuthority','expectedPolicyHash','record'])||!fields(input.record,['policy','policyHash','approvals'])||!validId(input.record.policyHash)||!(input.expectedPolicyHash===null||validId(input.expectedPolicyHash)))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{await this.requireAuthority(tx,input.expectedAuthority);const scope=input.expectedAuthority.scope.id,head=input.expectedAuthority.record?.acceptedParent;if(input.expectedAuthority.scope.kind!=='household'||input.record.policy?.scope?.id!==scope||input.record.policy?.checkpoint!==head||input.record.policy?.predecessor!==input.expectedPolicyHash)conflict();const active=(await tx.get(key('disclosure-active',scope)))??null;if(active!==input.expectedPolicyHash)conflict();const slot=key('disclosure-policy',scope,input.record.policyHash);if(await tx.get(slot)!==undefined)conflict();await tx.put(slot,input.record);this.fault?.('disclosure-policy');await tx.put(key('disclosure-active',scope),input.record.policyHash);return {ok:true as const,value:undefined}})}catch(e){return fail(mapError(e))}
   }
-  async commitLocalWithDisclosurePolicy(c:LocalCommit,policyHash:string|null,expectedActiveHash:string|null=policyHash,publication?:RecipePublication,recipeSources:ShoppingRecipeSourceReceipt[]=[]):Promise<CommitResult> {
+  async commitLocalWithDisclosurePolicy(c:LocalCommit,policyHash:string|null,expectedActiveHash:string|null=policyHash,publication?:RecipePublication,recipeSources:ShoppingRecipeSourceReceipt[]=[],verifiedProvenance?:PolicyProvenance):Promise<CommitResult> {
     const k=storageOperationKey(c,'local');if(!k.ok)return fail(k.error);if((policyHash!==null&&!validId(policyHash))||(expectedActiveHash!==null&&!validId(expectedActiveHash))||(policyHash!==null&&policyHash!==expectedActiveHash))return fail('MALFORMED');c=snapshot(c);publication=snapshot(publication);recipeSources=snapshot(recipeSources);
     if(c.commands.length!==c.outbound.length)return fail('MALFORMED');
     const allowed=new Set(['recipe-create','recipe-field','recipe-ingredient-add','recipe-ingredient-field','recipe-step-add','recipe-step-field','pantry-create','pantry-field','shopping-list-create','shopping-cycle-start','shopping-item-put','shopping-item-create','shopping-item-field','shopping-list-field','purchase','purchase-correction']);if(c.expectedAuthority.scope.kind!=='household'||c.commands.some(command=>!allowed.has(command.kind)))return fail('MALFORMED');
-    try{return await this.run(true,async tx=>{const scope=c.scopeId,head=c.expectedAuthority.record?.acceptedParent;const old=await tx.get(key('local',scope,c.operationId));if(old){if(old.inputKey!==k.value)conflict();for(const command of c.commands){const source=await this.validatedDisclosureSource(tx,scope,command.effectId,policyHash);if(!source||source.commandId!==command.commandId||source.documentId!==command.documentId)conflict()}validateOutcome(old.outcome,c.documents);await this.completedLocal(tx,c,k.value);return {ok:true as const,value:{outcome:old.outcome,replayed:true}}}
+    verifiedProvenance=snapshot(verifiedProvenance);
+    try{return await this.run(true,async tx=>{const scope=c.scopeId,head=c.expectedAuthority.record?.acceptedParent;
+      if(verifiedProvenance!==undefined){
+        if(!head)conflict();
+        const receipt:PolicySetReceipt|undefined=await tx.get(key('policy-set-activation',scope,head!));
+        if(!receipt || !sameRetainedPolicyProvenance(receipt.provenance,verifiedProvenance))conflict();
+        if(c.commands.length!==1 || c.commands[0].kind!=='recipe-field')conflict();
+        const command=c.commands[0], recipeId=this.storedRecipeId(command);
+        if(!recipeId || !retainedRecipeDependencies(verifiedProvenance,command.documentId,recipeId,command.dependencyEffectIds))conflict();
+      }
+      const old=await tx.get(key('local',scope,c.operationId));if(old){if(old.inputKey!==k.value)conflict();for(const command of c.commands){const source=await this.validatedDisclosureSource(tx,scope,command.effectId,policyHash);if(!source||source.commandId!==command.commandId||source.documentId!==command.documentId)conflict()}validateOutcome(old.outcome,c.documents);await this.completedLocal(tx,c,k.value);return {ok:true as const,value:{outcome:old.outcome,replayed:true}}}
       await this.requireAuthority(tx,c.expectedAuthority);if(((await tx.get(key('disclosure-active',scope)))??null)!==expectedActiveHash)conflict();if(expectedActiveHash!==null){const policy=await tx.get(key('disclosure-policy',scope,expectedActiveHash));if(!policy||policy.policyHash!==expectedActiveHash||policy.policy?.scope?.id!==scope||(policyHash!==null&&policy.policy?.checkpoint!==head))conflict()}
       const receipts=new Map(recipeSources.map(source=>[source.consumerEffectId,source]));
       if(receipts.size!==recipeSources.length)conflict();
