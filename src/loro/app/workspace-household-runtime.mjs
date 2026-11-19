@@ -15,7 +15,7 @@ import {localProvider} from './local-provider.mjs';
 import {installedRecipeDelivery} from './installed-recipe-delivery.mjs';
 import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
-import {readVerifiedActivatedPolicyDocumentSet} from './read-activated-policy-document-set.mjs';
+import {readVerifiedActivatedPolicyDocumentSet,readPolicyReturnActivationEvidence} from './read-activated-policy-document-set.mjs';
 import {readRecipeCatalog} from './selected-recipe-catalog.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 
@@ -24,6 +24,40 @@ const policyMounts=new WeakMap();
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 // Activation must only accept histories that the return verifier can reopen.
 const unsupportedPolicySource=state=>state.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice'));
+
+/** Bind the narrowly scoped policy branch operations to the selected workspace. */
+export async function bindPolicyBranches({runtime,keys,service,sodium,withCurrent,eligible,activated}) {
+ if(!eligible) return null;
+ const mount=policyMounts.get(runtime);
+ if(!mount || !mount.record || mount.paired || keys!==mount.keys) return null;
+ const args={storage:mount.storage,LoroDoc:mount.LoroDoc,pin:mount.pin,provider:mount.provider,
+  scope:mount.expected.scope,deviceId:mount.scope.authorDevice,targetHead:mount.scope.branchHead,keys,sodium};
+ if(activated) {
+  const evidence=await readPolicyReturnActivationEvidence(args);
+  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(evidence.expected.authorityState));
+  const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(evidence.staged.proof))?.[2]?.signed?.body?.observation?.manifest;
+  if(unsupportedPolicySource(state) || !evidence.verifiedProvenance || manifest?.version!==1 || manifest.parentHead!==evidence.sourceHead) return null;
+  const reviewReturn=()=>withCurrent(async()=>{
+   const verified=await readPolicyReturnActivationEvidence(args);
+   return {sourceHead:verified.sourceHead,targetHead:verified.targetHead,targetRevision:verified.record.revision};
+  });
+  return {reviewReturn,returnToSource:input=>withCurrent(async()=>{
+   if(input?.explicit!==true)throw Error('INVALID_CONFIRMATION');
+   const result=await returnActivatedPolicyDocumentSet({runtime,keys,service,expectedSourceHead:input.expectedSourceHead,expectedTargetHead:input.expectedTargetHead,expectedTargetRevision:input.expectedTargetRevision});
+   return {sourceHead:result.sourceHead};
+  })};
+ }
+ const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(mount.record.authorityState));
+ if(unsupportedPolicySource(state)) return null;
+ return {reviewStaged:targetHead=>withCurrent(async()=>{
+  const verified=await readVerifiedPolicyDocumentSet({runtime,targetHead});
+  return {sourceHead:verified.current.acceptedParent,sourceRevision:verified.current.revision,targetHead:verified.targetHead};
+ }),activate:input=>withCurrent(async()=>{
+  if(input?.explicit!==true)throw Error('INVALID_CONFIRMATION');
+  const result=await activateStagedPolicyDocumentSet({runtime,keys,service,sodium,expectedSourceHead:input.expectedSourceHead,expectedSourceRevision:input.expectedSourceRevision,targetHead:input.targetHead});
+  return {targetHead:result.targetHead};
+ })};
+}
 
 /** Prepare wrapped keys for a staged policy successor; does not activate it. */
 export async function prepareWorkspacePolicyDocumentKeys(runtime,targetHead,keys) {

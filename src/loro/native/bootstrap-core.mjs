@@ -1,7 +1,7 @@
 import {householdCompromise} from '../app/household-compromise.mjs';
 import {householdLocalTrust} from '../app/household-local-trust.mjs';
 import {bindHouseholdContent} from '../app/household-content.mjs';
-import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from '../app/workspace-household-runtime.mjs';
+import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold,bindPolicyBranches} from '../app/workspace-household-runtime.mjs';
 import {openSQLiteStorage,openSQLiteTransaction,scheduleSQLite} from '../storage/sqlite.ts';
 import {rootPin,policyId,initializeAuthority} from '../authority/chain.mjs';
 import {personalRootPin,initializePersonalAuthority,resolvePersonalAuthority} from '../authority/personal.mjs';
@@ -144,9 +144,10 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
    original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
   const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure,originalRecipeDocuments,shoppingRecipeCopies});
+  const policyBranches=await bindPolicyBranches({runtime:household,keys,service:disclosure,sodium,withCurrent,eligible:!selected&&!installedSet&&!returnedPolicy,activated:!!activatedPolicy});
   const installedRecipeIds=installedSet||readOnlyPolicy?house.members.flatMap(member=>member.recipeId===null?[]:[member.recipeId]):undefined;
   return {
-   personalRotation:rotatePersonal,personalPairing:pairPersonal,
+   policyBranches,personalRotation:rotatePersonal,personalPairing:pairPersonal,
    householdCompromise:(readOnlyPolicy?unavailableInReadOnly: x=>x)(householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)})),
    householdLocalTrust:(readOnlyPolicy?unavailableInReadOnly: x=>x)(householdLocalTrust({runtime:household,withCurrent})),
    authorizeHousehold:active(()=>household.authorize()),
