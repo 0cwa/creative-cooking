@@ -17,7 +17,7 @@ import {verifyHouseholdParentRecord} from './household-parent.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
 import {captureOwnDeviceCopySet,installOwnDeviceSetFile,isOwnDeviceSetFile,publishOwnDeviceSet,reopenOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 import {existingRecipientContextBytes} from '../authority/ceremony.mjs';
-import {ownDeviceRecipientSignal} from '../pairing/household-own-device-recipients.mjs';
+import {ownDeviceRecipientSignal,verifyOwnDeviceRecipients} from '../pairing/household-own-device-recipients.mjs';
 import {preflightOwnDeviceLocalTransition} from '../pairing/household-own-device-local-transition.mjs';
 import {ceremonyBytes} from '../pairing/candidate-v2.mjs';
 import {openSelectedRecipeCatalog} from './selected-recipe-catalog.mjs';
@@ -327,6 +327,34 @@ export function householdOwnDevice({
   if(result.oob.hash!==confirmedHash)throw Error('CONFIRMATION_REQUIRED');
   return result;
  }
+ async function publishPreparedSet(code,establishedProofs){
+  return withSession('initiator',async({proposal,record,parent,oob,secrets,session})=>{
+   if(code!==oob.hash||!belongs(proposal))throw Error('OOB_REQUIRED');
+   const {messages}=await session.evidence();
+   const saved=await read('set-preparation:'+JSON.stringify([scope.id,pin,proposal.transcript.sessionId]));
+   if(!saved||!same(saved.proposal,proposal)||!same(saved.messages,messages))throw Error('INVALID_PROOF');
+   const replay=await retainedSponsor(proposal);
+   if(replay){
+    if(!same(replay.item,(await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:record,next:saved.next,proposal:{hash:oob.hash,guard:proposal.guard},eventVersion:5})).item))throw Error('INVALID_AUTHORITY');
+    const recipients=await verifyOwnDeviceRecipients({sodium:s,provider,successor:replay,parent,authorizationSnapshot:record.authorizationSnapshot,evidence:establishedProofs});
+    if(recipients.length!==replay.establishedRecipients.length||recipients.some(recipient=>!replay.establishedRecipients.some(entry=>entry.recipientDeviceId===recipient.deviceId&&entry.ceremonyGuardId===recipient.guardId&&entry.transcriptHash===recipient.transcriptHash)))throw Error('INVALID_PROOF');
+    return {file:replay.file,establishedRecipients:replay.establishedRecipients,head:replay.head,replayed:true};
+   }
+   if(runtime.authority.installedSet?.paired)throw Error('UNSUPPORTED_VERSION');
+   let live;
+   try{live=await current();}catch{throw Error('SOURCE_CHANGED');}
+   if(record.authorizationSnapshot!==live.record.authorizationSnapshot||record.acceptedParent!==live.record.acceptedParent||proposal.parentRevision!==live.record.revision||proposal.adultId!==live.resolved.adultId||!same(await runtime.authorize(),live.resolved.expectedAuthority))throw Error('SOURCE_CHANGED');
+   let captured;
+   try{captured=await captureOwnDeviceCopySet({runtime,service,sodium:s,peerId:proposal.peerId,seedId:proposal.transcript.sessionId});}
+   catch(error){if(['CONFLICT','STALE_AUTHORITY'].includes(error.message))throw Error('SOURCE_CHANGED');throw error;}
+   const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:live.record,next:saved.next,proposal:{hash:oob.hash,guard:proposal.guard},eventVersion:5});
+   if(saved.copyHash!==captured.copyHash||checked.item.event.subject.copyHash!==captured.copyHash||!same(checked.proof.messages,messages))throw Error('SOURCE_CHANGED');
+   try{must(await storage.checkSelectedHouseholdSources(captured.guard));}catch{throw Error('SOURCE_CHANGED');}
+   const result=await publishOwnDeviceSet({storage,provider,sodium:s,LoroDoc,pin,parentRecord:live.record,next:saved.next,captured,
+    evidence:{transcript:proposal.transcript,guard:proposal.guard,messages,hash:oob.hash},establishedEvidence:establishedProofs,keys,deviceId,signingSecret:secrets.signingSecret});
+   return {...result,replayed:false};
+  });
+ }
  async function publish(code){
   return withSession('initiator',async({proposal,record,oob,secrets,session})=>{
    const {bundle,transcript,guard,adultId,peerId}=proposal;
@@ -519,5 +547,5 @@ export function householdOwnDevice({
    policy:selected.policy,devices:selected.devices,events:ancestry.reverse()};
  }
  return {deviceId,fingerprint:fingerprint(own),rootPin:pin,request,propose,inspect:async incoming=>(await inspectProposal(parse(incoming),'responder')).view,
-  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publish,install,acceptExisting,history};
+  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publishPreparedSet,publish,install,acceptExisting,history};
 }

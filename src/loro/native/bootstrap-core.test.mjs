@@ -738,8 +738,8 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
  }
 });
 
-async function ownDeviceScenario(prepareOnly=false) {
- const names=['own-device-sponsor','own-device-adult','own-device-fresh'];
+async function ownDeviceScenario(prepareOnly=false,publishPrepared=false) {
+ const names=['own-device-sponsor','own-device-adult','own-device-fresh'].map(name=>name+(publishPrepared?'-published':prepareOnly?'-prepared':''));
  const [sponsorName,adultName,freshName]=names;
  let sponsor, adult, fresh;
  let faultName='',faultWrite=0,writes=0,failCounter=false;
@@ -907,9 +907,31 @@ async function ownDeviceScenario(prepareOnly=false) {
    assert.equal(!!containsCopy(prepared),false);
    prepared.transition.head='tampered';
    assert.deepEqual(await initiator.prepareSet(proposal.code),exact);
+   const sessionA=sponsor.householdPairing.session({...offer,role:'initiator',confirmedHash:offer.oob.hash});
+   const sessionB=adult.householdPairing.session({...verifiedOffer,role:'responder',confirmedHash:offer.oob.hash});
+   const offers=await Promise.all([sessionA.initialize(),sessionB.initialize()]);
+   const responses=await Promise.all([sessionA.respond(offers[1],0),sessionB.respond(offers[0],0)]);
+   const acks=await Promise.all([sessionA.acknowledge(responses[1],1),sessionB.acknowledge(responses[0],1)]);
+   await Promise.all([sessionA.finish(acks[1],2),sessionB.finish(acks[0],2)]);
+   const proof={context:offer.context,transcript:offer.transcript,guard:offer.guard,oob:offer.oob,messages:(await sessionA.evidence()).messages};
+   await assert.rejects(initiator.publishPreparedSet(proposal.code,[]));
+   const bad=structuredClone(proof);bad.context.recipientDeviceId='wrong';
+   await assert.rejects(initiator.publishPreparedSet(proposal.code,[bad]));
+   if(publishPrepared){
+    const published=await initiator.publishPreparedSet(proposal.code,[proof]);
+    assert.equal(published.replayed,false);
+    assert.equal(published.establishedRecipients.length,1);
+    await assert.rejects(initiator.publishPreparedSet(proposal.code,[]));
+    const replay=await initiator.publishPreparedSet(proposal.code,[proof]);
+    assert.equal(replay.replayed,true);
+    assert.deepEqual(replay.file,published.file);
+    assert.deepEqual(replay.establishedRecipients,published.establishedRecipients);
+    return;
+   }
    await addPantry(sponsor,'changed-after-preparation');
    await assert.rejects(initiator.prepareSet(proposal.code),/SOURCE_CHANGED/);
    await assert.rejects(initiator.prepareEstablishedOffer(proposal.code,recipient),/SOURCE_CHANGED/);
+   await assert.rejects(initiator.publishPreparedSet(proposal.code,[proof]),/SOURCE_CHANGED/);
    return;
   }
   const sponsorRows=rows(sponsorName),freshRows=rows(freshName);
@@ -1071,5 +1093,6 @@ async function ownDeviceScenario(prepareOnly=false) {
   names.forEach(removeWorkspace);
  }
 }
+test('own-device prepared set publishes all recipients', {timeout:40_000}, () => ownDeviceScenario(true,true));
 test('own-device set preparation binds the exact source', {timeout:40_000}, () => ownDeviceScenario(true));
 test('own-device household release and install roll back, reopen and preserve distinct-adult votes', {timeout:40_000}, () => ownDeviceScenario());
