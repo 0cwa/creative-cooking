@@ -244,6 +244,23 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.equal(row(prerequisite.effectId).recipeId,beforeRecipe.id);
  assert.deepEqual(a.rows(),beforeRows);
  assert.deepEqual(await planSelectedRetention(runtime,{reportHash,selectedEffectIds:[...selectedIds].reverse()}),plan);
+ const {reconstructSelectedRetention}=await import('../compromise/selected-reconstruction.mjs');
+ const draft=await reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds});
+ assert.equal(draft.complete,false);
+ const rootDoc=new LoroDoc(),recipeDoc=new LoroDoc();
+ rootDoc.import(draft.documents.find(d=>d.recipeId===null).snapshot);
+ recipeDoc.import(draft.documents.find(d=>d.recipeId===beforeRecipe.id).snapshot);
+ assert.equal(rootDoc.getMap('pantry:retention-pantry').get('name'),'Beans');
+ assert.equal(recipeDoc.getMap('recipe:retention-recipe').get('title'),'Soup');
+ assert.equal(recipeDoc.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'1 cup');
+ assert.equal(rootDoc.getMap('shopping-item:retention-item').get('value'),undefined);
+ assert.equal(draft.rows.find(r=>r.effectId===prerequisite.effectId).status,'excluded');
+ assert.equal(draft.rows.find(r=>r.effectId===copy.effectId).status,'held');
+ assert.deepEqual(a.rows(),beforeRows);
+ const originalCheck=a.storage.checkSelectedHouseholdSources.bind(a.storage);
+ a.storage.checkSelectedHouseholdSources=async()=>({ok:false,error:{code:'CONFLICT'}});
+ try {await assert.rejects(()=>reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds}),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=originalCheck;}
+ await assert.rejects(()=>reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:['not-in-batch']}),/UNKNOWN_EFFECT/);
  const allPlan=await planSelectedRetention(runtime,{reportHash,selectedEffectIds:all});
  const fieldRow=allPlan.rows.find(row=>row.effectId===prerequisite.effectId),copyRow=allPlan.rows.find(row=>row.effectId===copy.effectId);
  assert.equal(copyRow.status,'retained');assert.ok(fieldRow.order<copyRow.order);
