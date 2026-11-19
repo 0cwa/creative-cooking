@@ -1,3 +1,4 @@
+import {releaseAdultRemoval} from '../compromise/release-adult-removal.mjs';
 import {authorAdultRemovalSuccessor,verifyAdultRemovalSuccessor} from '../compromise/adult-removal-successor.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -484,6 +485,23 @@ test('adult removal complete-set proposal binds its signed head and projected do
   assert.deepEqual((await a.storage.readPairingAuthority(scope)).value,publication.next);
   const saved=new Map(a.rows().map(({key,value})=>[key,value]));
   for(const row of before)if(row.key!==JSON.stringify(['pairing-authority','household',scope.id]))assert.equal(saved.get(row.key),row.value);
+  const releaseOptions={storage:a.storage,scope,operationId:publication.operationId,pin,provider:a.provider,sodium,LoroDoc:a.runtime.LoroDoc,keys:a.keys(),recipientDeviceId:b.deviceId};
+  const releaseRows=a.rows();
+  const released=await releaseAdultRemoval(releaseOptions);
+  assert.deepEqual(released.bytes,retained.value.files[0].bytes);
+  assert.deepEqual(a.rows(),releaseRows);
+  await assert.rejects(()=>releaseAdultRemoval({...releaseOptions,recipientDeviceId:a.deviceId}),/INVALID_RECIPIENT/);
+  await assert.rejects(()=>releaseAdultRemoval({...releaseOptions,recipientDeviceId:'c'}),/INVALID_RECIPIENT/);
+  for(const mutate of [
+   receipt=>{const envelope=JSON.parse(new TextDecoder().decode(receipt.proof));envelope[2].signature='0'.repeat(128);receipt.proof=domain('adult-removal-publication-v1',envelope[2]);},
+   receipt=>{receipt.documents[0].localKey.record.wrapped=new Uint8Array();},
+   receipt=>{receipt.files[0].bytes[0]^=1;}
+  ]){
+   const receipt=structuredClone(retained.value);mutate(receipt);
+   const storage={readAdultRemovalPublication:async()=>({ok:true,value:receipt}),readPairingAuthority:(...args)=>a.storage.readPairingAuthority(...args)};
+   await assert.rejects(()=>releaseAdultRemoval({...releaseOptions,storage}));
+   assert.deepEqual(a.rows(),releaseRows);
+  }
   const storedFile=retained.value.files[0];
   assert.deepEqual(publishedProof.fileCommitments,[{recipientDeviceId:b.deviceId,fileHash:sodium.to_hex(sodium.crypto_generichash(32,storedFile.bytes))}]);
   await b.keys().useIdentity(wrapperIdentity(b.deviceId),wrappingSecret=>

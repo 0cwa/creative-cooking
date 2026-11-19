@@ -59,3 +59,12 @@ export async function authorAdultRemovalSuccessor(options) {
  const candidate={state,record:{scope:record.scope,revision:record.revision+1,acceptedParent:e.head,authorizationSnapshot:await snapshotId(provider,state),authorityState:authorityBytes(state)},child:e.child};
  return verifyAdultRemovalSuccessor({...options,candidate});
 }
+
+/** Reconstruct the candidate from the retained authority record, then verify it. */
+export async function verifyRetainedAdultRemovalSuccessor(options) {
+ const e=await expected(options);
+ let state;
+ try { state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(options.next.authorityState)); }
+ catch { throw Error('INVALID_AUTHORITY'); }
+ return verifyAdultRemovalSuccessor({...options,candidate:{state,record:options.next,child:e.child}});
+}
