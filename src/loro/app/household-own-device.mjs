@@ -212,6 +212,46 @@ export function householdOwnDevice({
   }
   return {...view,installed,progress:saved.confirmed?await progress(role):null};
  }
+ async function prepareSet(code){
+  return withSession('initiator',async({proposal,record,oob,session})=>{
+   if(code!==oob.hash||!belongs(proposal))throw Error('OOB_REQUIRED');
+   const {messages}=await session.evidence();
+   const key='set-preparation:'+JSON.stringify([scope.id,pin,proposal.transcript.sessionId]);
+   const saved=await read(key);
+   let live;
+   try{live=await current();}catch(error){if(saved)throw Error('SOURCE_CHANGED');throw error;}
+   if(record.authorizationSnapshot!==live.record.authorizationSnapshot||record.acceptedParent!==live.record.acceptedParent||proposal.parentRevision!==live.record.revision||
+      proposal.adultId!==live.resolved.adultId){
+    throw Error(saved?'SOURCE_CHANGED':'STALE_AUTHORITY');
+   }
+   if(runtime.authority.installedSet?.paired)throw Error('UNSUPPORTED_VERSION');
+   const expected=await runtime.authorize();
+   if(!same(expected,live.resolved.expectedAuthority))throw Error(saved?'SOURCE_CHANGED':'STALE_AUTHORITY');
+   let captured;
+   try{captured=await captureOwnDeviceCopySet({runtime,service,sodium:s,peerId:proposal.peerId,seedId:proposal.transcript.sessionId});}
+   catch(error){if(saved&&['CONFLICT','STALE_AUTHORITY'].includes(error.message))throw Error('SOURCE_CHANGED');throw error;}
+   const publicResult=({item,selection,head})=>({version:1,code:oob.hash,
+    parent:{head:live.record.acceptedParent,authorizationSnapshot:live.record.authorizationSnapshot,revision:live.record.revision},
+    transition:{item,selection,head},requiredRecipientIds:live.parent.runtime.acceptedRecipients.filter(id=>id!==deviceId).sort()});
+   if(saved){
+    if(saved.copyHash!==captured.copyHash||!same(saved.proposal,proposal)||!same(saved.messages,messages))throw Error('SOURCE_CHANGED');
+    const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:live.record,next:saved.next,proposal:{hash:oob.hash,guard:proposal.guard},eventVersion:5});
+    if(checked.item.event.subject.copyHash!==captured.copyHash||!same(checked.proof.messages,messages))throw Error('SOURCE_CHANGED');
+    try{must(await storage.checkSelectedHouseholdSources(captured.guard));}catch{throw Error('SOURCE_CHANGED');}
+    return structuredClone(publicResult(checked));
+   }
+   const signed=await signCopy(live,proposal,oob,messages,5,{baseline:captured.set.documents[0].baseline,copyHash:captured.copyHash});
+   const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:live.record,next:signed.next,proposal:{hash:oob.hash,guard:proposal.guard},eventVersion:5});
+   const result=publicResult(checked);
+   const retained={proposal,messages,copyHash:captured.copyHash,next:signed.next};
+   must(await storage.checkSelectedHouseholdSources(captured.guard));
+   await store.transaction(tx=>{
+    if(!same(savedIn(tx,'initiator')?.proposal,proposal)||!savedIn(tx,'initiator')?.confirmed||tx.get(slot(key))!==undefined)throw Error('CONFLICT');
+    tx.put(slot(key),retained);
+   });
+   return structuredClone(result);
+  });
+ }
  async function publish(code){
   return withSession('initiator',async({proposal,record,oob,secrets,session})=>{
    const {bundle,transcript,guard,adultId,peerId}=proposal;
@@ -398,5 +438,5 @@ export function householdOwnDevice({
    policy:selected.policy,devices:selected.devices,events:ancestry.reverse()};
  }
  return {deviceId,fingerprint:fingerprint(own),rootPin:pin,request,propose,inspect:async incoming=>(await inspectProposal(parse(incoming),'responder')).view,
-  confirm,accept,resume,publish,install,acceptExisting,history};
+  confirm,accept,resume,prepareSet,publish,install,acceptExisting,history};
 }

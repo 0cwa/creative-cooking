@@ -738,7 +738,7 @@ test('native bootstrap pairs fresh personal devices across signed v1, v2 and v3 
  }
 });
 
-test('own-device household release and install roll back, reopen and preserve distinct-adult votes', {timeout:40_000}, async () => {
+async function ownDeviceScenario(prepareOnly=false) {
  const names=['own-device-sponsor','own-device-adult','own-device-fresh'];
  const [sponsorName,adultName,freshName]=names;
  let sponsor, adult, fresh;
@@ -864,6 +864,38 @@ test('own-device household release and install roll back, reopen and preserve di
    y=await responder.accept('responder',outgoing);
   }
   assert.ok(x.complete&&y.complete);
+  if(prepareOnly){
+   await assert.rejects(initiator.prepareSet('wrong'),/OOB_REQUIRED/);
+   const prepared=await initiator.prepareSet(proposal.code);
+   const exact=structuredClone(prepared);
+   assert.deepEqual(await initiator.prepareSet(proposal.code),exact);
+   assert.deepEqual(prepared.requiredRecipientIds,[adult.householdPairing.identity.deviceId]);
+   assert.equal(prepared.transition.item.event.version,5);
+   assert.equal(prepared.parent.head,before.head);
+   assert.equal(prepared.code,proposal.code);
+   const event=prepared.transition.item.event;
+   assert.ok(await provider.verify(sponsor.householdPairing.identity.signingKey,domain('event-signature',event),sodium.from_hex(prepared.transition.item.authorSignature)));
+   assert.equal(sodium.to_hex(await provider.hash(domain('event',event))),prepared.transition.head);
+   const {signature,...selection}=prepared.transition.selection;
+   assert.ok(await provider.verify(sponsor.householdPairing.identity.signingKey,domain('select-head',{root:rootPin,householdId:scope.id,...selection}),sodium.from_hex(signature)));
+   const authorityDb=new DatabaseSync(join(dir,sponsorName+'.sqlite'));
+   try{
+    const original=authorityDb.prepare('SELECT value FROM loro_records WHERE key=?').get(authoritySlot).value;
+    try{
+     const record=JSON.parse(original);
+     authorityDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({...record,revision:record.revision+1}),authoritySlot);
+     await assert.rejects(initiator.prepareSet(proposal.code),/SOURCE_CHANGED/);
+    }finally{authorityDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(original,authoritySlot);}
+   }finally{authorityDb.close();}
+   const containsCopy=value=>value&&typeof value==='object'&&Object.entries(value).some(([key,child])=>
+    ['snapshot','seedSnapshot','sources','policies'].includes(key)||containsCopy(child));
+   assert.equal(!!containsCopy(prepared),false);
+   prepared.transition.head='tampered';
+   assert.deepEqual(await initiator.prepareSet(proposal.code),exact);
+   await addPantry(sponsor,'changed-after-preparation');
+   await assert.rejects(initiator.prepareSet(proposal.code),/SOURCE_CHANGED/);
+   return;
+  }
   const sponsorRows=rows(sponsorName),freshRows=rows(freshName);
   const row=sponsorRows.find(row=>row.key===authoritySlot);
   const staleDb=new DatabaseSync(join(dir,sponsorName+'.sqlite'));
@@ -1022,4 +1054,6 @@ test('own-device household release and install roll back, reopen and preserve di
   for(const workspace of [sponsor,adult,fresh])workspace?.close();
   names.forEach(removeWorkspace);
  }
-});
+}
+test('own-device set preparation binds the exact source', {timeout:40_000}, () => ownDeviceScenario(true));
+test('own-device household release and install roll back, reopen and preserve distinct-adult votes', {timeout:40_000}, () => ownDeviceScenario());
