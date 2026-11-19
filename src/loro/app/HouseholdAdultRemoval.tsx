@@ -123,7 +123,7 @@ export function HouseholdAdultRemoval(){
      if(!bytes)return;
      setFileReview(null);
      const release=decodeAdultRemovalRelease(bytes);
-     const checked=await service.review({proposal:release.proposal,publisherRecord:release.publisherRecord});
+     const checked=await service.reviewFile({release});
      setFileReview({release,review:checked});
     })}
     {fileReview&&<>

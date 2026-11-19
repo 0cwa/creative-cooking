@@ -23,6 +23,7 @@ import {OfflineRuntime} from '../engine/runtime.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
 import {resolveAdultRemovalRuntimeAuthority,authorityBytes,snapshotId,checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin,verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
+import {MAX_AUTHORITY_HISTORY} from '../contracts/pairing.ts';
 import {approveHouseholdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
 import {householdCompromise} from './household-compromise.mjs';
 import {householdReadmission} from './household-readmission.mjs';
@@ -157,6 +158,16 @@ async function withRotationFixture({owners,policy,guest},run){
   for(const p of participants)p.close();
   await rm(directory,{recursive:true,force:true});
  }
+}
+
+async function selectionHistoryAtLimit(participant,record,pin){
+ const state=JSON.parse(new TextDecoder().decode(record.authorityState));
+ while(state.selections.length<MAX_AUTHORITY_HISTORY){
+  const choice={from:state.activeHead,to:state.activeHead,deviceId:participant.deviceId,index:state.selections.length};
+  const signature=await participant.provider.sign(participant.signingKey,domain('select-head',{root:pin,householdId:scope.id,...choice}));
+  state.selections.push({...choice,signature:sodium.to_hex(signature)});
+ }
+ return {...record,revision:record.revision+1,authorityState:authorityBytes(state),authorizationSnapshot:await snapshotId(participant.provider,state)};
 }
 
 test('SQLite revocation verifies source and votes, rolls back, reopens the bound key and preserves old evidence',async()=>{
@@ -360,13 +371,13 @@ test('recipe-set removal controls are available only for supported workspaces',(
 });
 
 test('adult removal facade publishes, releases and installs one confirmed complete set',async()=>{
- await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],_root,pin)=>{
+ await withRotationFixture({owners:{a:'alpha',b:'beta',b2:'beta',c:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b,b2],_root,pin)=>{
   await apply(a.runtime,1,'pantry-create','facade-pantry',{itemId:'leek',name:'Leek',preference:3,author:a.deviceId,at});
   const recipe=await a.runtime.forRecipe('facade-soup');recipe.disclosure=a.runtime.disclosure;
   await apply(recipe,2,'recipe-create','facade-recipe',{recipe:{id:'facade-soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:a.deviceId,at});
   const binding=await b.pairing.adultRemoval.binding(),status=await a.pairing.adultRemoval.status();
   assert.equal(status.head,a.runtime.scope.branchHead);assert(status.targets.some(target=>target.adultId==='gamma'));
-  const draft=await a.pairing.adultRemoval.prepare({targetAdultId:'gamma',bindings:[binding],explicit:true});
+  const draft=await a.pairing.adultRemoval.prepare({targetAdultId:'gamma',bindings:[binding,await b2.pairing.adultRemoval.binding()],explicit:true});
   const first=await a.pairing.adultRemoval.approve({proposal:draft.proposal,confirmed:draft.confirmation,explicit:true});
   const localRecord=(await b.storage.readPairingAuthority(scope)).value;
   const localHistory=JSON.parse(new TextDecoder().decode(localRecord.authorityState));
@@ -394,8 +405,14 @@ test('adult removal facade publishes, releases and installs one confirmed comple
   const changed=structuredClone(approved.proposal);changed.grant.signatures[0].signature='0'.repeat(128);
   await assert.rejects(()=>a.pairing.adultRemoval.publish({proposal:changed,confirmed:approved.confirmation,explicit:true}));
   const release=await a.pairing.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:b.deviceId});
-  recipientReview=await b.pairing.adultRemoval.review({proposal:release.proposal,publisherRecord:release.publisherRecord});
+  recipientReview=await b.pairing.adultRemoval.reviewFile({release});
   assert.equal(recipientReview.sourceRevision,alternate.revision);
+  await assert.rejects(()=>b2.pairing.adultRemoval.reviewFile({release}),/INVALID_RECIPIENT/);
+  const fullRecipient=await selectionHistoryAtLimit(b,alternate,pin);
+  await assert.rejects(()=>withOpenedAdultRemovalRelease({scope,pin,provider:b.provider,sodium,LoroDoc,release,
+   storage:{readPairingAuthority:async()=>({ok:true,value:fullRecipient})},recipientDeviceId:b.deviceId,
+   confirmedHead:recipientReview.eventHash,confirmedGrantHash:recipientReview.grantHash,expectedRevision:fullRecipient.revision},
+  ()=>assert.fail('An exhausted history cannot yield an installation')),/AUTHORITY_HISTORY_FULL/);
   const wrongPublisher=structuredClone(release.publisherRecord);wrongPublisher.authorizationSnapshot='0'.repeat(64);
   await assert.rejects(()=>b.pairing.adultRemoval.review({proposal:release.proposal,publisherRecord:wrongPublisher}));
   const frame=encodeAdultRemovalRelease(release),decoded=decodeAdultRemovalRelease(frame);
@@ -543,6 +560,8 @@ test('adult removal complete-set proposal binds its signed head and projected do
   assert.equal((await verifyAdultRemovalGrant(publicOptions)).complete,true);
   const record=(await a.storage.readPairingAuthority(scope)).value, original=structuredClone(record);
   const successorOptions={...publicOptions,record,documents:prepared.documents,LoroDoc,deviceId:'a',signingKey:a.signingKey};
+  const fullSponsor=await selectionHistoryAtLimit(a,record,pin);
+  await assert.rejects(()=>authorAdultRemovalSuccessor({...successorOptions,record:fullSponsor}),/AUTHORITY_HISTORY_FULL/);
   const candidate=await authorAdultRemovalSuccessor(successorOptions);
   assert.deepEqual(record,original);
   assert.deepEqual(candidate.child.roster,['alpha','beta']);

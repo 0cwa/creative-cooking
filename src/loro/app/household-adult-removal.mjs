@@ -7,6 +7,7 @@ import {verifyAdultRemovalGrant} from '../compromise/adult-removal-grant.mjs';
 import {publishAdultRemovalDocumentSet} from '../compromise/publish-adult-removal-set.mjs';
 import {releaseAdultRemoval,reopenAdultRemovalSponsor} from '../compromise/release-adult-removal.mjs';
 import {installAdultRemovalRelease} from '../compromise/install-adult-removal.mjs';
+import {verifyAdultRemovalFileAddress} from '../compromise/open-adult-removal.mjs';
 import {digest,exact,grantBody,hex} from '../compromise/revocation.mjs';
 
 const same=(a,b)=>hex(authorityBytes(a))===hex(authorityBytes(b));
@@ -69,6 +70,15 @@ export function householdAdultRemoval({storage,scope,pin,provider,sodium,runtime
   ({proposal,publisherRecord,publisherParent}=structuredClone({proposal,publisherRecord,publisherParent}));
   const context=await parent(),checkedContext=await proposalContext(proposal,context,publisherRecord,publisherParent);
   const result=await inspect(proposal,checkedContext);await unchanged(context.record);return result;
+ }
+ async function reviewFile({release}) {
+  release=structuredClone(release);
+  const {proposal,publisherRecord}=release;
+  const local=await parent(),context=await proposalContext(proposal,local,publisherRecord,undefined);
+  const checked=await inspect(proposal,context);
+  await verifyAdultRemovalFileAddress({scope:capturedScope,provider,sodium,parent:context.parent,release,recipientDeviceId:deviceId});
+  await unchanged(local.record);
+  return checked;
  }
  async function prepare({targetAdultId,bindings,explicit}) {
   if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
@@ -174,5 +184,5 @@ export function householdAdultRemoval({storage,scope,pin,provider,sodium,runtime
    recipientDeviceId:deviceId,wrappingSecret,signSelection:bytes=>sodium.crypto_sign_detached(bytes,signingSecret),
    confirmedHead:h.eventHash,confirmedGrantHash:h.grantHash,expectedRevision:sourceRevision}));
  }
- return {prepare,review,approve,status,binding,publish,exportFile,install};
+ return {prepare,review,reviewFile,approve,status,binding,publish,exportFile,install};
 }

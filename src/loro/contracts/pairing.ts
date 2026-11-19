@@ -39,6 +39,7 @@ export interface PairingRecipientStorage {
 /** No production verifier/provider has been selected. Never fall back to structural checks. */
 export const acceptRecipientUnavailable = async ():Promise<Result<never,'UNAVAILABLE'>> => ({ok:false,error:'UNAVAILABLE'});
 export const PAIRING_LIMITS = { idBytes: 256, publicKeyBytes: 4096, signalingItems: 64, itemBytes: 1024 * 1024, totalBytes: 8 * 1024 * 1024 } as const;
+export const MAX_AUTHORITY_HISTORY = 128;
 type ValidationError = 'MALFORMED' | 'UNSUPPORTED_VERSION' | 'TOO_LARGE';
 const enc = new TextEncoder();
 const obj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x) && !(x instanceof Uint8Array);

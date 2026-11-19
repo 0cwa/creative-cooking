@@ -1,4 +1,4 @@
-import {PAIRING_LIMITS} from '../contracts/pairing.ts';
+import {MAX_AUTHORITY_HISTORY,PAIRING_LIMITS} from '../contracts/pairing.ts';
 import {domain} from '../authority/validator.mjs';
 
 /** Untrusted selected-event locator; callers must authenticate the retained receipt. */
@@ -6,7 +6,7 @@ export async function discoverSelectedAdultRemoval(record,provider) {
  if(!record)return null;
  if(!(record.authorityState instanceof Uint8Array)||record.authorityState.length>PAIRING_LIMITS.itemBytes)throw Error('INVALID_AUTHORITY');
  let state;try{state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState));}catch{throw Error('INVALID_AUTHORITY');}
- if(!Array.isArray(state?.events)||state.events.length>128||!Array.isArray(state.selections)||state.selections.length>128)throw Error('INVALID_AUTHORITY');
+ if(!Array.isArray(state?.events)||state.events.length>MAX_AUTHORITY_HISTORY||!Array.isArray(state.selections)||state.selections.length>MAX_AUTHORITY_HISTORY)throw Error('INVALID_AUTHORITY');
  const matches=[];
  for(const item of state.events){
   if(item?.event?.version!==2||item.event.kind!=='removeAdult'||item.rotation?.grant?.version!==3)continue;

@@ -142,9 +142,11 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   }};
 
   const withCurrent = <T,>(use:(revision:number)=>Promise<T>)=>selection.withCurrent(selectedId,use);
-  const workspaceSequences={reserve:(scopeId:string,operationId:string)=>scopeId===selectedPersonal.scopeId?
-   sequences!.reserve(r.personal,operationId):selected&&scopeId===activeScope.id?
-   joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId)};
+  const workspaceSequences={reserve:(scopeId:string,operationId:string)=>{
+   if(scopeId===selectedPersonal.scopeId)return sequences!.reserve(r.personal,operationId);
+   if(adultRemoval)throw Error('READ_ONLY_WORKSPACE');
+   return selected&&scopeId===activeScope.id?joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId);
+  }};
   const policyBranches=await bindPolicyBranches({runtime:householdRuntime,keys,service:disclosure,sodium,withCurrent,eligible:!selected&&!installedSet&&!returnedPolicy&&!adultRemoval,activated:!!activatedPolicy});
   const installedRecipeIds=installedSet||readOnlyPolicy?house.members.flatMap((member:{recipeId:string|null})=>member.recipeId===null?[]:[member.recipeId]):undefined;
   const householdContent=bindHouseholdContent({runtime:householdRuntime,withCurrent,sequences:workspaceSequences,disclosure,originalRecipeDocuments,shoppingRecipeCopies});

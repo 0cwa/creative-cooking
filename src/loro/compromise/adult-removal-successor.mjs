@@ -1,5 +1,6 @@
 import {authorityBytes,snapshotId,verifyAuthority} from '../authority/chain.mjs';
 import {domain,removedDevice,validParent} from '../authority/validator.mjs';
+import {MAX_AUTHORITY_HISTORY} from '../contracts/pairing.ts';
 import {verifyAdultRemovalGrant} from './adult-removal-grant.mjs';
 import {verifyAdultRemovalDocumentSet} from '../projection/current-document-set.mjs';
 
@@ -18,6 +19,7 @@ async function parentContext({record,pin,provider}) {
 async function expected(options) {
  const {record,pin,provider,item,grant,manifest,recipientBindings,documents,LoroDoc}=options;
  const context=await parentContext({record,pin,provider});
+ if(context.state.events.length>=MAX_AUTHORITY_HISTORY||context.state.selections.length>=MAX_AUTHORITY_HISTORY)throw Error('AUTHORITY_HISTORY_FULL');
  const args={...context,pin,provider,item,grant,manifest,recipientBindings,documents,LoroDoc};
  const checked=await verifyAdultRemovalGrant({...args,requireQuorum:true});
  await verifyAdultRemovalDocumentSet(args);

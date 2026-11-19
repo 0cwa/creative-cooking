@@ -59,7 +59,9 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    const legacyName=!pairedEnrollment&&savedBinding===undefined&&enrollment?.version===1&&typeof enrollment.sequenceName==='string'&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
    const boundName=enrollment?.version===2&&enrollment.sequenceName===sequenceName&&
     (anchored||unannotated||!pairedEnrollment&&savedBinding===undefined);
-   if((verified?.activatedPolicy||verified?.adultRemoval) && !(boundName && anchored && enrollment.stage==='active'))throw Error('MISSING_ENROLLMENT');
+   const activeBound=boundName&&anchored&&enrollment.stage==='active';
+   const activeLegacyRemoval=verified?.adultRemoval&&legacyName&&enrollment.stage==='active';
+   if((verified?.activatedPolicy||verified?.adultRemoval) && !activeBound && !activeLegacyRemoval)throw Error('MISSING_ENROLLMENT');
    if(!(boundName||legacyName)||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId)throw Error('ENROLLMENT_CONFLICT');
    if(mode==='prepare'){
     if(enrollment.stage!=='pending'&&!found.value&&!verified)throw Error('ENROLLMENT_CONFLICT');

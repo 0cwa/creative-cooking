@@ -6,6 +6,7 @@ import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, check
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import {verifyRevocation, revocationPackage, verifyRevocationSeed, projectRemovalSeed} from '../compromise/revocation.mjs';
 import {verifyOwnDeviceEvent} from './own-device.mjs';
+import {MAX_AUTHORITY_HISTORY} from '../contracts/pairing.ts';
 import sodium from 'libsodium-wrappers';
 const enc=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -27,7 +28,7 @@ export const snapshotId=(provider,state)=>digest(provider,'authority-state',stat
 /** Replay every signed event from a locally pinned, explicitly preaccepted genesis. */
 export async function verifyAuthority(state,pin,provider,{pendingOwnDeviceSet=null}={}) {
  state=copy(state);
- if (!state || Array.isArray(state) || !['activeHead,events,root,selections,version','activeHead,agreements,events,root,selections,version'].includes(Object.keys(state).sort().join(',')) || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
+ if (!state || Array.isArray(state) || !['activeHead,events,root,selections,version','activeHead,agreements,events,root,selections,version'].includes(Object.keys(state).sort().join(',')) || state.version!==1 || !Array.isArray(state.events) || state.events.length>MAX_AUTHORITY_HISTORY || !Array.isArray(state.selections) || state.selections.length>MAX_AUTHORITY_HISTORY || typeof state.activeHead!=='string') throw Error('MALFORMED');
  if (!validParent(state.root) || state.root.devices.some(d=>!state.root.roster.includes(d.adultId)) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
  // A root head is the digest of the root payload excluding its self-reference.
  const nodes=new Map([[pin,state.root]]);
