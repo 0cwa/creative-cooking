@@ -61,9 +61,9 @@ export function householdPairing({
     admissionRule: {
       status: active(() => householdAdmissionRule(member)),
       propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation, runtime})),
-      review: active(item => reviewHouseholdAdmissionRule({...member, item})),
-      approve: active(input => approveHouseholdAdmissionRule({...input, ...member})),
-      retain: legacy(input => retainHouseholdAdmissionRule({...input, ...member})),
+      review: active(item => reviewHouseholdAdmissionRule({...member, runtime, item})),
+      approve: active(input => approveHouseholdAdmissionRule({...input, ...member, runtime})),
+      retain: legacy(input => retainHouseholdAdmissionRule({...input, ...member, runtime})),
       checkout: legacy(async input => {
         await runtime.authorize();
         return checkoutPolicyHead({...input, ...member, LoroDoc});

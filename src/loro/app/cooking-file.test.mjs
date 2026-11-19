@@ -191,6 +191,37 @@ function fixtureSessionStore(connection){
  }};
 }
 
+test('mounted admission rule stages a signed recipe set',async t=>{
+ const [a]=await household(t), keys=a.storage.localKeys(testMaster(),sodium);
+ await keys.provision('rule-master');
+ const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
+ await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
+ await a.edit('rule-root',1);
+ const recipe=await a.runtime.forRecipe('rule-recipe');
+ const after={id:'rule-recipe',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
+ await executeAction(recipe,{reserve:async()=>2},'rule-recipe',planRecipeAction({doc:(await recipe.document()).doc,before:null,after,actionId:'rule-recipe',author:a.deviceId,at:after.createdAt}),a.service);
+ const identity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:a.root.epochId};
+ const sourceKey=await keys.preparePairedDataKey('rule-source',identity,a.dataKey);
+ const {installLocalKey}=await import('../storage/local-keys.ts');
+ await openSQLiteTransaction(a.connection)(true,tx=>installLocalKey(tx,sourceKey.record,sourceKey.catalog));
+ const signingKeys=Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='rule-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)});
+ const signing={publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'rule-signing'};
+ const runtime=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:await resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
+ const api=householdPairing({name:'fixture',sodium,storage:a.storage,provider:a.provider,store:fixtureSessionStore(a.connection),scope,pin:a.root.head,deviceId:a.deviceId,adultId:'adult',runtime,service:a.service,keys:signingKeys,signing,wrapping:{},LoroDoc}).admissionRule;
+ const item=await api.propose({policy:{kind:'unanimous',fixedCount:null},expectedHead:a.root.head,explicit:true});
+ assert.equal(item.event.version,6); assert.equal(item.event.subject.documentCount,2);
+ const review=await api.review(item), approved=await api.approve({item,confirmedEventHash:review.eventHash,explicit:true});
+ assert.deepEqual(approved.item.documentSet,item.documentSet);
+ const altered=structuredClone(approved.item); altered.documentSet.body.observation.manifest.children[0].revision++;
+ await assert.rejects(()=>api.retain({item:altered,confirmedEventHash:review.eventHash,explicit:true}));
+ const staged=await api.retain({item:approved.item,confirmedEventHash:review.eventHash,explicit:true});
+ assert.equal(staged.targetHead,review.eventHash);
+ assert.deepEqual((await readVerifiedPolicyDocumentSet({runtime,targetHead:staged.targetHead})).signed,item.documentSet);
+ await a.edit('rule-later',3);
+ await assert.rejects(()=>api.retain({item:approved.item,confirmedEventHash:review.eventHash,explicit:true}),/STALE_SOURCE/);
+ assert.equal((await readAuthority(a.storage,scope,a.root.head,a.provider)).activeHead,a.root.head);
+});
+
 test('retained policy activation authenticates signed history and local keys',async t=>{
  const [a]=await household(t), master=testMaster(), keys=a.storage.localKeys(master,sodium);
  await keys.provision('retained-master');

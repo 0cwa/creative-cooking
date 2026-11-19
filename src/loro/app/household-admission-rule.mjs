@@ -1,6 +1,8 @@
 import {observeSuccessorWithOutcome, policyCheckoutCandidates, readAuthority, verifyAuthority} from '../authority/chain.mjs';
 import {admissionThreshold, domain, validPolicyBaseline, validateSuccessor} from '../authority/validator.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
+import {observePolicyDocumentSet, matchPolicyDocumentSetEvent, policyDocumentSetSubject} from '../authority/policy-document-set.mjs';
+import {stageVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {requireAdmissionPolicy} from './admission-rule.mjs';
 
 const hex = bytes => Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
@@ -40,10 +42,13 @@ export async function proposeHouseholdAdmissionRule(args) {
   if (legacyPolicyHeads.has(parent.head)) throw Error('CHECKOUT_REQUIRED');
   const policy = requireAdmissionPolicy(requested, parent.roster.length);
   if (policy.kind === parent.policy.kind && policy.fixedCount === parent.policy.fixedCount) throw Error('Choose a different admission rule.');
+  const captured = runtime.storage && runtime.authority && !runtime.authority.installedSet ? await observePolicyDocumentSet(runtime) : null;
+  const evidence = captured?.signed.body.observation.manifest.children.length ? captured.signed : null;
+  if (evidence && (runtime.authority.activatedPolicy || runtime.authority.returnedPolicy)) throw Error('UNSUPPORTED_VERSION');
   const {doc} = await runtime.document();
-  const subject = await policyBaseline(doc, provider);
-  if (!validPolicyBaseline(subject)) throw Error('This cooking starting point exceeds the supported frontier size.');
-  const slot = JSON.stringify(['household-admission-rule', parent.head, device.deviceId, policy.kind, policy.fixedCount, subject.historyHash]);
+  const subject = evidence ? await policyDocumentSetSubject(setOptions(args, captured, evidence)) : await policyBaseline(doc, provider);
+  if (!validPolicyBaseline(evidence ? subject.baseline : subject)) throw Error('This cooking starting point exceeds the supported frontier size.');
+  const slot = JSON.stringify(['household-admission-rule', parent.head, device.deviceId, policy.kind, policy.fixedCount, evidence ? subject.setHash : subject.historyHash]);
   const proposalId = await store.transaction(tx => {
     const retained = tx.get(slot);
     if (retained !== undefined) return retained;
@@ -51,20 +56,35 @@ export async function proposeHouseholdAdmissionRule(args) {
     tx.put(slot, id);
     return id;
   });
-  const event = {version: 3, suiteId: 'candidate-ed25519-xchacha20-sealedbox-v1',
+  const event = {version: evidence ? 6 : 3, suiteId: 'candidate-ed25519-xchacha20-sealedbox-v1',
     householdId: parent.householdId, parentHead: parent.head, policyHash: parent.policyHash,
     generation: parent.generation, epochId: parent.epochId, proposalId, kind: 'changePolicy',
     authorDeviceId: device.deviceId, frozenAdultRoster: parent.roster, subject, nextPolicy: policy};
   const authorSignature = hex(await provider.sign(device.signingKeyRef, domain('event-signature', event)));
-  return {event, authorSignature, approvals: []};
+  if (evidence) {
+    const checked = await runtime.storage.checkSelectedHouseholdSources(captured.guard);
+    if (!checked.ok) throw Error(checked.error.code);
+  }
+  return {event, authorSignature, approvals: [], ...(evidence ? {documentSet:evidence} : {})};
+}
+
+function setOptions(args, captured, signed) {
+  return {storage:args.storage, scope:args.scope, pin:args.pin, provider:args.provider, LoroDoc:args.runtime.LoroDoc, signed,
+    retained:captured.sources.map(source=>({documentId:source.runtime.scope.documentId,revision:source.revision,bytes:source.bytes??new Uint8Array()}))};
 }
 
 async function verifyRuleProposal(args, allowHistoricalParent) {
   const item = structuredClone(args.item);
   const {parent: activeParent, nodes} = await context(args);
-  if (item?.event?.kind !== 'changePolicy' || Object.keys(item).sort().join(',') !== 'approvals,authorSignature,event') throw Error('INVALID_INPUT');
+  if (item?.event?.kind !== 'changePolicy' || Object.keys(item).sort().join(',') !== (item.event.version === 6 ? 'approvals,authorSignature,documentSet,event' : 'approvals,authorSignature,event')) throw Error('INVALID_INPUT');
   const parent = allowHistoricalParent ? nodes.get(item.event.parentHead) : activeParent;
   if (!parent || item.event.parentHead !== parent.head) throw Error('The proposal uses a different household head.');
+  if (item.event.version === 6) {
+    if (!args.runtime || args.runtime.authority?.installedSet || args.runtime.authority?.activatedPolicy || args.runtime.authority?.returnedPolicy) throw Error('UNSUPPORTED_VERSION');
+    const captured = await observePolicyDocumentSet(args.runtime);
+    if (JSON.stringify(captured.signed.body.observation.manifest) !== JSON.stringify(item.documentSet?.body?.observation?.manifest)) throw Error('STALE_SOURCE');
+    await matchPolicyDocumentSetEvent(setOptions(args,captured,item.documentSet),item.event);
+  }
   const check = await validateSuccessor(parent, item.event, item.authorSignature, item.approvals, args.provider);
   if (check.status !== 'validated' && check.reason !== 'QUORUM_REQUIRED') throw Error(check.reason);
   return {item, parent, eventHash: check.eventHash, approvals: check.approvals, required: check.required,
@@ -95,5 +115,6 @@ export async function retainHouseholdAdmissionRule(args) {
   const {item, eventHash, complete} = await verifyRuleProposal(args, true);
   if (eventHash !== confirmedEventHash) throw Error('REVIEW_CHANGED');
   if (!complete) throw Error('QUORUM_REQUIRED');
+  if (item.event.version === 6) return stageVerifiedPolicyDocumentSet({runtime:args.runtime,item:{event:item.event,authorSignature:item.authorSignature,approvals:ordered(item.approvals)},signed:item.documentSet});
   return observeSuccessorWithOutcome(storage, scope, pin, provider, {...item, approvals: ordered(item.approvals)}, item.event.parentHead);
 }
