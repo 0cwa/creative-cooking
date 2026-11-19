@@ -1,5 +1,5 @@
 import {
- authorityBytes,encodeEvidence,resolveRuntimeAuthority,snapshotId,verifyAuthority
+ authorityBytes,encodeEvidence,snapshotId,verifyAuthority
 } from '../authority/chain.mjs';
 import {admissionThreshold,domain} from '../authority/validator.mjs';
 import {checkOwnDeviceCeremony,ownDeviceHash,ownDeviceSignal} from '../authority/own-device.mjs';
@@ -54,12 +54,18 @@ export function householdOwnDevice({
  const rootRecord=async (bundle,rootPin,head)=>verifyHouseholdParentRecord({provider,bundle,
   confirmedRootPin:rootPin,confirmedSelectedHead:head,explicit:true});
  async function current(){
-  const resolved=await resolveRuntimeAuthority(storage,scope,pin,provider,deviceId);
-  const {record:{revision}}=resolved.expectedAuthority,record=must(await storage.readPairingAuthority(scope));
-  if(record?.revision!==revision||record.authorizationSnapshot!==resolved.scope.authorizationSnapshot)throw Error('CONFLICT');
+  const {expectedAuthority}=await runtime.authorization();
+  const record=must(await storage.readPairingAuthority(scope)), selected=expectedAuthority?.record;
+  if(!record||!same(record.scope,scope)||!same(expectedAuthority.scope,scope)||
+     record.revision!==selected?.revision||record.authorizationSnapshot!==selected?.authorizationSnapshot||
+     record.acceptedParent!==selected?.acceptedParent||record.authorizationSnapshot!==runtime.scope.authorizationSnapshot||
+     record.acceptedParent!==runtime.scope.branchHead)throw Error('CONFLICT');
   const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState));
-  const verified=await verifyAuthority(state,pin,provider);
-  return {resolved,record,state,parent:verified.nodes.get(record.acceptedParent)};
+  const verified=await verifyAuthority(state,pin,provider),parent=verified.nodes.get(record.acceptedParent);
+  const device=parent?.devices.find(entry=>entry.active&&entry.deviceId===deviceId);
+  if(state.activeHead!==record.acceptedParent||!device||!parent.runtime.acceptedRecipients.includes(deviceId))throw Error('INVALID_AUTHORITY');
+  const resolved={expectedAuthority,scope:runtime.scope,adultId:device.adultId};
+  return {resolved,record,state,parent};
  }
  async function request(renew=false){
   const old=await read('request');

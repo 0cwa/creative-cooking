@@ -1,3 +1,4 @@
+import {householdPairing} from './household-pairing.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {installEstablishedOwnDeviceSet,commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
@@ -1360,6 +1361,32 @@ test('selected recipe shopping copies and current-only admission survive durable
  const openSponsor=async()=>openPeer(a.storage,await resolveOriginalHousehold({...sealOptions,deviceId:a.deviceId}),signerKeys,signingRef);
  let newcomerSelection=await joinStore.selection.openSelected();
  let sponsor=await openSponsor();
+ await t.test('installed admission permits newcomer ceremony preparation without publication',async()=>{
+  const signing=sodium.crypto_sign_keypair(),wrapping=sodium.crypto_box_keypair();
+  const signingKey=sodium.to_hex(signing.publicKey),wrappingKey=sodium.to_hex(wrapping.publicKey);
+  const verify=a.provider.verify;
+  a.provider.verify=async(ref,bytes,signature)=>ref===signingKey
+   ?sodium.crypto_sign_verify_detached(signature,bytes,signing.publicKey):verify(ref,bytes,signature);
+  const entries=new Map(),store={transaction:async fn=>fn({get:key=>entries.get(key),put:(key,value)=>entries.set(key,structuredClone(value))})};
+  try{
+   const service=householdPairing({name:'fixture',sodium,storage:a.storage,provider:a.provider,store,scope,pin:a.root.head,
+    deviceId:a.deviceId,adultId:'adult',runtime:sponsor.runtime,service:sponsor.service,keys:signerKeys,
+    signing:{operationId:'test-signing'},wrapping:{operationId:'test-wrapping'},signingKey:signingRef,
+    wrappingPublicKey:sodium.to_hex(sponsorWrap.publicKey),LoroDoc});
+   const request={deviceId:'fresh-own-device',signingKey,wrappingKey,nonce:sodium.to_hex(sodium.randombytes_buf(32))};
+   const signed={request,signature:sodium.to_hex(sodium.crypto_sign_detached(domain('household-own-device-request',request),signing.privateKey))};
+   const fingerprint=pairingDigest(sodium,domain('household-own-device-fingerprint',{deviceId:request.deviceId,signingKey,wrappingKey}));
+   const proposal=await service.ownDevice.propose(JSON.stringify(signed),fingerprint);
+   assert.equal(proposal.head,eventHash);
+   assert.equal((await service.ownDevice.resume('initiator')).code,proposal.code);
+   assert.throws(()=>service.ownDevice.publish(proposal.code),/UNSUPPORTED_VERSION/);
+   assert.throws(()=>service.ownDevice.install(new Uint8Array()),/UNSUPPORTED_VERSION/);
+   const authorization=sponsor.runtime.authorization.bind(sponsor.runtime);
+   sponsor.runtime.authorization=async()=>{const value=await authorization();return {...value,expectedAuthority:{...value.expectedAuthority,record:{...value.expectedAuthority.record,acceptedParent:'0'.repeat(64)}}};};
+   try{await assert.rejects(()=>service.ownDevice.propose(JSON.stringify(signed),fingerprint),/CONFLICT/);}
+   finally{delete sponsor.runtime.authorization;}
+  }finally{a.provider.verify=verify;signing.privateKey.fill(0);wrapping.privateKey.fill(0);}
+ });
  let newcomer=await openPeer(freshStorage,newcomerSelection,receiverKeys,receiverRef);
  const recipeRuntime=await sponsor.runtime.forRecipe(recipeId);
  await assert.rejects(()=>sponsor.runtime.forRecipe('outside-signed-catalog'),/INVALID_RECIPE_DOCUMENT/);
