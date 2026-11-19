@@ -1,7 +1,28 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
 import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';import {candidateCodec,SUITE} from '../crypto/candidate.mjs';import {testProvider} from '../crypto/test-provider.mjs';import {FixtureOfflineRuntime} from '../engine/runtime.mjs';import {recipeIntentions,apply as applyDomain,operations} from './registry.mjs';import {replayAuthenticated} from './replay.mjs';
+import {policyBaseline,verifyRetainedPolicyBaseline} from '../authority/policy-baseline.mjs';
 await sodium.ready;
+test('signed history detects an overwritten value at the same operation ID',async()=>{
+ const provider={hash:async bytes=>sodium.crypto_generichash(32,bytes)};
+ const history=firstTitle=>{
+  const doc=new LoroDoc();
+  doc.setPeerId('21');
+  const recipe=doc.getMap('recipe:r');
+  recipe.set('title',firstTitle);
+  recipe.set('title','Current title');
+  return doc;
+ };
+ const source=history('Signed title'),altered=history('Altered title');
+ assert.deepEqual(altered.toJSON(),source.toJSON());
+ const baseline=await policyBaseline(source,provider),alteredBaseline=await policyBaseline(altered,provider);
+ assert.deepEqual(alteredBaseline.frontiers,baseline.frontiers);
+ assert.notEqual(alteredBaseline.historyHash,baseline.historyHash);
+ for(const doc of [source,altered])doc.getMap('recipe:r').set('title','Later edit');
+ const retained=doc=>({revision:1,bytes:doc.export({mode:'snapshot'})});
+ await verifyRetainedPolicyBaseline(LoroDoc,retained(source),baseline,provider);
+ await assert.rejects(verifyRetainedPolicyBaseline(LoroDoc,retained(altered),baseline,provider),/POLICY_BASELINE_UNAVAILABLE/);
+});
 test('authenticated out-of-order updates retain dependencies and reject mismatched semantic payloads',async()=>{
  const signing=sodium.crypto_sign_keypair(),recipient=sodium.crypto_box_keypair(),dataKey=sodium.randombytes_buf(32),p=testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey});p.sign=async(_,b)=>sodium.crypto_sign_detached(b,signing.privateKey);p.verify=async(_,b,s)=>sodium.crypto_sign_verify_detached(s,b,signing.publicKey);const codec=candidateCodec(p);
  const scope={scopeId:'h',documentId:'d',documentGeneration:0,branchHead:'head',authorizationSnapshot:'authority',policyHashes:['policy'],epochId:'epoch',authorDevice:'a',acceptedAuthors:['a','b'],authorPeers:{a:'1',b:'2'},acceptedRecipients:['peer'],suiteId:SUITE};

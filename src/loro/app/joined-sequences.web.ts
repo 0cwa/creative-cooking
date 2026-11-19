@@ -31,7 +31,7 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error??Error('ENROLLMENT_WRITE_FAILED'));tx.onerror=()=>{};
    try{
     store.put(value,scope.id);
-    if(value.version===2)store.put(binding,bindingKey);
+    if(value.version===2)store.put({binding,stage:value.stage},bindingKey);
    }catch(error){tx.abort();reject(error);}
   });
   let sequences:Awaited<ReturnType<typeof openSequences>>|undefined;
@@ -49,9 +49,14 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    }
    const installation=verified?.installedSet;
    const pairedEnrollment=!!installation&&'paired' in installation;
+   const anchored=savedBinding&&typeof savedBinding==='object'&&
+    savedBinding.binding===binding&&savedBinding.stage===enrollment?.stage;
+   // An older unannotated binding can be upgraded after opening its active
+   // counter. It cannot prove that a paired counter was never exposed.
+   const unannotated=savedBinding===binding&&(!pairedEnrollment||enrollment?.stage==='active');
    const legacyName=!pairedEnrollment&&savedBinding===undefined&&enrollment?.version===1&&typeof enrollment.sequenceName==='string'&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
    const boundName=enrollment?.version===2&&enrollment.sequenceName===sequenceName&&
-    (savedBinding===binding||!pairedEnrollment&&savedBinding===undefined);
+    (anchored||unannotated||!pairedEnrollment&&savedBinding===undefined);
    if(!(boundName||legacyName)||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId)throw Error('ENROLLMENT_CONFLICT');
    if(mode==='prepare'){
     if(enrollment.stage!=='pending'&&!found.value&&!verified)throw Error('ENROLLMENT_CONFLICT');
@@ -67,7 +72,7 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    }
    const finalize=mode==='finalize'&&enrollment.stage==='pending';
    sequences=await openSequences(enrollment.sequenceName,[scope.id],finalize,enrollment.version===2?binding:null);
-   if(finalize||boundName&&savedBinding===undefined)await put({...enrollment,stage:'active'});
+   if(finalize||boundName&&!anchored)await put({...enrollment,stage:'active'});
    return {sequences,...verified!};
   } catch(e) {sequences?.close();throw e} finally {db.close()}
  });

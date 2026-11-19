@@ -63,15 +63,25 @@ async function authority(page,scopeId){
   }finally{db.close();}
  },scopeId);
 }
-async function joinedCounter(page,scopeId,remove=false){
- return page.evaluate(async({scope,remove})=>{
+async function joinedCounter(page,scopeId,{remove=false,rollback=false}={}){
+ return page.evaluate(async({scope,remove,rollback})=>{
   const req=request=>new Promise((resolve,reject)=>{
    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
    request.onblocked=()=>reject(Error('Blocked sequence fixture'));
   });
   const name=localStorage.getItem('creative-cooking-local-workspace-v1');
   const enrollmentDb=await req(indexedDB.open(name+'-joined'));
-  const enrollment=await req(enrollmentDb.transaction('enrollments').objectStore('enrollments').get(scope));
+  const tx=enrollmentDb.transaction('enrollments',rollback?'readwrite':'readonly');
+  const completed=new Promise((resolve,reject)=>{
+   tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
+  });
+  const store=tx.objectStore('enrollments');
+  const enrollment=await req(store.get(scope));
+  if(rollback){
+   if(enrollment.stage!=='active')throw Error('Expected an active enrollment fixture');
+   store.put({...enrollment,stage:'pending'},scope);
+  }
+  await completed;
   enrollmentDb.close();
   const databaseName=enrollment.sequenceName+'-sequences';
   if(remove){
@@ -81,7 +91,7 @@ async function joinedCounter(page,scopeId,remove=false){
   const db=await req(indexedDB.open(databaseName));
   try{return await req(db.transaction('sequences').objectStore('sequences').get(JSON.stringify(['counter',scope])))}
   finally{db.close()}
- },{scope:scopeId,remove});
+ },{scope:scopeId,remove,rollback});
 }
 
 for(const copiesRecipes of [false,true])test(`same-adult household Settings verifies, resumes, installs and opens a separate device${copiesRecipes?' with separate recipes':''}`,async({browser,baseURL})=>{
@@ -230,7 +240,11 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
    await notice(receiver,'The same household pairing is already installed.');
    expect(await authority(receiver,scope)).toEqual(beforeRetry);
    expect(await joinedCounter(receiver,scope)).toBe(sequence);
-   const counter=await joinedCounter(receiver,scope,true);
+   const counter=await joinedCounter(receiver,scope,{remove:true});
+   await click(receiver,'Install verified household device');
+   await notice(receiver,'Household pairing could not continue. Check the verified message or file and try again.');
+   expect(await receiver.evaluate(async name=>(await indexedDB.databases()).some(db=>db.name===name),counter)).toBe(false);
+   await joinedCounter(receiver,scope,{remove:true,rollback:true});
    await click(receiver,'Install verified household device');
    await notice(receiver,'Household pairing could not continue. Check the verified message or file and try again.');
    expect(await receiver.evaluate(async name=>(await indexedDB.databases()).some(db=>db.name===name),counter)).toBe(false);
