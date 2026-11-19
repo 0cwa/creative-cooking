@@ -22,6 +22,8 @@ import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 const policyReaders=new WeakMap();
 const policyMounts=new WeakMap();
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+// Activation must only accept histories that the return verifier can reopen.
+const unsupportedPolicySource=state=>state.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice'));
 
 /** Prepare wrapped keys for a staged policy successor; does not activate it. */
 export async function prepareWorkspacePolicyDocumentKeys(runtime,targetHead,keys) {
@@ -54,7 +56,7 @@ export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHea
  const expected=verified.current;
  if(expected.acceptedParent!==expectedSourceHead || expected.revision!==expectedSourceRevision || runtime.scope.branchHead!==expectedSourceHead)throw Error('STALE_SOURCE');
  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(expected.authorityState));
- if(state.events.some(item=>item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice')))throw Error('UNSUPPORTED_SOURCE');
+ if(unsupportedPolicySource(state))throw Error('UNSUPPORTED_SOURCE');
  const signer=verified.parent.devices.find(d=>d.active && d.deviceId===runtime.scope.authorDevice);
  if(!signer || mount.signing.publicKey!==signer.signingKeyRef)throw Error('INVALID_SIGNER');
  const captured=await observeSelectedSourceSet(runtime,{verifyCheckpointHistory:true});
@@ -93,7 +95,7 @@ export async function returnActivatedPolicyDocumentSet({runtime,expectedSourceHe
  if(!mount.record || !same(mount.record,activation.record))throw Error('STALE_TARGET');
  if(activation.sourceHead!==expectedSourceHead)throw Error('STALE_SOURCE');
  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(activation.expected.authorityState));
- if(state.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice')))throw Error('UNSUPPORTED_SOURCE');
+ if(unsupportedPolicySource(state))throw Error('UNSUPPORTED_SOURCE');
  const verified=await verifyAuthority(state,mount.pin,mount.provider), parent=verified.nodes.get(expectedSourceHead);
  if(!parent || state.activeHead!==expectedSourceHead)throw Error('INVALID_AUTHORITY');
  const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(activation.staged.proof))?.[2]?.signed?.body?.observation?.manifest;
