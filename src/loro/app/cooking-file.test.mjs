@@ -229,6 +229,11 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const report=await buildSelectedOperationReport(runtime,{candidates,suspectDevice:'device-1',boundary:{documentId:child.scope.documentId,objectId:candidates[0].objectId}});
  const {reportHash}=await selectedOperationReportService(runtime).freeze({report:report.report,candidates});
  const all=report.evidence.map(row=>row.evidence.command.effectId),selectedIds=all.filter(id=>id!==prerequisite.effectId),beforeRows=a.rows();
+ const {resolveSelectedReportStart}=await import('../compromise/selected-report-start.mjs');
+ const start=await resolveSelectedReportStart(runtime,reportHash);
+ assert.deepEqual(start.documents.map(({recipeId,snapshot,seedId,identities})=>[recipeId,snapshot.length,seedId,identities]),[
+  [null,0,null,[]],['retention-recipe',0,null,[]],
+ ]);
  const plan=await planSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds});
  const row=id=>plan.rows.find(row=>row.effectId===id);
  assert.equal(row(prerequisite.effectId).status,'excluded');
@@ -2255,6 +2260,39 @@ test('selected recipe shopping copies and current-only admission survive durable
   await assert.rejects(()=>sponsor.householdContent.createRecipe('seed-collision',recipe(recipeId,'Duplicate baseline')),/INVALID_RECIPE_DOCUMENT/);
   await assert.rejects(()=>sponsor.householdContent.createRecipe('child-collision',added),/CONFLICT/);
   assert.deepEqual(a.rows(),afterCreation);
+
+  const {buildSelectedOperationReport}=await import('../compromise/selected-report.mjs');
+  const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
+  const {resolveSelectedReportStart}=await import('../compromise/selected-report-start.mjs');
+  const candidates=[{sourceId:'outbound',documentId:newDocumentId,objectId:creation.id,bytes}];
+  const report=await buildSelectedOperationReport(sponsor.runtime,{candidates,
+   suspectDevice:sponsor.runtime.scope.acceptedAuthors.find(id=>id!==a.deviceId),
+   boundary:{documentId:newDocumentId,objectId:creation.id}});
+  const {reportHash}=await selectedOperationReportService(sponsor.runtime).freeze({report:report.report,candidates});
+  const beforeStart=a.rows();
+  const start=await resolveSelectedReportStart(sponsor.runtime,reportHash);
+  const seededRoot=start.documents.find(row=>row.recipeId===null);
+  const seededRecipe=start.documents.find(row=>row.recipeId===recipeId);
+  assert.ok(seededRoot.snapshot.length>0);
+  assert.ok(seededRecipe.snapshot.length>0);
+  assert.ok(seededRecipe.identities.some(row=>row.incomplete&&row.policyHashes.includes(accepted.policyHash)));
+  assert.deepEqual(start.documents.find(row=>row.recipeId===added.id),{
+   recipeId:added.id,documentId:newDocumentId,snapshot:new Uint8Array(),seedId:null,identities:[],policies:[],
+  });
+  assert.deepEqual(a.rows(),beforeStart);
+  const originalPublication=a.storage.getProjectionPublication.bind(a.storage);
+  a.storage.getProjectionPublication=async(...args)=>{
+   const result=await originalPublication(...args);
+   if(result.ok&&result.value?.documentSet){
+    const malformed=structuredClone(result.value);
+    malformed.documents[1].bytes[0]^=1;
+    return {ok:true,value:malformed};
+   }
+   return result;
+  };
+  try {await assert.rejects(()=>resolveSelectedReportStart(sponsor.runtime,reportHash));}
+  finally {a.storage.getProjectionPublication=originalPublication;}
+  assert.deepEqual(a.rows(),beforeStart);
 
   const document=await sponsor.householdContent.readRecipe(added.id);
   const edited={...added,title:'Edited after installed creation'};
