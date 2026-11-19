@@ -53,6 +53,9 @@ type PolicyCheckout = {
   parent:BranchRevision|null;
   baseline:Uint8Array|null;
 };
+export type PolicyDocumentSetMapping = {recipeId:string|null;sourceDocumentId:string;targetDocumentId:string;baseline:Uint8Array};
+export type StagedPolicyDocumentSet = {version:1;sourceHead:string;targetHead:string;proof:Uint8Array;mapping:PolicyDocumentSetMapping[]};
+export type StagePolicyDocumentSetInput = {guard:SelectedHouseholdSources;targetHead:string;proof:Uint8Array;mapping:PolicyDocumentSetMapping[]};
 export type TransactionRunner = <T>(write: boolean, body: (tx: Tx) => Promise<T>) => Promise<T>;
 const key = (...parts: string[]) => JSON.stringify(parts);
 const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
@@ -138,6 +141,22 @@ const validPersonalReceipt = (value:unknown): value is PersonalRotationReceipt =
     value.transfer.sealedSnapshot.length<=4_200_000 && object(value.transfer.packages) &&
     Object.keys(value.transfer.packages).length<=127 &&
     Object.values(value.transfer.packages).every(v=>typeof v==='string' && v.length<=32768)));
+const validStagedPolicyDocumentSet = (v:unknown): v is StagedPolicyDocumentSet => {
+  if(!fields(v,['version','sourceHead','targetHead','proof','mapping']) || v.version!==1 ||
+    !validId(v.sourceHead) || !validId(v.targetHead) || v.sourceHead===v.targetHead ||
+    !(v.proof instanceof Uint8Array) || !v.proof.length || v.proof.length>MAX_SELECTED_SET_BYTES ||
+    !denseArray(v.mapping,(row:any)=>fields(row,['recipeId','sourceDocumentId','targetDocumentId','baseline']) &&
+      (row.recipeId===null || validId(row.recipeId)) && validId(row.sourceDocumentId) && validId(row.targetDocumentId) &&
+      row.baseline instanceof Uint8Array && row.baseline.length>0 && row.baseline.length<=MAX_SELECTED_SOURCE_BYTES) ||
+    !v.mapping.length || v.mapping.length>MAX_SELECTED_CHILDREN+1 || v.mapping[0].recipeId!==null ||
+    v.mapping.slice(1).some((row:any,i:number)=>row.recipeId===null || (i>0 && v.mapping[i].recipeId>=row.recipeId))) return false;
+  const sources=new Set(v.mapping.map((row:any)=>row.sourceDocumentId));
+  const targets=new Set(v.mapping.map((row:any)=>row.targetDocumentId));
+  return sources.size===v.mapping.length && targets.size===v.mapping.length &&
+    v.mapping.every((row:any)=>!sources.has(row.targetDocumentId) &&
+      (!isPolicyDocumentId(row.targetDocumentId) || row.targetDocumentId===`policy-${v.targetHead}`)) &&
+    v.mapping.reduce((sum:number,row:any)=>sum+row.baseline.length,v.proof.length)<=MAX_SELECTED_SET_BYTES;
+};
 const validateRecord = (k: string, v: any) => {
   if (v === undefined) return;
   const parts=JSON.parse(k),namespace=parts[0];
@@ -148,6 +167,7 @@ const validateRecord = (k: string, v: any) => {
     case 'compromise-quarantine': valid=typeof v==='boolean'; break;
     case 'disclosure-pending': valid=fields(v,['reason','objectId']) && v.reason==='POLICY_GOVERNANCE_UNPROVEN' && typeof v.objectId==='string' && !!v.objectId; break;
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
+    case 'policy-staged-set': valid=validStagedPolicyDocumentSet(v) && parts.length===3 && v.targetHead===parts[2]; break;
     case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
     case 'disclosure-source': valid=(fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId']) || (fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId','incomplete']) && v.incomplete===true)) && v.envelope instanceof Uint8Array && ['local','import'].includes(v.origin) && typeof v.objectId==='string' && !!v.objectId && denseArray(v.policyHashes,(x:any)=>typeof x==='string' && !!x) && typeof v.checkpoint==='string' && !!v.checkpoint && typeof v.documentId==='string' && !!v.documentId && typeof v.commandId==='string' && !!v.commandId; break;
@@ -560,6 +580,54 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       this.fault?.('policy-checkout');
       return {ok:true as const,value:undefined};
     })}catch(e){return fail(mapError(e));}
+  }
+  /** Stage caller-verified evidence and baselines without changing the selected authority. */
+  async stagePolicyDocumentSet(input:StagePolicyDocumentSetInput):Promise<{ok:true;value:void}|ReturnType<typeof fail>> {
+    input=snapshot(input);
+    const {guard,targetHead,proof,mapping}=input;
+    if(!guard?.expectedAuthority?.scope || !this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority) ||
+      !denseArray(guard.entries,entry=>object(entry)&&validId(entry.recipeId)&&validId(entry.documentId)) ||
+      guard.entries.length+(guard.members?.length??0)>MAX_SELECTED_CHILDREN || guard.catalogRevision!==guard.entries.length ||
+      guard.members!==undefined&&!denseArray(guard.members,member=>object(member)&&validId(member.recipeId)&&validId(member.documentId)&&revision(member.revision)&&member.bytes instanceof Uint8Array)) return fail('MALFORMED');
+    const record:StagedPolicyDocumentSet={version:1,sourceHead:guard.binding.branchHead,targetHead,proof,mapping};
+    if(!validStagedPolicyDocumentSet(record))return fail('MALFORMED');
+    const expected=[{recipeId:null,documentId:guard.binding.sourceDocumentId},
+      ...[...guard.entries,...(guard.members??[])].sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0)];
+    if(expected.length!==mapping.length || expected.some((row,i)=>row.recipeId!==mapping[i].recipeId || row.documentId!==mapping[i].sourceDocumentId)) return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      await this.requireSelectedHouseholdSources(tx,guard);
+      const scope=guard.binding.scopeId;
+      if(await tx.get(key('policy-staged-set',scope,targetHead))!==undefined) conflict();
+      for(const row of mapping) {
+        if(await tx.get(key('document',scope,row.targetDocumentId))!==undefined ||
+          await tx.get(key('document-owner',scope,row.targetDocumentId))!==undefined ||
+          await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId))!==undefined) conflict();
+      }
+      for(const row of mapping) {
+        await tx.put(key('document-owner',scope,row.targetDocumentId),targetHead);
+        await tx.put(key('document',scope,row.targetDocumentId),{bytes:copy(row.baseline),revision:0});
+        await tx.put(key('policy-checkout-parent',scope,row.targetDocumentId),{head:record.sourceHead,documentId:row.sourceDocumentId});
+        this.fault?.('policy-set-target');
+      }
+      await tx.put(key('policy-staged-set',scope,targetHead),record);
+      return {ok:true as const,value:undefined};
+    });}catch(e){return fail(mapError(e));}
+  }
+  /** Retained data is structural evidence only; callers must authenticate it before use. */
+  async readStagedPolicyDocumentSet(scope:string,targetHead:string):Promise<{ok:true;value:StagedPolicyDocumentSet|null}|ReturnType<typeof fail>> {
+    if(!validId(scope)||!validId(targetHead))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const record:StagedPolicyDocumentSet|undefined=await tx.get(key('policy-staged-set',scope,targetHead));
+      if(!record)return {ok:true as const,value:null};
+      for(const row of record.mapping){
+        const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
+        const doc=await tx.get(key('document',scope,row.targetDocumentId));
+        const parent=await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId));
+        if(owner!==targetHead || !doc || doc.revision!==0 || !sameBytes(doc.bytes,row.baseline) ||
+          !sameRecord(parent,{head:record.sourceHead,documentId:row.sourceDocumentId}))return corrupt();
+      }
+      return {ok:true as const,value:snapshot(record)};
+    });}catch(e){return fail(mapError(e));}
   }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
     const scope=p.expectedAuthority.scope.id;

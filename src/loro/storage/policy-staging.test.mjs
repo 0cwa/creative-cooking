@@ -1,0 +1,36 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {openSQLiteStorage} from './sqlite.ts';
+
+test('policy set staging is atomic, checks selected members and rejects occupied slots', async()=>{
+ const db=new DatabaseSync(':memory:');
+ const conn={executeSync(sql,args=[]){const q=db.prepare(sql);return {rows:sql.startsWith('SELECT')?q.all(...args):(q.run(...args),[])}}};
+ let fail=false; const store=openSQLiteStorage(conn,point=>{if(fail&&point==='policy-set-target')throw Error('injected')});
+ const bytes=(...v)=>new Uint8Array(v), scope={kind:'household',id:'h'};
+ const record={scope,revision:0,acceptedParent:'old',authorizationSnapshot:'snap',authorityState:bytes(1)};
+ assert.equal((await store.compareAndSwapPairingAuthority({expectedRevision:null,record})).ok,true);
+ const put=(key,value)=>db.prepare('INSERT OR REPLACE INTO loro_records VALUES (?,?)').run(JSON.stringify(key),JSON.stringify(value,(_k,v)=>v instanceof Uint8Array?{__storageBytes:Array.from(v)}:v));
+ const child='recipe-v1-'+'a'.repeat(64);
+ put(['document-owner','h','root'],'old'); put(['document','h','root'],{bytes:bytes(1),revision:0});
+ put(['document-owner','h',child],'old'); put(['document','h',child],{bytes:bytes(2),revision:0});
+ put(['projection-document-set','h','old'],{manifestId:'manifest',operationId:'operation',catalog:[{recipeId:'recipe',documentId:child}]});
+ const guard={binding:{version:1,rootPin:'pin',scopeId:'h',branchHead:'old',sourceDocumentId:'root',documentGeneration:1,epochId:'epoch'},expectedAuthority:{version:2,scope,record},catalogRevision:0,root:{documentId:'root',bytes:bytes(1),revision:0},entries:[],members:[{recipeId:'recipe',documentId:child,bytes:bytes(2),revision:0}]};
+ const input={guard,targetHead:'new',proof:bytes(9),mapping:[{recipeId:null,sourceDocumentId:'root',targetDocumentId:'policy-new',baseline:bytes(3)},{recipeId:'recipe',sourceDocumentId:child,targetDocumentId:'target-child',baseline:bytes(4)}]};
+ const rows=()=>db.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+ const before=rows(); fail=true; assert.equal((await store.stagePolicyDocumentSet(input)).ok,false); fail=false; assert.deepEqual(rows(),before);
+ put(['document-owner','h','target-child'],'other'); const occupied=rows();
+ assert.equal((await store.stagePolicyDocumentSet(input)).error.code,'CONFLICT'); assert.deepEqual(rows(),occupied);
+ db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['document-owner','h','target-child']));
+ put(['document','h',child],{bytes:bytes(2),revision:1}); const changed=rows();
+ assert.equal((await store.stagePolicyDocumentSet(input)).error.code,'CONFLICT'); assert.deepEqual(rows(),changed);
+ put(['document','h',child],{bytes:bytes(2),revision:0});
+ assert.equal((await store.stagePolicyDocumentSet(input)).ok,true);
+ const retained=await store.readStagedPolicyDocumentSet('h','new'); assert.equal(retained.ok,true); assert.deepEqual(retained.value.mapping,input.mapping); assert.deepEqual(retained.value.proof,input.proof);
+ assert.deepEqual((await store.readPairingAuthority(scope)).value,record);
+ assert.deepEqual((await store.reopenDocument('h','root')).value,{documentId:'root',bytes:bytes(1),revision:0});
+ assert.deepEqual((await store.reopenDocument('h',child)).value,{documentId:child,bytes:bytes(2),revision:0});
+ put(['document','h','target-child'],{bytes:bytes(7),revision:0});
+ assert.equal((await store.readStagedPolicyDocumentSet('h','new')).error.code,'CORRUPT');
+ db.close();
+});
