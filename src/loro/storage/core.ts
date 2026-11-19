@@ -186,6 +186,9 @@ const validStagedPolicyDocumentSet = (v:unknown): v is StagedPolicyDocumentSet =
       (!isPolicyDocumentId(row.targetDocumentId) || row.targetDocumentId===`policy-${v.targetHead}`)) &&
     v.mapping.reduce((sum:number,row:any)=>sum+row.baseline.length,v.proof.length)<=MAX_SELECTED_SET_BYTES;
 };
+const policySetTargetBudget=(set:StagedPolicyDocumentSet)=>MAX_SELECTED_SET_BYTES-
+  set.mapping.reduce((size,row)=>size+row.baseline.length,set.proof.length);
+const MAX_BRANCH_LOCAL_OPERATIONS=256;
 const validateRecord = (k: string, v: any) => {
   if (v === undefined) return;
   const parts=JSON.parse(k),namespace=parts[0];
@@ -424,7 +427,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
    * with an outbound object from the selected branch. No delivery is inferred. */
   async listBranchLocalOperations(expectedAuthority:LocalCommit['expectedAuthority']):Promise<Result<{scopeId:string;operationId:string}[],StorageError>> {
     expectedAuthority=snapshot(expectedAuthority);if(!expectedAuthority||expectedAuthority.scope?.kind!=='household'||!validId(expectedAuthority.scope.id)||!expectedAuthority.record||!validId(expectedAuthority.record.acceptedParent))return {ok:false,error:'MALFORMED'};
-    try{return await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scopeId=expectedAuthority.scope.id,head=expectedAuthority.record!.acceptedParent,result:{scopeId:string;operationId:string}[]=[];for(const raw of await tx.keys()){let parts:any;try{parts=JSON.parse(raw)}catch{continue}if(!Array.isArray(parts)||parts[0]!=='local'||parts[1]!==scopeId)continue;if(parts.length!==3||!validId(parts[2]))return corrupt();const found=await this.localOperation(tx,scopeId,parts[2]);if(!found)return corrupt();if(found.commit.outbound.some(x=>x.branchHead===head)){result.push({scopeId,operationId:parts[2]});if(result.length>256)throw new StorageFailure('TOO_LARGE')}}result.sort((a,b)=>a.operationId<b.operationId?-1:a.operationId>b.operationId?1:0);return {ok:true as const,value:result}})}catch(e){return {ok:false,error:mapError(e)}}
+    try{return await this.run(false,async tx=>{await this.requireAuthority(tx,expectedAuthority);const scopeId=expectedAuthority.scope.id,head=expectedAuthority.record!.acceptedParent,result:{scopeId:string;operationId:string}[]=[];for(const raw of await tx.keys()){let parts:any;try{parts=JSON.parse(raw)}catch{continue}if(!Array.isArray(parts)||parts[0]!=='local'||parts[1]!==scopeId)continue;if(parts.length!==3||!validId(parts[2]))return corrupt();const found=await this.localOperation(tx,scopeId,parts[2]);if(!found)return corrupt();if(found.commit.outbound.some(x=>x.branchHead===head)){result.push({scopeId,operationId:parts[2]});if(result.length>MAX_BRANCH_LOCAL_OPERATIONS)throw new StorageFailure('TOO_LARGE')}}result.sort((a,b)=>a.operationId<b.operationId?-1:a.operationId>b.operationId?1:0);return {ok:true as const,value:result}})}catch(e){return {ok:false,error:mapError(e)}}
   }
   async getLocalOperation(scopeId:string,operationId:string):Promise<Result<{commit:LocalCommit;outcome:SavedOutcome}|null,StorageError>> {
     if (![scopeId,operationId].every(validId)) return {ok:false,error:'MALFORMED'};
@@ -664,21 +667,34 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(!staged || (!historical && !sameRecord(authority,receipt.next)) || staged.sourceHead!==receipt.expected.acceptedParent ||
         staged.targetHead!==receipt.next.acceptedParent || staged.mapping.length!==receipt.targets.length ||
         staged.mapping.some((row,i)=>row.targetDocumentId!==receipt.targets[i].targetDocumentId)) return corrupt();
-      let size=staged.proof.length+staged.mapping.reduce((n,row)=>n+row.baseline.length,0);
-      const documents=[];
-      for(const row of staged.mapping){
-        const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
-        const doc=await tx.get(key('document',scope,row.targetDocumentId));
-        const parent=await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId));
-        if(owner!==targetHead || !doc || !(doc.bytes instanceof Uint8Array) || !doc.bytes.length ||
-          doc.bytes.length>MAX_SELECTED_SOURCE_BYTES || !revision(doc.revision) ||
-          !sameRecord(parent,{head:staged.sourceHead,documentId:row.sourceDocumentId})) return corrupt();
-        size+=doc.bytes.length;
-        if(size>MAX_SELECTED_SET_BYTES)return corrupt();
-        documents.push({documentId:row.targetDocumentId,bytes:doc.bytes,revision:doc.revision});
-      }
+      const documents=await this.readPolicySetTargets(tx,scope,staged);
       return {ok:true as const,value:snapshot({receipt,staged,documents})};
     });}catch(e){return fail(mapError(e));}
+  }
+  private async readPolicySetTargets(tx:Tx,scope:string,staged:StagedPolicyDocumentSet,replacement?:LocalCommit['documents'][number]) {
+    let remaining=policySetTargetBudget(staged), edits=0;
+    const documents=[];
+    for(const row of staged.mapping){
+      const {targetDocumentId:documentId,sourceDocumentId}=row;
+      const owner=await tx.get(key('document-owner',scope,documentId));
+      const doc=await tx.get(key('document',scope,documentId));
+      const parent=await tx.get(key('policy-checkout-parent',scope,documentId));
+      if(owner!==staged.targetHead || !doc || !(doc.bytes instanceof Uint8Array) || !doc.bytes.length ||
+        doc.bytes.length>MAX_SELECTED_SOURCE_BYTES || !revision(doc.revision) ||
+        !sameRecord(parent,{head:staged.sourceHead,documentId:sourceDocumentId}))return corrupt();
+      const updating=replacement?.documentId===documentId;
+      if(updating && doc.revision!==replacement.expectedRevision)conflict();
+      const bytes=updating?replacement.bytes:doc.bytes;
+      const revisionNumber=doc.revision+(updating?1:0);
+      remaining-=bytes.length;
+      edits+=revisionNumber;
+      if(bytes.length>MAX_SELECTED_SOURCE_BYTES || remaining<0 || edits>MAX_BRANCH_LOCAL_OPERATIONS){
+        if(replacement)throw new StorageFailure('TOO_LARGE');
+        return corrupt();
+      }
+      documents.push({documentId,bytes,revision:revisionNumber});
+    }
+    return documents;
   }
   /** Return structural pointer snapshots only for the exact selected activation. */
   async readPolicyReturnPointers(scope:string,targetHead:string) {
@@ -725,6 +741,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       new Set(prepared.map(p=>p.record.identity.epochId)).size!==prepared.length) return fail('MALFORMED');
     const sources=[{recipeId:null,documentId:guard.binding.sourceDocumentId}, ...[...guard.entries,...(guard.members??[])].sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0)];
     if(sources.length!==mapping.length || sources.some((r,i)=>r.recipeId!==mapping[i].recipeId || r.documentId!==mapping[i].sourceDocumentId)) return fail('MALFORMED');
+    if(mapping.reduce((size,row)=>size+row.baseline.length,0)>policySetTargetBudget(staged))return fail('TOO_LARGE');
     const receipt:PolicySetReceipt={version:1,expected,next,targets:prepared.map(p=>({targetDocumentId:p.targetDocumentId,operationId:p.record.operationId,identity:p.record.identity})),...(provenance===undefined?{}:{provenance})};
     if(!validPolicySetReceipt(receipt))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{
@@ -1832,13 +1849,13 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         if(!sameRecord(await tx.get(key('pairing-authority','household',scope)),activation.next))conflict();
         const command=c.commands[0], recipeId=this.storedRecipeId(command);
         const staged:StagedPolicyDocumentSet|undefined=await tx.get(key('policy-staged-set',scope,head!));
-        const mapping=staged?.mapping.filter(row=>row.targetDocumentId===command.documentId && row.recipeId===recipeId);
-        if(!staged || staged.targetHead!==head || staged.sourceHead!==activation.expected.acceptedParent || !mapping || mapping.length!==1 ||
+        if(!staged)return conflict();
+        const mapping=staged.mapping.filter(row=>row.targetDocumentId===command.documentId && row.recipeId===recipeId);
+        if(staged.targetHead!==head || staged.sourceHead!==activation.expected.acceptedParent || mapping.length!==1 ||
           !activation.targets.some(row=>row.targetDocumentId===command.documentId) || c.documents.length!==1 || c.documents[0].documentId!==command.documentId ||
           await tx.get(key('document-owner',scope,command.documentId))!==head ||
           !sameRecord(await tx.get(key('policy-checkout-parent',scope,command.documentId)),{head:staged.sourceHead,documentId:mapping[0].sourceDocumentId}))conflict();
-        const document=await tx.get(key('document',scope,command.documentId));
-        if(!document || document.revision!==c.documents[0].expectedRevision)conflict();
+        await this.readPolicySetTargets(tx,scope,staged,c.documents[0]);
         let rows:any[];try{rows=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(verifiedProvenance.statement))[2].rows}catch{conflict()}
         if(rows!.some((row:any)=>!Array.isArray(row.identities)||row.identities.some((identity:any)=>identity.commandId===command.commandId||identity.effectId===command.effectId)))conflict();
         const row=rows!.find((r:any)=>r.targetDocumentId===command.documentId && r.recipeId===recipeId);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {openSQLiteStorage} from './sqlite.ts';
+import {MAX_SELECTED_SET_BYTES,MAX_SELECTED_SOURCE_BYTES} from '../contracts/runtime-storage.ts';
 
 test('policy set staging is atomic, checks selected members and rejects occupied slots', async()=>{
  const db=new DatabaseSync(':memory:');
@@ -44,6 +45,10 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  const provenance={statement:new TextEncoder().encode(JSON.stringify(['creative-cooking/authority-candidate/v1','policy-provenance-receipt-v1',{rows:signedRows}])),signature:'ab'.repeat(64)};
  const selection={...input,provenance,expected:record,next,deviceId:'device',prepared};
  const stagedRows=rows();
+ // The proof and two one-byte baselines fit in the stage. Their target copies do not.
+ const oversized={...selection,proof:new Uint8Array(MAX_SELECTED_SET_BYTES-3)};
+ assert.equal((await store.commitPolicyDocumentSetSelection(oversized)).error.code,'TOO_LARGE');
+ assert.deepEqual(rows(),stagedRows);
  assert.equal((await store.commitPolicyDocumentSetSelection({...selection,provenance:{...provenance,signature:'bad'}})).error.code,'MALFORMED');
  assert.deepEqual(rows(),stagedRows);
  put(['pairing-authority','household','h'],{...record,authorityState:bytes(99)});
@@ -130,6 +135,25 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  put(['pairing-authority','household','h'],{...next,authorityState:bytes(99)});await unchanged();put(['pairing-authority','household','h'],next);
  put(['document-owner','h','target-child'],'other');await unchanged();put(['document-owner','h','target-child'],'new');
  const staleCommit=structuredClone(commit);staleCommit.documents[0].expectedRevision=1;await unchanged(staleCommit);
+ const largeCommit=structuredClone(commit);largeCommit.documents[0].bytes=new Uint8Array(MAX_SELECTED_SOURCE_BYTES+1);
+ const beforeLarge=rows();
+ assert.equal((await run(largeCommit)).error.code,'TOO_LARGE');
+ assert.deepEqual(rows(),beforeLarge);
+ // At the total limit, even a small replacement that grows the snapshot is too large.
+ put(['policy-staged-set','h','new'],{...retained.value,proof:new Uint8Array(MAX_SELECTED_SET_BYTES-4)});
+ assert.equal((await read()).ok,true);
+ const grows=structuredClone(commit);grows.documents[0].bytes=bytes(8,9);
+ const full=rows();
+ assert.equal((await run(grows)).error.code,'TOO_LARGE');
+ assert.deepEqual(rows(),full);
+ put(['policy-staged-set','h','new'],retained.value);
+ // Existing later revisions count against the authenticated history reader's work limit.
+ put(['document','h','target-child'],{bytes:bytes(7),revision:256});
+ const editLimit=structuredClone(commit);editLimit.documents[0].expectedRevision=256;
+ const atLimit=rows();
+ assert.equal((await run(editLimit)).error.code,'TOO_LARGE');
+ assert.deepEqual(rows(),atLimit);
+ put(['document','h','target-child'],{bytes:bytes(7),revision:0});
  for(const point of ['disclosure-local','disclosure-local-provenance']){localFail=point;await unchanged();}localFail='';
  const result=await run();assert.equal(result.ok,true);assert.equal(result.value.replayed,false);
  assert.equal((await run()).value.replayed,true);
