@@ -90,13 +90,16 @@ type OwnDevicePublication = {
   document:{documentId:string;bytes:Uint8Array};
   file:Uint8Array|null; sources:{effectId:string;policyHashes:string[]}[];
 };
+type EstablishedRecipientReceipt = {recipientDeviceId:string;ceremonyGuardId:string;transcriptHash:string;ciphertextHash:string;ciphertext:Uint8Array};
+type OwnDeviceSetSponsor = {deviceId:string;set:unknown;keyHashes:string[];signature:string;
+  establishedRecipients?:{version:1;entries:EstablishedRecipientReceipt[]}};
 type OwnDeviceSetPublication = {
   operationId:string; guardId:string; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
   copyHash:string; file:Uint8Array;
   documents:{recipeId:string|null; sourceDocumentId:string; documentId:string; bytes:Uint8Array;
     identities:{commandId:string;effectId:string}[];
     sources:{effectId:string;policyHashes:string[]}[]; policies?:any[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
-} & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:{deviceId:string;set:unknown;keyHashes:string[];signature:string}} |
+} & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:OwnDeviceSetSponsor} |
      {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
@@ -106,8 +109,20 @@ type PersonalPairingPublication = {
 };
 const validPairingFile = (value:unknown): value is Uint8Array =>
   value instanceof Uint8Array && value.length>112 && value.length<=7*1024*1024;
+// Bound both the number of recipients and their combined retained ciphertext bytes.
+const MAX_ESTABLISHED_RECIPIENTS = 127, MAX_ESTABLISHED_CIPHERTEXT_BYTES = 16*1024*1024;
+const validEstablishedRecipients = (value:unknown) => {
+  if(!fields(value,['version','entries'])||value.version!==1||!Array.isArray(value.entries)||
+    value.entries.length<1||value.entries.length>MAX_ESTABLISHED_RECIPIENTS||
+    !denseArray(value.entries,entry=>fields(entry,['recipientDeviceId','ceremonyGuardId','transcriptHash','ciphertextHash','ciphertext'])&&
+      validId(entry.recipientDeviceId)&&validId(entry.ceremonyGuardId)&&hexOf(entry.transcriptHash,64)&&
+      hexOf(entry.ciphertextHash,64)&&validPairingFile(entry.ciphertext)))return false;
+  return value.entries.every((entry,i)=>i===0||value.entries[i-1].recipientDeviceId<entry.recipientDeviceId)&&
+    value.entries.reduce((sum,entry)=>sum+entry.ciphertext.length,0)<=MAX_ESTABLISHED_CIPHERTEXT_BYTES;
+};
 const validOwnDeviceSetSponsor = (value:any, count:number) =>
-  fields(value,['deviceId','set','keyHashes','signature'])&&validId(value.deviceId)&&object(value.set)&&
+  (fields(value,['deviceId','set','keyHashes','signature'])||fields(value,['deviceId','set','keyHashes','signature','establishedRecipients'])&&
+    validEstablishedRecipients(value.establishedRecipients))&&validId(value.deviceId)&&object(value.set)&&
   denseArray(value.keyHashes,hash=>hexOf(hash,64))&&value.keyHashes.length===count&&hexOf(value.signature,128);
 const validPersonalReceipt = (value:unknown): value is PersonalRotationReceipt =>
   fields(value,['requestHash','transfer']) && hexOf(value.requestHash,64) &&

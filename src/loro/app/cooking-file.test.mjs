@@ -1666,9 +1666,22 @@ test('selected recipe shopping copies and current-only admission survive durable
   }
   const publication={operationId:'own-device-set-transaction',guardId:'own-device-set-guard',expected:parentRecord,
    next:copyTransition.next,guard:capturedCopy.guard,copyHash:capturedCopy.copyHash,file:probeFile,documents:preparedDocuments};
+  const entries=['established-a','established-b'].map((recipientDeviceId,index)=>({recipientDeviceId,
+   ceremonyGuardId:`ceremony-${index}`,transcriptHash:'a'.repeat(64),ciphertextHash:'b'.repeat(64),
+   ciphertext:new Uint8Array(113).fill(index+1)}));
+  const retainedPublication={...publication,sponsor:{deviceId:a.deviceId,set:{},
+   keyHashes:preparedDocuments.map(()=>'c'.repeat(64)),signature:'d'.repeat(128),
+   establishedRecipients:{version:1,entries}}};
   const beforeSetWrite=a.rows();
+  const duplicate=structuredClone(retainedPublication);
+  duplicate.sponsor.establishedRecipients.entries[1].recipientDeviceId=entries[0].recipientDeviceId;
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(duplicate)).error.code,'MALFORMED');
+  const oversized=structuredClone(retainedPublication);
+  oversized.sponsor.establishedRecipients.entries=Array.from({length:3},(_,index)=>({
+   ...entries[0],recipientDeviceId:`device-${index}`,ciphertext:new Uint8Array(6*1024*1024)}));
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(oversized)).error.code,'MALFORMED');
   a.faultAt('household-own-device-set');
-  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(publication)).error.code,'IO');
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(retainedPublication)).error.code,'IO');
   a.faultAt(undefined);
   assert.deepEqual(a.rows(),beforeSetWrite);
   const openedKeys=[];
@@ -1708,6 +1721,12 @@ test('selected recipe shopping copies and current-only admission survive durable
   t.after(()=>publishDb.close());
   const beforePublish=a.rows();
   const put=publishDb.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
+  for(const row of beforePublish)put.run(row.key,row.value);
+  assert.equal((await publishStorage.commitHouseholdOwnDeviceSet(retainedPublication)).ok,true);
+  const retained=must(await publishStorage.readHouseholdOwnDeviceSetRetained(scope,publication.operationId));
+  assert.deepEqual(retained.sponsor.establishedRecipients,{version:1,entries});
+  // Restore the cloned fixture for the separate legacy publisher scenario.
+  publishDb.prepare('DELETE FROM loro_records').run();
   for(const row of beforePublish)put.run(row.key,row.value);
   const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,
    signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId});
