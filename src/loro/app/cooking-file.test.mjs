@@ -1,4 +1,4 @@
-import {commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
+import {installEstablishedOwnDeviceSet,commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
@@ -1829,6 +1829,32 @@ test('selected recipe shopping copies and current-only admission survive durable
    const identity={version:1,scope,deviceId:b.deviceId,purpose:'data',epochId};
    await proofKeys.use(keyOperationId,identity,key=>assert.equal(pairingDigest(sodium,key),proofKeyHashes[index]));
   }
+  const establishedReopen={storage:proofStorage,scope,operationId:eventV5.proposalId,pin:a.root.head,provider:a.provider,sodium,LoroDoc,keys:proofKeys,wrappingSecret:existingWrap.privateKey};
+  const reopenedEstablished=await reopenOwnDeviceSet(establishedReopen);
+  assert.equal(reopenedEstablished.head,signedCopy.head);
+  assert.equal(reopenedEstablished.documents.length,signedCopy.documents.length);
+  for(const mutate of [saved=>{saved.recipient.signature='0'.repeat(128)},saved=>{saved.recipient.evidence.guard.guardId+='x'},saved=>{saved.copyHash='0'.repeat(64)},saved=>{saved.documents.reverse()}]){
+   const changed=structuredClone(establishedSaved);mutate(changed);
+   const storage={...proofStorage,readHouseholdOwnDeviceSetRetained:async()=>({ok:true,value:changed})};
+   await assert.rejects(reopenOwnDeviceSet({...establishedReopen,storage}));
+  }
+  const retryArgs={storage:proofStorage,runtime:{...proofPeer.runtime,scope:{...proofPeer.runtime.scope,authorDevice:b.deviceId}},provider:a.provider,sodium,LoroDoc,pin:a.root.head,parentRecord,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,signingSecret:b.signingTestKey.privateKey,keys:proofKeys,deviceId:b.deviceId};
+  const installedSet={operationId:eventV5.proposalId,paired:{keys:proofKeys,useWrapping:use=>use(existingWrap.privateKey)}};
+  const resolvedEstablished=await resolveInstalledSetAuthority({...fileOptions,storage:proofStorage,scope,authorDevice:b.deviceId,...installedSet});
+  const establishedPeer=await openPeer(proofStorage,{resolved:resolvedEstablished,installedSet},enable(proofKeys,b.signingTestKey.privateKey,existingWrap.privateKey),sodium.to_hex(b.signingTestKey.publicKey));
+  const installedRecipe=await establishedPeer.householdContent.readRecipe(added.id);
+  const installedBefore=projectCooking(installedRecipe.doc).recipes[0];
+  const installedAfter={...installedBefore,title:'Established recipient edit'};
+  const installedCommands=planRecipeAction({doc:installedRecipe.doc,before:installedBefore,after:installedAfter,actionId:'established-post-install',author:b.deviceId,at});
+  await establishedPeer.householdContent.execute('established-post-install',installedCommands,added.id);
+  assert.equal(projectCooking((await establishedPeer.householdContent.readRecipe(added.id)).doc).recipes[0].title,installedAfter.title);
+  const beforeRetry=proofRows();
+  assert.equal((await installEstablishedOwnDeviceSet(retryArgs)).replayed,true);
+  const altered=establishedFile.slice(); altered[altered.length-1]^=1;
+  await assert.rejects(installEstablishedOwnDeviceSet({...retryArgs,file:altered}));
+  const changedEvidence=structuredClone(establishedProof); changedEvidence.guard.guardId+='-changed';
+  await assert.rejects(installEstablishedOwnDeviceSet({...retryArgs,evidence:changedEvidence}));
+  assert.deepEqual(proofRows(),beforeRetry);
   const pairingFile=published.file;
   assert.ok(pairingFile.length>112);
   const sourceKeyHash=await sponsorCatalog.useIdentity({version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:parent.epochId},

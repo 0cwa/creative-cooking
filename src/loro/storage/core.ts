@@ -95,7 +95,6 @@ type OwnDeviceSetSponsor = {deviceId:string;set:unknown;keyHashes:string[];signa
   establishedRecipients?:{version:1;entries:EstablishedRecipientReceipt[]}};
 // Established receipts reserve a distinct format; callers must verify a signature
 // binding the ciphertext, local ceremony, and exact parent before using it.
-// No runtime installer or reopen path currently consumes this variant.
 type OwnDeviceSetPublication = {
   operationId:string; guardId:string; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
   copyHash:string; file:Uint8Array;
@@ -104,7 +103,7 @@ type OwnDeviceSetPublication = {
     sources:{effectId:string;policyHashes:string[]}[]; policies?:any[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
 } & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:OwnDeviceSetSponsor} |
      {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}} |
-     {guard:SelectedHouseholdSources;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string;kind:'established';transcriptHash:string}});
+     {guard:SelectedHouseholdSources;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string;kind:'established';transcriptHash:string;evidence?:any}});
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
   source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
@@ -128,6 +127,9 @@ const validOwnDeviceSetSponsor = (value:any, count:number) =>
   (fields(value,['deviceId','set','keyHashes','signature'])||fields(value,['deviceId','set','keyHashes','signature','establishedRecipients'])&&
     validEstablishedRecipients(value.establishedRecipients))&&validId(value.deviceId)&&object(value.set)&&
   denseArray(value.keyHashes,hash=>hexOf(hash,64))&&value.keyHashes.length===count&&hexOf(value.signature,128);
+const validEstablishedEvidence = (value:unknown) => {
+  try { return object(value) && JSON.stringify(value).length <= 262144; } catch { return false; }
+};
 const validPersonalReceipt = (value:unknown): value is PersonalRotationReceipt =>
   fields(value,['requestHash','transfer']) && hexOf(value.requestHash,64) &&
   (value.transfer===null || (fields(value.transfer,['parent','item','senderWrappingKey','sealedSnapshot','packages']) &&
@@ -174,7 +176,7 @@ const validateRecord = (k: string, v: any) => {
     case 'household-own-device-set': {
       const base=['version','next','guardId','copyHash','file','mapping'];
       valid=(fields(v,base)||fields(v,[...base,'expected','recipient'])&&validatePairingAuthority(v.expected).ok&&
-        (fields(v.recipient,['deviceId','fileHash','signature'])||fields(v.recipient,['deviceId','fileHash','signature','kind','transcriptHash'])&&v.recipient.kind==='established'&&hexOf(v.recipient.transcriptHash,64))&&validId(v.recipient.deviceId)&&
+        (fields(v.recipient,['deviceId','fileHash','signature'])||(fields(v.recipient,['deviceId','fileHash','signature','kind','transcriptHash'])||fields(v.recipient,['deviceId','fileHash','signature','kind','transcriptHash','evidence'])&&validEstablishedEvidence(v.recipient.evidence))&&v.recipient.kind==='established'&&hexOf(v.recipient.transcriptHash,64))&&validId(v.recipient.deviceId)&&
         hexOf(v.recipient.fileHash,64)&&hexOf(v.recipient.signature,128)||
         fields(v,[...base,'expected','sponsor'])&&validatePairingAuthority(v.expected).ok&&
         validOwnDeviceSetSponsor(v.sponsor,v.mapping?.length))&&
@@ -820,7 +822,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       new Set(documents.map(d=>d.sourceDocumentId)).size!==documents.length)return fail('MALFORMED');
     if(recipient){
       if(sponsor!==undefined||!(fields(recipient,['deviceId','fileHash','signature'])&&guard===undefined||
-        'kind' in recipient&&fields(recipient,['deviceId','fileHash','signature','kind','transcriptHash'])&&recipient.kind==='established'&&hexOf(recipient.transcriptHash,64)&&guard!==undefined)||!validId(recipient.deviceId)||
+        'kind' in recipient&&(fields(recipient,['deviceId','fileHash','signature','kind','transcriptHash'])||fields(recipient,['deviceId','fileHash','signature','kind','transcriptHash','evidence'])&&validEstablishedEvidence((recipient as any).evidence))&&recipient.kind==='established'&&hexOf(recipient.transcriptHash,64)&&guard!==undefined)||!validId(recipient.deviceId)||
         !hexOf(recipient.fileHash,64)||!hexOf(recipient.signature,128))return fail('MALFORMED');
     }
     if(!recipient||guard){
