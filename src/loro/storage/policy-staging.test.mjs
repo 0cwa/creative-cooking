@@ -7,7 +7,7 @@ import {openSQLiteStorage} from './sqlite.ts';
 test('policy set staging is atomic, checks selected members and rejects occupied slots', async()=>{
  const db=new DatabaseSync(':memory:');
  const conn={executeSync(sql,args=[]){const q=db.prepare(sql);return {rows:sql.startsWith('SELECT')?q.all(...args):(q.run(...args),[])}}};
- let fail=false, keyFail=false; const store=openSQLiteStorage(conn,point=>{if(fail&&point==='policy-set-target'||keyFail&&point==='policy-set-key')throw Error('injected')});
+ let fail=false, keyFail=false, localFail=''; const store=openSQLiteStorage(conn,point=>{if(fail&&point==='policy-set-target'||keyFail&&point==='policy-set-key'||localFail===point)throw Error('injected')});
  const masterKey=await webcrypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
  const master={async provision(){},async wrap(_id,p,a){const iv=webcrypto.getRandomValues(new Uint8Array(12));return new Uint8Array([...iv,...new Uint8Array(await webcrypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:a},masterKey,p))]);},async unwrap(_id,p,a){return new Uint8Array(await webcrypto.subtle.decrypt({name:'AES-GCM',iv:p.slice(0,12),additionalData:a},masterKey,p.slice(12)));}};
  const local=store.localKeys(master,{}); await local.provision('master');
@@ -40,7 +40,8 @@ test('policy set staging is atomic, checks selected members and rejects occupied
   prepared.push({targetDocumentId:row.targetDocumentId,...await local.preparePairedDataKey(`op-${i}`,identity,new Uint8Array(32).fill(i+1))});
  }
  const next={...record,revision:1,acceptedParent:'new',authorityState:bytes(8)};
- const provenance={statement:bytes(1,2,3),signature:'ab'.repeat(64)};
+ const signedRows=[{recipeId:null,targetDocumentId:'policy-new',identities:[{commandId:'sibling-command',effectId:'sibling'}],sources:[{effectId:'sibling',policyHashes:['sibling-policy'],incomplete:true}]},{recipeId:'recipe',targetDocumentId:'target-child',identities:[{commandId:'source-command',effectId:'source'}],sources:[{effectId:'source',policyHashes:['restricted'],incomplete:true}]}];
+ const provenance={statement:new TextEncoder().encode(JSON.stringify(['creative-cooking/authority-candidate/v1','policy-provenance-receipt-v1',{rows:signedRows}])),signature:'ab'.repeat(64)};
  const selection={...input,provenance,expected:record,next,deviceId:'device',prepared};
  const stagedRows=rows();
  assert.equal((await store.commitPolicyDocumentSetSelection({...selection,provenance:{...provenance,signature:'bad'}})).error.code,'MALFORMED');
@@ -88,5 +89,30 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  assert.equal((await store.readActivatedPolicyDocumentSet('h','missing')).value,null);
  put(['document','h','target-child'],{bytes:bytes(7),revision:0});
  assert.equal((await store.readStagedPolicyDocumentSet('h','new')).error.code,'CORRUPT');
+ // This fixture supplies preverified evidence; signature verification is the caller's responsibility.
+ const payload={version:1,kind:'recipe-field',commandId:'edit-command',effectId:'edit',dependencyEffectIds:['source'],data:{recipeId:'recipe',field:'title',value:'Edited'}};
+ const header={version:4,scopeId:'h',documentId:'target-child',branchHead:'new',semanticEffectIds:['edit'],sourceEffectIds:['source'],disclosurePolicyHash:null,disclosurePolicyHashes:['restricted'],disclosureIncomplete:true};
+ const commit={scopeId:'h',operationId:'edit-op',expectedAuthority:{version:2,scope,record:{revision:next.revision,acceptedParent:next.acceptedParent,authorizationSnapshot:next.authorizationSnapshot}},documents:[{documentId:'target-child',expectedRevision:0,bytes:bytes(8)}],commands:[{version:1,commandId:'edit-command',effectId:'edit',documentId:'target-child',kind:'recipe-field',payload:new TextEncoder().encode(JSON.stringify(payload)),dependencyEffectIds:['source']}],outbound:[{object:{id:'edit-object',bytes:new TextEncoder().encode(JSON.stringify({header}))},branchHead:'new',epochId:'epoch-1'}]};
+ const run=(c=commit,p=provenance)=>store.commitLocalWithDisclosurePolicy(c,null,null,undefined,[],p);
+ const envelope=(h)=>new TextEncoder().encode(JSON.stringify({header:h}));
+ const unchanged=async(c,p)=>{const before=rows();assert.equal((await run(c,p)).ok,false);assert.deepEqual(rows(),before)};
+ const omitted=structuredClone(commit);omitted.outbound[0].object.bytes=envelope({...header,disclosurePolicyHashes:[]});await unchanged(omitted);
+ const extra=structuredClone(commit);extra.outbound[0].object.bytes=envelope({...header,disclosurePolicyHashes:['restricted','sibling-policy']});await unchanged(extra);
+ const complete=structuredClone(commit);complete.outbound[0].object.bytes=envelope({...header,disclosureIncomplete:false});await unchanged(complete);
+ const sibling=structuredClone(commit);sibling.commands[0].dependencyEffectIds=['sibling'];sibling.commands[0].payload=new TextEncoder().encode(JSON.stringify({...payload,dependencyEffectIds:['sibling']}));sibling.outbound[0].object.bytes=envelope({...header,sourceEffectIds:['sibling'],disclosurePolicyHashes:['sibling-policy']});await unchanged(sibling);
+ const changedReceipt=structuredClone(provenance);changedReceipt.signature='cd'.repeat(64);await unchanged(commit,changedReceipt);
+ const changedStatement=structuredClone(provenance);changedStatement.statement[0]^=1;await unchanged(commit,changedStatement);
+ const duplicate=structuredClone(commit);duplicate.commands[0].effectId='sibling';duplicate.commands[0].payload=new TextEncoder().encode(JSON.stringify({...payload,effectId:'sibling'}));duplicate.outbound[0].object.bytes=envelope({...header,semanticEffectIds:['sibling']});await unchanged(duplicate);
+ put(['effect','h','source'],JSON.stringify(['local',{commands:[{effectId:'source',commandId:'source-command',documentId:'other'}]}]));await unchanged();db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['effect','h','source']));
+ put(['pairing-authority','household','h'],{...next,authorityState:bytes(99)});await unchanged();put(['pairing-authority','household','h'],next);
+ put(['document-owner','h','target-child'],'other');await unchanged();put(['document-owner','h','target-child'],'new');
+ const staleCommit=structuredClone(commit);staleCommit.documents[0].expectedRevision=1;await unchanged(staleCommit);
+ for(const point of ['disclosure-local','disclosure-local-provenance']){localFail=point;await unchanged();}localFail='';
+ const result=await run();assert.equal(result.ok,true);assert.equal(result.value.replayed,false);
+ assert.equal((await run()).value.replayed,true);
+ assert.equal((await store.readDisclosureSource('h','edit')).value.incomplete,true);
+ assert.deepEqual((await store.readDisclosureSource('h','edit')).value.policyHashes,['restricted']);
+ assert.equal((await store.reopenDocument('h','target-child')).value.revision,1);
+ assert.equal((await store.listOutboundObjects('h')).value.some(x=>x.objectId==='edit-object'),true);
  db.close();
 });
