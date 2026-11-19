@@ -93,6 +93,9 @@ type OwnDevicePublication = {
 type EstablishedRecipientReceipt = {recipientDeviceId:string;ceremonyGuardId:string;transcriptHash:string;ciphertextHash:string;ciphertext:Uint8Array};
 type OwnDeviceSetSponsor = {deviceId:string;set:unknown;keyHashes:string[];signature:string;
   establishedRecipients?:{version:1;entries:EstablishedRecipientReceipt[]}};
+// Established receipts reserve a distinct format; callers must verify a signature
+// binding the ciphertext, local ceremony, and exact parent before using it.
+// No runtime installer or reopen path currently consumes this variant.
 type OwnDeviceSetPublication = {
   operationId:string; guardId:string; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
   copyHash:string; file:Uint8Array;
@@ -100,7 +103,8 @@ type OwnDeviceSetPublication = {
     identities:{commandId:string;effectId:string}[];
     sources:{effectId:string;policyHashes:string[]}[]; policies?:any[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
 } & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:OwnDeviceSetSponsor} |
-     {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
+     {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}} |
+     {guard:SelectedHouseholdSources;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string;kind:'established';transcriptHash:string}});
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
   source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
@@ -170,7 +174,7 @@ const validateRecord = (k: string, v: any) => {
     case 'household-own-device-set': {
       const base=['version','next','guardId','copyHash','file','mapping'];
       valid=(fields(v,base)||fields(v,[...base,'expected','recipient'])&&validatePairingAuthority(v.expected).ok&&
-        fields(v.recipient,['deviceId','fileHash','signature'])&&validId(v.recipient.deviceId)&&
+        (fields(v.recipient,['deviceId','fileHash','signature'])||fields(v.recipient,['deviceId','fileHash','signature','kind','transcriptHash'])&&v.recipient.kind==='established'&&hexOf(v.recipient.transcriptHash,64))&&validId(v.recipient.deviceId)&&
         hexOf(v.recipient.fileHash,64)&&hexOf(v.recipient.signature,128)||
         fields(v,[...base,'expected','sponsor'])&&validatePairingAuthority(v.expected).ok&&
         validOwnDeviceSetSponsor(v.sponsor,v.mapping?.length))&&
@@ -815,9 +819,11 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       documents.some(d=>d.documentId===d.sourceDocumentId)||
       new Set(documents.map(d=>d.sourceDocumentId)).size!==documents.length)return fail('MALFORMED');
     if(recipient){
-      if(guard!==undefined||sponsor!==undefined||!fields(recipient,['deviceId','fileHash','signature'])||!validId(recipient.deviceId)||
+      if(sponsor!==undefined||!(fields(recipient,['deviceId','fileHash','signature'])&&guard===undefined||
+        'kind' in recipient&&fields(recipient,['deviceId','fileHash','signature','kind','transcriptHash'])&&recipient.kind==='established'&&hexOf(recipient.transcriptHash,64)&&guard!==undefined)||!validId(recipient.deviceId)||
         !hexOf(recipient.fileHash,64)||!hexOf(recipient.signature,128))return fail('MALFORMED');
-    }else{
+    }
+    if(!recipient||guard){
       if(sponsor!==undefined&&(!validOwnDeviceSetSponsor(sponsor,documents.length)||
         documents.some(d=>d.localKey.record.identity.deviceId!==sponsor.deviceId)))return fail('MALFORMED');
       if(!guard?.expectedAuthority||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||

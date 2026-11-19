@@ -1691,6 +1691,20 @@ test('selected recipe shopping copies and current-only admission survive durable
   const retainedPublication={...publication,sponsor:{deviceId:a.deviceId,set:{},
    keyHashes:preparedDocuments.map(()=>'c'.repeat(64)),signature:'d'.repeat(128),
    establishedRecipients:{version:1,entries}}};
+  // Established storage writes require the captured local set as a transaction guard.
+  const establishedPublication={...publication,recipient:{deviceId:a.deviceId,fileHash:'a'.repeat(64),
+   signature:'b'.repeat(128),kind:'established',transcriptHash:'c'.repeat(64)}};
+  const missingGuard={...establishedPublication}; delete missingGuard.guard;
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(missingGuard)).error.code,'MALFORMED');
+  const staleEstablished=structuredClone(establishedPublication);
+  staleEstablished.guard.root.revision++;
+  const beforeEstablished=a.rows();
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(staleEstablished)).ok,false);
+  assert.deepEqual(a.rows(),beforeEstablished);
+  a.faultAt('household-own-device-set');
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(establishedPublication)).error.code,'IO');
+  a.faultAt(undefined);
+  assert.deepEqual(a.rows(),beforeEstablished);
   const beforeSetWrite=a.rows();
   const duplicate=structuredClone(retainedPublication);
   duplicate.sponsor.establishedRecipients.entries[1].recipientDeviceId=entries[0].recipientDeviceId;
@@ -1740,6 +1754,11 @@ test('selected recipe shopping copies and current-only admission survive durable
   t.after(()=>publishDb.close());
   const beforePublish=a.rows();
   const put=publishDb.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
+  for(const row of beforePublish)put.run(row.key,row.value);
+  assert.equal((await publishStorage.commitHouseholdOwnDeviceSet(establishedPublication)).ok,true);
+  const establishedReceipt=must(await publishStorage.readHouseholdOwnDeviceSetReceipt(scope,publication.operationId));
+  assert.deepEqual(establishedReceipt.recipient,establishedPublication.recipient);
+  publishDb.prepare('DELETE FROM loro_records').run();
   for(const row of beforePublish)put.run(row.key,row.value);
   assert.equal((await publishStorage.commitHouseholdOwnDeviceSet(retainedPublication)).ok,true);
   const retained=must(await publishStorage.readHouseholdOwnDeviceSetRetained(scope,publication.operationId));
