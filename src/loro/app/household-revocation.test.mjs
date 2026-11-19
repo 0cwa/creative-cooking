@@ -1,3 +1,4 @@
+import {authorAdultRemovalSuccessor,verifyAdultRemovalSuccessor} from '../compromise/adult-removal-successor.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -378,6 +379,22 @@ test('adult removal complete-set proposal binds its signed head and projected do
    grant.signatures.push({...voter,signature:await sign('adult-removal-set-grant-vote-v3',{grant:body,...voter})});
   }
   assert.equal((await verifyAdultRemovalGrant(publicOptions)).complete,true);
+  const record=(await a.storage.readPairingAuthority(scope)).value, original=structuredClone(record);
+  const successorOptions={...publicOptions,record,documents:prepared.documents,LoroDoc,deviceId:'a',signingKey:a.signingKey};
+  const candidate=await authorAdultRemovalSuccessor(successorOptions);
+  assert.deepEqual(record,original);
+  assert.deepEqual(candidate.child.roster,['alpha','beta']);
+  assert.deepEqual(candidate.child.runtime.acceptedRecipients,['a','b']);
+  assert(candidate.child.devices.filter(d=>['c','tablet'].includes(d.deviceId)).every(d=>!d.active));
+  await assert.rejects(()=>verifyAuthority(candidate.state,pin,a.provider));
+  const changedSelection=structuredClone(candidate); changedSelection.state.selections.at(-1).to=pin;
+  await assert.rejects(()=>verifyAdultRemovalSuccessor({...successorOptions,candidate:changedSelection}));
+  const oldParent=structuredClone(record); oldParent.acceptedParent='old';
+  await assert.rejects(()=>verifyAdultRemovalSuccessor({...successorOptions,record:oldParent,candidate}));
+  const changedGrant=structuredClone(grant); changedGrant.packageRefs[0]='changed';
+  await assert.rejects(()=>verifyAdultRemovalSuccessor({...successorOptions,grant:changedGrant,candidate}));
+  const unapproved=structuredClone(candidate); unapproved.state.events.push(structuredClone(unapproved.state.events.at(-1)));
+  await assert.rejects(()=>verifyAdultRemovalSuccessor({...successorOptions,candidate:unapproved}));
   const codecOptions={...publicOptions,sodium,LoroDoc,documents:prepared.documents,recipientId:'b'};
   const dataKeys=prepared.documents.map(()=>sodium.randombytes_buf(32));
   await a.keys().useIdentity(signerIdentity('a'),async signingSecret=>{
