@@ -262,6 +262,8 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.ok(runtime.members.every(member=>member.operationId&&member.identity));
  assert.equal(runtime.selectionIndex,nextState.selections.length);
  const {openWorkspaceHouseholdRuntime}=await import('./workspace-household-runtime.mjs');
+ const signingKeys={use:(op,identity,fn)=>op==='fixture-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)};
+ const signing={publicKey:author.signingKeyRef,operationId:'fixture-signing'};
  const mounted=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys,signing:{publicKey:author.signingKeyRef},LoroDoc,decodeImportBlobMeta});
  assert.ok((await mounted.document()).revision!==null);
  const mountedRecipe=await mounted.forRecipe('retained-recipe');
@@ -322,6 +324,26 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>mounted.authorize());
  a.connection.executeSync('INSERT INTO loro_records (key,value) VALUES (?,?)',[saved.key,saved.value]);
  assert.deepEqual(a.rows(),before);
+ const editMount=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
+ const editRecipe=await editMount.forRecipe('retained-recipe');
+ const current=(await editRecipe.document()).doc;
+ const base=current.getMap('recipe-index').get('retained-recipe');
+ const prior=current.getMap(`field-head:${encodeURIComponent(JSON.stringify(['recipe','retained-recipe','title']))}`).get('effect');
+ const edit={version:1,kind:'recipe-field',commandId:'activated-edit',effectId:'activated-edit',dependencyEffectIds:[...new Set([base,prior].filter(Boolean))].sort(),data:{recipeId:'retained-recipe',field:'title',value:'Edited soup',author:a.deviceId,at:'2026-01-02T00:00:00Z'}};
+ const input={operationId:'activated-edit',deviceSequence:3,command:edit};
+ await assert.rejects(()=>editRecipe.prepareActivatedRecipeField(input,{},a.service),/INVALID_AUTHORITY/);
+ await assert.rejects(()=>editRecipe.prepare(input),/SOURCE_PROVENANCE_REQUIRED/);
+ const {commitActivatedRecipeField}=await import('./activated-policy-edit.mjs');
+ await commitActivatedRecipeField({runtime:editRecipe,service:a.service,input});
+ const source=must(await a.storage.readDisclosureSource(scope.id,edit.effectId));
+ assert.equal(source.incomplete,true);assert.ok(source.policyHashes.includes(accepted.policyHash));
+ const envelope=await editRecipe.codec.openContent(source.envelope,runtime.signingKeyRefs);
+ assert.equal(envelope.header.version,3);assert.equal(envelope.header.disclosureIncomplete,true);
+ assert.deepEqual(envelope.header.disclosurePolicyHashes,source.policyHashes);
+ assert.deepEqual(await readActivatedPolicySource({...args,documentId:childRow.targetDocumentId,effectId:inherited.effectId}),inherited);
+ await assert.rejects(()=>commitActivatedRecipeField({runtime:editRecipe,service:a.service,input}),/SOURCE_PROVENANCE_REQUIRED|CONFLICT/);
+ const reopened=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
+ assert.equal((await (await reopened.forRecipe('retained-recipe')).document()).doc.getMap('recipe:retained-recipe').get('title'),'Edited soup');
 });
 
 test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{

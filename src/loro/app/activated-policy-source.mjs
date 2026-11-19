@@ -42,10 +42,25 @@ export async function activatedPolicyEditContext(runtime,service) {
 
 // Tokens cannot be constructed by callers and are only accepted by the explicit
 // incomplete local-edit route. Revalidate authority and the receipt for each read.
-export async function activatedPolicyEditSource(token,runtime,service,effect) {
+function requireEditContext(token,runtime,service) {
  const entry=editContexts.get(token);
  if(!entry || entry.runtime!==runtime || entry.service!==service || JSON.stringify(entry.scope)!==JSON.stringify(runtime.scope) ||
   !matchesDisclosureService(service,{storage:entry.args.storage,scope:entry.args.scope,rootPin:entry.args.pin,provider:entry.args.provider,deviceId:entry.args.deviceId}))throw Error('INVALID_AUTHORITY');
+ return entry;
+}
+
+/** Reauthenticate the receipt and authority for the exact runtime and service. */
+export async function verifiedActivatedPolicyEdit(token,runtime,service) {
+ const entry=requireEditContext(token,runtime,service);
+ const auth=await runtime.authorization();
+ const opened=await readVerifiedActivatedPolicyDocumentSet(entry.args);
+ if(!opened.verifiedProvenance || !opened.provenance?.some(row=>row.targetDocumentId===entry.documentId && row.recipeId===runtime.recipeId))throw Error('SOURCE_PROVENANCE_REQUIRED');
+ await runtime.authorization();
+ return {provenance:opened.verifiedProvenance,expectedAuthority:auth.expectedAuthority};
+}
+
+export async function activatedPolicyEditSource(token,runtime,service,effect) {
+ const entry=requireEditContext(token,runtime,service);
  await runtime.authorization();
  const source=await readActivatedPolicySource({...entry.args,documentId:entry.documentId,effectId:effect});
  for(const hash of source.policyHashes)await service.validateStored(hash,entry.context);

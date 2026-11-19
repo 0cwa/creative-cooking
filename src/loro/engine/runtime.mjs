@@ -126,8 +126,14 @@ export class OfflineRuntime {
   }
   async read() { const {doc}=await this.document(); return {recipe:doc.getMap('recipe').toJSON(), purchases:doc.getMap('purchases').toJSON()}; }
   async prepare(input,verifyRecipeSource=undefined) { return this.#prepareOnDocument(input,null,verifyRecipeSource); }
-  async #prepareOnDocument({operationId, command, deviceSequence}, staged, verifyRecipeSource) {
-    if(this.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
+  async prepareActivatedRecipeField(input,token,service) {
+    if(!this.authority?.activatedPolicy || this.recipeId===null || input?.command?.kind!=='recipe-field')throw Error('INVALID_AUTHORITY');
+    const {verifiedActivatedPolicyEdit}=await import('../app/activated-policy-source.mjs');
+    await verifiedActivatedPolicyEdit(token,this,service);
+    return this.#prepareOnDocument(input,null,undefined,true);
+  }
+  async #prepareOnDocument({operationId, command, deviceSequence}, staged, verifyRecipeSource, activatedEdit=false) {
+    if(this.authority?.activatedPolicy&&!activatedEdit)throw Error('SOURCE_PROVENANCE_REQUIRED');
     command=structuredClone(command);
     command=checkCommand(command);
     this.assertRecipeCommand(command);
