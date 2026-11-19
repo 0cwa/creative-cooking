@@ -1,4 +1,4 @@
-import {openWorkspaceHouseholdRuntime} from './workspace-household-runtime.mjs';
+import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {resolveAdultRemovalReceipt} from '../compromise/resolve-adult-removal.mjs';
 import {reopenAdultRemovalRecipient} from '../compromise/reopen-adult-removal.mjs';
 import {installAdultRemovalRelease} from '../compromise/install-adult-removal.mjs';
@@ -82,6 +82,7 @@ async function withRotationFixture({owners,policy,guest},run){
    const participant={deviceId,adultId,fault:null,close:()=>database?.close(),rows:()=>database.prepare('SELECT * FROM loro_records ORDER BY key').all()};
    participant.replaceRow=(key,value)=>database.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,key);
    participant.deleteRow=key=>database.prepare('DELETE FROM loro_records WHERE key=?').run(key);
+   participant.insertRow=(key,value)=>database.prepare('INSERT INTO loro_records VALUES (?,?)').run(key,value);
    participants.push(participant);
    participant.open=()=>{
     database=new DatabaseSync(path);
@@ -343,6 +344,8 @@ const houseState=async(participant,pin)=>{
 
 test('adult removal complete-set proposal binds its signed head and projected documents',async()=>{
  await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],root,pin)=>{
+  const ordinary=await resolveOriginalHousehold({storage:a.storage,scope,pin,provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys:a.keys()}});
+  assert.equal(ordinary.resolved.scope.branchHead,root.head);assert.equal(ordinary.adultRemoval,undefined);
   const recipe=await a.runtime.forRecipe('soup');
   recipe.disclosure=a.runtime.disclosure;
   await apply(recipe,1,'recipe-create','soup-create',{recipe:{id:'soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:a.deviceId,at});
@@ -640,10 +643,21 @@ test('adult removal complete-set proposal binds its signed head and projected do
   for(const [participant,role] of [[a,'sponsor'],[b,'recipient']]){
    const withWrapping=fn=>participant.keys().useIdentity(wrapperIdentity(participant.deviceId),fn);
    const options={storage:participant.storage,scope,pin,provider:participant.provider,authorDevice:participant.deviceId,operationId:publication.operationId,role,sodium,LoroDoc,keys:participant.keys(),withWrapping};
+   const discovered=await resolveOriginalHousehold({storage:participant.storage,scope,pin,provider:participant.provider,deviceId:participant.deviceId,sodium,LoroDoc,paired:{keys:participant.keys(),useWrapping:withWrapping}});
    const resolved=await resolveAdultRemovalRuntimeAuthority(options);
-   assert.deepEqual(await resolveAdultRemovalRuntimeAuthority(options),resolved);
-   const mount=await openWorkspaceHouseholdRuntime({storage:participant.storage,resolved,adultRemoval:{operationId:publication.operationId,role,withWrapping},pin,provider:participant.provider,sodium,keys:participant.keys(),signing:{operationId:'signing',identity:signerIdentity(participant.deviceId),publicKey:participant.signingKey},LoroDoc,decodeImportBlobMeta});
+   assert.equal(discovered.adultRemoval.operationId,publication.operationId);assert.equal(discovered.adultRemoval.role,role);
+   assert.deepEqual(discovered.resolved,resolved);
+   const mount=await openWorkspaceHouseholdRuntime({storage:participant.storage,resolved:discovered.resolved,adultRemoval:discovered.adultRemoval,pin,provider:participant.provider,sodium,keys:participant.keys(),signing:{operationId:'signing',identity:signerIdentity(participant.deviceId),publicKey:participant.signingKey},LoroDoc,decodeImportBlobMeta});
    const rows=participant.rows();
+   for(const missing of [
+    JSON.stringify([role==='sponsor'?'adult-removal-publication':'adult-removal-recipient',scope.id,publication.operationId]),
+    JSON.stringify(['local-key-operation',resolved.members[0].keySlot.operationId])
+   ]){
+    const original=rows.find(row=>row.key===missing);assert(original);participant.deleteRow(missing);
+    try{await assert.rejects(()=>resolveOriginalHousehold({storage:participant.storage,scope,pin,provider:participant.provider,deviceId:participant.deviceId,sodium,LoroDoc,paired:{keys:participant.keys(),useWrapping:withWrapping}}));}
+    finally{participant.insertRow(missing,original.value);}
+    assert.deepEqual(participant.rows(),rows);
+   }
    const rootDoc=await mount.document();assert.deepEqual(rootDoc.storedBytes,prepared.documents[0].seed.snapshot);
    const recipe=await mount.forRecipe('soup');assert.deepEqual((await recipe.document()).storedBytes,prepared.documents[1].seed.snapshot);
    await assert.rejects(()=>mount.forRecipe('missing'));

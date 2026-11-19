@@ -107,8 +107,9 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const {resolved:house,installedSet}=selected??originalHouse;
   const activatedPolicy=selected?.activatedPolicy??(!selected?originalHouse.activatedPolicy:undefined);
   const returnedPolicy=!selected?originalHouse.returnedPolicy:undefined;
-  const readOnlyPolicy=activatedPolicy||returnedPolicy;
-  const household=await openWorkspaceHouseholdRuntime({storage,resolved:house,installedSet,activatedPolicy,returnedPolicy,pin:activePin,provider,
+  const adultRemoval=!selected?originalHouse.adultRemoval:undefined;
+  const readOnlyPolicy=activatedPolicy||returnedPolicy||adultRemoval;
+  const household=await openWorkspaceHouseholdRuntime({storage,resolved:house,installedSet,activatedPolicy,returnedPolicy,adultRemoval,pin:activePin,provider,
    sodium,keys,signing:{...signing,publicKey:signingRef},wrapping,LoroDoc,decodeImportBlobMeta});
   const disclosure=disclosureService({storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
    installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
@@ -144,7 +145,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
    original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
   const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure,originalRecipeDocuments,shoppingRecipeCopies});
-  const policyBranches=await bindPolicyBranches({runtime:household,keys,service:disclosure,sodium,withCurrent,eligible:!selected&&!installedSet&&!returnedPolicy,activated:!!activatedPolicy});
+  const policyBranches=await bindPolicyBranches({runtime:household,keys,service:disclosure,sodium,withCurrent,eligible:!selected&&!installedSet&&!returnedPolicy&&!adultRemoval,activated:!!activatedPolicy});
   const installedRecipeIds=installedSet||readOnlyPolicy?house.members.flatMap(member=>member.recipeId===null?[]:[member.recipeId]):undefined;
   return {
    policyBranches,personalRotation:rotatePersonal,personalPairing:pairPersonal,
