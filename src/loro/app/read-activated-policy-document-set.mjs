@@ -45,5 +45,6 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
  }
  const again=await storage.readPairingAuthority(scope);
  if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
- return structuredClone({targetHead,sourceHead:staged.sourceHead,documents:documents.map(({documentId,revision})=>({documentId,revision}))});
+ return structuredClone({targetHead,sourceHead:staged.sourceHead,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
+  documents:documents.map(({documentId,revision},i)=>({recipeId:staged.mapping[i].recipeId,documentId,revision,...receipt.targets[i]}))});
 }

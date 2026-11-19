@@ -222,8 +222,20 @@ test('retained policy activation authenticates signed history and local keys',as
  const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
  assert.equal(verified.documents.length,2); assert.deepEqual(a.rows(),before);
+ const {resolveActivatedPolicyAuthority,resolveRuntimeAuthority,policyId}=await import('../authority/chain.mjs');
+ const resolve=overrides=>resolveActivatedPolicyAuthority({...args,authorDevice:a.deviceId,...overrides});
+ const runtime=await resolve({});
+ assert.equal(runtime.scope.branchHead,targetHead);
+ assert.equal(runtime.scope.documentId,`policy-${targetHead}`);
+ assert.deepEqual(runtime.scope.policyHashes,[await policyId(a.provider,event.nextPolicy)]);
+ assert.deepEqual(runtime.members.map(({recipeId,documentId})=>({recipeId,documentId})),staged.mapping.map(({recipeId,targetDocumentId})=>({recipeId,documentId:targetDocumentId})));
+ assert.ok(runtime.members.every(member=>member.operationId&&member.identity));
+ assert.equal(runtime.selectionIndex,nextState.selections.length);
+ await assert.rejects(()=>resolve({authorDevice:'unauthorized'}));
+ await assert.rejects(()=>resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),/UNSUPPORTED_VERSION/);
+
  const evidence=must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead));
- const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));};
+ const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));await assert.rejects(()=>resolve({storage}));};
  await altered(x=>{x.receipt.next.authorityState[0]^=1});
  await altered(async x=>{const n=JSON.parse(new TextDecoder().decode(x.receipt.next.authorityState));n.selections.at(-1).signature='0'.repeat(128);x.receipt.next.authorityState=authorityBytes(n);x.receipt.next.authorizationSnapshot=await snapshotId(a.provider,n)});
  await altered(x=>{x.receipt.targets[1].identity.epochId='wrong'});
@@ -238,6 +250,7 @@ test('retained policy activation authenticates signed history and local keys',as
  const slot=prepared[0].record.identity, key=JSON.stringify(['local-key','household',scope.id,a.deviceId,'data',slot.epochId]);
  const saved=a.rows().find(row=>row.key===key); a.connection.executeSync('DELETE FROM loro_records WHERE key=?',[key]);
  await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet(args));
+ await assert.rejects(()=>resolve({}));
  a.connection.executeSync('INSERT INTO loro_records (key,value) VALUES (?,?)',[saved.key,saved.value]);
  assert.deepEqual(a.rows(),before);
 });
