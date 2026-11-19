@@ -1826,6 +1826,17 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(localParent.acceptedParent,parentRecord.acceptedParent);
   assert.notEqual(localParent.authorizationSnapshot,parentRecord.authorizationSnapshot);
   const localBefore=JSON.parse(dec.decode(localParent.authorityState));
+  const {preflightOwnDeviceLocalTransition,verifyOwnDeviceLocalTransition}=await import('../pairing/household-own-device-local-transition.mjs');
+  const preflightArgs={sodium,provider:a.provider,pin:a.root.head,localParent,publisherParent:parentRecord,
+   publisherNext:copyTransition.next,deviceId:b.deviceId};
+  const preflight=await preflightOwnDeviceLocalTransition(preflightArgs);
+  assert.equal(preflight.head,signedCopy.head);
+  assert.deepEqual(preflight.event,signedCopy.item.event);
+  assert.ok(preflight.parent.runtime.acceptedRecipients.includes(b.deviceId));
+  await assert.rejects(preflightOwnDeviceLocalTransition({...preflightArgs,deviceId:'unknown-device'}),/INVALID_AUTHORITY/);
+  const tamperedParent=structuredClone(localParent);tamperedParent.authorizationSnapshot='changed';
+  await assert.rejects(preflightOwnDeviceLocalTransition({...preflightArgs,localParent:tamperedParent}),/INVALID_AUTHORITY/);
+  await assert.rejects(verifyOwnDeviceLocalTransition(preflightArgs),/INVALID_KEY/);
   let localNext;
   await withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
    parentRecord:localParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,

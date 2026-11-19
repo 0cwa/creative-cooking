@@ -4,10 +4,9 @@ import {sameOwnDevice} from './household-own-device.mjs';
 
 const hex=bytes=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 
-/** Build or verify a recipient's selection without replacing its retained history.
- * The publisher successor must already have passed the complete set verifier. */
-export async function verifyOwnDeviceLocalTransition({sodium,provider,pin,localParent,publisherParent,publisherNext,deviceId,signingSecret,selection}) {
- ({localParent,publisherParent,publisherNext,selection}=structuredClone({localParent,publisherParent,publisherNext,selection}));
+// Shared verification also retains the local state privately for the installer.
+async function checkTransition({sodium,provider,pin,localParent,publisherParent,publisherNext,deviceId}) {
+ ({localParent,publisherParent,publisherNext}=structuredClone({localParent,publisherParent,publisherNext}));
  const parse=async record=>{
   const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(record.authorityState));
   if(!sameOwnDevice(sodium,authorityBytes(state),record.authorityState)||state.activeHead!==record.acceptedParent||
@@ -26,6 +25,23 @@ export async function verifyOwnDeviceLocalTransition({sodium,provider,pin,localP
     !sameOwnDevice(sodium,child,{...publisher.state,events:[...publisher.state.events,item],selections:[...publisher.state.selections,publisherSelection],activeHead:head})||
     !sameOwnDevice(sodium,authorityBytes(child),publisherNext.authorityState)||await snapshotId(provider,child)!==publisherNext.authorizationSnapshot)throw Error('INVALID_AUTHORITY');
  await verifyAuthority(child,pin,provider,{pendingOwnDeviceSet:head});
+ return {localParent,local,localNode,item,head};
+}
+
+/** Verify the two retained parents and signed successor without signing a selection.
+ * This checks authority metadata, not the complete copy set. */
+export async function preflightOwnDeviceLocalTransition(args) {
+ const {localParent,localNode,item,head}=await checkTransition(args);
+ return structuredClone({scope:localParent.scope,parent:localNode,head,event:item.event});
+}
+
+/** Build or verify a recipient's selection without replacing its retained history.
+ * The publisher successor must already have passed the complete set verifier. */
+export async function verifyOwnDeviceLocalTransition({sodium,provider,pin,localParent,publisherParent,publisherNext,deviceId,signingSecret,selection}) {
+ const checked=await checkTransition({sodium,provider,pin,localParent,publisherParent,publisherNext,deviceId});
+ ({localParent}=checked);
+ const {local,item,head}=checked;
+ selection=structuredClone(selection);
  const body={root:pin,householdId:localParent.scope.id,from:local.state.activeHead,to:head,deviceId,index:local.state.selections.length};
  if(!selection){
   if(!(signingSecret instanceof Uint8Array))throw Error('INVALID_KEY');
