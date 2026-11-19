@@ -1,3 +1,4 @@
+import {adultRemovalWorkspaceAccess} from './adult-removal-access.mjs';
 import {encodeAdultRemovalRelease,decodeAdultRemovalRelease,adultRemovalReleaseSize,MAX_ADULT_REMOVAL_FILE} from '../pairing/adult-removal-wire.mjs';
 import {readOnlyPairing} from './read-only-services.mjs';
 import {householdPairing} from './household-pairing.mjs';
@@ -349,6 +350,15 @@ const houseState=async(participant,pin)=>{
  return (await verifyAuthority(current.state,pin,participant.provider)).nodes.get(current.activeHead);
 };
 
+test('recipe-set removal controls are available only for supported workspaces',()=>{
+ assert.equal(adultRemovalWorkspaceAccess({readOnly:false,installedSet:null}),'mutable');
+ assert.equal(adultRemovalWorkspaceAccess({readOnly:false,installedSet:{operationId:'installed-v5'}}),'mutable');
+ assert.equal(adultRemovalWorkspaceAccess({readOnly:false,installedSet:{paired:{}}}),null);
+ assert.equal(adultRemovalWorkspaceAccess({readOnly:true,adultRemoval:{role:'recipient'}}),null);
+ assert.equal(adultRemovalWorkspaceAccess({readOnly:true,adultRemoval:{role:'sponsor'}}),'sponsor');
+ assert.equal(adultRemovalWorkspaceAccess({readOnly:true}),null);
+});
+
 test('adult removal facade publishes, releases and installs one confirmed complete set',async()=>{
  await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],_root,pin)=>{
   await apply(a.runtime,1,'pantry-create','facade-pantry',{itemId:'leek',name:'Leek',preference:3,author:a.deviceId,at});
@@ -358,8 +368,20 @@ test('adult removal facade publishes, releases and installs one confirmed comple
   assert.equal(status.head,a.runtime.scope.branchHead);assert(status.targets.some(target=>target.adultId==='gamma'));
   const draft=await a.pairing.adultRemoval.prepare({targetAdultId:'gamma',bindings:[binding],explicit:true});
   const first=await a.pairing.adultRemoval.approve({proposal:draft.proposal,confirmed:draft.confirmation,explicit:true});
-  const approved=await b.pairing.adultRemoval.approve({proposal:first.proposal,confirmed:first.confirmation,explicit:true});
-  const recipientReview=await b.pairing.adultRemoval.review({proposal:approved.proposal});
+  const localRecord=(await b.storage.readPairingAuthority(scope)).value;
+  const localHistory=JSON.parse(new TextDecoder().decode(localRecord.authorityState));
+  const localChoice={from:localHistory.activeHead,to:localHistory.activeHead,deviceId:b.deviceId,index:localHistory.selections.length};
+  localChoice.signature=sodium.to_hex(await b.provider.sign(b.signingKey,domain('select-head',{root:pin,householdId:scope.id,...localChoice})));
+  localHistory.selections.push(localChoice);
+  const alternate={...localRecord,revision:localRecord.revision+1,authorizationSnapshot:await snapshotId(b.provider,localHistory),authorityState:authorityBytes(localHistory)};
+  assert.equal((await b.storage.compareAndSwapPairingAuthority({expectedRevision:localRecord.revision,record:alternate})).ok,true);
+  await b.configure(pin);
+  const reviewedParent=await b.pairing.adultRemoval.review({proposal:first.proposal,publisherParent:draft.publisherParent});
+  assert.equal(reviewedParent.confirmation,first.confirmation);
+  const wrongParent=structuredClone(draft.publisherParent);wrongParent.authorizationSnapshot='0'.repeat(64);
+  await assert.rejects(()=>b.pairing.adultRemoval.review({proposal:first.proposal,publisherParent:wrongParent}));
+  const approved=await b.pairing.adultRemoval.approve({proposal:first.proposal,publisherParent:draft.publisherParent,confirmed:first.confirmation,explicit:true});
+  let recipientReview=await b.pairing.adultRemoval.review({proposal:approved.proposal,publisherParent:draft.publisherParent});
   assert.equal(recipientReview.complete,true);
   await assert.rejects(()=>a.pairing.adultRemoval.publish({proposal:approved.proposal,confirmed:'wrong',explicit:true}),/REVIEW_CHANGED/);
   const commit=a.storage.commitAdultRemovalPublication.bind(a.storage);
@@ -372,6 +394,10 @@ test('adult removal facade publishes, releases and installs one confirmed comple
   const changed=structuredClone(approved.proposal);changed.grant.signatures[0].signature='0'.repeat(128);
   await assert.rejects(()=>a.pairing.adultRemoval.publish({proposal:changed,confirmed:approved.confirmation,explicit:true}));
   const release=await a.pairing.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:b.deviceId});
+  recipientReview=await b.pairing.adultRemoval.review({proposal:release.proposal,publisherRecord:release.publisherRecord});
+  assert.equal(recipientReview.sourceRevision,alternate.revision);
+  const wrongPublisher=structuredClone(release.publisherRecord);wrongPublisher.authorizationSnapshot='0'.repeat(64);
+  await assert.rejects(()=>b.pairing.adultRemoval.review({proposal:release.proposal,publisherRecord:wrongPublisher}));
   const frame=encodeAdultRemovalRelease(release),decoded=decodeAdultRemovalRelease(frame);
   assert.deepEqual(decoded,release);assert.equal(adultRemovalReleaseSize(release),frame.length);
   const sourceRows=a.rows(),receiverRows=b.rows();

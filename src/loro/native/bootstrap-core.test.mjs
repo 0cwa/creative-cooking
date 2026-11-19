@@ -125,7 +125,7 @@ test('native startup reopens an activated original household read-only',async()=
   await workspace.policyBranches.activate(confirmation);
   workspace.close();workspace=undefined;
   workspace=await openNativeWorkspaceWith({...options,create:false});
-  assert.equal(workspace.readOnly,true);
+  assert.equal(workspace.readOnly,true);assert.equal(workspace.adultRemovalAccess,null);
   assert.deepEqual(await workspace.householdContent.readCooking(),before);
   assert.equal((await workspace.householdContent.readRecipe('soup')).doc.getMap('recipe:soup').get('title'),'Soup');
   assert.equal((await workspace.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');
@@ -1294,7 +1294,9 @@ test('joined adult removal reopens with its original pin and existing counter', 
   recipient.close();recipient=undefined;
   const counter=new DatabaseSync(counterPath),prior=counter.prepare('SELECT value FROM loro_sequence_counters WHERE scope=?').get(scope.id).value;counter.close();
   recipient=await openRecipient(false);
-  assert.equal(recipient.readOnly,true);
+  assert.equal(recipient.readOnly,true);assert.equal(recipient.adultRemovalAccess,'sponsor');
+  assert.equal((await recipient.householdPairing.adultRemoval.status()).role,'sponsor');
+  await assert.rejects(()=>recipient.householdPairing.adultRemoval.prepare({}),/READ_ONLY_WORKSPACE/);
   assert.deepEqual(await recipient.householdContent.readCooking(),before);
   assert.equal((await recipient.householdContent.readRecipe('joined-soup')).doc.getMap('recipe:joined-soup').get('title'),'Joined soup');
   assert.throws(()=>recipient.householdContent.execute('no',[]),/READ_ONLY_WORKSPACE/);

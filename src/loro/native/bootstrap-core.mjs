@@ -1,3 +1,4 @@
+import {adultRemovalWorkspaceAccess} from '../app/adult-removal-access.mjs';
 import {householdCompromise} from '../app/household-compromise.mjs';
 import {householdLocalTrust} from '../app/household-local-trust.mjs';
 import {bindHouseholdContent} from '../app/household-content.mjs';
@@ -160,7 +161,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    },
    personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing:readOnlyPolicy?readOnlyPairing(householdPairing,adultRemoval):householdPairing,cookingFiles:activeMethods(readOnlyPolicy?unavailableInReadOnly(cooking):cooking),direct,
    householdContent,installedRecipeIds,executeHouseholdAction:householdContent.execute,
-   disclosure:activeMethods(readOnlyPolicy?unavailableInReadOnly(disclosure):disclosure),disclosureProvider:activeMethods(provider),readOnly:!!readOnlyPolicy,needsDisclosureSetup:!selected&&policyStatus.needsSetup,
+   disclosure:activeMethods(readOnlyPolicy?unavailableInReadOnly(disclosure):disclosure),disclosureProvider:activeMethods(provider),readOnly:!!readOnlyPolicy,adultRemovalAccess:adultRemovalWorkspaceAccess({adultRemoval,readOnly:!!readOnlyPolicy,installedSet}),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
    sequences:{reserve:(scopeId,operationId)=>{

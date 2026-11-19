@@ -1,4 +1,5 @@
-import {authorityBytes} from '../authority/chain.mjs';
+import {authorityBytes,snapshotId} from '../authority/chain.mjs';
+import {validatePairingAuthority} from '../contracts/pairing.ts';
 import {domain,removedDevice} from '../authority/validator.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {prepareAdultRemovalDocumentSet} from '../projection/current-document-set.mjs';
@@ -42,9 +43,32 @@ export function householdAdultRemoval({storage,scope,pin,provider,sodium,runtime
    excludedAdultId:proposal.item.event.subject.adultId,excludedDevices:excluded.map(d=>d.deviceId),
    recipients:proposal.grant.recipients.slice()};
  }
- async function review({proposal}) {
-  proposal=structuredClone(proposal);const context=await parent();
-  const result=await inspect(proposal,context);await unchanged(context.record);return result;
+ async function proposalContext(proposal,context,publisherRecord,publisherParent) {
+  if(publisherParent!==undefined){
+   if(publisherRecord!==undefined||!validatePairingAuthority(publisherParent).ok||!same(publisherParent.scope,capturedScope))throw Error('INVALID_PROOF');
+   const view={readPairingAuthority:async()=>({ok:true,value:publisherParent})};
+   const publisher=await verifyPublicParent(view,capturedScope,pin,provider),publisherNode=publisher.nodes.get(publisher.state.activeHead);
+   if(publisher.state.activeHead!==context.state.activeHead||!same(publisherNode,context.parent))throw Error('INVALID_PARENT');
+   return {...publisher,parent:publisherNode,record:context.record,local:context.local};
+  }
+  if(publisherRecord!==undefined){
+   if(!validatePairingAuthority(publisherRecord).ok||!same(publisherRecord.scope,capturedScope)||publisherRecord.revision<1)throw Error('INVALID_PROOF');
+   let state;try{state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(publisherRecord.authorityState));}catch{throw Error('INVALID_PROOF');}
+   if(!same(publisherRecord.authorityState,authorityBytes(state))||!Array.isArray(state.events)||!state.events.length||!Array.isArray(state.selections)||!state.selections.length||state.activeHead!==publisherRecord.acceptedParent||state.activeHead!==proposal?.grant?.eventHash||await snapshotId(provider,state)!==publisherRecord.authorizationSnapshot)throw Error('INVALID_PROOF');
+   const prior=structuredClone(state);prior.events.pop();prior.selections.pop();prior.activeHead=proposal.manifest.parentHead;
+   const record={scope:capturedScope,revision:publisherRecord.revision-1,acceptedParent:proposal.manifest.parentHead,
+    authorizationSnapshot:proposal.manifest.authorizationSnapshot,authorityState:authorityBytes(prior)};
+   const view={readPairingAuthority:async()=>({ok:true,value:record})};
+   const publisher=await verifyPublicParent(view,capturedScope,pin,provider),publisherParent=publisher.nodes.get(publisher.state.activeHead);
+   if(publisher.state.activeHead!==context.state.activeHead||!same(publisherParent,context.parent))throw Error('INVALID_PARENT');
+   return {...publisher,parent:publisherParent,record:context.record,local:context.local};
+  }
+  return context;
+ }
+ async function review({proposal,publisherRecord,publisherParent}) {
+  ({proposal,publisherRecord,publisherParent}=structuredClone({proposal,publisherRecord,publisherParent}));
+  const context=await parent(),checkedContext=await proposalContext(proposal,context,publisherRecord,publisherParent);
+  const result=await inspect(proposal,checkedContext);await unchanged(context.record);return result;
  }
  async function prepare({targetAdultId,bindings,explicit}) {
   if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
@@ -65,11 +89,11 @@ export function householdAdultRemoval({storage,scope,pin,provider,sodium,runtime
    contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only',signatures:[]};
   const proposal={item,grant,manifest:projected.manifest,recipientBindings:legacy.proposal.recipientBindings};
   const result=await inspect(proposal,context);await unchanged(context.record);
-  return {proposal,...result};
+  return {proposal,publisherParent:context.record,...result};
  }
- async function approve({proposal,confirmed,explicit}) {
+ async function approve({proposal,publisherParent,confirmed,explicit}) {
   if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
-  proposal=structuredClone(proposal);const context=await parent(),checked=await inspect(proposal,context);
+  ({proposal,publisherParent}=structuredClone({proposal,publisherParent}));const context=await parent(),checkedContext=await proposalContext(proposal,context,undefined,publisherParent),checked=await inspect(proposal,checkedContext);
   if(confirmed!==checked.confirmation)throw Error('REVIEW_CHANGED');
   if(!checked.canApprove)throw Error('ALREADY_APPROVED');
   const event=proposal.item.event,voter={adultId,deviceId};
@@ -78,7 +102,7 @@ export function householdAdultRemoval({storage,scope,pin,provider,sodium,runtime
   const signature=hex(await provider.sign(signingKey,domain('approval-signature',approval)));
   const grantSignature=hex(await provider.sign(signingKey,domain('adult-removal-set-grant-vote-v3',{grant:grantBody(proposal.grant),...voter})));
   proposal.item.approvals.push({...approval,signature});proposal.grant.signatures.push({...voter,signature:grantSignature});
-  const result=await inspect(proposal,context);await unchanged(context.record);
+  const result=await inspect(proposal,checkedContext);await unchanged(context.record);
   return {proposal,...result};
  }
  const sponsorOptions=operationId=>({storage,scope:capturedScope,operationId,pin,provider,sodium,LoroDoc,keys,deviceId});
@@ -145,7 +169,7 @@ export function householdAdultRemoval({storage,scope,pin,provider,sodium,runtime
   if(runtime.scope.branchHead!==proposal.item.event.parentHead)throw Error('STALE_AUTHORITY');
   const existing=await storage.readAdultRemovalRecipient(capturedScope.id,proposal.item.event.proposalId);
   if(!existing.ok)throw Error('INVALID_RECEIPT');
-  if(!existing.value){const checked=await review({proposal});if(checked.confirmation!==confirmed||checked.sourceRevision!==sourceRevision||!checked.complete)throw Error('REVIEW_CHANGED');}
+  if(!existing.value){const checked=await review({proposal,publisherRecord:release.publisherRecord});if(checked.confirmation!==confirmed||checked.sourceRevision!==sourceRevision||!checked.complete)throw Error('REVIEW_CHANGED');}
   return withSecrets(({signingSecret,wrappingSecret})=>installAdultRemovalRelease({storage,scope:capturedScope,pin,provider,sodium,LoroDoc,keys,release,
    recipientDeviceId:deviceId,wrappingSecret,signSelection:bytes=>sodium.crypto_sign_detached(bytes,signingSecret),
    confirmedHead:h.eventHash,confirmedGrantHash:h.grantHash,expectedRevision:sourceRevision}));
