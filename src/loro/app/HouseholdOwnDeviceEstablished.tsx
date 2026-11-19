@@ -17,7 +17,7 @@ const decode=(text:string)=>JSON.parse(text,(_key,v)=>{
  return v;
 });
 
-export function HouseholdOwnDeviceEstablished(){
+export function HouseholdOwnDeviceEstablished({onLocked}:{onLocked:(value:boolean)=>void}){
  const workspace=useContext(LoroWorkspaceValue),app=useAppState(),pairing=workspace?.householdPairing;
  const [open,setOpen]=useState(false),[offer,setOffer]=useState(''),[code,setCode]=useState(''),[peer,setPeer]=useState(''),[out,setOut]=useState(''),[phase,setPhase]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[target,setTarget]=useState<any>(null);
  const session=useRef<any>(null),verified=useRef<any>(null),paused=useRef<null|(()=>void)>(null),working=useRef(false);
@@ -30,11 +30,25 @@ export function HouseholdOwnDeviceEstablished(){
  const show=(value:any)=>{setOut(encode(value.ack??value.response??value.offer));setPhase(value.complete?'complete':value.ack?'ack':value.response?'response':'offer')};
  const begin=async()=>{clear();const v=await pairing.ownDevice.verifyEstablishedOffer(offer,code.trim());const s=pairing.session({...v,role:'responder',confirmedHash:code.trim()});await s.initialize();const result=await s.outgoing();verified.current=v;session.current=s;show(result)};
  const advance=async()=>{const s=session.current;if(!s)throw Error('Start verification first.');const current=await s.outgoing(),message=decode(peer);if(current.revision===0)await s.respond(message,0);else if(current.revision===1)await s.acknowledge(message,1);else if(current.revision===2)await s.finish(message,2);else throw Error('Verification is already complete.');setPeer('');show(await s.outgoing())};
- const install=async()=>{if(!session.current||!verified.current||!(await session.current.outgoing()).complete)throw Error('Complete device verification first.');const bytes=await chooseExchangeFile({accept:['application/octet-stream','.cchouse'],minBytes:48,maxBytes:MAX_PERSONAL_PAIRING_FILE});if(!bytes)return;
-  const release=app.beginWorkspaceTransition();let advanced=false;
-  try{await app.flushCurrentWorkspace();const checked=await pairing.ownDevice.verifyEstablishedOffer(offer,code.trim());if(encode(checked)!==encode(verified.current))throw Error('The verified offer changed. Start verification again.');const evidence={...checked,messages:(await session.current.evidence()).messages};const result=await pairing.ownDevice.installEstablished(bytes,evidence);advanced=true;paused.current=release;setTarget(result);setNotice('Household installed. Editing is paused until you reopen the verified household.');}finally{if(!advanced)release()}
+ const install=async()=>{
+  onLocked(true);
+  let release:(()=>void)|undefined,advanced=false;
+  try{
+   if(!session.current||!verified.current||!(await session.current.outgoing()).complete)throw Error('Complete device verification first.');
+   const bytes=await chooseExchangeFile({accept:['application/octet-stream','.cchouse'],minBytes:48,maxBytes:MAX_PERSONAL_PAIRING_FILE});
+   if(!bytes)return;
+   release=app.beginWorkspaceTransition();
+   await app.flushCurrentWorkspace();
+   const checked=await pairing.ownDevice.verifyEstablishedOffer(offer,code.trim());
+   if(encode(checked)!==encode(verified.current))throw Error('The verified offer changed. Start verification again.');
+   const evidence={...checked,messages:(await session.current.evidence()).messages};
+   const result=await pairing.ownDevice.installEstablished(bytes,evidence);
+   advanced=true;paused.current=release;setTarget(result);setNotice('Household installed. Editing is paused until you reopen the verified household.');
+  }finally{
+   if(!advanced){release?.();onLocked(false)}
+  }
  };
- return <View style={{gap:8}}>{button(open?'Close paired-household update':'Receive paired-household update',async()=>setOpen(!open))}{open?<>
+ return <View style={{gap:8}}>{button(open?'Close paired-household update':'Receive paired-household update',async()=>setOpen(!open),!!target)}{open?<>
   <Text>Send your public identity to the sponsor. Compare the offer code separately, exchange verification messages, then import the encrypted file labeled for this device.</Text>
   {output('Existing household device public identity',encode(pairing.identity))}
   {input('Incoming paired-household offer',offer,v=>{clear();setOffer(v)},true)}

@@ -21,6 +21,7 @@ type History={head:string;roster:string[];threshold:number;policy:{kind:string};
 export function HouseholdOwnDevice(){
  const workspace=useContext(LoroWorkspaceValue),app=useAppState(),pairing=workspace?.householdPairing,service=pairing?.ownDevice;
  const [open,setOpen]=useState(false),[role,setRole]=useState<Role|null>(null),[sponsorLocked,setSponsorLocked]=useState(false),[sponsorDraft,setSponsorDraft]=useState(false);
+ const [establishedLocked,setEstablishedLocked]=useState(false);
  const [busy,setBusy]=useState(false),[notice,setNotice]=useState(''),working=useRef(false);
  const [history,setHistory]=useState<History|null>(null),[request,setRequest]=useState(''),[input,setInput]=useState('');
  const [proposal,setProposal]=useState<Proposal|null>(null),[progress,setProgress]=useState<Progress|null>(null);
@@ -78,10 +79,10 @@ export function HouseholdOwnDevice(){
   }catch(error){finish();throw error}
  };
  return <View style={{gap:8}}>
-  {button(open?'Close household device pairing':'Pair my household devices',async()=>setOpen(!open),sponsorLocked)}
+  {button(open?'Close household device pairing':'Pair my household devices',async()=>setOpen(!open),sponsorLocked||establishedLocked)}
   {open?<View style={{gap:8}}>
    <Text accessibilityRole="header">Your household devices</Text>
-   <HouseholdOwnDeviceEstablished/>
+   <HouseholdOwnDeviceEstablished onLocked={setEstablishedLocked}/>
    <Text>Use a device with household access to authorize another device for the same adult. The new device gets the selected cooking document and its current data key. Every adult keeps one vote.</Text>
    <Text selectable accessibilityLabel="This household pairing device fingerprint">{service.fingerprint}</Text>
    <Text selectable accessibilityLabel="Household pairing root to compare">{service.rootPin}</Text>
