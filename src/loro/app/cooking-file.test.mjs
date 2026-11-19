@@ -259,6 +259,14 @@ test('retained policy activation authenticates signed history and local keys',as
   pins:{list:async()=>[{scope,pin:a.root.head,head:a.root.head}]},paired:{keys,LoroDoc},allowActivatedPolicy:true};
  await assert.rejects(()=>joinedHouseholdAuthority(joinedArgs),/INVALID_ADMISSION/);
  await assert.rejects(()=>joinedHouseholdAuthority({...joinedArgs,operationId:'wrong'}),/INVALID_ADMISSION/);
+ const {preflightPolicyReturn}=await import('./preflight-policy-return.mjs');
+ const preflightBefore=a.rows();
+ const preflight=await preflightPolicyReturn({...args,expectedTargetHead:targetHead,expectedTargetRevision:activated.record.revision});
+ assert.equal(preflight.sourceHead,expected.acceptedParent);
+ await assert.rejects(()=>preflightPolicyReturn({...args,expectedTargetHead:'wrong',expectedTargetRevision:activated.record.revision}),/STALE_TARGET/);
+ await assert.rejects(()=>preflightPolicyReturn({...args,expectedTargetHead:targetHead,expectedTargetRevision:activated.record.revision+1}),/STALE_TARGET/);
+ await assert.rejects(()=>preflightPolicyReturn({...args,keys:{use:async()=>{throw Error('key failed')}},expectedTargetHead:targetHead,expectedTargetRevision:activated.record.revision}),/key failed/);
+ assert.deepEqual(a.rows(),preflightBefore);
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
  assert.equal(verified.documents.length,2); assert.deepEqual(verified.provenance,evidenceCapture.body.rows); assert.deepEqual(a.rows(),before);
  const {readActivatedPolicySource}=await import('./activated-policy-source.mjs');

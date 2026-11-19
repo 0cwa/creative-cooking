@@ -72,6 +72,12 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  assert.deepEqual(activated.value.receipt.provenance,provenance);
  assert.deepEqual(activated.value.staged,retained.value);
  assert.deepEqual(activated.value.documents.map(d=>d.documentId),input.mapping.map(r=>r.targetDocumentId));
+ const pointers=await store.readPolicyReturnPointers('h','new');
+ assert.deepEqual(pointers,{ok:true,value:{sourcePointer:null,targetPointer:null}});
+ assert.equal((await store.readPolicyReturnPointers('h','missing')).ok,false);
+ db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['policy-disclosure-head','h','old']));
+ assert.equal((await store.readPolicyReturnPointers('h','new')).ok,false);
+ put(['policy-disclosure-head','h','old'],null);
  // Preverified return evidence; the application must authenticate this and source keys.
  const returned={...next,revision:2,acceptedParent:'old',authorityState:bytes(11)};
  const returnInput={receipt:activated.value.receipt,staged:activated.value.staged,next:returned,sourceDocuments:[{documentId:'root',document:{bytes:bytes(1),revision:0}},{documentId:child,document:{bytes:bytes(2),revision:0}}],targetDocuments:activated.value.documents,sourcePointer:null,targetPointer:null};

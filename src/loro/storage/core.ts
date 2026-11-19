@@ -680,6 +680,19 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true as const,value:snapshot({receipt,staged,documents})};
     });}catch(e){return fail(mapError(e));}
   }
+  /** Return structural pointer snapshots only for the exact selected activation. */
+  async readPolicyReturnPointers(scope:string,targetHead:string) {
+    if(!validId(scope)||!validId(targetHead))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const receipt:PolicySetReceipt|undefined=await tx.get(key('policy-set-activation',scope,targetHead));
+      if(!receipt || !validPolicySetReceipt(receipt) || receipt.next.scope.kind!=='household' || receipt.next.scope.id!==scope || receipt.next.acceptedParent!==targetHead ||
+        !sameRecord(await tx.get(key('pairing-authority','household',scope)),receipt.next))return corrupt();
+      const sourcePointer=await tx.get(key('policy-disclosure-head',scope,receipt.expected.acceptedParent));
+      const targetPointer=await tx.get(key('disclosure-active',scope));
+      if(!(sourcePointer===null||validId(sourcePointer)) || !(targetPointer===null||validId(targetPointer)))return corrupt();
+      return {ok:true as const,value:snapshot({sourcePointer,targetPointer})};
+    });}catch(e){return fail(mapError(e));}
+  }
   private async requireStagedPolicyTargets(tx:Tx,scope:string,record:StagedPolicyDocumentSet) {
     for(const row of record.mapping){
       const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
