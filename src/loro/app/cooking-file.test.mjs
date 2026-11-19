@@ -1637,6 +1637,21 @@ test('selected recipe shopping copies and current-only admission survive durable
     return use(testKeys.get(documentId));
    }});
   assert.deepEqual(requested,signedCopy.documents.map(document=>document.documentId));
+  // A failure after key installation and the first document write rolls back every row.
+  const preparedDocuments=[];
+  for(const [index,document] of signedCopy.documents.entries()){
+   const identity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:`own-device-set-test-${index}`};
+   const localKey=await sponsorCatalog.preparePairedDataKey(`own-device-set-key-${index}`,identity,testKeys.get(document.documentId));
+   preparedDocuments.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,
+    documentId:document.targetDocumentId,bytes:document.copy.snapshot,sources:document.copy.sources,localKey});
+  }
+  const publication={operationId:'own-device-set-transaction',guardId:'own-device-set-guard',expected:parentRecord,
+   next:copyTransition.next,guard:capturedCopy.guard,copyHash:capturedCopy.copyHash,file:pairingFile,documents:preparedDocuments};
+  const beforeSetWrite=a.rows();
+  a.faultAt('household-own-device-set');
+  assert.equal((await a.storage.commitHouseholdOwnDeviceSet(publication)).error.code,'IO');
+  a.faultAt(undefined);
+  assert.deepEqual(a.rows(),beforeSetWrite);
   const openedKeys=[];
   const openPairingFile=(file,wrappingSecret=nextWrap.privateKey)=>withOpenedOwnDeviceSetFile({
    ...fileOptions,file,wrappingSecret,withKeys:({next,keys,fileHash})=>{
