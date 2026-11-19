@@ -1834,9 +1834,11 @@ test('selected recipe shopping copies and current-only admission survive durable
    const installedSet={operationId:evidence.transcript.sessionId,paired:{keys,useWrapping}};
    const resolved=await resolveInstalledSetAuthority({...fileOptions,storage,scope,authorDevice:deviceId,
     ...installedSet});
-   return openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin:a.root.head,provider:a.provider,sodium,
+   const runtime=await openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin:a.root.head,provider:a.provider,sodium,
     keys:enable(keys,signingSecret),signing:{operationId:'test-signing',publicKey:sodium.to_hex(signingSecret.subarray(32))},
     LoroDoc,decodeImportBlobMeta});
+   const service=disclosureService({storage,scope,rootPin:a.root.head,provider:a.provider,deviceId,installedSet:{...installedSet,sodium,LoroDoc}});
+   return {runtime,service,householdContent:bindHouseholdContent({runtime,sequences,disclosure:service,shoppingRecipeCopies:true}),files:cookingFiles({runtime,service,recipeCatalogVersion:1})};
   };
   const pairedSponsorKeys=publishStorage.localKeys(sponsorMaster,sodium);
   await assert.rejects(()=>resolveRuntimeAuthority(pairedStorage,scope,a.root.head,a.provider,pairedOptions.deviceId),
@@ -1846,9 +1848,10 @@ test('selected recipe shopping copies and current-only admission survive durable
   const pairedSponsor=await openPaired(publishStorage,a.deviceId,pairedSponsorKeys,sponsorKeys.signingSecret);
   const pairedRecipient=await openPaired(pairedStorage,pairedOptions.deviceId,pairedKeys,nextRecipient.privateKey,
    use=>use(nextWrap.privateKey));
-  await assert.rejects(pairedSponsor.forRecipe('missing-paired-recipe'),/INVALID_RECIPE_DOCUMENT/);
-  const copiedSponsorRecipe=await pairedSponsor.forRecipe(recipeId);
-  const copiedRecipientRecipe=await pairedRecipient.forRecipe(recipeId);
+  await assert.rejects(pairedSponsor.runtime.forRecipe('missing-paired-recipe'),/INVALID_RECIPE_DOCUMENT/);
+  await assert.rejects(pairedRecipient.runtime.forRecipe('missing-paired-recipe'),/INVALID_RECIPE_DOCUMENT/);
+  const copiedSponsorRecipe=await pairedSponsor.runtime.forRecipe(recipeId);
+  const copiedRecipientRecipe=await pairedRecipient.runtime.forRecipe(recipeId);
   const copiedRecipe=(await copiedSponsorRecipe.document()).doc;
   const beforePairedEdit=projectCooking(copiedRecipe).recipes[0];
   assert.equal(projectCooking((await copiedRecipientRecipe.document()).doc).recipes[0].title,beforePairedEdit.title);
@@ -1861,6 +1864,18 @@ test('selected recipe shopping copies and current-only admission survive durable
   await copiedRecipientRecipe.importItem({itemId:object.id,bytes:object.bytes});
   assert.equal(projectCooking((await copiedRecipientRecipe.document()).doc).recipes[0].title,title);
   assert.equal(projectCooking((await copiedSponsorRecipe.document()).doc).recipes[0].title,title);
+  const appDoc=await pairedSponsor.householdContent.readRecipe(recipeId);
+  const appBefore=projectCooking(appDoc.doc).recipes[0],appTitle='Saved through paired app';
+  const appCommands=planRecipeAction({doc:appDoc.doc,before:appBefore,after:{...appBefore,title:appTitle},
+   actionId:'paired-app-save',author:a.deviceId,at});
+  await pairedSponsor.householdContent.execute('paired-app-save',appCommands,recipeId);
+  const appObject=must(await publishStorage.getLocalOperation(scope.id,'paired-app-save')).commit.outbound[0].object;
+  const appHeader=JSON.parse(new TextDecoder().decode(appObject.bytes)).header;
+  assert.equal(appHeader.disclosureIncomplete,true);
+  await assert.rejects(()=>pairedRecipient.files.receive(new Uint8Array([1,2,3])));
+  await pairedRecipient.files.receive(appObject.bytes);
+  assert.equal(projectCooking((await pairedSponsor.householdContent.readRecipe(recipeId)).doc).recipes[0].title,appTitle);
+  assert.equal(projectCooking((await pairedRecipient.householdContent.readRecipe(recipeId)).doc).recipes[0].title,appTitle);
   assert.deepEqual(a.rows(),beforePublish);
   const raceDoc=await sponsor.householdContent.readRecipe(added.id);
   const raceCommands=planRecipeAction({doc:raceDoc.doc,before:edited,after:{...edited,title:'Revision race'},

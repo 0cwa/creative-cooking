@@ -8,12 +8,13 @@ const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.co
 export function disclosureService({storage,scope,rootPin,provider,deviceId,installedSet=null}) {
  if(scope?.kind!=='household'||!scope.id||!rootPin||!deviceId)throw Error('INVALID_AUTHORITY');
  async function authority() {
-  const current=await readAuthority(storage,scope,rootPin,provider);
-  const verified=await verifyAuthority(current.state,rootPin,provider);
   const resolved=installedSet
    ? await resolveInstalledSetAuthority({storage,scope,pin:rootPin,provider,authorDevice:deviceId,
-     operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:installedSet.LoroDoc})
+     operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:installedSet.LoroDoc,paired:installedSet.paired})
    : await resolveRuntimeAuthority(storage,scope,rootPin,provider,deviceId);
+  const paired=resolved.pairedAuthority;
+  const current=paired?{revision:paired.record.revision,activeHead:paired.state.activeHead,state:paired.state}:await readAuthority(storage,scope,rootPin,provider);
+  const verified=paired?paired.verified:await verifyAuthority(current.state,rootPin,provider);
   if(current.activeHead!==resolved.scope.branchHead||current.revision!==resolved.expectedAuthority.record.revision)throw Error('CONFLICT');
   return {current,verified,resolved};
  }
@@ -27,6 +28,6 @@ export function disclosureService({storage,scope,rootPin,provider,deviceId,insta
  }
  async function active() {const context=await authority(),id=must(await storage.readDisclosureActive(scope.id));if(!id||!must(await storage.readDisclosurePolicy(scope.id,id)))throw Error('POLICY_UNRESOLVED');const record=await validateStored(id,context);if(record.policy.checkpoint!==context.current.activeHead)throw Error('POLICY_UNRESOLVED');return {context,record};}
  async function publish(policy,approvals) {const history=new Set(),context=await authority(),old=must(await storage.readDisclosureActive(scope.id)),previous=old?await validateStored(old,context,history):null,selected=context.verified.nodes.get(context.current.activeHead);const candidateHash=await hash(provider,'policy',policy);if(old===candidateHash){if(JSON.stringify(previous.policy)!==JSON.stringify(policy)||JSON.stringify(previous.approvals)!==JSON.stringify(approvals))throw Error('CONFLICT');return {...previous,replayed:true}}if(history.size>=MAX_POLICY_HISTORY)throw Error('INVALID_PREDECESSOR');const record=await validatePolicyAcceptance({policy,approvals,previous:previous?.policy??null,authority:{scopeId:scope.id,head:context.current.activeHead,selected},provider});if(policy.predecessor!==old)throw Error('CONFLICT');must(await storage.publishDisclosurePolicy({expectedAuthority:context.resolved.expectedAuthority,expectedPolicyHash:old,record}));return record;}
- async function historicalSigningRefs(head) {const current=await readAuthority(storage,scope,rootPin,provider),verified=await verifyAuthority(current.state,rootPin,provider),node=verified.nodes.get(head);if(!node)throw Error('INVALID_AUTHORITY');return Object.fromEntries(node.devices.filter(d=>d.active).map(d=>[d.deviceId,d.signingKeyRef]));}
+ async function historicalSigningRefs(head) {const {verified}=await authority(),node=verified.nodes.get(head);if(!node)throw Error('INVALID_AUTHORITY');return Object.fromEntries(node.devices.filter(d=>d.active).map(d=>[d.deviceId,d.signingKeyRef]));}
  return {authority,active,publish,validateStored,historicalSigningRefs};
 }

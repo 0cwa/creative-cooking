@@ -412,7 +412,7 @@ export async function resolveInstalledSetAuthority({storage,scope,pin,provider,a
   const selected=verified.nodes.get(opened.head);
   return {...runtimeAuthority(scope,record,state,selected,authorDevice),
    members:opened.documents.map(({recipeId,documentId})=>({recipeId,documentId})),
-   pairedDocuments:opened.documents,wrappingKeyRefs:{}};
+   pairedDocuments:opened.documents,wrappingKeyRefs:{},pairedAuthority:{record,state,verified}};
  }
  const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
  const installed=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId,LoroDoc});

@@ -95,7 +95,7 @@ type OwnDeviceSetPublication = {
   copyHash:string; file:Uint8Array;
   documents:{recipeId:string|null; sourceDocumentId:string; documentId:string; bytes:Uint8Array;
     identities:{commandId:string;effectId:string}[];
-    sources:{effectId:string;policyHashes:string[]}[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
+    sources:{effectId:string;policyHashes:string[]}[]; policies?:any[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
 } & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:{deviceId:string;set:unknown;keyHashes:string[];signature:string}} |
      {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
 type PersonalPairingPublication = {
@@ -782,6 +782,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       !denseArray(documents,d=>object(d)&&(d.recipeId===null||validId(d.recipeId))&&validId(d.sourceDocumentId)&&validId(d.documentId)&&
         d.bytes instanceof Uint8Array&&d.bytes.length>0&&d.bytes.length<=MAX_SELECTED_SOURCE_BYTES&&
         denseArray(d.sources,row=>fields(row,['effectId','policyHashes'])&&validId(row.effectId)&&denseArray(row.policyHashes,validId))&&
+        (d.policies===undefined||denseArray(d.policies,row=>fields(row,['policyHash','policy','approvals'])&&validId(row.policyHash)&&object(row.policy)&&Array.isArray(row.approvals)))&&
         denseArray(d.identities,row=>fields(row,['effectId','commandId'])&&validId(row.effectId)&&validId(row.commandId))&&
         d.identities.length===d.sources.length&&d.identities.every((row,i)=>row.effectId===d.sources[i].effectId)&&
         validLocalRecord(d.localKey?.record)&&validMasterCatalog(d.localKey?.catalog)&&
@@ -831,6 +832,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
             !sameRecord(await tx.get(key('household-own-device-parent',scope,d.documentId)),{head:expected.acceptedParent,documentId:d.sourceDocumentId})||
             !sameRecord(await tx.get(key('household-own-device-sources',scope,d.documentId)),d.sources)||
             !sameRecord(await findLocalKey(tx,d.localKey.record.operationId,d.localKey.record.identity),d.localKey.record))return corrupt();
+          for(const policy of d.policies??[])if(!sameRecord(await tx.get(key('disclosure-policy-archive',scope,policy.policyHash)),policy))return corrupt();
         }
         for(const slot of reservations)if(await tx.get(slot)!==operationId)return corrupt();
         return {ok:true as const,value:{replayed:true}};
@@ -841,6 +843,11 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       for(const d of documents)for(const slot of [key('document-owner',scope,d.documentId),key('document',scope,d.documentId),key('household-own-device-parent',scope,d.documentId),key('household-own-device-sources',scope,d.documentId)])if(await tx.get(slot)!==undefined)conflict();
       const write=async(slot:string,value:unknown)=>{await tx.put(slot,value);this.fault?.('household-own-device-set')};
       for(const d of documents){
+        for(const policy of d.policies??[]){
+          const slot=key('disclosure-policy-archive',scope,policy.policyHash),existing=await tx.get(slot);
+          if(existing!==undefined&&!sameRecord(existing,policy))conflict();
+          if(existing===undefined)await write(slot,policy);
+        }
         if((await installLocalKey(tx,d.localKey.record,d.localKey.catalog)).replayed)conflict();
         await write(key('document-owner',scope,d.documentId),next.acceptedParent);
         await write(key('document',scope,d.documentId),{bytes:d.bytes,revision:0});
