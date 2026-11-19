@@ -1,3 +1,5 @@
+import {authorityBytes} from '../authority/chain.mjs';
+import {MAX_ADULT_REMOVAL_FILE} from '../pairing/adult-removal-wire.mjs';
 import {hasSelectedRecipeChildren} from './selected-recipe-children.ts';
 import {readLocalQuarantine, REVIEW_LIMITS} from '../compromise/review.mjs';
 import {readContinuityHead} from './continuity-head.ts';
@@ -153,7 +155,7 @@ type AdultRemovalPublication = {
     localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
   files:{recipientDeviceId:string;bytes:Uint8Array}[];
 };
-function validAdultRemovalPublication(value:unknown):value is AdultRemovalPublication {
+function validAdultRemovalPublication(value:unknown,separateProofBudget=false):value is AdultRemovalPublication {
   if(!fields(value,['version','operationId','sponsorDeviceId','manifestHash','proof','expected','next','documents','files'])||
     value.version!==1||!validId(value.operationId)||!validId(value.sponsorDeviceId)||!hexOf(value.manifestHash,64)||
     !(value.proof instanceof Uint8Array)||!value.proof.length||value.proof.length>MAX_SELECTED_SET_BYTES||
@@ -177,27 +179,34 @@ function validAdultRemovalPublication(value:unknown):value is AdultRemovalPublic
     new Set(documents.map(d=>d.documentId)).size===documents.length&&
     new Set(documents.map(d=>d.localKey.record.operationId)).size===documents.length&&
     new Set(documents.map(d=>d.localKey.record.identity.epochId)).size===documents.length&&
-    documents.reduce((size,d)=>size+d.bytes.length,value.proof.length)<=MAX_SELECTED_SET_BYTES&&
+    documents.reduce((size,d)=>size+d.bytes.length,separateProofBudget?0:value.proof.length)<=MAX_SELECTED_SET_BYTES&&
     Array.isArray(files)&&files.length<=MAX_ESTABLISHED_RECIPIENTS&&
     denseArray(files,f=>fields(f,['recipientDeviceId','bytes'])&&validId(f.recipientDeviceId)&&
       f.recipientDeviceId!==value.sponsorDeviceId&&validPairingFile(f.bytes))&&
     files.every((f,i)=>i===0||files[i-1].recipientDeviceId<f.recipientDeviceId)&&
     files.reduce((size,f)=>size+f.bytes.length,0)<=MAX_ESTABLISHED_CIPHERTEXT_BYTES;
 }
-const adultRemovalCatalog=(p:AdultRemovalPublication)=>({
+const adultRemovalCatalog=(p:Pick<AdultRemovalPublication,'manifestHash'|'operationId'|'documents'>)=>({
   manifestId:p.manifestHash,operationId:p.operationId,catalog:p.documents.slice(1).map(({recipeId,documentId})=>({recipeId,documentId}))
 });
 type AdultRemovalRecipient = {
-  version:1; operationId:string; recipientDeviceId:string; manifestHash:string; proof:Uint8Array; signature:string;
+  version:1|2; operationId:string; recipientDeviceId:string; manifestHash:string; proof:Uint8Array; signature:string;
   ciphertext:Uint8Array; publisherRecord:PairingAuthorityRecord; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
-  documents:AdultRemovalPublication['documents'];
+  documents:AdultRemovalPublication['documents']; publisherProof?:Uint8Array;
 };
 function validAdultRemovalRecipient(v:unknown):v is AdultRemovalRecipient {
- if(!fields(v,['version','operationId','recipientDeviceId','manifestHash','proof','signature','ciphertext','publisherRecord','expected','next','documents']) ||
+ const common=['version','operationId','recipientDeviceId','manifestHash','proof','signature','ciphertext','publisherRecord','expected','next','documents'];
+ if(!object(v)||!(v.version===1&&fields(v,common)||v.version===2&&fields(v,[...common,'publisherProof'])) ||
    !hexOf(v.signature,128) || !validPairingFile(v.ciphertext) || !validatePairingAuthority(v.publisherRecord).ok ||
    !sameRecord(v.publisherRecord.scope,v.expected?.scope) || v.publisherRecord.acceptedParent!==v.next?.acceptedParent) return false;
- return validAdultRemovalPublication({version:v.version,operationId:v.operationId,sponsorDeviceId:v.recipientDeviceId,
-   manifestHash:v.manifestHash,proof:v.proof,expected:v.expected,next:v.next,documents:v.documents,files:[]});
+ if(v.version===2){
+  if(!(v.publisherProof instanceof Uint8Array)||!v.publisherProof.length||v.publisherProof.length>MAX_SELECTED_SET_BYTES||
+    !(v.proof instanceof Uint8Array)||!v.proof.length||v.proof.length>128*1024)return false;
+  const {authorityState,...header}=v.publisherRecord;
+  if(21+authorityBytes(header).length+authorityState.length+v.publisherProof.length+v.ciphertext.length>MAX_ADULT_REMOVAL_FILE)return false;
+ }
+ return validAdultRemovalPublication({version:1,operationId:v.operationId,sponsorDeviceId:v.recipientDeviceId,
+   manifestHash:v.manifestHash,proof:v.proof,expected:v.expected,next:v.next,documents:v.documents,files:[]},v.version===2);
 }
 const validEstablishedRecipients = (value:unknown) => {
   if(!fields(value,['version','entries'])||value.version!==1||!Array.isArray(value.entries)||
@@ -1105,7 +1114,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         await tx.put(key('document-owner',scope,d.documentId),next.acceptedParent);
         await tx.put(key('document',scope,d.documentId),{bytes:d.bytes,revision:0});
       }
-      await tx.put(catalog,adultRemovalCatalog({ ...input,sponsorDeviceId:input.recipientDeviceId,files:[] }));
+      await tx.put(catalog,adultRemovalCatalog(input));
       await tx.put(receipt,input);
       this.fault?.('adult-removal-recipient-receipt');
       await tx.put(authority,next);
@@ -1120,7 +1129,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(saved===undefined)return {ok:true as const,value:null};
       if(!validAdultRemovalRecipient(saved)||saved.operationId!==operationId||saved.expected.scope.id!==scope||
         !sameRecord(await tx.get(key('pairing-authority','household',scope)),saved.next)||
-        !sameRecord(await tx.get(key('projection-document-set',scope,saved.next.acceptedParent)),adultRemovalCatalog({...saved,sponsorDeviceId:saved.recipientDeviceId,files:[]})))return corrupt();
+        !sameRecord(await tx.get(key('projection-document-set',scope,saved.next.acceptedParent)),adultRemovalCatalog(saved)))return corrupt();
       for(const d of saved.documents){
         const stored=await tx.get(key('document',scope,d.documentId));
         if(await tx.get(key('document-owner',scope,d.documentId))!==saved.next.acceptedParent||

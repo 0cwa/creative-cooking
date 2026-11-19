@@ -743,6 +743,16 @@ test('adult removal complete-set proposal binds its signed head and projected do
    }};
    await assert.rejects(()=>installAdultRemovalRelease({...installOptions,storage:staleStorage}),/CONFLICT/);
    assert.deepEqual(b.rows(),beforeInstall);
+   const budgetStorage={readAdultRemovalRecipient:(...args)=>b.storage.readAdultRemovalRecipient(...args),readPairingAuthority:(...args)=>b.storage.readPairingAuthority(...args),commitAdultRemovalRecipient:async input=>{
+    const padded={...input,publisherProof:new Uint8Array(3*1024*1024)};
+    b.fault=point=>{if(point==='adult-removal-recipient-receipt')throw Error('budget rollback');};
+    try{assert.equal((await b.storage.commitAdultRemovalRecipient(padded)).error.code,'IO');}finally{b.fault=null;}
+    const {publisherProof:ignored,...legacy}=input;
+    assert.equal((await b.storage.commitAdultRemovalRecipient({...legacy,version:1,proof:new Uint8Array(8*1024*1024)})).error.code,'MALFORMED');
+    throw Error('BUDGET_CHECKED');
+   }};
+   await assert.rejects(()=>installAdultRemovalRelease({...installOptions,storage:budgetStorage}),/BUDGET_CHECKED/);
+   assert.deepEqual(b.rows(),beforeInstall);
    const lostStorage={readAdultRemovalRecipient:(...args)=>b.storage.readAdultRemovalRecipient(...args),readPairingAuthority:(...args)=>b.storage.readPairingAuthority(...args),commitAdultRemovalRecipient:async input=>{
     const result=await b.storage.commitAdultRemovalRecipient(input);assert.equal(result.ok,true);throw Error('response lost');
    }};
@@ -789,6 +799,40 @@ test('adult removal complete-set proposal binds its signed head and projected do
     {...retry,confirmedGrantHash:'wrong'}, {...retry,confirmedHead:'wrong'}, {...retry,expectedRevision:localParent.revision+1},
     {...retry,release:{...released,publisherRecord:{...released.publisherRecord,revision:released.publisherRecord.revision+1}}}
    ])await assert.rejects(()=>installAdultRemovalRelease(changed));
+   const receiptKey=JSON.stringify(['adult-removal-recipient',scope.id,publication.operationId]);
+   const savedRaw=reconnectedRows.find(row=>row.key===receiptKey).value;
+   const savedReceipt=JSON.parse(savedRaw,(_key,value)=>value && Array.isArray(value.__storageBytes)?new Uint8Array(value.__storageBytes):value);
+   const encodeReceipt=value=>JSON.stringify(value,(_key,item)=>item instanceof Uint8Array?{__storageBytes:Array.from(item)}:item);
+   const tamperedProof=structuredClone(savedReceipt);tamperedProof.publisherProof[0]^=1;
+   b.replaceRow(receiptKey,encodeReceipt(tamperedProof));
+   try{await assert.rejects(()=>installAdultRemovalRelease(retry));}finally{b.replaceRow(receiptKey,savedRaw);}
+   const tamperedHash=structuredClone(savedReceipt),badBody=JSON.parse(new TextDecoder().decode(tamperedHash.proof))[2];
+   badBody.targets[0].policyBundleHash='0'.repeat(64);tamperedHash.proof=domain('adult-removal-recipient-receipt-v2',badBody);
+   tamperedHash.signature=sodium.to_hex(await b.provider.sign(b.signingKey,tamperedHash.proof));
+   b.replaceRow(receiptKey,encodeReceipt(tamperedHash));
+   try{await assert.rejects(()=>installAdultRemovalRelease(retry));}finally{b.replaceRow(receiptKey,savedRaw);}
+   const targets=[];
+   for(const [i,entry] of prepared.manifest.entries.entries()){
+    const {recipeId,sourceDocumentId,sourceRevision,documentId}=entry,doc=prepared.documents[i],local=savedReceipt.documents[i].localKey.record;
+    const slot=await adultRemovalKeySlot(b.provider,scope,prepared.manifest,b.deviceId,documentId),{snapshot,...seed}=doc.seed;
+    let keyHash;await b.keys().use(slot.operationId,slot.identity,key=>{keyHash=sodium.to_hex(sodium.crypto_generichash(32,key));});
+    targets.push({recipeId,sourceDocumentId,sourceRevision,documentId,...slot,seed,policyBundle:doc.policyBundle,
+     snapshotHash:sodium.to_hex(sodium.crypto_generichash(32,snapshot)),keyHash,wrappedHash:await digest(b.provider,'adult-removal-wrapped-key-v1',sodium.to_hex(local.wrapped))});
+   }
+   const recordText=record=>({...record,authorityState:sodium.to_hex(record.authorityState)});
+   const selection=JSON.parse(new TextDecoder().decode(savedReceipt.next.authorityState)).selections.at(-1);
+   const legacyBody={version:1,scope,operationId:publication.operationId,recipientDeviceId:b.deviceId,eventHash:confirmed.eventHash,grantHash:confirmed.grantHash,
+    ciphertextHash:sodium.to_hex(sodium.crypto_generichash(32,released.bytes)),publisherProof:sodium.to_hex(released.proof),publisherRecord:recordText(released.publisherRecord),
+    expected:recordText(savedReceipt.expected),next:recordText(savedReceipt.next),selection,targets};
+   const {publisherProof:ignored,...oldReceipt}=savedReceipt;
+   oldReceipt.version=1;oldReceipt.proof=domain('adult-removal-recipient-receipt-v1',legacyBody);
+   oldReceipt.signature=sodium.to_hex(await b.provider.sign(b.signingKey,oldReceipt.proof));
+   b.replaceRow(receiptKey,encodeReceipt(oldReceipt));
+   try{
+    assert.deepEqual(await reopenAdultRemovalRecipient({...retry,operationId:publication.operationId}),{head:confirmed.eventHash});
+    assert.deepEqual(await installAdultRemovalRelease(retry),{head:confirmed.eventHash});
+   }finally{b.replaceRow(receiptKey,savedRaw);}
+   assert.deepEqual(b.rows(),reconnectedRows);
    const keySlot=await adultRemovalKeySlot(b.provider,scope,prepared.manifest,b.deviceId,prepared.manifest.entries[0].documentId);
    const rowKeys=[
     JSON.stringify(['adult-removal-recipient',scope.id,publication.operationId]),
@@ -863,10 +907,11 @@ test('adult removal complete-set proposal binds its signed head and projected do
   const receipt=JSON.parse(receiptRaw,(_key,value)=>value && Array.isArray(value.__storageBytes)?new Uint8Array(value.__storageBytes):value);
   assert.deepEqual(receipt.ciphertext,released.bytes);
   const receiptBody=JSON.parse(new TextDecoder().decode(receipt.proof))[2];
-  assert.equal(await verifySignature(b.provider,b.signingKey,'adult-removal-recipient-receipt-v1',receiptBody,receipt.signature),true);
-  assert.equal(receiptBody.publisherProof,sodium.to_hex(released.proof));
+  assert.equal(receipt.version,2);
+  assert.equal(await verifySignature(b.provider,b.signingKey,'adult-removal-recipient-receipt-v2',receiptBody,receipt.signature),true);
+  assert.deepEqual(receipt.publisherProof,released.proof);
   assert.equal(receiptBody.targets.length,prepared.documents.length);
-  assert.deepEqual(receiptBody.targets.map(target=>target.policyBundle),prepared.documents.map(document=>document.policyBundle));
+  assert(receiptBody.targets.every(target=>!Object.hasOwn(target,'policyBundle')&&!Object.hasOwn(target,'seed')));
   await assert.rejects(()=>verifyAuthority(nextState,pin,b.provider));
   for(const [i,entry] of prepared.manifest.entries.entries()){
    const slot=await adultRemovalKeySlot(b.provider,scope,prepared.manifest,b.deviceId,entry.documentId);
