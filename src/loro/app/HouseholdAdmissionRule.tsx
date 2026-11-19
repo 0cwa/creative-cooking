@@ -1,4 +1,4 @@
-import {useContext, useState} from 'react';
+import {useContext, useState, useSyncExternalStore} from 'react';
 import {Pressable, Text, TextInput, View} from 'react-native';
 import {useAppState} from '@/state/AppState';
 import {admissionThreshold, validAdmissionPolicy} from '../authority/validator.mjs';
@@ -12,6 +12,18 @@ type Status = Awaited<ReturnType<typeof householdAdmissionRule>>;
 type Review = Awaited<ReturnType<typeof reviewHouseholdAdmissionRule>>;
 type Checkout = {expectedHead:string;expectedRevision:number;targetHead:string};
 
+type BranchReview = {sourceHead:string; sourceRevision:number; targetHead:string};
+type ReturnReview = {sourceHead:string; targetHead:string; targetRevision:number};
+type ReopenTarget = {scopeId:string; head:string};
+const reopenTargets = new WeakMap<object, ReopenTarget>();
+const reopenListeners = new Set<() => void>();
+const subscribeReopen = (listener:()=>void) => { reopenListeners.add(listener); return () => {reopenListeners.delete(listener);}; };
+const noReopen = () => null;
+function saveReopen(workspace:object, target:ReopenTarget) {
+  reopenTargets.set(workspace, target);
+  for (const listener of reopenListeners) listener();
+}
+
 export function HouseholdAdmissionRule() {
   const workspace = useContext(LoroWorkspaceValue);
   const app = useAppState();
@@ -24,6 +36,13 @@ export function HouseholdAdmissionRule() {
   const [busy, setBusy] = useState(false);
   const [checkout, setCheckout] = useState<Checkout | null>(null);
   const rule = workspace.householdPairing.admissionRule;
+  const branches = workspace.policyBranches;
+  const pendingReopen = useSyncExternalStore(subscribeReopen, () => reopenTargets.get(workspace) ?? null, noReopen);
+  const [retainedHead, setRetainedHead] = useState('');
+  const [branchReview, setBranchReview] = useState<BranchReview | null>(null);
+  const [returnReview, setReturnReview] = useState<ReturnReview | null>(null);
+  const canActivate = !!branches?.reviewStaged && !workspace.readOnly;
+  const canReturn = !!branches?.reviewReturn && workspace.readOnly;
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -53,20 +72,27 @@ export function HouseholdAdmissionRule() {
   }
 
   async function openBranch(choice: Checkout) {
-    const release = app.beginWorkspaceTransition();
-    try {
-      await app.flushCurrentWorkspace();
-      const scopeId=workspace.household.scope.scopeId;
-      const {head}=await rule.checkout({...choice, explicit:true});
-      workspace.reopen({scopeId,head});
-    } catch (error) {
-      release();
-      if (error instanceof Error && error.message === 'IO') throw Error('Could not save the branch switch. Your current cooking branch is still open.');
-      throw error;
-    }
+    await switchPolicy(async () => {
+      const {head} = await rule.checkout({...choice, explicit:true});
+      return head;
+    });
   }
 
-  if (!open) return <Pressable accessibilityRole="button" onPress={() => {setOpen(true); void run(refresh);}}>
+  async function switchPolicy(commit: () => Promise<string>) {
+    const release = app.beginWorkspaceTransition();
+    let committed = false;
+    try {
+      await app.flushCurrentWorkspace();
+      const head = await commit();
+      committed = true;
+      const target = {scopeId:workspace.household.scope.scopeId, head};
+      saveReopen(workspace, target);
+      await workspace.reopen(target);
+    } finally { if (!committed) release(); }
+  }
+
+  if (workspace.readOnly && !canReturn && !pendingReopen) return null;
+  if (!open && !pendingReopen) return <Pressable accessibilityRole="button" onPress={() => {setOpen(true); if (!workspace.readOnly) void run(refresh);}}>
     <Text>Manage adult admission rules</Text>
   </Pressable>;
 
@@ -78,6 +104,24 @@ export function HouseholdAdmissionRule() {
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => {setOpen(false); setCheckout(null);}}>
       <Text>Close adult admission rules</Text>
     </Pressable>
+    {pendingReopen ? <>
+      <Text selectable>Workspace switch saved. Editing remains paused until reopening branch {pendingReopen.head}.</Text>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => void run(async () => { await workspace.reopen(pendingReopen); })}><Text>Retry reopening workspace</Text></Pressable>
+    </> : <>
+    {(canActivate || canReturn) && <Text>The copied branch and the returned original are read-only.</Text>}
+    {canReturn && <>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => void run(async () => {setReturnReview(await branches.reviewReturn());})}><Text>Review return to original</Text></Pressable>
+      {returnReview && <>
+        <Text selectable>Original branch: {returnReview.sourceHead}</Text>
+        <Text selectable>Copied branch: {returnReview.targetHead} · revision {returnReview.targetRevision}</Text>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => void run(() => switchPolicy(async () => {
+          const result = await branches.returnToSource({expectedSourceHead:returnReview.sourceHead, expectedTargetHead:returnReview.targetHead, expectedTargetRevision:returnReview.targetRevision, explicit:true});
+          return result.sourceHead;
+        }))}><Text>Confirm return to original</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => setReturnReview(null)}><Text>Cancel return</Text></Pressable>
+      </>}
+    </>}
+    {!workspace.readOnly && <>
     {current && <>
       <Text accessibilityLabel="Active adult admission rule">{admissionRuleLabel(current.policy)}. Requires {current.required} of {current.electorate.length} existing adults.</Text>
       <Text selectable>Adults eligible to vote: {current.electorate.join(', ')}</Text>
@@ -113,6 +157,7 @@ export function HouseholdAdmissionRule() {
       })}><Text>Copy admission rule proposal message</Text></Pressable>
       <Pressable accessibilityRole="button" disabled={busy || !review.complete} onPress={() => void run(async () => {
         const result = await rule.retain({item:review.item, confirmedEventHash:review.eventHash, explicit:true});
+        if ('targetHead' in result && result.targetHead) setRetainedHead(result.targetHead);
         await refresh();
         setNotice(result.replayed ? 'This approved rule is already retained.' : 'Approved rule retained. You can open its cooking branch separately.');
       })}><Text>Retain approved admission rule</Text></Pressable>
@@ -147,6 +192,23 @@ export function HouseholdAdmissionRule() {
         </Pressable>
         <Pressable accessibilityRole="button" disabled={busy} onPress={() => setCheckout(null)}><Text>Cancel branch switch</Text></Pressable>
       </>}
+    </>}
+    {canActivate && <>
+      <Text accessibilityRole="header">Open a retained policy branch</Text>
+      <Text>Enter the retained head to resume review after reopening Settings or reloading.</Text>
+      <TextInput accessibilityLabel="Retained policy branch head" value={retainedHead} editable={!busy} autoCapitalize="none" autoCorrect={false} onChangeText={value => {setRetainedHead(value); setBranchReview(null);}} />
+      <Pressable accessibilityRole="button" disabled={busy || !retainedHead.trim()} onPress={() => void run(async () => {setBranchReview(null); setBranchReview(await branches.reviewStaged(retainedHead.trim()));})}><Text>Review staged policy branch</Text></Pressable>
+      {branchReview && <>
+        <Text selectable>Source branch: {branchReview.sourceHead} · revision {branchReview.sourceRevision}</Text>
+        <Text selectable>Copied branch: {branchReview.targetHead}</Text>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => void run(() => switchPolicy(async () => {
+          const result = await branches.activate({expectedSourceHead:branchReview.sourceHead, expectedSourceRevision:branchReview.sourceRevision, targetHead:branchReview.targetHead, explicit:true});
+          return result.targetHead;
+        }))}><Text>Confirm open copied branch</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => setBranchReview(null)}><Text>Cancel policy branch switch</Text></Pressable>
+      </>}
+    </>}
+    </>}
     </>}
     {notice ? <Text accessibilityRole="alert">{notice}</Text> : null}
   </View>;
