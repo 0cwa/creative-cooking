@@ -24,7 +24,11 @@ export async function readVerifiedActivatedPolicyDocumentSet(args) {
  return verifyActivationEvidence(args, true);
 }
 
-async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys,sodium=defaultSodium}, selected) {
+export async function readPolicyReturnActivationEvidence(args) {
+ return verifyActivationEvidence(args,true,true);
+}
+
+async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys,sodium=defaultSodium}, selected, detached=false) {
  scope=structuredClone(scope);
  if(scope?.kind!=='household' || typeof deviceId!=='string') throw Error('INVALID_AUTHORITY');
  const loaded=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead);
@@ -137,6 +141,7 @@ async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,devi
   if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
  }
  return structuredClone({targetHead,sourceHead:staged.sourceHead,expected:receipt.expected,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
+  ...(detached?{receipt,staged,targetDocuments:documents}:{}),
   provenance,verifiedProvenance:receipt.provenance??null,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
    if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');
    return {recipeId:row.recipeId,documentId,revision,...receipt.targets[i],policySeed:source?.seed??null};})});

@@ -1,5 +1,10 @@
 import {resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority,authorityBytes,snapshotId} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
+import {verifyAuthority} from '../authority/chain.mjs';
+import {selectedSourceHash} from '../projection/selected-sources.mjs';
+import {matchesDisclosureService} from '../disclosure/service.mjs';
+import {readPolicyReturnPreflight} from './preflight-policy-return.mjs';
+import {verifyPolicyReturnCandidate} from './verify-policy-return.mjs';
 import {observeSelectedSourceSet} from '../projection/selected-sources.mjs';
 import {buildPolicyProvenanceReceipt} from './build-policy-provenance-receipt.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
@@ -71,6 +76,56 @@ export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHea
   throw error;
  }
  return {targetHead,record:next};
+}
+
+/** Return only an explicitly confirmed, independently pinned ordinary source. */
+export async function returnActivatedPolicyDocumentSet({runtime,expectedSourceHead,expectedTargetHead,expectedTargetRevision,service,keys}) {
+ const mount=policyMounts.get(runtime);
+ if(!mount || !mount.activated || mount.paired || keys!==mount.keys || runtime.storage!==mount.storage ||
+   runtime.authority!==mount.authority || !same(runtime.scope,mount.scope) || runtime.keyRef!==mount.scope.epochId ||
+   mount.authority.rootPin!==mount.pin || mount.authority.provider!==mount.provider ||
+   expectedTargetHead!==mount.scope.branchHead || typeof expectedSourceHead!=='string' || !expectedSourceHead ||
+   !Number.isSafeInteger(expectedTargetRevision) || expectedTargetRevision<0) throw Error('INVALID_CONFIRMATION');
+ const scope=mount.expected.scope, deviceId=mount.scope.authorDevice;
+ if(!matchesDisclosureService(service,{storage:mount.storage,scope,rootPin:mount.pin,provider:mount.provider,deviceId}))throw Error('INVALID_AUTHORITY');
+ const args={storage:mount.storage,LoroDoc:mount.LoroDoc,pin:mount.pin,provider:mount.provider,scope,deviceId,targetHead:expectedTargetHead,keys,sodium:mount.sodium};
+ const {activation,pointers}=await readPolicyReturnPreflight({...args,expectedTargetHead,expectedTargetRevision});
+ if(!mount.record || !same(mount.record,activation.record))throw Error('STALE_TARGET');
+ if(activation.sourceHead!==expectedSourceHead)throw Error('STALE_SOURCE');
+ const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(activation.expected.authorityState));
+ if(state.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice')))throw Error('UNSUPPORTED_SOURCE');
+ const verified=await verifyAuthority(state,mount.pin,mount.provider), parent=verified.nodes.get(expectedSourceHead);
+ if(!parent || state.activeHead!==expectedSourceHead)throw Error('INVALID_AUTHORITY');
+ const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(activation.staged.proof))?.[2]?.signed?.body?.observation?.manifest;
+ if(manifest?.version!==1 || manifest.parentHead!==expectedSourceHead || manifest.epochId!==parent.epochId)throw Error('UNSUPPORTED_SOURCE');
+ const claims=[manifest.root,...manifest.children], sourceDocuments=[];
+ if(claims.length!==activation.staged.mapping.length)throw Error('INVALID_SOURCE');
+ for(const [i,claim] of claims.entries()){
+  const row=activation.staged.mapping[i];
+  if(claim.documentId!==row.sourceDocumentId || (i===0?row.recipeId!==null:claim.recipeId!==row.recipeId))throw Error('INVALID_SOURCE');
+  const result=await mount.storage.reopenDocument(scope.id,claim.documentId);
+  if(!result.ok)throw Error(result.error.code);
+  const doc=result.value;
+  if(!doc){if(i!==0 || claim.revision!==null || claim.checkpointHash!==null)throw Error('INVALID_SOURCE');sourceDocuments.push({documentId:claim.documentId,document:null});continue;}
+  const hash=await selectedSourceHash(mount.provider,'projection-source-snapshot',Array.from(doc.bytes,x=>x.toString(16).padStart(2,'0')).join(''));
+  if(doc.revision!==claim.revision || hash!==claim.checkpointHash)throw Error('INVALID_SOURCE');
+  sourceDocuments.push({documentId:claim.documentId,document:{bytes:doc.bytes,revision:doc.revision}});
+ }
+ await keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:parent.epochId},()=>{});
+ if(pointers.sourcePointer!==null) await service.validateStored(pointers.sourcePointer,{current:{state,activeHead:expectedSourceHead,revision:activation.expected.revision},verified});
+ const signer=parent.devices.find(d=>d.active&&d.deviceId===deviceId);
+ if(!signer || mount.signing.publicKey!==signer.signingKeyRef)throw Error('INVALID_SIGNER');
+ const body={from:expectedTargetHead,to:expectedSourceHead,deviceId,index:activation.state.selections.length};
+ const statement=domain('select-head',{root:mount.pin,householdId:scope.id,...body});
+ const signature=await localProvider(mount.sodium,keys,{signing:mount.signing,content:{}}).sign(signer.signingKeyRef,statement);
+ if(!(signature instanceof Uint8Array)||signature.length!==64||!await mount.provider.verify(signer.signingKeyRef,statement,signature))throw Error('INVALID_SIGNER');
+ const selection={...body,signature:Array.from(signature,x=>x.toString(16).padStart(2,'0')).join('')};
+ const nextState={...activation.state,selections:[...activation.state.selections,selection],activeHead:expectedSourceHead};
+ const next={...activation.record,revision:activation.record.revision+1,acceptedParent:expectedSourceHead,authorizationSnapshot:await snapshotId(mount.provider,nextState),authorityState:authorityBytes(nextState)};
+ await verifyPolicyReturnCandidate({...args,candidate:next});
+ const result=await mount.storage.commitPolicyDocumentSetReturn({receipt:activation.receipt,staged:activation.staged,next,sourceDocuments,targetDocuments:activation.targetDocuments,...pointers});
+ if(!result.ok)throw Error(result.error.code);
+ return {sourceHead:expectedSourceHead,record:next};
 }
 
 // The original workspace has its own initialized sequence allocator. Joined

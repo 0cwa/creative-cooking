@@ -405,6 +405,33 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>commitActivatedRecipeField({runtime:editRecipe,service:a.service,input}),/SOURCE_PROVENANCE_REQUIRED|CONFLICT/);
  const reopened=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
  assert.equal((await (await reopened.forRecipe('retained-recipe')).document()).doc.getMap('recipe:retained-recipe').get('title'),'Edited soup');
+ const {returnActivatedPolicyDocumentSet}=await import('./workspace-household-runtime.mjs');
+ const returnArgs={runtime:editMount,expectedSourceHead:expected.acceptedParent,expectedTargetHead:targetHead,expectedTargetRevision:activated.record.revision,service:a.service,keys:signingKeys};
+ const beforeReturn=a.rows();
+ await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedSourceHead:'wrong'}),/STALE_SOURCE/);
+ await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedTargetHead:'wrong'}));
+ await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedTargetRevision:activated.record.revision+1}),/STALE_TARGET/);
+ const sourceRow=beforeReturn.find(row=>row.key===JSON.stringify(['document',scope.id,staged.mapping[0].sourceDocumentId]));
+ const changedSource=JSON.parse(sourceRow.value);changedSource.revision++;
+ a.replaceRow(sourceRow.key,JSON.stringify(changedSource));
+ const changedRows=a.rows();
+ await assert.rejects(()=>returnActivatedPolicyDocumentSet(returnArgs),/INVALID_SOURCE/);
+ assert.deepEqual(a.rows(),changedRows);
+ a.replaceRow(sourceRow.key,sourceRow.value);
+ const originalUseIdentity=signingKeys.useIdentity;
+ signingKeys.useIdentity=async()=>{throw Error('MISSING_SOURCE_KEY')};
+ try {await assert.rejects(()=>returnActivatedPolicyDocumentSet(returnArgs),/MISSING_SOURCE_KEY/);} finally {signingKeys.useIdentity=originalUseIdentity;}
+ assert.deepEqual(a.rows(),beforeReturn);
+ const result=await returnActivatedPolicyDocumentSet(returnArgs);
+ assert.equal(result.sourceHead,expected.acceptedParent);
+ const returnedState=JSON.parse(new TextDecoder().decode(result.record.authorityState));
+ assert.equal(returnedState.selections.at(-1).to,expected.acceptedParent);
+ assert.match(returnedState.selections.at(-1).signature,/^[a-f0-9]{128}$/);
+ assert.equal(returnedState.selections.length,nextState.selections.length+1);
+ assert.equal(must(await a.storage.readDisclosureActive(scope.id)),accepted.policyHash);
+ const stable=row=>{const key=JSON.parse(row.key);return ['document','document-owner','local-key','local-key-operation'].includes(key[0]);};
+ assert.deepEqual(a.rows().filter(stable),beforeReturn.filter(stable));
+
 });
 
 test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{
