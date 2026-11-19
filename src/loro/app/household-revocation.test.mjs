@@ -26,6 +26,8 @@ import {disclosureService} from '../disclosure/service.mjs';
 import {prepareAdultRemovalDocumentSet,verifyAdultRemovalDocumentSet} from '../projection/current-document-set.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {verifyAdultRemovalGrant} from '../compromise/adult-removal-grant.mjs';
+import {sealAdultRemovalFile,withOpenedAdultRemovalFile} from '../pairing/adult-removal-file.mjs';
+import {openDeviceCopy,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 
 await sodium.ready;
 const scope={id:'rotation-home',kind:'household'};
@@ -376,6 +378,32 @@ test('adult removal complete-set proposal binds its signed head and projected do
    grant.signatures.push({...voter,signature:await sign('adult-removal-set-grant-vote-v3',{grant:body,...voter})});
   }
   assert.equal((await verifyAdultRemovalGrant(publicOptions)).complete,true);
+  const codecOptions={...publicOptions,sodium,LoroDoc,documents:prepared.documents,recipientId:'b'};
+  const dataKeys=prepared.documents.map(()=>sodium.randombytes_buf(32));
+  await a.keys().useIdentity(signerIdentity('a'),async signingSecret=>{
+   const file=await sealAdultRemovalFile({...codecOptions,keys:dataKeys,signingSecret});
+   await b.keys().useIdentity(wrapperIdentity('b'),async wrappingSecret=>{
+    await withOpenedAdultRemovalFile({...codecOptions,file,wrappingSecret},({keys,documents})=>{
+     assert.deepEqual(keys,dataKeys); assert.deepEqual(documents,prepared.documents);
+    });
+    await assert.rejects(()=>withOpenedAdultRemovalFile({...codecOptions,file,wrappingSecret,recipientId:'a'},()=>{}),/INVALID_RECIPIENT/);
+    await assert.rejects(()=>withOpenedAdultRemovalFile({...codecOptions,file,wrappingSecret,recipientId:'c'},()=>{}),/INVALID_RECIPIENT/);
+    const checked=await verifyAdultRemovalGrant(publicOptions), bindings=publicOptions.recipientBindings;
+    const sender=options.parent.devices.find(d=>d.deviceId==='a'), recipient=options.parent.devices.find(d=>d.deviceId==='b');
+    const hash=await digest(a.provider,'adult-removal-file-binding-v1',{scope:options.parent.householdId,pin,parentHead:options.parent.head,
+     manifestHash:checked.manifestHash,grantHash:checked.grantHash,successorHead:checked.eventHash,sender:'a',senderSigningKey:sender.signingKeyRef,
+     senderWrappingKey:bindings[0].wrappingKey,recipient:'b',recipientSigningKey:recipient.signingKeyRef,recipientWrappingKey:bindings[1].wrappingKey,packageRef:grant.packageRefs[1]});
+    const participant={wrappingPublicKey:sodium.from_hex(bindings[1].wrappingKey)};
+    const contents=openDeviceCopy(sodium,'adult-removal-document-set-file-v1',file,hash,{initiator:{signingPublicKey:sodium.from_hex(sender.signingKeyRef)},responder:participant},wrappingSecret);
+    contents.packets.reverse();
+    const swappedFile=sealDeviceCopy(sodium,'adult-removal-document-set-file-v1',hash,participant,signingSecret,contents);
+    await assert.rejects(()=>withOpenedAdultRemovalFile({...codecOptions,file:swappedFile,wrappingSecret},()=>{}),/INVALID_PROOF/);
+    const corrupt=file.slice(); corrupt[corrupt.length-1]^=1;
+    await assert.rejects(()=>withOpenedAdultRemovalFile({...codecOptions,file:corrupt,wrappingSecret},()=>{}));
+    await assert.rejects(()=>withOpenedAdultRemovalFile({...codecOptions,file,wrappingSecret:sodium.crypto_box_keypair().privateKey},()=>{}));
+   });
+  });
+  dataKeys.forEach(key=>key.fill(0));
   const badManifest=structuredClone(prepared.manifest); badManifest.entries[1].snapshotHash='0'.repeat(64);
   await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,manifest:badManifest}),/INVALID_GRANT/);
   const badRecipients=structuredClone(grant); badRecipients.recipients=['a','tablet'];
