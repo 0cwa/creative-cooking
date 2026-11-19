@@ -42,7 +42,7 @@ import {householdReceiverIds} from './household-transfer.mjs';
 import {householdLocalTrust} from './household-local-trust.mjs';
 import {executeAction} from './action.mjs';
 import {bindHouseholdContent} from './household-content.mjs';
-import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
+import {prepareWorkspacePolicyDocumentKeys,openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planRecipeRestore,readRecipeHistory} from '../domain/recipe-history.mjs';
@@ -1736,6 +1736,57 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(observedInstalled.signed.manifest.version,2);
   assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===recipeId&&child.creationEffectId===null));
   assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===added.id&&child.creationEffectId!==null));
+  // Exercise the production reader against admitted and later-created keys.
+  const policyCapture=await observePolicyDocumentSet(sponsor.runtime);
+  const policyRetained=policyCapture.sources.map(source=>({documentId:source.runtime.scope.documentId,revision:source.revision,bytes:source.bytes??new Uint8Array()}));
+  const policyOptions={storage:a.storage,scope,pin:a.root.head,provider:a.provider,LoroDoc,signed:policyCapture.signed,retained:policyRetained};
+  const policySubject=await policyDocumentSetSubject(policyOptions);
+  const policyParent=(await verifyPolicyDocumentSet(policyOptions)).selected;
+  const policyEvent={version:6,kind:'changePolicy',authorDeviceId:a.deviceId,householdId:scope.id,
+   parentHead:policyParent.head,epochId:policyParent.epochId,generation:policyParent.generation,subject:policySubject,
+   suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',policyHash:policyParent.policyHash,
+   proposalId:'installed-policy-stage',frozenAdultRoster:policyParent.roster,nextPolicy:policyParent.policy};
+  const policyHash=sodium.to_hex(await a.provider.hash(domain('event',policyEvent)));
+  const policyApprovals=nextSigners.map((signer,index)=>{const approval={version:1,householdId:scope.id,eventHash:policyHash,
+   parentHead:policyParent.head,policyHash:policyParent.policyHash,generation:policyParent.generation,epochId:policyParent.epochId,...signer};
+   return {...approval,signature:sodium.to_hex(sodium.crypto_sign_detached(domain('approval-signature',approval),index?newcomerSign.privateKey:a.signingTestKey.privateKey))};});
+  await stageVerifiedPolicyDocumentSet({runtime:sponsor.runtime,item:{event:policyEvent,
+   authorSignature:await signAdmission('event-signature',policyEvent),approvals:policyApprovals},signed:policyCapture.signed});
+  const beforePreparation=a.rows();
+  const prepared=await prepareWorkspacePolicyDocumentKeys(sponsor.runtime,policyHash,sponsorCatalog);
+  assert.equal(prepared.length,policyCapture.sources.length);
+  for(const [index,entry] of prepared.entries()) {
+   const identity=entry.record.identity;
+   const aad=new TextEncoder().encode(JSON.stringify(['creative-cooking/local-key/v1',identity.scope.kind,identity.scope.id,identity.deviceId,identity.purpose,identity.epochId]));
+   const actual=await sponsorMaster.unwrap(entry.record.masterId,entry.record.wrapped,aad);
+   const source=policyCapture.sources[index].runtime;
+   if(sponsorAuthority.members.some(member=>member.documentId===source.scope.documentId))
+    await sponsorContent(source.scope.epochId,key=>assert.deepEqual(actual,key),source.scope);
+   else {
+    const epochId=await selectedSourceHash(a.provider,'installed-recipe-key-slot-v1',{pin:a.root.head,scopeId:scope.id,
+     head:source.scope.branchHead,epochId:source.scope.epochId,generation:source.scope.documentGeneration,documentId:source.scope.documentId});
+    const operationId=await selectedSourceHash(a.provider,'installed-recipe-key-operation-v1',{epochId,deviceId:a.deviceId});
+    await sponsorCatalog.use(operationId,{version:1,scope,deviceId:a.deviceId,purpose:'data',epochId},key=>assert.deepEqual(actual,key));
+   }
+   actual.fill(0);
+  }
+  await assert.rejects(()=>prepareWorkspacePolicyDocumentKeys(sponsor.runtime,'0'.repeat(64),sponsorCatalog));
+  const dynamicSource=policyCapture.sources.find(source=>source.runtime.recipeId===added.id).runtime.scope;
+  const missingEpoch=await selectedSourceHash(a.provider,'installed-recipe-key-slot-v1',{pin:a.root.head,scopeId:scope.id,
+   head:dynamicSource.branchHead,epochId:dynamicSource.epochId,generation:dynamicSource.documentGeneration,documentId:dynamicSource.documentId});
+  const missingOperation=await selectedSourceHash(a.provider,'installed-recipe-key-operation-v1',{epochId:missingEpoch,deviceId:a.deviceId});
+  const savedUse=sponsorCatalog.use;
+  sponsorCatalog.use=function(op,...args){if(op===missingOperation)throw Error('NOT_FOUND');return savedUse.call(this,op,...args);};
+  try{await assert.rejects(()=>prepareWorkspacePolicyDocumentKeys(sponsor.runtime,policyHash,sponsorCatalog),/RECIPE_CREATION_REQUIRED/);}
+  finally{sponsorCatalog.use=savedUse;}
+
+  const originalPolicyScope=structuredClone(sponsor.runtime.scope);
+  for(const change of [{scopeId:'wrong'},{documentId:'wrong'},{branchHead:'wrong'}]) {
+   Object.assign(sponsor.runtime.scope,change);
+   await assert.rejects(()=>prepareWorkspacePolicyDocumentKeys(sponsor.runtime,policyHash,sponsorCatalog));
+   sponsor.runtime.scope=structuredClone(originalPolicyScope);
+  }
+  assert.deepEqual(a.rows(),beforePreparation);
   const copyOptions={runtime:sponsor.runtime,service:sponsor.service,sodium,peerId:'31337',seedId:'copy-set-test'};
   const capturedCopy=await captureOwnDeviceCopySet(copyOptions);
   const forgottenHistory=observedInstalled.guard.members[0];

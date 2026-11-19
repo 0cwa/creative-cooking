@@ -31,7 +31,7 @@ export function hasRecipeDelivery(bytes) {
  return record!=null&&Object.hasOwn(record,'recipeDelivery');
 }
 
-export function installedRecipeDelivery({sodium,keys,signing,wrapping,provider,pin,resolved,baselineContent}) {
+export function installedRecipeDelivery({sodium,keys,signing,wrapping,provider,pin,resolved,baselineContent,bindContent}) {
  const {scope}=resolved;
  const baseIds=new Set(resolved.members.map(member=>member.documentId));
  const hash=async(purpose,value)=>sodium.to_hex(await provider.hash(domain(purpose,value)));
@@ -55,6 +55,7 @@ export function installedRecipeDelivery({sodium,keys,signing,wrapping,provider,p
   try{return await keys.use(operationId,identity,key=>{keyFound=true;return fn(key);});}
   catch(error){if(!keyFound&&error?.message==='NOT_FOUND')throw Error('RECIPE_CREATION_REQUIRED');throw error;}
  }
+ bindContent?.(useContent);
  const candidate=content=>candidateCodec(localProvider(sodium,keys,{signing,content}));
  const base=candidate(useContent);
  const withKey=(documentId,key)=>candidate((ref,fn,h)=>{
