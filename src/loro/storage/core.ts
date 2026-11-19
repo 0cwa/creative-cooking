@@ -654,14 +654,14 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     });}catch(e){return fail(mapError(e));}
   }
   /** Structural evidence only. Authenticate the receipt, proof, documents and keys before use. */
-  async readActivatedPolicyDocumentSet(scope:string,targetHead:string) {
+  async readActivatedPolicyDocumentSet(scope:string,targetHead:string,historical=false) {
     if(!validId(scope)||!validId(targetHead))return fail('MALFORMED');
     try{return await this.run(false,async tx=>{
       const receipt:PolicySetReceipt|undefined=await tx.get(key('policy-set-activation',scope,targetHead));
       if(!receipt)return {ok:true as const,value:null};
       const staged:StagedPolicyDocumentSet|undefined=await tx.get(key('policy-staged-set',scope,targetHead));
       const authority=await tx.get(key('pairing-authority','household',scope));
-      if(!staged || !sameRecord(authority,receipt.next) || staged.sourceHead!==receipt.expected.acceptedParent ||
+      if(!staged || (!historical && !sameRecord(authority,receipt.next)) || staged.sourceHead!==receipt.expected.acceptedParent ||
         staged.targetHead!==receipt.next.acceptedParent || staged.mapping.length!==receipt.targets.length ||
         staged.mapping.some((row,i)=>row.targetDocumentId!==receipt.targets[i].targetDocumentId)) return corrupt();
       let size=staged.proof.length+staged.mapping.reduce((n,row)=>n+row.baseline.length,0);

@@ -15,6 +15,7 @@ const same=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
 export async function readHistoricalPolicyActivationEvidence(args) {
  const proof=await verifyActivationEvidence(args, false);
  return structuredClone({targetHead:proof.targetHead,sourceHead:proof.sourceHead,expected:proof.expected,next:proof.record,
+  mapping:proof.mapping,
   documents:proof.documents.map(({recipeId,documentId,revision,targetDocumentId,operationId,identity})=>
    ({recipeId,documentId,revision,targetDocumentId,operationId,identity}))});
 }
@@ -31,7 +32,7 @@ export async function readPolicyReturnActivationEvidence(args) {
 async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys,sodium=defaultSodium}, selected, detached=false) {
  scope=structuredClone(scope);
  if(scope?.kind!=='household' || typeof deviceId!=='string') throw Error('INVALID_AUTHORITY');
- const loaded=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead);
+ const loaded=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead,!selected);
  if(!loaded.ok) throw Error(loaded.error.code);
  if(!loaded.value) throw Error('ACTIVATION_NOT_FOUND');
  const {receipt,staged,documents}=structuredClone(loaded.value);
@@ -142,6 +143,7 @@ async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,devi
  }
  return structuredClone({targetHead,sourceHead:staged.sourceHead,expected:receipt.expected,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
   ...(detached?{receipt,staged,targetDocuments:documents}:{}),
+  mapping:staged.mapping.map(({recipeId,sourceDocumentId})=>({recipeId,sourceDocumentId})),
   provenance,verifiedProvenance:receipt.provenance??null,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
    if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');
    return {recipeId:row.recipeId,documentId,revision,...receipt.targets[i],policySeed:source?.seed??null};})});

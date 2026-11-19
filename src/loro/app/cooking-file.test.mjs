@@ -431,6 +431,26 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.equal(must(await a.storage.readDisclosureActive(scope.id)),accepted.policyHash);
  const stable=row=>{const key=JSON.parse(row.key);return ['document','document-owner','local-key','local-key-operation'].includes(key[0]);};
  assert.deepEqual(a.rows().filter(stable),beforeReturn.filter(stable));
+ const {resolveReturnedPolicyAuthority}=await import('../authority/chain.mjs');
+ const returnResolve={storage:a.storage,scope,pin:a.root.head,provider:a.provider,authorDevice:a.deviceId,LoroDoc,targetHead,keys:signingKeys,sodium};
+ const afterReturn=a.rows();
+ const resolvedReturn=await resolveReturnedPolicyAuthority(returnResolve);
+ assert.equal(resolvedReturn.scope.documentId,staged.mapping[0].sourceDocumentId);
+ assert.deepEqual(resolvedReturn.members,staged.mapping.map(row=>({recipeId:row.recipeId,documentId:row.sourceDocumentId})));
+ assert.equal(resolvedReturn.selectionIndex,returnedState.selections.length);
+ await assert.rejects(()=>resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId));
+ await assert.rejects(()=>mounted.authorize());
+ await assert.rejects(()=>editMount.authorize());
+ await assert.rejects(()=>resolveReturnedPolicyAuthority({...returnResolve,storage:missingReceipt}));
+ await assert.rejects(()=>resolveReturnedPolicyAuthority({...returnResolve,keys:{use:async()=>{throw Error('missing key')}}}));
+ await assert.rejects(()=>resolveReturnedPolicyAuthority({...returnResolve,keys:{use:signingKeys.use.bind(signingKeys),useIdentity:async()=>{throw Error('missing source key')}}}),/missing source key/);
+ let returnReads=0;
+ const returnRace=Object.assign(Object.create(a.storage),{readPairingAuthority:async sc=>{const value=await a.storage.readPairingAuthority(sc);if(++returnReads===2)value.value.revision++;return value;}});
+ await assert.rejects(()=>resolveReturnedPolicyAuthority({...returnResolve,storage:returnRace}),/STALE_AUTHORITY/);
+ const corrupt=structuredClone(result.record);corrupt.authorityState[0]^=1;
+ const corruptStorage=Object.assign(Object.create(a.storage),{readPairingAuthority:async()=>({ok:true,value:corrupt})});
+ await assert.rejects(()=>resolveReturnedPolicyAuthority({...returnResolve,storage:corruptStorage}));
+ assert.deepEqual(a.rows(),afterReturn);
 
 });
 

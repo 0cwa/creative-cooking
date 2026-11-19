@@ -389,6 +389,27 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
  return resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,null);
 }
 
+/** Explicitly resolve one authenticated return to an ordinary original source. */
+export async function resolveReturnedPolicyAuthority({storage,scope,pin,provider,authorDevice,LoroDoc,targetHead,keys,sodium}) {
+ scope=copy(scope);
+ const record=await read(storage,scope);
+ const args={storage,scope,pin,provider,deviceId:authorDevice,LoroDoc,targetHead,keys,sodium};
+ const {readHistoricalPolicyActivationEvidence}=await import('../app/read-activated-policy-document-set.mjs');
+ const {verifyPolicyReturnCandidate}=await import('../app/verify-policy-return.mjs');
+ const evidence=await readHistoricalPolicyActivationEvidence(args);
+ const parent=JSON.parse(dec.decode(evidence.expected.authorityState));
+ if(parent.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice')))throw Error('UNSUPPORTED_SOURCE');
+ const {source}=await verifyPolicyReturnCandidate({...args,candidate:record});
+ const mapping=evidence.mapping;
+ if(!mapping.length || mapping[0].recipeId!==null || mapping[0].sourceDocumentId!==source.runtime.documentId ||
+   mapping.slice(1).some(row=>typeof row.recipeId!=='string' || !row.recipeId || typeof row.sourceDocumentId!=='string' || !row.sourceDocumentId) ||
+   new Set(mapping.map(row=>row.sourceDocumentId)).size!==mapping.length || new Set(mapping.slice(1).map(row=>row.recipeId)).size!==mapping.length-1)throw Error('INVALID_SOURCE');
+ await keys.useIdentity({version:1,scope,deviceId:authorDevice,purpose:'data',epochId:source.epochId},()=>{});
+ if(!same(record,await read(storage,scope)))throw Error('STALE_AUTHORITY');
+ const state=JSON.parse(dec.decode(record.authorityState));
+ return {...runtimeAuthority(scope,record,state,source,authorDevice),members:mapping.map(row=>({recipeId:row.recipeId,documentId:row.sourceDocumentId}))};
+}
+
 /** Resolve only after verifying the locally installed, selected document set. */
 export async function resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice,sodium,operationId,LoroDoc,
  paired=/** @type {{keys:any;useWrapping?:(use:(secret:Uint8Array)=>Promise<any>)=>Promise<any>}|undefined} */(undefined)}) {
