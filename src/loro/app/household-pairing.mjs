@@ -45,7 +45,7 @@ export function householdPairing({
     withSecrets, prepareJoinedSequences, finalizeJoinedSequences
   });
   const revocation=householdRevocation({...preparation,master,runtime,signingKey,wrappingPublicKey,withSecrets,LoroDoc,sha256});
-  const adultRemoval=householdAdultRemoval({...member,sodium,runtime,service,signingKey,randomUUID,revocation});
+  const adultRemoval=householdAdultRemoval({...member,sodium,runtime,service,signingKey,randomUUID,revocation,keys,withSecrets,LoroDoc});
   const readmission=continuity&&householdReadmission({...authority,sodium,runtime,rotation:revocation,withSecrets,
     deviceId,signingKey,wrappingPublicKey,pins,transfer,...continuity});
   const ownDevice=householdOwnDevice({name,sodium,storage,scope,pin,provider,store,pins,identity,runtime,service,keys,master,withSecrets,

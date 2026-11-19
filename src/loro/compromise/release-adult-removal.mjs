@@ -48,6 +48,7 @@ async function verifyPublication({storage,scope,operationId,pin,provider,sodium,
 export async function reopenAdultRemovalSponsor(options) {
  const checked=await verifyPublication(options);
  if(options.deviceId!==checked.body.deviceId)throw Error('INVALID_RECIPIENT');
+ if(options.expectedProposal!==undefined && !same(options.expectedProposal,{item:checked.body.item,grant:checked.body.grant,manifest:checked.body.manifest,recipientBindings:checked.body.recipientBindings}))throw Error('RETRY_MISMATCH');
  return structuredClone(checked.metadata);
 }
 

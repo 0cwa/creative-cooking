@@ -1,3 +1,4 @@
+import {readOnlyPairing} from './read-only-services.mjs';
 import {householdPairing} from './household-pairing.mjs';
 import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {resolveAdultRemovalReceipt} from '../compromise/resolve-adult-removal.mjs';
@@ -130,9 +131,10 @@ async function withRotationFixture({owners,policy,guest},run){
     const runtime=new OfflineRuntime({storage,LoroDoc,decodeImportBlobMeta,scope:auth.scope,codec:candidateCodec(provider),
      keyRef:auth.scope.epochId,authority:{rootPin:pin,provider,selectionIndex:auth.selectionIndex}});
     runtime.disclosure=disclosureService({storage,scope,rootPin:pin,provider,deviceId});
-    participant.pairing=householdPairing({name:'fixture',sodium,storage,master,provider,store:bind(states),scope,pin,deviceId,adultId,
-     runtime,service:runtime.disclosure,pins:{list:async()=>[]},keys:keys(),signing,wrapping,signingKey,wrappingPublicKey,
+    participant.makePairing=mounted=>householdPairing({name:'fixture',sodium,storage,master,provider,store:bind(states),scope,pin,deviceId,adultId,
+     runtime:mounted,service:runtime.disclosure,pins:{list:async()=>[]},keys:keys(),signing,wrapping,signingKey,wrappingPublicKey,
      selection:{},selectedHousehold:false,LoroDoc,randomUUID:()=>crypto.randomUUID(),withCurrent});
+    participant.pairing=participant.makePairing(runtime);
     Object.assign(participant,{runtime,service:householdRevocation({
      storage,scope,pin,provider,sodium,master,runtime,deviceId,adultId,signingKey,wrappingPublicKey,store:bind(states),
      withSecrets,LoroDoc,randomUUID:()=>crypto.randomUUID()
@@ -345,6 +347,54 @@ const houseState=async(participant,pin)=>{
  const current=await readAuthority(participant.storage,scope,pin,participant.provider);
  return (await verifyAuthority(current.state,pin,participant.provider)).nodes.get(current.activeHead);
 };
+
+test('adult removal facade publishes, releases and installs one confirmed complete set',async()=>{
+ await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],_root,pin)=>{
+  await apply(a.runtime,1,'pantry-create','facade-pantry',{itemId:'leek',name:'Leek',preference:3,author:a.deviceId,at});
+  const recipe=await a.runtime.forRecipe('facade-soup');recipe.disclosure=a.runtime.disclosure;
+  await apply(recipe,2,'recipe-create','facade-recipe',{recipe:{id:'facade-soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:a.deviceId,at});
+  const binding=await b.pairing.adultRemoval.binding(),status=await a.pairing.adultRemoval.status();
+  assert.equal(status.head,a.runtime.scope.branchHead);assert(status.targets.some(target=>target.adultId==='gamma'));
+  const draft=await a.pairing.adultRemoval.prepare({targetAdultId:'gamma',bindings:[binding],explicit:true});
+  const first=await a.pairing.adultRemoval.approve({proposal:draft.proposal,confirmed:draft.confirmation,explicit:true});
+  const approved=await b.pairing.adultRemoval.approve({proposal:first.proposal,confirmed:first.confirmation,explicit:true});
+  const recipientReview=await b.pairing.adultRemoval.review({proposal:approved.proposal});
+  assert.equal(recipientReview.complete,true);
+  await assert.rejects(()=>a.pairing.adultRemoval.publish({proposal:approved.proposal,confirmed:'wrong',explicit:true}),/REVIEW_CHANGED/);
+  const commit=a.storage.commitAdultRemovalPublication.bind(a.storage);
+  a.storage.commitAdultRemovalPublication=async(...args)=>{const result=await commit(...args);assert.equal(result.ok,true);throw Error('response lost');};
+  let published;
+  try{published=await a.pairing.adultRemoval.publish({proposal:approved.proposal,confirmed:approved.confirmation,explicit:true});}
+  finally{a.storage.commitAdultRemovalPublication=commit;}
+  assert.deepEqual(published,{head:approved.eventHash,operationId:approved.proposal.item.event.proposalId});
+  assert.deepEqual(await a.pairing.adultRemoval.publish({proposal:approved.proposal,confirmed:approved.confirmation,explicit:true}),published);
+  const changed=structuredClone(approved.proposal);changed.grant.signatures[0].signature='0'.repeat(128);
+  await assert.rejects(()=>a.pairing.adultRemoval.publish({proposal:changed,confirmed:approved.confirmation,explicit:true}));
+  const release=await a.pairing.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:b.deviceId});
+  await assert.rejects(()=>a.pairing.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:'c'}));
+  await assert.rejects(()=>b.pairing.adultRemoval.install({release,confirmed:'wrong',sourceRevision:recipientReview.sourceRevision,explicit:true}),/REVIEW_CHANGED/);
+  await assert.rejects(()=>b.pairing.adultRemoval.install({release,confirmed:recipientReview.confirmation,sourceRevision:recipientReview.sourceRevision+1,explicit:true}),/REVIEW_CHANGED/);
+  const install={release,confirmed:recipientReview.confirmation,sourceRevision:recipientReview.sourceRevision,explicit:true};
+  assert.deepEqual(await b.pairing.adultRemoval.install(install),{head:published.head});
+  const rows=b.rows();assert.deepEqual(await b.pairing.adultRemoval.install(install),{head:published.head});assert.deepEqual(b.rows(),rows);
+  const bad=structuredClone(release);bad.bytes[0]^=1;
+  await assert.rejects(()=>b.pairing.adultRemoval.install({...install,release:bad}));assert.deepEqual(b.rows(),rows);
+  a.close();a.open();
+  const discovered=await resolveOriginalHousehold({storage:a.storage,scope,pin,provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys:a.keys()}});
+  const mounted=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:discovered.resolved,adultRemoval:discovered.adultRemoval,pin,provider:a.provider,sodium,keys:a.keys(),signing:{operationId:'signing',identity:signerIdentity(a.deviceId),publicKey:a.signingKey},LoroDoc,decodeImportBlobMeta});
+  const readonly=readOnlyPairing(a.makePairing(mounted),discovered.adultRemoval);
+  const readonlyRows=a.rows();
+  assert.equal((await readonly.adultRemoval.status()).head,published.head);
+  assert.deepEqual(await readonly.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:b.deviceId}),release);
+  await assert.rejects(()=>readonly.adultRemoval.exportFile({operationId:'wrong',recipientDeviceId:b.deviceId}));
+  await assert.rejects(()=>readonly.adultRemoval.publish({proposal:approved.proposal,confirmed:approved.confirmation,explicit:true}),/READ_ONLY_WORKSPACE/);
+  await assert.rejects(()=>readonly.revocation.status(),/READ_ONLY_WORKSPACE/);
+  const blocked=readOnlyPairing(a.makePairing(mounted),{role:'recipient'});
+  await assert.rejects(()=>blocked.adultRemoval.status(),/READ_ONLY_WORKSPACE/);
+  await assert.rejects(()=>blocked.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:b.deviceId}),/READ_ONLY_WORKSPACE/);
+  assert.deepEqual(a.rows(),readonlyRows);
+ });
+});
 
 test('adult removal complete-set proposal binds its signed head and projected documents',async()=>{
  await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],root,pin)=>{

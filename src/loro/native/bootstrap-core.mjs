@@ -158,7 +158,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
     listOutboundObjects:active(()=>storage.listOutboundObjects(activeScope.id)),
     subscribe:listener=>subscribeActions(household,listener)
    },
-   personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing:readOnlyPolicy?readOnlyPairing(householdPairing):householdPairing,cookingFiles:activeMethods(readOnlyPolicy?unavailableInReadOnly(cooking):cooking),direct,
+   personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing:readOnlyPolicy?readOnlyPairing(householdPairing,adultRemoval):householdPairing,cookingFiles:activeMethods(readOnlyPolicy?unavailableInReadOnly(cooking):cooking),direct,
    householdContent,installedRecipeIds,executeHouseholdAction:householdContent.execute,
    disclosure:activeMethods(readOnlyPolicy?unavailableInReadOnly(disclosure):disclosure),disclosureProvider:activeMethods(provider),readOnly:!!readOnlyPolicy,needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,

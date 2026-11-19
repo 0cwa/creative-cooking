@@ -5,8 +5,12 @@ export function unavailableInReadOnly(value) {
  if(!value || typeof value!=='object' || Array.isArray(value))return value;
  return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,unavailableInReadOnly(item)]));
 }
-export function readOnlyPairing(pairing) {
- return {...unavailableInReadOnly(pairing),selection:pairing.selection,
+export function readOnlyPairing(pairing,adultRemoval) {
+ const limited=unavailableInReadOnly(pairing);
+ if(adultRemoval?.role==='sponsor' && pairing.adultRemoval){
+  limited.adultRemoval={...limited.adultRemoval,status:pairing.adultRemoval.status,exportFile:pairing.adultRemoval.exportFile};
+ }
+ return {...limited,selection:pairing.selection,
   selectedHousehold:pairing.selectedHousehold,onInstalled:pairing.onInstalled,
   acceptedParents:pairing.acceptedParents};
 }
