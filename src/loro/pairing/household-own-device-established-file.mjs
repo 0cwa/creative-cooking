@@ -2,7 +2,9 @@ import {MAX_SELECTED_CHILDREN} from '../contracts/runtime-storage.ts';
 import {selectedSourceHash} from '../projection/selected-sources.mjs';
 import {exact,sameOwnDevice} from './household-own-device.mjs';
 import {makeKeyPackage,verifyStoredKeyPackage,withOpenedKeyPackage} from './key-package.mjs';
-import {openDeviceCopy,sealDeviceCopy} from './personal-copy.mjs';
+import {MAX_PERSONAL_PAIRING_FILE,openDeviceCopy,sealDeviceCopy} from './personal-copy.mjs';
+import {authorityBytes,snapshotId,verifyAuthority} from '../authority/chain.mjs';
+import {checkExistingRecipientCeremonies} from '../authority/ceremony.mjs';
 import {verifyOwnDeviceRecipients} from './household-own-device-recipients.mjs';
 
 const fileDomain='household-own-device-established-file-v1';
@@ -46,9 +48,9 @@ export async function sealEstablishedOwnDeviceFile({sodium,provider,checked,reci
 /** Recheck every ceremony before constructing packets. The caller invokes packetFor
  * once per document inside prepareForAtomicInstall, then seals only after all
  * documents have packets. These transient files must not be offered before an
- * atomic publication retains them. Installation still needs an independently
- * verified successor and copy set; the established file does not carry those. */
-export async function prepareEstablishedOwnDeviceFanout({sodium,provider,checked,parent,authorizationSnapshot,evidence,signingSecret}) {
+ * atomic publication retains them. Version 2 carries the transition and copy set
+ * for verification against the recipient’s independently retained parent. */
+export async function prepareEstablishedOwnDeviceFanout({sodium,provider,checked,parent,authorizationSnapshot,evidence,signingSecret,transition}) {
  const proofs=structuredClone(evidence);
  const recipients=await verifyOwnDeviceRecipients({sodium,provider,successor:checked,parent,authorizationSnapshot,evidence:proofs});
  const routes=await Promise.all(recipients.map(async recipient=>{
@@ -73,6 +75,7 @@ export async function prepareEstablishedOwnDeviceFanout({sodium,provider,checked
     const selected=packets.map(row=>row[i]);
     selected.forEach((packet,j)=>verifyStoredKeyPackage(sodium,packet,cs[j]));
     return {recipient,file:sealDeviceCopy(sodium,fileDomain,recipient.transcriptHash,proof.transcript.responder,signingSecret,
+     transition ? {version:2,...transition,packets:selected} :
      {version:1,head:checked.head,copyHash:checked.context.manifestHash,documents:checked.documents,packets:selected})};
    });
   }
@@ -94,4 +97,42 @@ export async function withOpenedEstablishedOwnDeviceFile({sodium,provider,checke
   keys.push({documentId:cs[i].projectionId,key});return open(i+1);
  });
  return open(0);
+}
+
+/** Open a released file using only locally retained authority and a completed local ceremony.
+ * A different retained authorization snapshot, even at the same head, fails closed. */
+export async function withOpenedEstablishedOwnDeviceTransition({sodium,provider,pin,parentRecord,evidence,file,wrappingSecret,withKeys,...options}) {
+ if(!(file instanceof Uint8Array)||file.length<=112||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
+ parentRecord=structuredClone(parentRecord); evidence=structuredClone(evidence); file=new Uint8Array(file);
+ const secret=new Uint8Array(wrappingSecret);
+ try {
+  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(parentRecord.authorityState));
+  if(!sameOwnDevice(sodium,authorityBytes(state),parentRecord.authorityState)||state.activeHead!==parentRecord.acceptedParent||
+     await snapshotId(provider,state)!==parentRecord.authorizationSnapshot||state.root?.householdId!==parentRecord.scope.id)throw Error('INVALID_AUTHORITY');
+  const verified=await verifyAuthority(state,pin,provider),parent=verified.nodes.get(state.activeHead);
+  const c=evidence?.context;
+  const [recipient]=await checkExistingRecipientCeremonies(sodium,parent,parentRecord.authorizationSnapshot,
+   {admissionEventHash:c?.admissionEventHash,newEpochId:c?.newEpochId},[evidence],provider);
+  if(evidence.transcript.action!=='pairOwnDevice'||hex(sodium.crypto_scalarmult_base(secret))!==recipient.wrappingKeyRef)throw Error('INVALID_PROOF');
+  const contents=openDeviceCopy(sodium,fileDomain,file,recipient.transcriptHash,evidence.transcript,secret);
+  if(!exact(contents,['version','parentFingerprint','head','item','selection','set','packets'])||contents.version!==2||
+     contents.parentFingerprint!==hex(await provider.hash(authorityBytes(parentRecord))))throw Error('INVALID_FILE');
+  const {head,item,selection,set,packets}=contents;
+  const nextState={...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:head};
+  const next={scope:parentRecord.scope,revision:parentRecord.revision+1,acceptedParent:head,authorityState:authorityBytes(nextState),authorizationSnapshot:await snapshotId(provider,nextState)};
+  const {verifyOwnDeviceSetSuccessor}=await import('./household-own-device-set.mjs');
+  const checked=await verifyOwnDeviceSetSuccessor({...options,sodium,provider,pin,parentRecord,next,set});
+  // Verify the local ceremony against the verified event; other recipients need not disclose their ceremonies.
+  const signal=(await import('./household-own-device-recipients.mjs')).ownDeviceRecipientSignal(head,item.event.subject.copyHash,item.event.epochId);
+  if(c.admissionEventHash!==head||c.newEpochId!==item.event.epochId||c.sponsorDeviceId!==item.event.authorDeviceId||
+     evidence.transcript.signaling.length!==2||!sameOwnDevice(sodium,evidence.transcript.signaling[1],signal))throw Error('INVALID_PROOF');
+  const cs=await contexts({sodium,provider,checked,recipient,evidence});
+  if(!Array.isArray(packets)||packets.length!==cs.length)throw Error('INVALID_FILE');
+  for(const [i,context] of cs.entries())verifyStoredKeyPackage(sodium,packets[i],context);
+  const keys=[];
+  const open=i=>i===cs.length?withKeys({checked,next,set,keys}):withOpenedKeyPackage(sodium,packets[i],cs[i],secret,key=>{
+   keys.push({documentId:cs[i].projectionId,key});return open(i+1);
+  });
+  return await open(0);
+ } finally {secret.fill(0)}
 }

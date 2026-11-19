@@ -198,7 +198,7 @@ export async function publishOwnDeviceSet({storage,provider,sodium,LoroDoc,pin,p
  const checked=await verifyOwnDeviceSetSuccessor({storage,provider,sodium,LoroDoc,pin,parentRecord,next,set,proposal:evidence});
  requireLocalEvidence(sodium,checked,evidence);
  if(deviceId!==checked.context.senderDevice)throw Error('INVALID_KEY');
- const fanout=await prepareEstablishedOwnDeviceFanout({sodium,provider,checked,parent:checked.parent,authorizationSnapshot:parentRecord.authorizationSnapshot,evidence:establishedEvidence,signingSecret});
+ const fanout=await prepareEstablishedOwnDeviceFanout({sodium,provider,checked,parent:checked.parent,authorizationSnapshot:parentRecord.authorizationSnapshot,evidence:establishedEvidence,signingSecret,transition:{parentFingerprint:hex(await provider.hash(authorityBytes(parentRecord))),head:checked.head,item:checked.item,selection:checked.selection,set}});
  const contexts=await keyContexts(provider,checked),packets=[],establishedPackets=[],keyHashes=[];
  const documents=[];
  for(const [index,document] of checked.documents.entries()){

@@ -3,7 +3,7 @@ import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-c
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
 import {ownDeviceRecipientSignal,verifyOwnDeviceRecipients} from '../pairing/household-own-device-recipients.mjs';
-import {withOpenedEstablishedOwnDeviceFile} from '../pairing/household-own-device-established-file.mjs';
+import {withOpenedEstablishedOwnDeviceTransition} from '../pairing/household-own-device-established-file.mjs';
 import {householdCompromise} from './household-compromise.mjs';
 import {CompromiseReviews,REVIEW_LIMITS} from '../compromise/review.mjs';
 import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
@@ -1969,11 +1969,23 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.deepEqual(sponsorHashes,newcomerHashes);
   for(const [index,recipient] of establishedRecipients.entries()){
    const material=establishedMaterials.get(recipient.deviceId);
-   await withOpenedEstablishedOwnDeviceFile({sodium,provider:a.provider,checked:signedCopy,recipient,evidence:establishedEvidence[index],
-    file:published.establishedRecipients[index].ciphertext,wrappingSecret:material.secret,withKeys:keys=>{
+   await withOpenedEstablishedOwnDeviceTransition({...fileOptions,sodium,provider:a.provider,evidence:establishedEvidence[index],
+    file:published.establishedRecipients[index].ciphertext,wrappingSecret:material.secret,withKeys:({keys})=>{
      assert.deepEqual(keys.map(({documentId})=>documentId),signedCopy.documents.map(document=>document.targetDocumentId));
      assert.deepEqual(keys.map(({key})=>pairingDigest(sodium,key)),sponsorHashes);
     }});
+  }
+  {
+   const material=establishedMaterials.get(establishedRecipients[0].deviceId);
+   const args={...fileOptions,sodium,provider:a.provider,evidence:establishedEvidence[0],
+    file:published.establishedRecipients[0].ciphertext,wrappingSecret:material.secret,withKeys:()=>assert.fail('unexpected callback')};
+   const wrongParent=structuredClone(fileOptions.parentRecord);wrongParent.authorizationSnapshot='wrong';
+   await assert.rejects(()=>withOpenedEstablishedOwnDeviceTransition({...args,parentRecord:wrongParent}));
+   const badProof=structuredClone(args.evidence);badProof.messages.offers.initiator.signature='00'.repeat(64);
+   await assert.rejects(()=>withOpenedEstablishedOwnDeviceTransition({...args,evidence:badProof}));
+   await assert.rejects(()=>withOpenedEstablishedOwnDeviceTransition({...args,evidence:establishedEvidence[1]}));
+   const tampered=args.file.slice();tampered[tampered.length-1]^=1;
+   await assert.rejects(()=>withOpenedEstablishedOwnDeviceTransition({...args,file:tampered}));
   }
   for(const mutate of [saved=>{saved.sponsor.establishedRecipients.entries[0].ciphertext[0]^=1},
    saved=>{delete saved.sponsor.establishedRecipients},saved=>{saved.sponsor.establishedRecipients.entries[0].ceremonyGuardId+='x'}]){
