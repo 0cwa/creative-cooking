@@ -15,7 +15,7 @@ import {
 } from '../pairing/household-own-device.mjs';
 import {verifyHouseholdParentRecord} from './household-parent.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
-import {captureOwnDeviceCopySet,installOwnDeviceSetFile,isOwnDeviceSetFile,publishOwnDeviceSet,reopenOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
+import {captureOwnDeviceCopySet,installOwnDeviceSetFile,installEstablishedOwnDeviceSet,selectedOwnDeviceSet,isOwnDeviceSetFile,publishOwnDeviceSet,reopenOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 import {existingRecipientContextBytes} from '../authority/ceremony.mjs';
 import {ownDeviceRecipientSignal,verifyOwnDeviceRecipients} from '../pairing/household-own-device-recipients.mjs';
 import {preflightOwnDeviceLocalTransition} from '../pairing/household-own-device-local-transition.mjs';
@@ -432,6 +432,25 @@ export function householdOwnDevice({
    const next={scope,revision:live.record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
    return {item,head,next,nextState,selection:{...selection,signature}};
  }
+ async function installEstablished(file,evidence){
+  if(!(file instanceof Uint8Array)||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
+  if(!evidence?.transcript||!evidence.guard||!evidence.oob)throw Error('INVALID_PROOF');
+  return withSecrets(async secrets=>{
+   const session=durableSession(s,store,secrets,evidence.transcript,evidence.guard,'responder',evidence.oob);
+   const completed=await session.evidence();
+   if(!same(completed.messages,evidence.messages)||completed.hash!==evidence.oob.hash)throw Error('INVALID_PROOF');
+   let parentRecord=must(await storage.readPairingAuthority(scope));
+   if(!parentRecord)throw Error('INVALID_AUTHORITY');
+   // Only a retained receipt for this exact file and proof may recover the
+   // old local parent after the selected authority has advanced.
+   const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(parentRecord.authorityState));
+   const operation=await selectedOwnDeviceSet(parentRecord,state,provider);
+   const receipt=operation&&must(await storage.readHouseholdOwnDeviceSetReceipt(scope,operation));
+   if(receipt?.recipient?.kind==='established'&&receipt.recipient.deviceId===deviceId&&
+      receipt.recipient.fileHash===digest(file)&&same(receipt.recipient.evidence,evidence))parentRecord=receipt.expected;
+   return installEstablishedOwnDeviceSet({storage,runtime,provider,sodium:s,LoroDoc,pin,parentRecord,evidence,file,keys,deviceId,...secrets});
+  });
+ }
  async function install(file){
   if(!(file instanceof Uint8Array)||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
   file=new Uint8Array(file);
@@ -547,5 +566,5 @@ export function householdOwnDevice({
    policy:selected.policy,devices:selected.devices,events:ancestry.reverse()};
  }
  return {deviceId,fingerprint:fingerprint(own),rootPin:pin,request,propose,inspect:async incoming=>(await inspectProposal(parse(incoming),'responder')).view,
-  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publishPreparedSet,publish,install,acceptExisting,history};
+  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publishPreparedSet,publish,install,installEstablished,acceptExisting,history};
 }

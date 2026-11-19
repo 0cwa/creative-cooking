@@ -926,6 +926,15 @@ async function ownDeviceScenario(prepareOnly=false,publishPrepared=false) {
     assert.equal(replay.replayed,true);
     assert.deepEqual(replay.file,published.file);
     assert.deepEqual(replay.establishedRecipients,published.establishedRecipients);
+    const recipientFile=published.establishedRecipients[0].ciphertext;
+    const installed=await established.installEstablished(recipientFile,proof);
+    assert.equal(installed.head,published.head);
+    assert.equal(installed.replayed,false);
+    assert.equal((await established.installEstablished(recipientFile,proof)).replayed,true);
+    const changedFile=new Uint8Array(recipientFile);changedFile[changedFile.length-1]^=1;
+    await assert.rejects(established.installEstablished(changedFile,proof));
+    const changedProof=structuredClone(proof);changedProof.messages.acks.responder.signature='0'.repeat(128);
+    await assert.rejects(established.installEstablished(recipientFile,changedProof));
     return;
    }
    await addPantry(sponsor,'changed-after-preparation');
