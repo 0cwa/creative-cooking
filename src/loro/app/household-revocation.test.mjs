@@ -1,3 +1,4 @@
+import {encodeAdultRemovalRelease,decodeAdultRemovalRelease,adultRemovalReleaseSize,MAX_ADULT_REMOVAL_FILE} from '../pairing/adult-removal-wire.mjs';
 import {readOnlyPairing} from './read-only-services.mjs';
 import {householdPairing} from './household-pairing.mjs';
 import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
@@ -371,10 +372,50 @@ test('adult removal facade publishes, releases and installs one confirmed comple
   const changed=structuredClone(approved.proposal);changed.grant.signatures[0].signature='0'.repeat(128);
   await assert.rejects(()=>a.pairing.adultRemoval.publish({proposal:changed,confirmed:approved.confirmation,explicit:true}));
   const release=await a.pairing.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:b.deviceId});
+  const frame=encodeAdultRemovalRelease(release),decoded=decodeAdultRemovalRelease(frame);
+  assert.deepEqual(decoded,release);assert.equal(adultRemovalReleaseSize(release),frame.length);
+  const sourceRows=a.rows(),receiverRows=b.rows();
+  const lengthView=new DataView(frame.buffer,frame.byteOffset,frame.byteLength),headerLength=lengthView.getUint32(5,false);
+  const header=new TextDecoder().decode(frame.subarray(21,21+headerLength));
+  const replaceHeader=headerBytes=>{
+   const out=new Uint8Array(frame.length-headerLength+headerBytes.length),view=new DataView(out.buffer);
+   out.set(frame.subarray(0,21));view.setUint32(5,headerBytes.length,false);out.set(headerBytes,21);out.set(frame.subarray(21+headerLength),21+headerBytes.length);return out;
+  };
+  const duplicate=new TextEncoder().encode('{"revision":0,'+header.slice(1));
+  const invalidUtf8=frame.slice();invalidUtf8[21]=255;
+  const wrongMagic=frame.slice();wrongMagic[0]^=1;
+  const wrongVersion=frame.slice();wrongVersion[4]++;
+  const wrongLength=frame.slice();new DataView(wrongLength.buffer).setUint32(9,0xffffffff,false);
+  const trailing=new Uint8Array(frame.length+1);trailing.set(frame);
+  const malformedProof=frame.slice();malformedProof[21+headerLength+lengthView.getUint32(9,false)]=255;
+  for(const input of [new Uint8Array(),wrongMagic,wrongVersion,wrongLength,trailing,invalidUtf8,malformedProof,replaceHeader(duplicate),frame.subarray(0,frame.length-1),new Uint8Array(MAX_ADULT_REMOVAL_FILE+1)])assert.throws(()=>decodeAdultRemovalRelease(input));
+  const extra={...release,unexpected:true};assert.throws(()=>encodeAdultRemovalRelease(extra));
+  const mismatch=structuredClone(release);mismatch.proposal.item.event.proposalId='other';assert.throws(()=>encodeAdultRemovalRelease(mismatch));
+  const duplicateProof=structuredClone(release),proofText=new TextDecoder().decode(duplicateProof.proof);
+  duplicateProof.proof=new TextEncoder().encode(proofText.replace('{"body":','{"body":null,"body":'));
+  assert.throws(()=>encodeAdultRemovalRelease(duplicateProof));
+  const duplicateState=structuredClone(release),stateText=new TextDecoder().decode(duplicateState.publisherRecord.authorityState);
+  duplicateState.publisherRecord.authorityState=new TextEncoder().encode('{"activeHead":"wrong",'+stateText.slice(1));
+  assert.throws(()=>encodeAdultRemovalRelease(duplicateState));
+  const wrongScope=structuredClone(release);wrongScope.publisherRecord.scope.id='wrong';assert.throws(()=>encodeAdultRemovalRelease(wrongScope));
+  const forged=structuredClone(release),unsigned=JSON.parse(new TextDecoder().decode(forged.proof))[2];
+  unsigned.signature='0'.repeat(128);forged.proof=domain('adult-removal-publication-v1',unsigned);
+  const structurallyDecoded=decodeAdultRemovalRelease(encodeAdultRemovalRelease(forged));
+  await assert.rejects(()=>b.pairing.adultRemoval.install({release:structurallyDecoded,confirmed:recipientReview.confirmation,sourceRevision:recipientReview.sourceRevision,explicit:true}));
+
+  const overflow=structuredClone(release),wireState=JSON.parse(new TextDecoder().decode(overflow.publisherRecord.authorityState));
+  wireState.padding='x'.repeat(1024*1024-overflow.publisherRecord.authorityState.length-100);
+  overflow.publisherRecord.authorityState=authorityBytes(wireState);
+  const proofBody=JSON.parse(new TextDecoder().decode(overflow.proof))[2];
+  proofBody.body.documents.push({padding:'x'.repeat(8*1024*1024-overflow.proof.length-100)});
+  overflow.proof=domain('adult-removal-publication-v1',proofBody);overflow.bytes=new Uint8Array(7*1024*1024);
+  assert.throws(()=>adultRemovalReleaseSize(overflow),/TOO_LARGE/);
+  assert.deepEqual(a.rows(),sourceRows);assert.deepEqual(b.rows(),receiverRows);
+
   await assert.rejects(()=>a.pairing.adultRemoval.exportFile({operationId:published.operationId,recipientDeviceId:'c'}));
   await assert.rejects(()=>b.pairing.adultRemoval.install({release,confirmed:'wrong',sourceRevision:recipientReview.sourceRevision,explicit:true}),/REVIEW_CHANGED/);
   await assert.rejects(()=>b.pairing.adultRemoval.install({release,confirmed:recipientReview.confirmation,sourceRevision:recipientReview.sourceRevision+1,explicit:true}),/REVIEW_CHANGED/);
-  const install={release,confirmed:recipientReview.confirmation,sourceRevision:recipientReview.sourceRevision,explicit:true};
+  const install={release:decoded,confirmed:recipientReview.confirmation,sourceRevision:recipientReview.sourceRevision,explicit:true};
   assert.deepEqual(await b.pairing.adultRemoval.install(install),{head:published.head});
   const rows=b.rows();assert.deepEqual(await b.pairing.adultRemoval.install(install),{head:published.head});assert.deepEqual(b.rows(),rows);
   const bad=structuredClone(release);bad.bytes[0]^=1;

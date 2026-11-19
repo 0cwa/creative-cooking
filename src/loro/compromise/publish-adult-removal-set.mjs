@@ -1,6 +1,7 @@
 import {authorityBytes} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
+import {adultRemovalReleaseSize} from '../pairing/adult-removal-wire.mjs';
 import {sealAdultRemovalFile} from '../pairing/adult-removal-file.mjs';
 import {prepareAdultRemovalDocumentSet} from '../projection/current-document-set.mjs';
 import {verifyAdultRemovalGrant} from './adult-removal-grant.mjs';
@@ -80,9 +81,11 @@ export async function publishAdultRemovalDocumentSet({
     const signature=hex(await provider.sign(signingKey,domain(purpose,body)));
     const author=parent.devices.find(device=>device.active&&device.deviceId===deviceId);
     if(!author || !await verifySignature(provider,author.signingKeyRef,purpose,body,signature))throw Error('INVALID_SIGNER');
+    const proof=domain(purpose,{body,signature});
+    for(const file of files)adultRemovalReleaseSize({bytes:file.bytes,proof,publisherRecord:successor.record,proposal:{item,grant,manifest,recipientBindings}});
     const committed=await storage.commitAdultRemovalPublication({
       version:1,operationId,sponsorDeviceId:deviceId,manifestHash:reviewed.manifestHash,
-      proof:domain(purpose,{body,signature}),expected:record,next:successor.record,documents,files
+      proof,expected:record,next:successor.record,documents,files
     },projected.source);
     if(!committed.ok)throw Error(committed.error.code);
     return {operationId,head:successor.record.acceptedParent};
