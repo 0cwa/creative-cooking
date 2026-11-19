@@ -195,7 +195,7 @@ test('retained policy activation authenticates signed history and local keys',as
  const [a]=await household(t), master=testMaster(), keys=a.storage.localKeys(master,sodium);
  await keys.provision('retained-master');
  const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
- await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
+ const accepted=await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
  await a.edit('retained-root',1);
  const recipe=await a.runtime.forRecipe('retained-recipe');
  const after={id:'retained-recipe',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
@@ -211,6 +211,18 @@ test('retained policy activation authenticates signed history and local keys',as
  const vote={version:1,householdId:scope.id,eventHash:targetHead,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,adultId:author.adultId,deviceId:a.deviceId};
  const item={event,authorSignature:await sign('event-signature',event),approvals:[{...vote,signature:await sign('approval-signature',vote)}]};
  const staged=await stageVerifiedPolicyDocumentSet({runtime:a.runtime,item,signed:full.signed});
+ const {capturePolicySourceEvidence}=await import('./capture-policy-source-evidence.mjs');
+ const capture=()=>capturePolicySourceEvidence({runtime:a.runtime,targetHead,service:a.service,sodium});
+ const evidenceCapture=await capture();
+ assert.deepEqual(evidenceCapture.body.rows.map(x=>x.targetDocumentId),staged.mapping.map(x=>x.targetDocumentId));
+ assert.ok(evidenceCapture.body.rows.every(x=>x.sources.length && x.sources.every(y=>y.incomplete)));
+ assert.ok(evidenceCapture.body.rows.every(x=>x.sources.some(y=>y.policyHashes.includes(accepted.policyHash))));
+ assert.deepEqual(await capture(),evidenceCapture);
+ assert.ok(!JSON.stringify(evidenceCapture.body).includes('snapshot'));
+ const tampered=Object.assign(Object.create(a.storage),{readStagedPolicyDocumentSet:async (...args)=>{const result=await a.storage.readStagedPolicyDocumentSet(...args);result.value.mapping[1].targetDocumentId='wrong';return result;}});
+ await assert.rejects(()=>capturePolicySourceEvidence({runtime:Object.assign(Object.create(a.runtime),{storage:tampered}),targetHead,service:a.service,sodium}));
+ const racing=Object.assign(Object.create(a.storage),{checkSelectedHouseholdSources:async()=>({ok:false,error:{code:'STALE_SOURCE'}})});
+ await assert.rejects(()=>capturePolicySourceEvidence({runtime:Object.assign(Object.create(a.runtime),{storage:racing}),targetHead,service:a.service,sodium}));
  const prepared=await preparePolicyDocumentKeys({runtime:a.runtime,targetHead,keys,withSourceDocumentKey:async(_route,use)=>use(new Uint8Array(32).fill(7))});
  const expected=must(await a.storage.readPairingAuthority(scope)), state=JSON.parse(new TextDecoder().decode(expected.authorityState));
  const selection={from:parent.head,to:targetHead,deviceId:a.deviceId,index:state.selections.length};
