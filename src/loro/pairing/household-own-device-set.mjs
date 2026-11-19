@@ -1,5 +1,6 @@
 import {authorityBytes,snapshotId} from '../authority/chain.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
+import {domain} from '../authority/validator.mjs';
 import {MAX_SELECTED_CHILDREN,MAX_SELECTED_SET_BYTES} from '../contracts/runtime-storage.ts';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
 import {recipeDocumentId} from '../domain/recipe-document.mjs';
@@ -192,4 +193,60 @@ export async function withOpenedOwnDeviceSetFile({file,wrappingSecret,evidence,w
     });
   return await open(0);
  }finally{secret.fill(0)}
+}
+
+/** Install a verified file against the recipient's independently confirmed parent. */
+export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret,signingSecret,keys,deviceId}) {
+ if(!(file instanceof Uint8Array)||file.length<=112||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
+ ({parentRecord,evidence,file}=structuredClone({parentRecord,evidence,file}));
+ const scope=parentRecord.scope,operationId=evidence.transcript.sessionId,fileHash=pairingDigest(sodium,file);
+ const secret=new Uint8Array(wrappingSecret),signer=new Uint8Array(signingSecret);
+ const readReceipt=async()=>must(await storage.readHouseholdOwnDeviceSetReceipt(scope,operationId));
+ const same=(a,b)=>sameOwnDevice(sodium,a,b);
+ async function install(prior) {
+  if(prior){
+   if(prior.recipient.fileHash!==fileHash||prior.recipient.deviceId!==deviceId||!same(prior.expected,parentRecord))
+    throw Error('CONFLICT');
+  }
+  // The transaction rechecks the exact selected record, including on replay.
+  const parentView={readPairingAuthority:async requested=>({ok:true,value:same(requested,scope)?parentRecord:null})};
+  return withOpenedOwnDeviceSetFile({storage:parentView,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,
+   wrappingSecret:secret,withKeys:async({checked,next,keys:opened})=>{
+    if(checked.context.recipientDevice!==deviceId)throw Error('INVALID_KEY');
+    const receipt=domain('household-own-device-set-receipt',{scope,pin,operationId,deviceId,fileHash,
+     head:checked.head,guardId:checked.proof.guard.guardId,parent:parentRecord.authorizationSnapshot,copyHash:checked.context.manifestHash});
+    const signature=prior?.recipient.signature??hex(sodium.crypto_sign_detached(receipt,signer));
+    if(!sodium.crypto_sign_verify_detached(sodium.from_hex(signature),receipt,checked.proof.transcript.responder.signingPublicKey))
+     throw Error('INVALID_PROOF');
+    const documents=[];
+    for(const [index,document] of checked.documents.entries()){
+     const {documentId,key}=opened[index];
+     const epochId=await selectedSourceHash(provider,'household-own-device-key-slot-v1',{
+      scope,pin,head:checked.head,epochId:checked.context.epochId,documentId
+     });
+     const keyOperationId=await selectedSourceHash(provider,'household-own-device-key-operation-v1',{epochId,deviceId});
+     const identity={version:1,scope,deviceId,purpose:'data',epochId};
+     const localKey=await keys.preparePairedDataKey(keyOperationId,identity,key);
+     documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,
+      documentId,bytes:document.copy.snapshot,sources:document.copy.sources,localKey});
+    }
+    const {replayed}=must(await storage.commitHouseholdOwnDeviceSet({operationId,guardId:checked.proof.guard.guardId,
+     expected:parentRecord,next,copyHash:checked.context.manifestHash,file,documents,recipient:{deviceId,fileHash,signature}}));
+    return {scope,head:checked.head,replayed};
+   }});
+ }
+ try{
+  let prior=await readReceipt();
+  if(!prior&&!same(must(await storage.readPairingAuthority(scope)),parentRecord)){
+   prior=await readReceipt();
+   if(!prior)throw Error('STALE_AUTHORITY');
+  }
+  try{return await install(prior)}
+  catch(error){
+   if(prior||!['CONFLICT','LOCKED'].includes(error.message))throw error;
+   const committed=await readReceipt();
+   if(!committed)throw error;
+   return await install(committed);
+  }
+ }finally{secret.fill(0);signer.fill(0)}
 }

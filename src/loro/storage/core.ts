@@ -92,10 +92,11 @@ type OwnDevicePublication = {
 };
 type OwnDeviceSetPublication = {
   operationId:string; guardId:string; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
-  guard:SelectedHouseholdSources; copyHash:string; file:Uint8Array;
+  copyHash:string; file:Uint8Array;
   documents:{recipeId:string|null; sourceDocumentId:string; documentId:string; bytes:Uint8Array;
     sources:{effectId:string;policyHashes:string[]}[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
-};
+} & ({guard:SelectedHouseholdSources;recipient?:never} |
+     {guard?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
   source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
@@ -147,7 +148,15 @@ const validateRecord = (k: string, v: any) => {
     case 'projection-pending': valid = typeof v==='string'; break;
     case 'projection-document': valid = fields(v,['generation','operationId']) && revision(v.generation) && typeof v.operationId==='string'; break;
     case 'household-own-device-sources': valid=denseArray(v,row=>fields(row,['effectId','policyHashes'])&&validId(row.effectId)&&denseArray(row.policyHashes,validId)); break;
-    case 'household-own-device-set': valid=object(v)&&v.version===1&&validatePairingAuthority(v.next).ok&&validId(v.guardId)&&hexOf(v.copyHash,64)&&validPairingFile(v.file)&&denseArray(v.mapping,row=>fields(row,['recipeId','sourceDocumentId','documentId'])&&(row.recipeId===null||validId(row.recipeId))&&validId(row.sourceDocumentId)&&validId(row.documentId)); break;
+    case 'household-own-device-set': {
+      const base=['version','next','guardId','copyHash','file','mapping'];
+      valid=(fields(v,base)||fields(v,[...base,'expected','recipient'])&&validatePairingAuthority(v.expected).ok&&
+        fields(v.recipient,['deviceId','fileHash','signature'])&&validId(v.recipient.deviceId)&&
+        hexOf(v.recipient.fileHash,64)&&hexOf(v.recipient.signature,128))&&
+        v.version===1&&validatePairingAuthority(v.next).ok&&validId(v.guardId)&&hexOf(v.copyHash,64)&&validPairingFile(v.file)&&
+        denseArray(v.mapping,row=>fields(row,['recipeId','sourceDocumentId','documentId'])&&(row.recipeId===null||validId(row.recipeId))&&validId(row.sourceDocumentId)&&validId(row.documentId));
+      break;
+    }
     case 'household-own-device': valid=fields(v,['next','guardId','documentId','file'])&&validatePairingAuthority(v.next).ok&&validId(v.guardId)&&validId(v.documentId)&&(v.file===null||validPairingFile(v.file)); break;
     case 'personal-pairing-file': valid = validPairingFile(v); break;
     case 'personal-selection': valid = validPersonalSelection(v); break;
@@ -758,33 +767,58 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   /** Commit a previously verified v5 successor and its complete prepared key set. */
   async commitHouseholdOwnDeviceSet(input:OwnDeviceSetPublication) {
     input=snapshot(input);
-    const {operationId,guardId,expected,next,guard,copyHash,file,documents}=input;
+    const {operationId,guardId,expected,next,guard,recipient,copyHash,file,documents}=input;
     if(!validId(operationId)||!validId(guardId)||!validatePairingAuthority(expected).ok||
       !validatePairingAuthority(next).ok||expected.scope.kind!=='household'||!sameRecord(expected.scope,next.scope)||
       next.revision!==expected.revision+1||next.acceptedParent===expected.acceptedParent||!hexOf(copyHash,64)||
-      !validPairingFile(file)||!guard?.expectedAuthority||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||
-      guard.binding.scopeId!==expected.scope.id||guard.binding.branchHead!==expected.acceptedParent||
-      !denseArray(guard.entries,entry=>object(entry)&&validId(entry.recipeId))||
-      guard.catalogRevision!==guard.entries.length||
-      (guard.members!==undefined&&!denseArray(guard.members,m=>object(m)&&validId(m.recipeId)&&validId(m.documentId)&&revision(m.revision)&&m.bytes instanceof Uint8Array))||
+      !validPairingFile(file)||
       !denseArray(documents,d=>object(d)&&(d.recipeId===null||validId(d.recipeId))&&validId(d.sourceDocumentId)&&validId(d.documentId)&&
         d.bytes instanceof Uint8Array&&d.bytes.length>0&&d.bytes.length<=MAX_SELECTED_SOURCE_BYTES&&
         denseArray(d.sources,row=>fields(row,['effectId','policyHashes'])&&validId(row.effectId)&&denseArray(row.policyHashes,validId))&&
         validLocalRecord(d.localKey?.record)&&validMasterCatalog(d.localKey?.catalog)&&
-        sameRecord(d.localKey.record.identity.scope,expected.scope)&&d.localKey.record.identity.purpose==='data')||
+        sameRecord(d.localKey.record.identity.scope,expected.scope)&&d.localKey.record.identity.purpose==='data'&&
+        (!recipient||d.localKey.record.identity.deviceId===recipient.deviceId))||
       documents.length<1||documents.length>MAX_SELECTED_CHILDREN+1||
       documents.reduce((n,d)=>n+d.bytes.length,0)>MAX_SELECTED_SET_BYTES)return fail('MALFORMED');
-    const sources=[{recipeId:null,documentId:guard.binding.sourceDocumentId},
-      ...guard.entries.map(e=>({recipeId:e.recipeId,documentId:e.documentId})),
-      ...(guard.members??[]).map(e=>({recipeId:e.recipeId,documentId:e.documentId}))];
-    if(documents.length!==sources.length||new Set(documents.map(d=>d.documentId)).size!==documents.length||
-      documents.some(d=>d.documentId===d.sourceDocumentId||!sources.some(s=>s.recipeId===d.recipeId&&s.documentId===d.sourceDocumentId))||
+    if(documents[0].recipeId!==null||documents.slice(1).some(d=>d.recipeId===null||!isRecipeDocumentId(d.documentId))||
+      new Set(documents.map(d=>d.recipeId)).size!==documents.length||
+      new Set(documents.map(d=>d.documentId)).size!==documents.length||
+      documents.some(d=>d.documentId===d.sourceDocumentId)||
       new Set(documents.map(d=>d.sourceDocumentId)).size!==documents.length)return fail('MALFORMED');
+    if(recipient){
+      if(guard!==undefined||!fields(recipient,['deviceId','fileHash','signature'])||!validId(recipient.deviceId)||
+        !hexOf(recipient.fileHash,64)||!hexOf(recipient.signature,128))return fail('MALFORMED');
+    }else{
+      if(!guard?.expectedAuthority||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||
+        guard.binding.scopeId!==expected.scope.id||guard.binding.branchHead!==expected.acceptedParent||
+        !denseArray(guard.entries,entry=>object(entry)&&validId(entry.recipeId))||guard.catalogRevision!==guard.entries.length||
+        (guard.members!==undefined&&!denseArray(guard.members,m=>object(m)&&validId(m.recipeId)&&validId(m.documentId)&&revision(m.revision)&&m.bytes instanceof Uint8Array)))return fail('MALFORMED');
+      const sources=[{recipeId:null,documentId:guard.binding.sourceDocumentId},
+        ...guard.entries.map(e=>({recipeId:e.recipeId,documentId:e.documentId})),
+        ...(guard.members??[]).map(e=>({recipeId:e.recipeId,documentId:e.documentId}))];
+      if(documents.length!==sources.length||documents.some(d=>!sources.some(s=>s.recipeId===d.recipeId&&s.documentId===d.sourceDocumentId)))return fail('MALFORMED');
+    }
     const scope=expected.scope.id;
     try{return await this.run(true,async tx=>{
       const authority=key('pairing-authority','household',scope),op=key('household-own-device-set',scope,operationId),guardSlot=key('pairing-guard',guardId);
-      if(!sameRecord(await tx.get(authority),expected))conflict();
-      await this.requireSelectedHouseholdSources(tx,guard);
+      const current=await tx.get(authority),saved=await tx.get(op);
+      const mapping=documents.map(({recipeId,sourceDocumentId,documentId})=>({recipeId,sourceDocumentId,documentId}));
+      const retained={version:1,next,guardId,copyHash,file,mapping,...(recipient?{expected,recipient}:{})};
+      if(saved&&recipient){
+        if(!sameRecord(current,next)||await tx.get(guardSlot)!==op||!sameBytes(saved.file,file)||
+          !sameRecord({...saved,file:null},{...retained,file:null}))return conflict();
+        for(const d of documents){
+          const revisionZero=await tx.get(key('document',scope,d.documentId));
+          if(revisionZero?.revision!==0||!sameBytes(revisionZero.bytes,d.bytes)||
+            await tx.get(key('document-owner',scope,d.documentId))!==next.acceptedParent||
+            !sameRecord(await tx.get(key('household-own-device-parent',scope,d.documentId)),{head:expected.acceptedParent,documentId:d.sourceDocumentId})||
+            !sameRecord(await tx.get(key('household-own-device-sources',scope,d.documentId)),d.sources)||
+            !sameRecord(await findLocalKey(tx,d.localKey.record.operationId,d.localKey.record.identity),d.localKey.record))return corrupt();
+        }
+        return {ok:true as const,value:{replayed:true}};
+      }
+      if(!sameRecord(current,expected))conflict();
+      if(guard)await this.requireSelectedHouseholdSources(tx,guard);
       for(const slot of [op,guardSlot])if(await tx.get(slot)!==undefined)conflict();
       for(const d of documents)for(const slot of [key('document-owner',scope,d.documentId),key('document',scope,d.documentId),key('household-own-device-parent',scope,d.documentId),key('household-own-device-sources',scope,d.documentId)])if(await tx.get(slot)!==undefined)conflict();
       const write=async(slot:string,value:unknown)=>{await tx.put(slot,value);this.fault?.('household-own-device-set')};
@@ -795,13 +829,24 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         await write(key('household-own-device-parent',scope,d.documentId),{head:expected.acceptedParent,documentId:d.sourceDocumentId});
         await write(key('household-own-device-sources',scope,d.documentId),d.sources);
       }
-      await write(op,{version:1,next,guardId,copyHash,file,mapping:documents.map(({recipeId,sourceDocumentId,documentId})=>({recipeId,sourceDocumentId,documentId}))});
+      await write(op,retained);
       await write(guardSlot,op);
       const active=(await tx.get(key('disclosure-active',scope)))??null;
       await write(key('policy-disclosure-head',scope,expected.acceptedParent),active);
       await write(key('policy-disclosure-head',scope,next.acceptedParent),active);
       await write(authority,next);
-      return {ok:true as const,value:undefined};
+      return {ok:true as const,value:{replayed:false}};
+    });}catch(error){return fail(mapError(error));}
+  }
+  async readHouseholdOwnDeviceSetReceipt(scope:PairingScope,operationId:string) {
+    if(!validPairingScope(scope)||scope.kind!=='household'||!validId(operationId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const op=key('household-own-device-set',scope.id,operationId),saved=await tx.get(op);
+      if(saved===undefined)return {ok:true as const,value:null};
+      if(!saved.recipient||!sameRecord(saved.expected.scope,scope)||!sameRecord(saved.next.scope,scope)||
+        await tx.get(key('pairing-guard',saved.guardId))!==op)return corrupt();
+      if(!sameRecord(await tx.get(key('pairing-authority','household',scope.id)),saved.next))return conflict();
+      return {ok:true as const,value:snapshot({expected:saved.expected,next:saved.next,recipient:saved.recipient})};
     });}catch(error){return fail(mapError(error));}
   }
   async readHouseholdOwnDeviceRelease(scope:PairingScope,operationId:string,requireCurrent=true) {

@@ -1,4 +1,4 @@
-import {captureOwnDeviceCopySet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
+import {captureOwnDeviceCopySet,installOwnDeviceSetFile,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
@@ -1679,6 +1679,53 @@ test('selected recipe shopping copies and current-only admission survive durable
   }
   await assert.rejects(openPairingFile(pairingFile,existingWrap.privateKey),/INVALID_KEY/);
   assert.equal(openedKeys.length,signedCopy.documents.length);
+  const pairedDir=mkdtempSync(join(tmpdir(),'own-device-set-recipient-'));
+  const pairedPath=join(pairedDir,'peer.sqlite');
+  let pairedDb=new DatabaseSync(pairedPath),pairedFault=0;
+  t.after(()=>{pairedDb.close();rmSync(pairedDir,{recursive:true});});
+  const pairedStorage=openSQLiteStorage({executeSync(sql,params=[]){
+   const statement=pairedDb.prepare(sql);
+   return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+  }},boundary=>{
+   if(boundary==='household-own-device-set'&&pairedFault>0&&--pairedFault===0)throw Error('injected');
+  });
+  const pairedRows=()=>pairedDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+  const pairedParent={...parentRecord,revision:0};
+  must(await pairedStorage.retainPublicHouseholdParent(pairedParent));
+  const pairedMaster=testMaster(),pairedKeys=pairedStorage.localKeys(pairedMaster,sodium);
+  await pairedKeys.provision('paired-set-master');
+  const pairedOptions={...fileOptions,storage:pairedStorage,parentRecord:pairedParent,
+   keys:pairedKeys,deviceId:peer.transcript.responder.deviceId,wrappingSecret:nextWrap.privateKey,signingSecret:nextRecipient.privateKey};
+  const pairedBefore=pairedRows();
+  pairedFault=signedCopy.documents.length*4+5;
+  await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),/IO/);
+  assert.equal(pairedFault,0);
+  pairedDb.close();pairedDb=new DatabaseSync(pairedPath);
+  assert.deepEqual(pairedRows(),pairedBefore);
+  assert.deepEqual(await installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),
+   {scope,head:signedCopy.head,replayed:false});
+  for(const doc of signedCopy.documents){
+   const saved=must(await pairedStorage.reopenDocument(scope.id,doc.targetDocumentId));
+   assert.deepEqual(saved.bytes,doc.copy.snapshot);
+   assert.equal(saved.revision,0);
+  }
+  pairedDb.close();pairedDb=new DatabaseSync(pairedPath);
+  const pairedAfter=pairedRows();
+  assert.deepEqual(await installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),
+   {scope,head:signedCopy.head,replayed:true});
+  const resealed=sealDeviceCopy(sodium,fileDomain,evidence.hash,evidence.transcript.responder,sponsorKeys.signingSecret,openedFile);
+  await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:resealed}),/CONFLICT/);
+  await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:pairingFile,
+   keys:pairedStorage.localKeys(testMaster(),sodium)}),/LOCKED/);
+  assert.deepEqual(pairedRows(),pairedAfter);
+  const receiptSlot=JSON.stringify(['household-own-device-set',scope.id,evidence.transcript.sessionId]);
+  const {value:receiptValue}=pairedDb.prepare('SELECT value FROM loro_records WHERE key=?').get(receiptSlot);
+  const damagedReceipt=JSON.parse(receiptValue);
+  damagedReceipt.recipient.signature='0'.repeat(128);
+  pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(damagedReceipt),receiptSlot);
+  const damagedRows=pairedRows();
+  await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),/INVALID_PROOF/);
+  assert.deepEqual(pairedRows(),damagedRows);
   const verifiedCopy=await verifyAuthority(copyTransition.state,a.root.head,a.provider,{pendingOwnDeviceSet:signedCopy.head});
   const child=verifiedCopy.nodes.get(signedCopy.head);
   assert.deepEqual(child.roster,parent.roster);
