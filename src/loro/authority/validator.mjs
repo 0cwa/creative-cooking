@@ -51,7 +51,7 @@ export async function validateSuccessor(parent, event, authorSignature, approval
  try {
   parent = structuredClone(parent); event = structuredClone(event); approvals = structuredClone(approvals);
   if (!validParent(parent)) return deny('INVALID_PARENT');
-  if (!keys(event,eventFields) || ![1,2,3,4].includes(event.version) || (event.version===2 && !['inviteAdult','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) || (event.version===3 && event.kind!=='changePolicy') || (event.version===4 && event.kind!=='pairOwnDevice') || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) return deny('INVALID_INPUT');
+  if (!keys(event,eventFields) || ![1,2,3,4,5].includes(event.version) || (event.version===2 && !['inviteAdult','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) || (event.version===3 && event.kind!=='changePolicy') || (event.version>=4 && event.kind!=='pairOwnDevice') || event.suiteId !== 'candidate-ed25519-xchacha20-sealedbox-v1' || ![event.householdId,event.parentHead,event.policyHash,event.epochId,event.proposalId,event.authorDeviceId].every(id) || !Number.isSafeInteger(event.generation) || event.generation < 0 || !ids(event.frozenAdultRoster) || !['inviteAdult','changePolicy','pairOwnDevice','revokeDevice','removeAdult','recoverDevice'].includes(event.kind)) return deny('INVALID_INPUT');
   if (event.householdId !== parent.householdId || event.parentHead !== parent.head) return pending('PARENT_UNRESOLVED');
   if (event.policyHash !== parent.policyHash || event.generation !== parent.generation || event.epochId !== parent.epochId || JSON.stringify(event.frozenAdultRoster) !== JSON.stringify(parent.roster)) return deny('CONTEXT_MISMATCH');
   const author = parent.devices.find(d=>d.deviceId === event.authorDeviceId && d.active);
@@ -95,9 +95,12 @@ export async function validateSuccessor(parent, event, authorSignature, approval
     if(!keys(s,['adultId','deviceId','signingKeyRef'])||s.adultId!==author.adultId||!id(s.deviceId)||!id(s.signingKeyRef)||parent.devices.some(d=>d.deviceId===s.deviceId)||event.nextPolicy!==null)return deny('INVALID_INPUT');
    } else {
     const digest=x=>typeof x==='string'&&/^[0-9a-f]{64}$/.test(x);
-    if(!keys(s,['adultId','deviceId','signingKeyRef','wrappingKeyRef','peerId','documentId','parentSnapshot','parentRevision','transcriptHash','baseline','copyHash','sourcesHash'])||
+    const fields=['adultId','deviceId','signingKeyRef','wrappingKeyRef','peerId','documentId','parentSnapshot','parentRevision','transcriptHash','baseline','copyHash'];
+    if(event.version===4)fields.push('sourcesHash');
+    if(!keys(s,fields)||
        s.adultId!==author.adultId||!parent.runtime.acceptedRecipients.includes(author.deviceId)||!id(s.deviceId)||
-       ![s.signingKeyRef,s.wrappingKeyRef,s.parentSnapshot,s.transcriptHash,s.copyHash,s.sourcesHash].every(digest)||
+       ![s.signingKeyRef,s.wrappingKeyRef,s.parentSnapshot,s.transcriptHash,s.copyHash].every(digest)||
+       (event.version===4&&!digest(s.sourcesHash))||
        parent.devices.length>=128||parent.devices.some(d=>d.deviceId===s.deviceId||d.signingKeyRef===s.signingKeyRef)||
        typeof s.peerId!=='string'||!/^[1-9][0-9]{0,19}$/.test(s.peerId)||BigInt(s.peerId)>18446744073709551615n||
        Object.values(parent.runtime.authorPeers).includes(s.peerId)||!id(s.documentId)||!s.documentId.startsWith('paired-')||

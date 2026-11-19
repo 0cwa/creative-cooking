@@ -103,10 +103,10 @@ export function ownDevicePacketContext(item,oob,head) {
   policyHash:event.policyHash,grantHash:head,projectionId:s.documentId,manifestHash:s.copyHash};
 }
 
-export async function verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord,next,proposal}) {
+export async function verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord,next,proposal,eventVersion=4}) {
  const state=JSON.parse(decoder.decode(parentRecord.authorityState)), child=JSON.parse(decoder.decode(next.authorityState));
  const item=child.events.at(-1), selection=child.selections.at(-1), head=next.acceptedParent;
- if(!item?.ownDevice||item.event.kind!=='pairOwnDevice'||item.event.version!==4||
+ if(!item?.ownDevice||item.event.kind!=='pairOwnDevice'||![4,5].includes(eventVersion)||item.event.version!==eventVersion||
     item.event.subject.parentSnapshot!==parentRecord.authorizationSnapshot||item.event.parentHead!==parentRecord.acceptedParent||
     sodium.to_hex(await provider.hash(domain('event',item.event)))!==head||
     state.activeHead!==parentRecord.acceptedParent||selection?.from!==state.activeHead||selection.to!==head||
@@ -114,7 +114,7 @@ export async function verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord
     !sameOwnDevice(sodium,child,{...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:head})||
     sodium.to_hex(next.authorityState)!==sodium.to_hex(authorityBytes(child))||
     await snapshotId(provider,child)!==next.authorizationSnapshot)throw Error('INVALID_AUTHORITY');
- const verified=await verifyAuthority(child,pin,provider);
+ const verified=await verifyAuthority(child,pin,provider,eventVersion===5?{pendingOwnDeviceSet:head}:undefined);
  const parent=verified.nodes.get(state.activeHead), proof=decodeEvidence(item.ownDevice);
  const oob=verifyOwnDeviceEvent(sodium,pin,parent,item.event,proof,verified.wrappingByHead.get(parent.head).get(item.event.authorDeviceId));
  if(proposal&&(oob.hash!==proposal.hash||proof.guard.guardId!==proposal.guard.guardId))throw Error('INVALID_OWN_DEVICE');

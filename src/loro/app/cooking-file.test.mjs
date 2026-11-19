@@ -1,4 +1,6 @@
-import {captureOwnDeviceCopySet,verifyOwnDeviceCopySet} from '../pairing/household-own-device-set.mjs';
+import {captureOwnDeviceCopySet,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor} from '../pairing/household-own-device-set.mjs';
+import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
+import {ownDeviceSignal} from '../authority/own-device.mjs';
 import {householdCompromise} from './household-compromise.mjs';
 import {CompromiseReviews,REVIEW_LIMITS} from '../compromise/review.mjs';
 import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
@@ -13,7 +15,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import sodium from 'libsodium-wrappers';
-import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,resolveInstalledSetAuthority,rootPin,authorityBytes,snapshotId} from '../authority/chain.mjs';
+import {acceptAdmissionAgreement,initializeAuthority,readAuthority,observeSuccessor,policyId,resolveRuntimeAuthority,resolveInstalledSetAuthority,rootPin,authorityBytes,snapshotId,verifyAuthority,encodeEvidence} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {writeFixtureSelection} from '../authority/chain-test-fixture.mjs';
 import {candidateCodec,SUITE,LIMIT as CANDIDATE_LIMIT} from '../crypto/candidate.mjs';
@@ -933,14 +935,15 @@ test('selected recipe shopping copies and current-only admission survive durable
  const existingContext={version:1,householdId:scope.id,parentHead:record.acceptedParent,admissionEventHash:eventHash,
   newEpochId:event.subject.newEpochId,sponsorDeviceId:a.deviceId,recipientDeviceId:b.deviceId,
   recipientWrappingKey:sodium.to_hex(existingWrap.publicKey)};
- function completedPair(context,action,signingPublicKey,wrappingPublicKey,use,recipientKeys,signal){
-  const transcript={version:1,sessionId:`set-${action}`,action,scope,purpose:'data',acceptedParent:record.acceptedParent,
-   authorizationSnapshot:record.authorizationSnapshot,signaling:[signal(context)],
+ function completedPair(context,action,signingPublicKey,wrappingPublicKey,use,recipientKeys,signal,
+   authority=record,sessionId=`set-${action}`){
+  const transcript={version:1,sessionId,action,scope,purpose:'data',acceptedParent:authority.acceptedParent,
+   authorizationSnapshot:authority.authorizationSnapshot,signaling:[signal(context)],
    initiator:{role:'initiator',deviceId:a.deviceId,signingPublicKey:a.signingTestKey.publicKey,
     wrappingPublicKey:sponsorWrap.publicKey,nonce:sodium.randombytes_buf(32)},
    responder:{role:'responder',deviceId:context.recipientDeviceId,signingPublicKey,
     wrappingPublicKey,nonce:sodium.randombytes_buf(32)}};
-  const guard={version:1,guardId:`set-guard-${action}`,scope,direction:'initiator-to-responder',purpose:'data'};
+  const guard={version:1,guardId:`${sessionId}-guard`,scope,direction:'initiator-to-responder',purpose:'data'};
   const oob={hash:sodium.to_hex(sodium.crypto_generichash(32,ceremonyBytes(transcript,guard))),
    pins:Object.fromEntries(['initiator','responder'].map(role=>[role,{deviceId:transcript[role].deviceId,
     signingKey:sodium.to_hex(transcript[role].signingPublicKey),wrappingKey:sodium.to_hex(transcript[role].wrappingPublicKey)}]))};
@@ -1585,6 +1588,61 @@ test('selected recipe shopping copies and current-only admission survive durable
   const verifyCopy=set=>verifyOwnDeviceCopySet({storage:a.storage,scope,pin:a.root.head,provider:a.provider,
    sodium,LoroDoc,set,copyHash:capturedCopy.copyHash,authorDevice:a.deviceId,peerId:copyOptions.peerId});
   const checkedCopy=await verifyCopy(capturedCopy.set);
+  const parentRecord=must(await a.storage.readPairingAuthority(scope));
+  const parentChain=JSON.parse(dec.decode(parentRecord.authorityState));
+  const parent=(await verifyAuthority(parentChain,a.root.head,a.provider)).nodes.get(parentRecord.acceptedParent);
+  const peer=completedPair({recipientDeviceId:'own-device-set-recipient'},'pairOwnDevice',
+   nextRecipient.publicKey,nextWrap.publicKey,newcomerSession,
+   {signingSecret:nextRecipient.privateKey,wrappingSecret:nextWrap.privateKey},
+   ()=>ownDeviceSignal(a.root.head,parent,'adult',copyOptions.peerId,parentRecord.revision),
+   parentRecord,'own-device-set-copy');
+  const eventV5={version:5,suiteId:SUITE,householdId:scope.id,parentHead:parent.head,
+   policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,
+   proposalId:peer.transcript.sessionId,kind:'pairOwnDevice',authorDeviceId:a.deviceId,
+   frozenAdultRoster:parent.roster,nextPolicy:null,subject:{
+    adultId:'adult',deviceId:peer.transcript.responder.deviceId,signingKeyRef:sodium.to_hex(nextRecipient.publicKey),
+    wrappingKeyRef:sodium.to_hex(nextWrap.publicKey),peerId:copyOptions.peerId,documentId:'paired-own-device-set-copy',
+    parentSnapshot:parentRecord.authorizationSnapshot,parentRevision:parentRecord.revision,transcriptHash:peer.oob.hash,
+    baseline:checkedCopy[0].baseline,copyHash:capturedCopy.copyHash}};
+  async function signedCopyTransition(event){
+   const head=await selectedSourceHash(a.provider,'event',event);
+   const item={event,approvals:[],authorSignature:await signAdmission('event-signature',event),
+    ownDevice:encodeEvidence({transcript:peer.transcript,guard:peer.guard,messages:peer.messages})};
+   const selection={from:parent.head,to:head,deviceId:a.deviceId,index:parentChain.selections.length};
+   selection.signature=await signAdmission('select-head',{root:a.root.head,householdId:scope.id,...selection});
+   const state={...parentChain,events:[...parentChain.events,item],selections:[...parentChain.selections,selection],activeHead:head};
+   return {state,next:{scope,revision:parentRecord.revision+1,acceptedParent:head,
+    authorizationSnapshot:await snapshotId(a.provider,state),authorityState:authorityBytes(state)}};
+  }
+  const copyTransition=await signedCopyTransition(eventV5);
+  const copyArgs={storage:a.storage,parentRecord,pin:a.root.head,provider:a.provider,sodium,LoroDoc,
+   set:capturedCopy.set,proposal:{hash:peer.oob.hash,guard:peer.guard}};
+  const signedCopy=await verifyOwnDeviceSetSuccessor({...copyArgs,next:copyTransition.next});
+  assert.equal(signedCopy.documents[0].targetDocumentId,eventV5.subject.documentId);
+  const targetScope={scopeId:scope.id,branchHead:signedCopy.head,documentId:eventV5.subject.documentId,
+   documentGeneration:parent.generation,epochId:parent.epochId};
+  for(const document of signedCopy.documents.slice(1)){
+   assert.equal(document.targetDocumentId,await recipeDocumentId(targetScope,a.root.head,a.provider,document.recipeId));
+   assert.notEqual(document.targetDocumentId,document.documentId);
+  }
+  const verifiedCopy=await verifyAuthority(copyTransition.state,a.root.head,a.provider,{pendingOwnDeviceSet:signedCopy.head});
+  const child=verifiedCopy.nodes.get(signedCopy.head);
+  assert.deepEqual(child.roster,parent.roster);
+  assert.deepEqual(child.policy,parent.policy);
+  assert.equal(child.devices.length,parent.devices.length+1);
+  assert.equal(child.devices.at(-1).adultId,eventV5.subject.adultId);
+  await assert.rejects(verifyAuthority(copyTransition.state,a.root.head,a.provider),/UNSUPPORTED_VERSION/);
+  await assert.rejects(verifyOwnDeviceSuccessor({...copyArgs,next:copyTransition.next}),/INVALID_AUTHORITY/);
+  for(const [changed,error] of [
+   [{...eventV5,subject:{...eventV5.subject,copyHash:'0'.repeat(64)}},/INVALID_COPY/],
+   [{...eventV5,subject:{...eventV5.subject,baseline:{...eventV5.subject.baseline,historyHash:'0'.repeat(64)}}},/INVALID_COPY/],
+   [{...eventV5,subject:{...eventV5.subject,parentRevision:parentRecord.revision+1}},/INVALID_OWN_DEVICE/],
+   [{...eventV5,subject:{...eventV5.subject,deviceId:'wrong-recipient'}},/INVALID_OWN_DEVICE/],
+   [{...eventV5,frozenAdultRoster:['adult']},/CONTEXT_MISMATCH/],
+  ]){
+   const {next}=await signedCopyTransition(changed);
+   await assert.rejects(verifyOwnDeviceSetSuccessor({...copyArgs,next}),error);
+  }
   const admittedCopy=checkedCopy.find(entry=>entry.recipeId===recipeId);
   const laterCopy=checkedCopy.find(entry=>entry.recipeId===added.id);
   assert.ok(admittedCopy.copy.seedSnapshot);

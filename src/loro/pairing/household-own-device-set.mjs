@@ -1,7 +1,8 @@
 import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {MAX_SELECTED_CHILDREN,MAX_SELECTED_SET_BYTES} from '../contracts/runtime-storage.ts';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
-import {exact,inspectOwnDeviceSnapshot,must,ownDeviceCopyHash,verifyOwnDeviceDocumentCopy} from './household-own-device.mjs';
+import {recipeDocumentId} from '../domain/recipe-document.mjs';
+import {exact,inspectOwnDeviceSnapshot,must,ownDeviceCopyHash,sameOwnDevice,verifyOwnDeviceDocumentCopy,verifyOwnDeviceSuccessor} from './household-own-device.mjs';
 
 const hex=bytes=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 const validPeerId=value=>typeof value==='string'&&/^[1-9][0-9]{0,19}$/.test(value)&&BigInt(value)<=18446744073709551615n;
@@ -89,4 +90,29 @@ export async function verifyOwnDeviceCopySet({storage,scope,pin,provider,sodium,
  }
  if(await commitment(provider,sodium,set)!==copyHash)throw Error('INVALID_COPY');
  return result;
+}
+
+/** A verified candidate transition. Persisting it requires a separate atomic
+ * installer for all derived documents and their keys. */
+export async function verifyOwnDeviceSetSuccessor({storage,pin,provider,sodium,LoroDoc,parentRecord,next,proposal,set}) {
+ ({parentRecord,next,proposal,set}=structuredClone({parentRecord,next,proposal,set}));
+ const checked=await verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord,next,proposal,eventVersion:5});
+ const {event}=checked.item, subject=event.subject;
+ const manifest=set?.observation?.manifest;
+ if(manifest?.parentHead!==event.parentHead||manifest.authorizationSnapshot!==subject.parentSnapshot||
+    manifest.authorityRevision!==subject.parentRevision)throw Error('INVALID_COPY');
+ const documents=await verifyOwnDeviceCopySet({storage,scope:parentRecord.scope,pin,provider,sodium,LoroDoc,set,
+  copyHash:subject.copyHash,authorDevice:event.authorDeviceId,peerId:subject.peerId});
+ if(!sameOwnDevice(sodium,documents[0].baseline,subject.baseline))throw Error('INVALID_COPY');
+ const target={scopeId:event.householdId,branchHead:checked.head,documentId:subject.documentId,
+  documentGeneration:event.generation,epochId:event.epochId};
+ const targetIds=new Set();
+ const copies=await Promise.all(documents.map(async document=>({
+  ...document,targetDocumentId:document.recipeId===null?target.documentId:await recipeDocumentId(target,pin,provider,document.recipeId)
+ })));
+ for(const {targetDocumentId} of copies){
+  if(targetIds.has(targetDocumentId))throw Error('INVALID_COPY');
+  targetIds.add(targetDocumentId);
+ }
+ return {...checked,documents:copies};
 }

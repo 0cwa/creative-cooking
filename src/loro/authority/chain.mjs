@@ -25,7 +25,7 @@ export const policyId=(provider,policy)=>digest(provider,'policy',policy);
 export const snapshotId=(provider,state)=>digest(provider,'authority-state',state);
 
 /** Replay every signed event from a locally pinned, explicitly preaccepted genesis. */
-export async function verifyAuthority(state,pin,provider) {
+export async function verifyAuthority(state,pin,provider,{pendingOwnDeviceSet=null}={}) {
  state=copy(state);
  if (!state || Array.isArray(state) || !['activeHead,events,root,selections,version','activeHead,agreements,events,root,selections,version'].includes(Object.keys(state).sort().join(',')) || state.version!==1 || !Array.isArray(state.events) || state.events.length>128 || !Array.isArray(state.selections) || state.selections.length>128 || typeof state.activeHead!=='string') throw Error('MALFORMED');
  if (!validParent(state.root) || state.root.devices.some(d=>!state.root.roster.includes(d.adultId)) || isPolicyDocumentId(state.root.runtime.documentId) || await authorityRootId(provider,state.root)!==pin || state.root.head!==pin || state.root.policyHash!==await policyId(provider,state.root.policy)) throw Error('INVALID_ROOT');
@@ -38,7 +38,10 @@ export async function verifyAuthority(state,pin,provider) {
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
   const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
   if(Object.hasOwn(item,'ownDevice')&&item.event.kind!=='pairOwnDevice')throw Error('INVALID_OWN_DEVICE');
-  if(item.event.kind==='pairOwnDevice'&&item.event.version===4&&r.reason==='CEREMONY_AND_POSSESSION_REQUIRED'){
+  // Normal authority loads require durable support for this copied document set.
+  if(item.event.kind==='pairOwnDevice'&&item.event.version===5&&pendingOwnDeviceSet===null)throw Error('UNSUPPORTED_VERSION');
+  if(item.event.kind==='pairOwnDevice'&&[4,5].includes(item.event.version)&&r.reason==='CEREMONY_AND_POSSESSION_REQUIRED'){
+   if(item.event.version===5&&r.eventHash!==pendingOwnDeviceSet)throw Error('UNSUPPORTED_VERSION');
    const s=item.event.subject,proof=decodeEvidence(item.ownDevice),known=wrappingByHead.get(parent.head);
    await sodium.ready;
    const {assertFreshRecoveryWrappingKey}=await import('../recovery/readmission.mjs');
