@@ -58,16 +58,14 @@ export function ownDeviceCopyHash(sodium,{snapshot,seed,seedSnapshot,sources,pol
  }));
 }
 
-export async function verifyOwnDeviceCopy({sodium,provider,LoroDoc,copy,pin,parentState,item}) {
+export async function verifyOwnDeviceDocumentCopy({sodium,provider,LoroDoc,copy,pin,parentState,authorDevice,householdId,peerId,baseline}) {
  const {snapshot,seed,seedSnapshot,sources,policies}=copy;
- const {doc,identities}=inspectOwnDeviceSnapshot({LoroDoc,snapshot,peerId:item.event.subject.peerId,seed,seedSnapshot});
- const subject=item.event.subject;
+ const {doc,identities}=inspectOwnDeviceSnapshot({LoroDoc,snapshot,peerId,seed,seedSnapshot});
  if(!Array.isArray(sources)||sources.length!==identities.length||!Array.isArray(policies)||policies.length>64||
     sources.some((row,i)=>!exact(row,['effectId','policyHashes'])||row.effectId!==identities[i].effectId||
      !Array.isArray(row.policyHashes)||row.policyHashes.length>64||row.policyHashes.some((hash,j)=>
       !/^[0-9a-f]{64}$/.test(hash)||(j>0&&row.policyHashes[j-1]>=hash)))||
-    ownDeviceCopyHash(sodium,copy)!==subject.copyHash||ownDeviceSourcesHash(sodium,sources)!==subject.sourcesHash||
-    !sameOwnDevice(sodium,await policyBaseline(doc,provider),subject.baseline))throw Error('INVALID_COPY');
+    !sameOwnDevice(sodium,await policyBaseline(doc,provider),baseline))throw Error('INVALID_COPY');
  if(seedSnapshot!==null){
   const retained=new LoroDoc();
   if(retained.import(seedSnapshot).pending?.size)throw Error('INVALID_SEED');
@@ -79,11 +77,20 @@ export async function verifyOwnDeviceCopy({sodium,provider,LoroDoc,copy,pin,pare
   if(!exact(record,['policyHash','policy','approvals'])||!/^[0-9a-f]{64}$/.test(record.policyHash)||records.has(record.policyHash))throw Error('INVALID_POLICY');
   records.set(record.policyHash,record);
  }
- const scope={kind:'household',id:item.event.householdId};
+ const scope={kind:'household',id:householdId};
  const policyStorage={readDisclosurePolicy:async(_scope,id)=>({ok:true,value:records.get(id)??null})};
- const service=disclosureService({storage:policyStorage,scope,rootPin:pin,provider,deviceId:item.event.authorDeviceId});
+ const service=disclosureService({storage:policyStorage,scope,rootPin:pin,provider,deviceId:authorDevice});
  const context={current:{state:parentState,activeHead:parentState.activeHead},verified:await verifyAuthority(parentState,pin,provider)};
  for(const hash of new Set(sources.flatMap(row=>row.policyHashes)))await service.validateStored(hash,context);
+ return identities;
+}
+
+export async function verifyOwnDeviceCopy({sodium,provider,LoroDoc,copy,pin,parentState,item}) {
+ const {subject,authorDeviceId:authorDevice,householdId}=item.event;
+ const identities=await verifyOwnDeviceDocumentCopy({sodium,provider,LoroDoc,copy,pin,parentState,
+  authorDevice,householdId,peerId:subject.peerId,baseline:subject.baseline});
+ if(ownDeviceCopyHash(sodium,copy)!==subject.copyHash||
+    ownDeviceSourcesHash(sodium,copy.sources)!==subject.sourcesHash)throw Error('INVALID_COPY');
  return identities;
 }
 

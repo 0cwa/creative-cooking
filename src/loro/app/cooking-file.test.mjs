@@ -1,3 +1,4 @@
+import {captureOwnDeviceCopySet,verifyOwnDeviceCopySet} from '../pairing/household-own-device-set.mjs';
 import {householdCompromise} from './household-compromise.mjs';
 import {CompromiseReviews,REVIEW_LIMITS} from '../compromise/review.mjs';
 import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
@@ -1579,6 +1580,34 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(observedInstalled.signed.manifest.version,2);
   assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===recipeId&&child.creationEffectId===null));
   assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===added.id&&child.creationEffectId!==null));
+  const copyOptions={runtime:sponsor.runtime,service:sponsor.service,sodium,peerId:'31337',seedId:'copy-set-test'};
+  const capturedCopy=await captureOwnDeviceCopySet(copyOptions);
+  const verifyCopy=set=>verifyOwnDeviceCopySet({storage:a.storage,scope,pin:a.root.head,provider:a.provider,
+   sodium,LoroDoc,set,copyHash:capturedCopy.copyHash,authorDevice:a.deviceId,peerId:copyOptions.peerId});
+  const checkedCopy=await verifyCopy(capturedCopy.set);
+  const admittedCopy=checkedCopy.find(entry=>entry.recipeId===recipeId);
+  const laterCopy=checkedCopy.find(entry=>entry.recipeId===added.id);
+  assert.ok(admittedCopy.copy.seedSnapshot);
+  assert.deepEqual(admittedCopy.copy.sources.find(row=>row.effectId===recipeCommands[0].effectId).policyHashes,
+   [accepted.policyHash]);
+  assert.ok(admittedCopy.copy.policies.some(row=>row.policyHash===accepted.policyHash));
+  assert.equal(laterCopy.copy.seedSnapshot,null);
+  for(const file of [bytes,editBytes]){
+   const {header}=JSON.parse(dec.decode(file));
+   assert.deepEqual(laterCopy.copy.sources.find(row=>row.effectId===header.semanticEffectIds[0]).policyHashes,
+    header.disclosurePolicyHashes);
+  }
+  for(const corrupt of [
+   value=>value.documents.pop(),
+   value=>value.documents.splice(1,1,value.documents[2]),
+   value=>{value.documents[1].copy.snapshot[0]^=1;},
+   value=>{value.documents.find(entry=>entry.recipeId===recipeId).copy.sources.find(row=>row.effectId===recipeCommands[0].effectId).policyHashes=[];},
+   value=>{value.observation.manifest.parentHead='0'.repeat(64);},
+  ]){
+   const invalid=structuredClone(capturedCopy.set);
+   corrupt(invalid);
+   await assert.rejects(()=>verifyCopy(invalid),/INVALID_COPY|INVALID_SOURCE_SET/);
+  }
   const allocations=new Map();
   const allocateNext=documentId=>{if(!allocations.has(documentId)){const n=allocations.size+1;
    allocations.set(documentId,{seedId:`33333333-3333-4333-8333-${String(n).padStart(12,'0')}`,peerId:String(1000+n)});}
@@ -1598,6 +1627,7 @@ test('selected recipe shopping copies and current-only admission survive durable
    actionId:'projection-source-race',author:a.deviceId,at});
   await sponsor.householdContent.execute('projection-source-race',raceCommands,added.id);
   assert.equal((await a.storage.checkSelectedHouseholdSources(observedInstalled.guard)).error.code,'CONFLICT');
+  assert.equal((await a.storage.checkSelectedHouseholdSources(capturedCopy.guard)).error.code,'CONFLICT');
   a.provider.verify=previousVerify;
   const beforeReceive=freshRows();
   await assert.rejects(()=>newcomer.files.receive(editBytes),/RECIPE_CREATION_REQUIRED/);
