@@ -146,6 +146,47 @@ const validPairingFile = (value:unknown): value is Uint8Array =>
   value instanceof Uint8Array && value.length>112 && value.length<=7*1024*1024;
 // Bound both the number of recipients and their combined retained ciphertext bytes.
 const MAX_ESTABLISHED_RECIPIENTS = 127, MAX_ESTABLISHED_CIPHERTEXT_BYTES = 16*1024*1024;
+type AdultRemovalPublication = {
+  version:1; operationId:string; sponsorDeviceId:string; manifestHash:string; proof:Uint8Array;
+  expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
+  documents:{recipeId:string|null;sourceDocumentId:string;sourceRevision:number|null;documentId:string;bytes:Uint8Array;
+    localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
+  files:{recipientDeviceId:string;bytes:Uint8Array}[];
+};
+function validAdultRemovalPublication(value:unknown):value is AdultRemovalPublication {
+  if(!fields(value,['version','operationId','sponsorDeviceId','manifestHash','proof','expected','next','documents','files'])||
+    value.version!==1||!validId(value.operationId)||!validId(value.sponsorDeviceId)||!hexOf(value.manifestHash,64)||
+    !(value.proof instanceof Uint8Array)||!value.proof.length||value.proof.length>MAX_SELECTED_SET_BYTES||
+    !validatePairingAuthority(value.expected).ok||!validatePairingAuthority(value.next).ok||
+    value.expected.scope.kind!=='household'||!sameRecord(value.expected.scope,value.next.scope)||
+    value.next.revision!==value.expected.revision+1||value.next.acceptedParent===value.expected.acceptedParent||
+    !Array.isArray(value.documents)||!value.documents.length||value.documents.length>MAX_SELECTED_CHILDREN+1||
+    !denseArray(value.documents,d=>fields(d,['recipeId','sourceDocumentId','sourceRevision','documentId','bytes','localKey'])&&
+      (d.recipeId===null||validId(d.recipeId))&&validId(d.sourceDocumentId)&&validId(d.documentId)&&
+      (revision(d.sourceRevision)||d.recipeId===null&&d.sourceRevision===null)&&
+      d.bytes instanceof Uint8Array&&d.bytes.length>0&&d.bytes.length<=MAX_SELECTED_SOURCE_BYTES&&
+      fields(d.localKey,['record','catalog'])&&validLocalRecord(d.localKey.record)&&validMasterCatalog(d.localKey.catalog)&&
+      d.localKey.record.masterId===d.localKey.catalog.id&&sameRecord(d.localKey.record.identity.scope,value.expected.scope)&&
+      d.localKey.record.identity.deviceId===value.sponsorDeviceId&&d.localKey.record.identity.purpose==='data'))return false;
+  const {documents,files}=value as unknown as AdultRemovalPublication;
+  const sources=new Set(documents.map(d=>d.sourceDocumentId));
+  return documents[0].recipeId===null&&!isRecipeDocumentId(documents[0].documentId)&&!isPolicyDocumentId(documents[0].documentId)&&
+    documents.slice(1).every((d,i)=>d.recipeId!==null&&isRecipeDocumentId(d.documentId)&&
+      (i===0||documents[i].recipeId! < d.recipeId))&&
+    sources.size===documents.length&&documents.every(d=>!sources.has(d.documentId))&&
+    new Set(documents.map(d=>d.documentId)).size===documents.length&&
+    new Set(documents.map(d=>d.localKey.record.operationId)).size===documents.length&&
+    new Set(documents.map(d=>d.localKey.record.identity.epochId)).size===documents.length&&
+    documents.reduce((size,d)=>size+d.bytes.length,value.proof.length)<=MAX_SELECTED_SET_BYTES&&
+    Array.isArray(files)&&files.length<=MAX_ESTABLISHED_RECIPIENTS&&
+    denseArray(files,f=>fields(f,['recipientDeviceId','bytes'])&&validId(f.recipientDeviceId)&&
+      f.recipientDeviceId!==value.sponsorDeviceId&&validPairingFile(f.bytes))&&
+    files.every((f,i)=>i===0||files[i-1].recipientDeviceId<f.recipientDeviceId)&&
+    files.reduce((size,f)=>size+f.bytes.length,0)<=MAX_ESTABLISHED_CIPHERTEXT_BYTES;
+}
+const adultRemovalCatalog=(p:AdultRemovalPublication)=>({
+  manifestId:p.manifestHash,operationId:p.operationId,catalog:p.documents.slice(1).map(({recipeId,documentId})=>({recipeId,documentId}))
+});
 const validEstablishedRecipients = (value:unknown) => {
   if(!fields(value,['version','entries'])||value.version!==1||!Array.isArray(value.entries)||
     value.entries.length<1||value.entries.length>MAX_ESTABLISHED_RECIPIENTS||
@@ -201,6 +242,7 @@ const validateRecord = (k: string, v: any) => {
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
     case 'policy-set-activation': valid=parts.length===3 && validId(parts[1]) && validPolicySetReceipt(v) && v.expected.scope.id===parts[1] && v.next.acceptedParent===parts[2]; break;
     case 'policy-staged-set': valid=validStagedPolicyDocumentSet(v) && parts.length===3 && v.targetHead===parts[2]; break;
+    case 'adult-removal-publication': valid=parts.length===3 && validAdultRemovalPublication(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
     case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
     case 'disclosure-source': valid=(fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId']) || (fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId','incomplete']) && v.incomplete===true)) && v.envelope instanceof Uint8Array && ['local','import'].includes(v.origin) && typeof v.objectId==='string' && !!v.objectId && denseArray(v.policyHashes,(x:any)=>typeof x==='string' && !!x) && typeof v.checkpoint==='string' && !!v.checkpoint && typeof v.documentId==='string' && !!v.documentId && typeof v.commandId==='string' && !!v.commandId; break;
@@ -992,6 +1034,63 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       if(input.documentSet) this.fault?.('projection-set-authority');
       return {ok:true,value:{replayed:false}};
     }); } catch(e) { return {ok:false,error:mapError(e)}; }
+  }
+  /** Preverified sponsor primitive. The caller authenticates the successor, proof,
+   * projected seeds, wrapped keys and each recipient ciphertext before calling. */
+  async commitAdultRemovalPublication(input:AdultRemovalPublication,guard:SelectedHouseholdSources) {
+    input=snapshot(input);guard=snapshot(guard);
+    if(!validAdultRemovalPublication(input))return fail('MALFORMED');
+    const {expected,next,operationId,documents}=input, scope=expected.scope.id;
+    const expectation={version:2,scope:expected.scope,record:{revision:expected.revision,
+      acceptedParent:expected.acceptedParent,authorizationSnapshot:expected.authorizationSnapshot}};
+    if(!guard||!sameRecord(guard.expectedAuthority,expectation)||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||
+      !denseArray(guard.entries,e=>object(e)&&validId(e.recipeId)&&validId(e.documentId)&&revision(e.revision))||
+      (guard.members!==undefined&&!denseArray(guard.members,m=>object(m)&&validId(m.recipeId)&&validId(m.documentId)&&revision(m.revision)))||
+      guard.entries.length+(guard.members?.length??0)>MAX_SELECTED_CHILDREN||guard.catalogRevision!==guard.entries.length||
+      documents[0].sourceDocumentId!==guard.binding.sourceDocumentId||documents[0].sourceRevision!==(guard.root?.revision??null))return fail('MALFORMED');
+    const sources=[...guard.entries,...(guard.members??[])];
+    if(documents.slice(1).some(d=>!sources.some(s=>s.recipeId===d.recipeId&&s.documentId===d.sourceDocumentId&&s.revision===d.sourceRevision)))
+      return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      const authority=key('pairing-authority','household',scope);
+      const publication=key('adult-removal-publication',scope,operationId);
+      const catalog=key('projection-document-set',scope,next.acceptedParent);
+      if(!sameRecord(await tx.get(authority),expected)||await tx.get(publication)!==undefined||await tx.get(catalog)!==undefined)conflict();
+      await this.requireSelectedHouseholdSources(tx,guard);
+      for(const d of documents){
+        if(await tx.get(key('document-owner',scope,d.documentId))!==undefined||
+          await tx.get(key('document',scope,d.documentId))!==undefined||
+          await tx.get(key('projection-document',scope,d.documentId))!==undefined)conflict();
+      }
+      for(const {localKey} of documents)if((await installLocalKey(tx,localKey.record,localKey.catalog)).replayed)conflict();
+      this.fault?.('adult-removal-keys');
+      for(const d of documents){
+        await tx.put(key('document-owner',scope,d.documentId),next.acceptedParent);
+        await tx.put(key('document',scope,d.documentId),{bytes:d.bytes,revision:0});
+      }
+      await tx.put(catalog,adultRemovalCatalog(input));
+      await tx.put(publication,input);
+      this.fault?.('adult-removal-files');
+      await tx.put(authority,next);
+      return {ok:true as const,value:undefined};
+    });}catch(e){return fail(mapError(e));}
+  }
+  /** Structural evidence only. The ordinary authority loader still rejects this transition. */
+  async readAdultRemovalPublication(scope:string,operationId:string) {
+    if(!validId(scope)||!validId(operationId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const saved:AdultRemovalPublication|undefined=await tx.get(key('adult-removal-publication',scope,operationId));
+      if(saved===undefined)return {ok:true as const,value:null};
+      if(!sameRecord(await tx.get(key('pairing-authority','household',scope)),saved.next)||
+        !sameRecord(await tx.get(key('projection-document-set',scope,saved.next.acceptedParent)),adultRemovalCatalog(saved)))return corrupt();
+      for(const d of saved.documents){
+        const stored=await tx.get(key('document',scope,d.documentId));
+        if(await tx.get(key('document-owner',scope,d.documentId))!==saved.next.acceptedParent||
+          !stored||stored.revision!==0||!sameBytes(stored.bytes,d.bytes)||
+          !sameRecord(await findLocalKey(tx,d.localKey.record.operationId,d.localKey.record.identity),d.localKey.record))return corrupt();
+      }
+      return {ok:true as const,value:snapshot(saved)};
+    });}catch(e){return fail(mapError(e));}
   }
   /** Called only after verifying the signed same-adult transition and source snapshot. */
   async commitHouseholdOwnDevice(input:OwnDevicePublication) {
