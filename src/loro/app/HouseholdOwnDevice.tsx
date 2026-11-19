@@ -6,6 +6,7 @@ import {copyText} from './clipboard';
 import {PublicMessageFile} from './PublicMessageFile';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import {MAX_HOUSEHOLD_OWN_DEVICE_MESSAGE} from './household-own-device.mjs';
+import {HouseholdOwnDeviceEstablished} from './HouseholdOwnDeviceEstablished';
 import {MAX_PERSONAL_PAIRING_FILE} from '../pairing/personal-copy.mjs';
 
 type Role='initiator'|'responder';
@@ -79,6 +80,7 @@ export function HouseholdOwnDevice(){
   {button(open?'Close household device pairing':'Pair my household devices',async()=>setOpen(!open))}
   {open?<View style={{gap:8}}>
    <Text accessibilityRole="header">Your household devices</Text>
+   <HouseholdOwnDeviceEstablished/>
    <Text>Use a device with household access to authorize another device for the same adult. The new device gets the selected cooking document and its current data key. Every adult keeps one vote.</Text>
    <Text selectable accessibilityLabel="This household pairing device fingerprint">{service.fingerprint}</Text>
    <Text selectable accessibilityLabel="Household pairing root to compare">{service.rootPin}</Text>
