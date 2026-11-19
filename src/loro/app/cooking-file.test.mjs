@@ -1586,6 +1586,24 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.ok(observedInstalled.signed.manifest.children.some(child=>child.recipeId===added.id&&child.creationEffectId!==null));
   const copyOptions={runtime:sponsor.runtime,service:sponsor.service,sodium,peerId:'31337',seedId:'copy-set-test'};
   const capturedCopy=await captureOwnDeviceCopySet(copyOptions);
+  const forgottenHistory=observedInstalled.guard.members[0];
+  const forgottenDoc=new LoroDoc();forgottenDoc.import(forgottenHistory.bytes);
+  forgottenDoc.setPeerId('31338');
+  const visibleBefore=forgottenDoc.toJSON();
+  forgottenDoc.getMap('recipe-index').set('ephemeral-proof-control','Unsigned hidden value');
+  forgottenDoc.commit();
+  forgottenDoc.getMap('recipe-index').delete('ephemeral-proof-control');
+  forgottenDoc.commit();
+  assert.deepEqual(forgottenDoc.toJSON(),visibleBefore);
+  const historyStore=openSQLiteTransaction(a.connection);
+  const historySlot=JSON.stringify(['document',scope.id,forgottenHistory.documentId]);
+  const savedHistory=await historyStore(false,tx=>tx.get(historySlot));
+  await historyStore(true,tx=>tx.put(historySlot,{revision:savedHistory.revision+1,bytes:forgottenDoc.export({mode:'snapshot'})}));
+  try{
+   await observeSelectedSourceSet(sponsor.runtime);
+   await assert.rejects(captureOwnDeviceCopySet(copyOptions),/INSUFFICIENT_EVIDENCE/);
+  }
+  finally{await historyStore(true,tx=>tx.put(historySlot,savedHistory))}
   const verifyCopy=set=>verifyOwnDeviceCopySet({storage:a.storage,scope,pin:a.root.head,provider:a.provider,
    sodium,LoroDoc,set,copyHash:capturedCopy.copyHash,authorDevice:a.deviceId,peerId:copyOptions.peerId});
   const checkedCopy=await verifyCopy(capturedCopy.set);
@@ -1631,7 +1649,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.ok(signedCopy.documents.length>=3);
   const testKeys=new Map(signedCopy.documents.map((document,index)=>[document.documentId,new Uint8Array(32).fill(index+1)]));
   const requested=[];
-  const pairingFile=await sealOwnDeviceSetFile({...fileOptions,next:copyTransition.next,set:capturedCopy.set,
+  const probeFile=await sealOwnDeviceSetFile({...fileOptions,next:copyTransition.next,set:capturedCopy.set,
    signingSecret:sponsorKeys.signingSecret,useSourceKey:({documentId},use)=>{
     requested.push(documentId);
     return use(testKeys.get(documentId));
@@ -1647,7 +1665,7 @@ test('selected recipe shopping copies and current-only admission survive durable
     sources:document.copy.sources,localKey});
   }
   const publication={operationId:'own-device-set-transaction',guardId:'own-device-set-guard',expected:parentRecord,
-   next:copyTransition.next,guard:capturedCopy.guard,copyHash:capturedCopy.copyHash,file:pairingFile,documents:preparedDocuments};
+   next:copyTransition.next,guard:capturedCopy.guard,copyHash:capturedCopy.copyHash,file:probeFile,documents:preparedDocuments};
   const beforeSetWrite=a.rows();
   a.faultAt('household-own-device-set');
   assert.equal((await a.storage.commitHouseholdOwnDeviceSet(publication)).error.code,'IO');
@@ -1657,18 +1675,18 @@ test('selected recipe shopping copies and current-only admission survive durable
   const openPairingFile=(file,wrappingSecret=nextWrap.privateKey)=>withOpenedOwnDeviceSetFile({
    ...fileOptions,file,wrappingSecret,withKeys:({next,keys,fileHash})=>{
     assert.deepEqual(next,copyTransition.next);
-    assert.equal(fileHash,pairingDigest(sodium,pairingFile));
+    assert.equal(fileHash,pairingDigest(sodium,probeFile));
     assert.deepEqual(keys,signedCopy.documents.map(document=>({
      documentId:document.targetDocumentId,key:testKeys.get(document.documentId)
     })));
     openedKeys.push(...keys.map(({key})=>key));
    }
   });
-  await openPairingFile(pairingFile);
+  await openPairingFile(probeFile);
   assert.equal(openedKeys.length,signedCopy.documents.length);
   assert.ok(openedKeys.every(key=>key.every(byte=>byte===0)));
   const fileDomain='household-own-device-set-file';
-  const openedFile=openDeviceCopy(sodium,fileDomain,pairingFile,evidence.hash,evidence.transcript,nextWrap.privateKey);
+  const openedFile=openDeviceCopy(sodium,fileDomain,probeFile,evidence.hash,evidence.transcript,nextWrap.privateKey);
   const [rootPacket,firstRecipePacket,secondRecipePacket,...remainingPackets]=openedFile.packets;
   for(const [packets,error] of [
    [[rootPacket,firstRecipePacket,...remainingPackets],/INVALID_KEY_PACKAGE/],
@@ -1678,9 +1696,32 @@ test('selected recipe shopping copies and current-only admission survive durable
     {...openedFile,packets});
    await assert.rejects(openPairingFile(changed),error);
   }
-  await assert.rejects(openPairingFile(pairingFile,existingWrap.privateKey),/INVALID_KEY/);
+  await assert.rejects(openPairingFile(probeFile,existingWrap.privateKey),/INVALID_KEY/);
   assert.equal(openedKeys.length,signedCopy.documents.length);
   const pairedDir=mkdtempSync(join(tmpdir(),'own-device-set-recipient-'));
+  // Clone the current fixture rows into an isolated disk database for sponsor publication.
+  let publishDb=new DatabaseSync(join(pairedDir,'sponsor.sqlite'));
+  const publishStorage=openSQLiteStorage({executeSync(sql,params=[]){
+   const statement=publishDb.prepare(sql);
+   return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+  }});
+  t.after(()=>publishDb.close());
+  const beforePublish=a.rows();
+  const put=publishDb.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
+  for(const row of beforePublish)put.run(row.key,row.value);
+  const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,
+   signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId});
+  assert.equal(published.head,signedCopy.head);
+  const pairingFile=published.file;
+  assert.ok(pairingFile.length>112);
+  const sourceKeyHash=await sponsorCatalog.useIdentity({version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:parent.epochId},
+   key=>pairingDigest(sodium,key));
+  await withOpenedOwnDeviceSetFile({...fileOptions,file:pairingFile,wrappingSecret:nextWrap.privateKey,withKeys:({keys})=>{
+   const hashes=keys.map(({key})=>pairingDigest(sodium,key));
+   assert.equal(new Set(hashes).size,signedCopy.documents.length);
+   assert.ok(!hashes.includes(sourceKeyHash));
+  }});
+  assert.deepEqual(a.rows(),beforePublish);
   const pairedPath=join(pairedDir,'peer.sqlite');
   let pairedDb=new DatabaseSync(pairedPath),pairedFault=0;
   t.after(()=>{pairedDb.close();rmSync(pairedDir,{recursive:true});});
@@ -1772,7 +1813,8 @@ test('selected recipe shopping copies and current-only admission survive durable
   const pairedAfter=pairedRows();
   assert.deepEqual(await installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),
    {scope,head:signedCopy.head,replayed:true});
-  const resealed=sealDeviceCopy(sodium,fileDomain,evidence.hash,evidence.transcript.responder,sponsorKeys.signingSecret,openedFile);
+  const resealed=sealDeviceCopy(sodium,fileDomain,evidence.hash,evidence.transcript.responder,sponsorKeys.signingSecret,
+   openDeviceCopy(sodium,fileDomain,pairingFile,evidence.hash,evidence.transcript,nextWrap.privateKey));
   await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:resealed}),/CONFLICT/);
   await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:pairingFile,
    keys:pairedStorage.localKeys(testMaster(),sodium)}),/LOCKED/);
@@ -1840,21 +1882,6 @@ test('selected recipe shopping copies and current-only admission survive durable
   tamperedObservation.manifest.children[0].checkpointHash='0'.repeat(64);
   await assert.rejects(()=>verifySelectedSourceSet({storage:a.storage,scope,pin:a.root.head,
    provider:a.provider,signed:tamperedObservation}),/INVALID_SOURCE_SIGNATURE/);
-  // Clone the current fixture rows into an isolated disk database for sponsor publication.
-  let publishDb=new DatabaseSync(join(pairedDir,'sponsor.sqlite'));
-  const publishStorage=openSQLiteStorage({executeSync(sql,params=[]){
-   const statement=publishDb.prepare(sql);
-   return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
-  }});
-  t.after(()=>publishDb.close());
-  const beforePublish=a.rows();
-  const put=publishDb.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
-  for(const row of beforePublish)put.run(row.key,row.value);
-  const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,
-   signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId,
-   useSourceKey:({documentId},use)=>use(testKeys.get(documentId))});
-  assert.equal(published.head,signedCopy.head);
-  assert.ok(published.file.length>112);
   publishDb.close();publishDb=new DatabaseSync(join(pairedDir,'sponsor.sqlite'));
   for(const doc of signedCopy.documents)assert.deepEqual(must(await publishStorage.reopenDocument(scope.id,doc.targetDocumentId)).bytes,doc.copy.snapshot);
   const sponsorReopenOptions={...fileOptions,storage:publishStorage,scope,
@@ -1927,6 +1954,10 @@ test('selected recipe shopping copies and current-only admission survive durable
   await pairedRecipient.files.receive(appObject.bytes);
   assert.equal(projectCooking((await pairedSponsor.householdContent.readRecipe(recipeId)).doc).recipes[0].title,appTitle);
   assert.equal(projectCooking((await pairedRecipient.householdContent.readRecipe(recipeId)).doc).recipes[0].title,appTitle);
+  const editedRecipientRows=pairedRows();
+  assert.deepEqual(await installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),
+   {scope,head:signedCopy.head,replayed:true});
+  assert.deepEqual(pairedRows(),editedRecipientRows);
   assert.deepEqual(a.rows(),beforePublish);
   const raceDoc=await sponsor.householdContent.readRecipe(added.id);
   const raceCommands=planRecipeAction({doc:raceDoc.doc,before:edited,after:{...edited,title:'Revision race'},
@@ -1936,8 +1967,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal((await a.storage.checkSelectedHouseholdSources(capturedCopy.guard)).error.code,'CONFLICT');
   const beforeStalePublish=a.rows();
   await assert.rejects(()=>publishOwnDeviceSet({...fileOptions,next:copyTransition.next,captured:capturedCopy,
-   signingSecret:sponsorKeys.signingSecret,keys:sponsorCatalog,deviceId:a.deviceId,
-   useSourceKey:({documentId},use)=>use(testKeys.get(documentId))}),/CONFLICT/);
+   signingSecret:sponsorKeys.signingSecret,keys:sponsorCatalog,deviceId:a.deviceId}),/CONFLICT/);
   assert.deepEqual(a.rows(),beforeStalePublish);
   a.provider.verify=previousVerify;
   const beforeReceive=freshRows();

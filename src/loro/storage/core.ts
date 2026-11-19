@@ -771,8 +771,9 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     });}catch(error){return fail(mapError(error));}
   }
   /** Commit a previously verified v5 successor and its complete prepared key set. */
-  async commitHouseholdOwnDeviceSet(input:OwnDeviceSetPublication) {
+  async commitHouseholdOwnDeviceSet(input:OwnDeviceSetPublication,replayDocuments?:{documentId:string;revision:number;bytes:Uint8Array}[]) {
     input=snapshot(input);
+    replayDocuments=snapshot(replayDocuments);
     const {operationId,guardId,expected,next,guard,recipient,copyHash,file,documents}=input;
     const sponsor='sponsor' in input?input.sponsor:undefined;
     if(!validId(operationId)||!validId(guardId)||!validatePairingAuthority(expected).ok||
@@ -823,11 +824,13 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         key('projection-seed-command',scope,d.documentId,row.commandId),key('projection-seed-effect',scope,d.documentId,row.effectId)
       ]));
       if(saved&&recipient){
+        if(replayDocuments?.length!==documents.length)return conflict();
         if(!sameRecord(current,next)||await tx.get(guardSlot)!==op||!sameBytes(saved.file,file)||
           !sameRecord({...saved,file:null},{...retained,file:null}))return conflict();
-        for(const d of documents){
-          const revisionZero=await tx.get(key('document',scope,d.documentId));
-          if(revisionZero?.revision!==0||!sameBytes(revisionZero.bytes,d.bytes)||
+        for(const [index,d] of documents.entries()){
+          const verified=replayDocuments[index],stored=await tx.get(key('document',scope,d.documentId));
+          if(verified.documentId!==d.documentId||!stored||stored.revision!==verified.revision||!sameBytes(stored.bytes,verified.bytes))return conflict();
+          if((stored.revision===0&&!sameBytes(stored.bytes,d.bytes))||
             await tx.get(key('document-owner',scope,d.documentId))!==next.acceptedParent||
             !sameRecord(await tx.get(key('household-own-device-parent',scope,d.documentId)),{head:expected.acceptedParent,documentId:d.sourceDocumentId})||
             !sameRecord(await tx.get(key('household-own-device-sources',scope,d.documentId)),d.sources)||

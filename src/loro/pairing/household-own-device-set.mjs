@@ -38,7 +38,7 @@ const commitment=(provider,sodium,set)=>selectedSourceHash(provider,'household-o
 export async function captureOwnDeviceCopySet({runtime,service,sodium,peerId,seedId}) {
  if(!validPeerId(peerId)||Object.values(runtime.scope.authorPeers).includes(peerId))throw Error('INVALID_COPY');
  const {provider}=runtime.authority,{storage,LoroDoc}=runtime;
- const {signed:observation,sources,guard}=await observeSelectedSourceSet(runtime);
+ const {signed:observation,sources,guard}=await observeSelectedSourceSet(runtime,{verifyCheckpointHistory:true});
  const {expectedAuthority}=guard;
  const disclosure=await service.authority();
  const documents=[];
@@ -189,31 +189,35 @@ export async function sealOwnDeviceSetFile({signingSecret,useSourceKey,evidence,
 }
 
 /** Publish the captured set atomically before returning its encrypted file. */
-export async function publishOwnDeviceSet({storage,provider,sodium,LoroDoc,pin,parentRecord,next,captured,evidence,signingSecret,useSourceKey,keys,deviceId}) {
+export async function publishOwnDeviceSet({storage,provider,sodium,LoroDoc,pin,parentRecord,next,captured,evidence,signingSecret,keys,deviceId}) {
  ({parentRecord,next,evidence}=structuredClone({parentRecord,next,evidence}));
  const {set,guard}=structuredClone(captured);
  const checked=await verifyOwnDeviceSetSuccessor({storage,provider,sodium,LoroDoc,pin,parentRecord,next,set,proposal:evidence});
  requireLocalEvidence(sodium,checked,evidence);
  if(deviceId!==checked.context.senderDevice)throw Error('INVALID_KEY');
- const keyHashes=new Map();
- const file=await sealOwnDeviceSetFile({storage,provider,sodium,LoroDoc,pin,parentRecord,next,set,evidence,signingSecret,
-  useSourceKey:(source,use)=>useSourceKey(source,key=>{keyHashes.set(source.documentId,hex(sodium.crypto_generichash(32,key)));return use(key)})});
+ const contexts=await keyContexts(provider,checked),packets=[],keyHashes=[];
  const documents=[];
- for(const document of checked.documents){
+ for(const [index,document] of checked.documents.entries()){
   const documentId=document.targetDocumentId;
   const {keyOperationId,identity}=await targetKeyIdentity(provider,parentRecord.scope,pin,checked,documentId,deviceId);
-  const localKey=await useSourceKey({documentId:document.documentId,recipeId:document.recipeId},key=>{if(hex(sodium.crypto_generichash(32,key))!==keyHashes.get(document.documentId))throw Error('INVALID_KEY');return keys.preparePairedDataKey(keyOperationId,identity,key)});
+  const {packets:packet,...localKey}=await keys.prepareForAtomicInstall(keyOperationId,identity,key=>{
+   keyHashes.push(pairingDigest(sodium,key));
+   return makeKeyPackage(sodium,contexts[index],key,signingSecret);
+  });
+  verifyStoredKeyPackage(sodium,packet,contexts[index]);
+  packets.push(packet);
   documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,documentId,bytes:document.copy.snapshot,
    identities:document.identities,sources:document.copy.sources,policies:document.copy.policies,localKey});
  }
- const orderedHashes=checked.documents.map(document=>keyHashes.get(document.documentId));
- const receipt=sponsorReceipt(parentRecord.scope,pin,checked,pairingDigest(sodium,file),orderedHashes);
+ const file=sealDeviceCopy(sodium,fileDomain,checked.context.transcriptHash,checked.proof.transcript.responder,signingSecret,
+  {version:1,head:checked.head,item:checked.item,selection:checked.selection,set,packets});
+ const receipt=sponsorReceipt(parentRecord.scope,pin,checked,pairingDigest(sodium,file),keyHashes);
  const signature=sodium.crypto_sign_detached(receipt,signingSecret);
  if(!sodium.crypto_sign_verify_detached(signature,receipt,checked.proof.transcript.initiator.signingPublicKey))
   throw Error('INVALID_KEY');
  must(await storage.commitHouseholdOwnDeviceSet({operationId:evidence.transcript.sessionId,guardId:checked.proof.guard.guardId,
   expected:parentRecord,next,guard,copyHash:checked.context.manifestHash,file,documents,
-  sponsor:{deviceId,set,keyHashes:orderedHashes,signature:hex(signature)}}));
+  sponsor:{deviceId,set,keyHashes,signature:hex(signature)}}));
  return {scope:parentRecord.scope,head:checked.head,file};
 }
 
@@ -282,6 +286,19 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
      else if(!same(current,parentRecord))throw Error('CONFLICT');
      await prepareEnrollment();
     }
+    let replayDocuments;
+    if(prior){
+     const saved=must(await storage.readHouseholdOwnDeviceSetRetained(scope,operationId));
+     if(!saved||!same(saved.next,next)||saved.documents.length!==checked.documents.length)throw Error('CONFLICT');
+     replayDocuments=[];
+     for(const [index,copy] of checked.documents.entries()){
+      const {documentId,document}=saved.documents[index];
+      if(documentId!==copy.targetDocumentId||
+        (document.revision===0&&!same(document.bytes,copy.copy.snapshot)))throw Error('INVALID_COPY');
+      await verifyRetainedPolicyBaseline(LoroDoc,document,copy.baseline,provider);
+      replayDocuments.push({documentId,...document});
+     }
+    }
     const documents=[];
     for(const [index,document] of checked.documents.entries()){
      const {documentId,key}=opened[index];
@@ -291,7 +308,7 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
       documentId,bytes:document.copy.snapshot,identities:document.identities,sources:document.copy.sources,policies:document.copy.policies,localKey});
     }
     const {replayed}=must(await storage.commitHouseholdOwnDeviceSet({operationId,guardId:checked.proof.guard.guardId,
-     expected:parentRecord,next,copyHash:checked.context.manifestHash,file,documents,recipient:{deviceId,fileHash,signature}}));
+     expected:parentRecord,next,copyHash:checked.context.manifestHash,file,documents,recipient:{deviceId,fileHash,signature}},replayDocuments));
     return {scope,head:checked.head,replayed};
    }});
  }

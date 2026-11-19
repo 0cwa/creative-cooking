@@ -231,11 +231,7 @@ export function householdOwnDevice({
      baseline:captured.set.documents[0].baseline,copyHash:captured.copyHash
     });
     const {file,head}=await publishOwnDeviceSet({storage,provider,sodium:s,LoroDoc,pin,parentRecord:live.record,next:signed.next,
-     captured,evidence:{transcript,guard,messages,hash:oob.hash},keys,deviceId,signingSecret:secrets.signingSecret,
-     useSourceKey:({documentId},use)=>{
-      if(!captured.set.documents.some(document=>document.documentId===documentId))throw Error('INVALID_KEY');
-      return keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:live.parent.epochId},use);
-     }});
+     captured,evidence:{transcript,guard,messages,hash:oob.hash},keys,deviceId,signingSecret:secrets.signingSecret});
     return {file,replayed:false,head,update:''};
    }
    const documentId=live.resolved.scope.documentId, stored=must(await storage.reopenBranchDocument(expectedAuthority,documentId));

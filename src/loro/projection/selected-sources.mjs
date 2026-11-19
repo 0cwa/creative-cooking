@@ -92,15 +92,15 @@ export async function verifySelectedSourceSet({storage,scope,pin,provider,signed
 
 const visible = doc => Object.fromEntries(Object.entries(doc.toJSON()).filter(([,value]) => Object.keys(value).length));
 
-async function authenticateSource(runtime,bytes,doc) {
+async function authenticateSource(runtime,bytes,doc,verifyCheckpointHistory) {
   if (bytes === null) return;
-  const replay = await replayAuthenticated({runtime,checkpoint:bytes});
+  const replay = await replayAuthenticated({runtime,checkpoint:bytes,verifyCheckpointHistory});
   if (replay.held.length || !same(visible(doc),visible(replay.doc))) throw Error('INCOMPLETE_SOURCE');
 }
 
 /** Capture and authenticate the complete source set, then recheck every
  * document and catalog entry together before returning the signed observation. */
-export async function observeSelectedSourceSet(runtime) {
+export async function observeSelectedSourceSet(runtime,{verifyCheckpointHistory=false}={}) {
   const catalog = await openSelectedRecipeCatalog(runtime,undefined,MAX_SELECTED_CHILDREN);
   const {binding,expectedAuthority,parent,entries,catalogRevision,children} = catalog;
   const {provider,rootPin} = runtime.authority;
@@ -110,14 +110,14 @@ export async function observeSelectedSourceSet(runtime) {
   if(admitted.length+entries.length>MAX_SELECTED_CHILDREN || admitted.some(member=>entries.some(entry=>entry.recipeId===member.recipeId||entry.documentId===member.documentId)))throw Error('CONFLICT');
   const guard = {binding,expectedAuthority,catalogRevision,...(auth.members?{members:[]}:{}),root:parent.storedBytes === null ? null :
     {documentId:binding.sourceDocumentId,revision:parent.revision,bytes:parent.storedBytes},entries};
-  await authenticateSource(runtime,parent.storedBytes,parent.doc);
+  await authenticateSource(runtime,parent.storedBytes,parent.doc,verifyCheckpointHistory);
   const manifestChildren = [];
   const sources = [{runtime,revision:parent.revision,bytes:parent.storedBytes,doc:parent.doc}];
   entries.sort((left,right) => left.recipeId < right.recipeId ? -1 : 1);
   for (const entry of entries) {
     const childRuntime = await runtime.forRecipe(entry.recipeId);
     const {doc}=children.get(entry.recipeId);
-    await authenticateSource(childRuntime,entry.bytes,doc);
+    await authenticateSource(childRuntime,entry.bytes,doc,verifyCheckpointHistory);
     sources.push({runtime:childRuntime,revision:entry.revision,bytes:entry.bytes,doc});
     manifestChildren.push({recipeId:entry.recipeId,documentId:entry.documentId,revision:entry.revision,
       checkpointHash:await sourceSnapshotHash(provider,entry.bytes),creationEffectId:entry.effectId,
@@ -129,7 +129,7 @@ export async function observeSelectedSourceSet(runtime) {
     capturedBytes+=child.storedBytes.length;
     if(child.storedBytes.length>MAX_SELECTED_SOURCE_BYTES||capturedBytes>MAX_SELECTED_SET_BYTES)throw Error('TOO_LARGE');
     const childRuntime=await runtime.forRecipe(member.recipeId);
-    await authenticateSource(childRuntime,child.storedBytes,child.doc);
+    await authenticateSource(childRuntime,child.storedBytes,child.doc,verifyCheckpointHistory);
     guard.members.push({recipeId:member.recipeId,documentId:member.documentId,revision:child.revision,bytes:child.storedBytes});
     sources.push({runtime:childRuntime,revision:child.revision,bytes:child.storedBytes,doc:child.doc,admitted:true});
     manifestChildren.push({recipeId:member.recipeId,documentId:member.documentId,revision:child.revision,

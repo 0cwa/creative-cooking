@@ -63,6 +63,26 @@ async function authority(page,scopeId){
   }finally{db.close();}
  },scopeId);
 }
+async function joinedCounter(page,scopeId,remove=false){
+ return page.evaluate(async({scope,remove})=>{
+  const req=request=>new Promise((resolve,reject)=>{
+   request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+   request.onblocked=()=>reject(Error('Blocked sequence fixture'));
+  });
+  const name=localStorage.getItem('creative-cooking-local-workspace-v1');
+  const enrollmentDb=await req(indexedDB.open(name+'-joined'));
+  const enrollment=await req(enrollmentDb.transaction('enrollments').objectStore('enrollments').get(scope));
+  enrollmentDb.close();
+  const databaseName=enrollment.sequenceName+'-sequences';
+  if(remove){
+   await req(indexedDB.deleteDatabase(databaseName));
+   return databaseName;
+  }
+  const db=await req(indexedDB.open(databaseName));
+  try{return await req(db.transaction('sequences').objectStore('sequences').get(JSON.stringify(['counter',scope])))}
+  finally{db.close()}
+ },{scope:scopeId,remove});
+}
 
 for(const copiesRecipes of [false,true])test(`same-adult household Settings verifies, resumes, installs and opens a separate device${copiesRecipes?' with separate recipes':''}`,async({browser,baseURL})=>{
  test.setTimeout(180000);
@@ -201,6 +221,20 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
   await settings(receiver);
   await click(receiver,'Receive my household access');
   await expect(button(receiver,'Open paired household')).toBeVisible();
+  if(copiesRecipes){
+   const beforeRetry=await authority(receiver,scope);
+   const sequence=await joinedCounter(receiver,scope);
+   expect(sequence).toBeGreaterThan(1);
+   await choose(receiver,file);
+   await click(receiver,'Install verified household device');
+   await notice(receiver,'The same household pairing is already installed.');
+   expect(await authority(receiver,scope)).toEqual(beforeRetry);
+   expect(await joinedCounter(receiver,scope)).toBe(sequence);
+   const counter=await joinedCounter(receiver,scope,true);
+   await click(receiver,'Install verified household device');
+   await notice(receiver,'Household pairing could not continue. Check the verified message or file and try again.');
+   expect(await receiver.evaluate(async name=>(await indexedDB.databases()).some(db=>db.name===name),counter)).toBe(false);
+  }
   await click(receiver,'Create a fresh household pairing request');
   await expect(button(receiver,'Open paired household')).toHaveCount(0);
   const renewed=JSON.parse(await label(receiver,'My household pairing request').inputValue());

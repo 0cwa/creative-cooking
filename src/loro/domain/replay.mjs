@@ -1,4 +1,5 @@
 import {validate,operations,checkPreconditions,apply,bytes,validateOperations as validateOperationsForReplay} from './registry.mjs';
+import {policyBaseline} from '../authority/policy-baseline.mjs';
 const LIMIT=256, MAX_BYTES=1024*1024;
 const dense=a=>Array.isArray(a) && Array.from({length:a.length},(_,i)=>Object.hasOwn(a,i)).every(Boolean);
 /**
@@ -53,7 +54,7 @@ export function replayCommandsFixtureOnly({LoroDoc,checkpoint,records,excludedEf
 export function replayCommands() { throw Error('INSUFFICIENT_EVIDENCE'); }
 
 /** Reconstruct only from envelopes committed by this runtime and its trusted checkpoint. */
-export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=[]}) {
+export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=[],verifyCheckpointHistory=false}) {
  const same=(a,b)=>JSON.stringify(Array.from(bytes(a)))===JSON.stringify(Array.from(bytes(b)));
  const required=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value;};
  if(!runtime || !(checkpoint instanceof Uint8Array) || checkpoint.length>MAX_BYTES || !dense(excludedEffectIds) || excludedEffectIds.length>LIMIT || !excludedEffectIds.every(x=>typeof x==='string'&&x) || new Set(excludedEffectIds).size!==excludedEffectIds.length) throw Error('MALFORMED_REPLAY');
@@ -61,6 +62,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
  const scope=runtime.scope, outbound=required(await runtime.storage.listOutboundObjects(scope.scopeId)), inbox=required(await runtime.storage.listStagedInbox(scope.scopeId));
  const seed=typeof runtime.storage.readProjectionSeed==='function'?required(await runtime.storage.readProjectionSeed(expectedAuthority,scope.documentId)):null;
  const objects=[],decoder=new TextDecoder('utf-8',{fatal:true});
+ const authenticatedUpdates=[];
  let size=checkpoint.length+(seed?.snapshot.length??0);
  if(size>MAX_BYTES)throw Error('TOO_LARGE');
  function include(id,bytes){
@@ -109,6 +111,7 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
    }
   }
   checkPreconditions(prior,command,{importing:true,recipeSource:linked?.source});
+  if(verifyCheckpointHistory)authenticatedUpdates.push(update);
   const marker=original.getMap('domain-effects').get(command.effectId);
   if(!marker?.command || !same(marker.command,command))throw Error('INSUFFICIENT_EVIDENCE');
   const old=identities.get(command.commandId);
@@ -117,6 +120,14 @@ export async function replayAuthenticated({runtime,checkpoint,excludedEffectIds=
   entries.push({authorDevice:h.authorDevice,command,sourcePeer:meta.peer,sourceCounter:runtime.decodeImportBlobMeta(update,true).partialStartVersionVector.toJSON().get(meta.peer)??0,prior:new Set(Object.keys(prior.getMap('domain-effects').toJSON()))});
  }
  const seedDoc=new runtime.LoroDoc(),seedIds=new Map();if(seed){seedDoc.import(seed.snapshot);for(const x of seed.seed.identities)seedIds.set(x.effectId,x.commandId)}
+ if(verifyCheckpointHistory){
+  const authenticated=new runtime.LoroDoc();
+  const imports=seed?[seed.snapshot,...authenticatedUpdates]:authenticatedUpdates;
+  if(imports.length&&authenticated.importBatch(imports).pending?.size)throw Error('INSUFFICIENT_EVIDENCE');
+  const provider=runtime.authority.provider;
+  if(!same(await policyBaseline(authenticated,provider),await policyBaseline(original,provider)))
+   throw Error('INSUFFICIENT_EVIDENCE');
+ }
  const base=new runtime.LoroDoc();
  if(checkpoint.length){
   base.import(checkpoint);

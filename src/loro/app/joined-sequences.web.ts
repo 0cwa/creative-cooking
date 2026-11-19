@@ -47,8 +47,11 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
     await put(pending);
     return null;
    }
-   const legacyName=savedBinding===undefined&&enrollment?.version===1&&typeof enrollment.sequenceName==='string'&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
-   const boundName=enrollment?.version===2&&enrollment.sequenceName===sequenceName&&(savedBinding===undefined||savedBinding===binding);
+   const installation=verified?.installedSet;
+   const pairedEnrollment=!!installation&&'paired' in installation;
+   const legacyName=!pairedEnrollment&&savedBinding===undefined&&enrollment?.version===1&&typeof enrollment.sequenceName==='string'&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
+   const boundName=enrollment?.version===2&&enrollment.sequenceName===sequenceName&&
+    (savedBinding===binding||!pairedEnrollment&&savedBinding===undefined);
    if(!(boundName||legacyName)||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId)throw Error('ENROLLMENT_CONFLICT');
    if(mode==='prepare'){
     if(enrollment.stage!=='pending'&&!found.value&&!verified)throw Error('ENROLLMENT_CONFLICT');
