@@ -1,3 +1,4 @@
+import {observePolicyDocumentSet,verifyPolicyDocumentSet} from '../authority/policy-document-set.mjs';
 import {householdPairing} from './household-pairing.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {installEstablishedOwnDeviceSet,commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
@@ -692,6 +693,26 @@ test('selected recipe shopping copies and current-only admission survive durable
  // The source set includes both children and the household document with a
  // signed copy dependency. The peer authenticates the claim from its own pin.
  const observation=await observeSelectedSourceSet(a.runtime);
+ const full=await observePolicyDocumentSet(a.runtime);
+ const retained=full.sources.map(source=>({documentId:source.runtime.scope.documentId,revision:source.revision,bytes:source.bytes??new Uint8Array()}));
+ const verifyFull=(signed=full.signed,docs=retained,pin=b.root.head)=>verifyPolicyDocumentSet({storage:b.storage,scope,pin,provider:b.provider,LoroDoc,signed,retained:docs});
+ await verifyFull();
+ await assert.rejects(()=>verifyFull(full.signed,retained.slice(0,-1)),/INVALID_POLICY_DOCUMENT_SET/);
+ await assert.rejects(()=>verifyFull(full.signed,[retained[0],retained[1],retained[1]]),/INVALID_POLICY_DOCUMENT_SET/);
+ const modified=structuredClone(full.signed); modified.body.documents[1].baseline.historyHash='0'.repeat(64);
+ await assert.rejects(()=>verifyFull(modified),/INVALID_POLICY_DOCUMENT_SIGNATURE/);
+ const resignFull=async body=>({...full.signed,body,signature:sodium.to_hex(await a.provider.sign(
+  a.root.devices.find(device=>device.deviceId===a.deviceId).signingKeyRef,
+  domain('policy-document-set-v1',{body,deviceId:a.deviceId})))});
+ const omittedBaseline=structuredClone(full.signed.body); omittedBaseline.documents.pop();
+ await assert.rejects(()=>resignFull(omittedBaseline).then(value=>verifyFull(value)),/INVALID_POLICY_DOCUMENT_SET/);
+ const substituted=structuredClone(full.signed.body); substituted.documents[1].documentId=substituted.documents[2].documentId;
+ await assert.rejects(()=>resignFull(substituted).then(value=>verifyFull(value)),/INVALID_POLICY_DOCUMENT_SET/);
+ await assert.rejects(()=>verifyFull({...full.signed,deviceId:b.deviceId}),/INVALID_POLICY_DOCUMENT_SET/);
+
+ await assert.rejects(()=>verifyFull(full.signed,retained,'0'.repeat(64)));
+ const stale=structuredClone(retained); stale[1].bytes[0]^=1;
+ await assert.rejects(()=>verifyFull(full.signed,stale),/INVALID_POLICY_DOCUMENT_SET/);
  const {signed,guard}=observation;
  const verifySet=signed=>verifySelectedSourceSet({storage:b.storage,scope,pin:b.root.head,provider:b.provider,signed});
  const verified=await verifySet(signed);
