@@ -55,7 +55,7 @@ export async function bindPolicyBranches({runtime,keys,service,sodium,withCurren
   return {sourceHead:verified.current.acceptedParent,sourceRevision:verified.current.revision,targetHead:verified.targetHead};
  }),activate:input=>withCurrent(async()=>{
   if(input?.explicit!==true)throw Error('INVALID_CONFIRMATION');
-  const result=await activateStagedPolicyDocumentSet({runtime,keys,service,sodium,expectedSourceHead:input.expectedSourceHead,expectedSourceRevision:input.expectedSourceRevision,targetHead:input.targetHead});
+  const result=await activateStagedPolicyDocumentSet({runtime,keys,service,sodium,expectedSourceHead:input.expectedSourceHead,expectedSourceRevision:input.expectedSourceRevision,targetHead:input.targetHead,requireReturnableSource:true});
   return {targetHead:result.targetHead};
  })};
 }
@@ -68,7 +68,7 @@ export async function prepareWorkspacePolicyDocumentKeys(runtime,targetHead,keys
 }
 
 /** Activate one explicitly confirmed staged successor from a mounted source. */
-export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHead,expectedSourceRevision,targetHead,service,sodium,keys}) {
+export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHead,expectedSourceRevision,targetHead,service,sodium,keys,requireReturnableSource=false}) {
  const mount=policyMounts.get(runtime);
  if(!mount || mount.activated || mount.paired || keys!==mount.keys)throw Error('INVALID_SOURCE_READER');
  if(typeof expectedSourceHead!=='string' || !expectedSourceHead || !Number.isSafeInteger(expectedSourceRevision) || expectedSourceRevision<0 || typeof targetHead!=='string' || !targetHead)throw Error('INVALID_CONFIRMATION');
@@ -91,7 +91,7 @@ export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHea
  const expected=verified.current;
  if(expected.acceptedParent!==expectedSourceHead || expected.revision!==expectedSourceRevision || runtime.scope.branchHead!==expectedSourceHead)throw Error('STALE_SOURCE');
  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(expected.authorityState));
- if(unsupportedPolicySource(state))throw Error('UNSUPPORTED_SOURCE');
+ if(unsupportedPolicySource(state,{allowAdmission:!requireReturnableSource}))throw Error('UNSUPPORTED_SOURCE');
  const signer=verified.parent.devices.find(d=>d.active && d.deviceId===runtime.scope.authorDevice);
  if(!signer || mount.signing.publicKey!==signer.signingKeyRef)throw Error('INVALID_SIGNER');
  const captured=await observeSelectedSourceSet(runtime,{verifyCheckpointHistory:true});

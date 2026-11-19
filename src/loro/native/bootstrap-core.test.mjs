@@ -1395,7 +1395,10 @@ test('joined legacy admission reopens activated policy with its existing counter
   const signed={event,authorSignature:sodium.to_hex(await provider.sign(author.signingKeyRef,domain('event-signature',event))),approvals};
   await stageVerifiedPolicyDocumentSet({runtime,item:signed,signed:full.signed});
   const expected=(await storage.readPairingAuthority(scope)).value;
-  await activateStagedPolicyDocumentSet({runtime,expectedSourceHead:expected.acceptedParent,expectedSourceRevision:expected.revision,targetHead,service:recipient.disclosure,sodium,keys});
+  const confirmation={runtime,expectedSourceHead:expected.acceptedParent,expectedSourceRevision:expected.revision,targetHead,service:recipient.disclosure,sodium,keys};
+  await assert.rejects(()=>activateStagedPolicyDocumentSet({...confirmation,requireReturnableSource:true}),/UNSUPPORTED_SOURCE/);
+  assert.deepEqual((await storage.readPairingAuthority(scope)).value,expected);
+  await activateStagedPolicyDocumentSet(confirmation);
   const counterPath=join(dir,`${houseCounterName(recipientName,scope,recipient.deviceId)}.sqlite`);
   recipient.close();recipient=undefined;
   const counter=new DatabaseSync(counterPath), prior=counter.prepare('SELECT value FROM loro_sequence_counters WHERE scope=?').get(scope.id).value;counter.close();
