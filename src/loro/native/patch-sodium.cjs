@@ -15,3 +15,29 @@ const fs=require('node:fs'),path=require('node:path');const dir=process.argv[2];
         jsiRuntime.global().setProperty(jsiRuntime, "jsi_cc_crypto_scalarmult_base", std::move(jsi_cc_crypto_scalarmult_base));
 
 `;s=s.replace(anchor,code+anchor);fs.writeFileSync(file,s)}
+
+const pointMarker='jsi_cc_crypto_scalarmult';
+if(!s.includes(`"${pointMarker}"`)){
+ if(s.split(anchor).length!==2)throw Error('unexpected native binding');
+ const code=`        // Use libsodium for X25519 point validation and equivalence checks.
+        auto jsi_cc_crypto_scalarmult = jsi::Function::createFromHostFunction(
+            jsiRuntime, jsi::PropNameID::forUtf8(jsiRuntime, "jsi_cc_crypto_scalarmult"), 2,
+            [](jsi::Runtime &runtime, const jsi::Value &, const jsi::Value *arguments, size_t count) -> jsi::Value {
+                if (count != 2) throw jsi::JSError(runtime, "invalid X25519 arguments");
+                std::string scalarName = "scalar", pointName = "point";
+                validateIsArrayBuffer("crypto_scalarmult", runtime, arguments[0], scalarName, true);
+                validateIsArrayBuffer("crypto_scalarmult", runtime, arguments[1], pointName, true);
+                auto scalar = arguments[0].asObject(runtime).getArrayBuffer(runtime);
+                auto point = arguments[1].asObject(runtime).getArrayBuffer(runtime);
+                if (scalar.size(runtime) != crypto_scalarmult_SCALARBYTES || point.size(runtime) != crypto_scalarmult_BYTES)
+                    throw jsi::JSError(runtime, "invalid X25519 length");
+                std::vector<uint8_t> output(crypto_scalarmult_BYTES);
+                if (crypto_scalarmult(output.data(), scalar.data(runtime), point.data(runtime)) != 0)
+                    throw jsi::JSError(runtime, "X25519 rejected the point");
+                return arrayBufferAsObject(runtime, output);
+            });
+        jsiRuntime.global().setProperty(jsiRuntime, "jsi_cc_crypto_scalarmult", std::move(jsi_cc_crypto_scalarmult));
+
+`;
+ fs.writeFileSync(file,s.replace(anchor,code+anchor));
+}

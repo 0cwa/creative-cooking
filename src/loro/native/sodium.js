@@ -11,6 +11,13 @@ export const sodium = {
  ...native,
  from_hex:value=>{if(typeof value!=='string'||value.length%2||!/^[0-9a-fA-F]*$/.test(value))throw Error('INVALID_HEX');return Uint8Array.from(value.match(/../g)??[],x=>parseInt(x,16));},
  crypto_scalarmult_base:scalar=>{if(!(scalar instanceof Uint8Array)||scalar.length!==32||typeof globalThis.jsi_cc_crypto_scalarmult_base!=='function')throw Error('NATIVE_SCALARMULT_UNAVAILABLE');const copy=scalar.slice();try{return new Uint8Array(globalThis.jsi_cc_crypto_scalarmult_base(copy.buffer));}finally{copy.fill(0)}},
+ crypto_scalarmult:(scalar,point)=>{
+  if(!(scalar instanceof Uint8Array)||scalar.length!==32||!(point instanceof Uint8Array)||point.length!==32||
+   typeof globalThis.jsi_cc_crypto_scalarmult!=='function')throw Error('NATIVE_SCALARMULT_UNAVAILABLE');
+  const copy=new Uint8Array(scalar);
+  try{return new Uint8Array(globalThis.jsi_cc_crypto_scalarmult(copy.buffer,new Uint8Array(point).buffer));}
+  finally{copy.fill(0)}
+ },
  crypto_aead_xchacha20poly1305_ietf_encrypt:(message,aad,secret,nonce,key)=>native.crypto_aead_xchacha20poly1305_ietf_encrypt(message,utf8(aad),secret,nonce,key),
  crypto_aead_xchacha20poly1305_ietf_decrypt:(secret,cipher,aad,nonce,key)=>native.crypto_aead_xchacha20poly1305_ietf_decrypt(secret,cipher,utf8(aad),nonce,key),
 };

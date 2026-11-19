@@ -33,6 +33,7 @@ export class LoroDoc {
  oplogVersion() {return new Vector(this.native.oplogVersion());}
  frontiers() {return ids(this.native.stateFrontiers());}
  import(value) {return this.native.import_(binary(value));}
+ importBatch(values) {return this.native.importBatch(values.map(binary));}
  export(options) {
   if(options.mode==='snapshot') return new Uint8Array(this.native.exportSnapshot());
   if(options.mode==='update') return new Uint8Array(this.native.exportUpdates(options.from?.native ?? new VersionVector()));
