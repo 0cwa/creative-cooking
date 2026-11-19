@@ -1,8 +1,13 @@
+import {authorityBytes,snapshotId} from '../authority/chain.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {MAX_SELECTED_CHILDREN,MAX_SELECTED_SET_BYTES} from '../contracts/runtime-storage.ts';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
 import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {exact,inspectOwnDeviceSnapshot,must,ownDeviceCopyHash,sameOwnDevice,verifyOwnDeviceDocumentCopy,verifyOwnDeviceSuccessor} from './household-own-device.mjs';
+import {makeKeyPackage,verifyStoredKeyPackage,withOpenedKeyPackage} from './key-package.mjs';
+import {MAX_PERSONAL_PAIRING_FILE,openDeviceCopy,pairingDigest,sealDeviceCopy} from './personal-copy.mjs';
+
+const fileDomain='household-own-device-set-file';
 
 const hex=bytes=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 const validPeerId=value=>typeof value==='string'&&/^[1-9][0-9]{0,19}$/.test(value)&&BigInt(value)<=18446744073709551615n;
@@ -115,4 +120,76 @@ export async function verifyOwnDeviceSetSuccessor({storage,pin,provider,sodium,L
   targetIds.add(targetDocumentId);
  }
  return {...checked,documents:copies};
+}
+
+async function keyContexts(provider,{context,documents}) {
+ return Promise.all(documents.map(async ({targetDocumentId})=>({
+  ...context,projectionId:targetDocumentId,
+  releaseId:await selectedSourceHash(provider,'household-own-device-document-release-v1',{
+   sessionId:context.releaseId,head:context.grantHash,copyHash:context.manifestHash,documentId:targetDocumentId
+  }),
+ })));
+}
+
+function requireLocalEvidence(sodium,checked,evidence) {
+ if(!sameOwnDevice(sodium,checked.proof,{transcript:evidence.transcript,guard:evidence.guard,messages:evidence.messages}))
+  throw Error('INVALID_PROOF');
+}
+
+/** The caller must commit the checked copy and source guard before sharing the file. */
+export async function sealOwnDeviceSetFile({signingSecret,useSourceKey,evidence,next,set,...options}) {
+ const {sodium,provider}=options;
+ ({evidence,next,set}=structuredClone({evidence,next,set}));
+ const secret=new Uint8Array(signingSecret);
+ try{
+  const checked=await verifyOwnDeviceSetSuccessor({...options,next,set,proposal:evidence});
+  requireLocalEvidence(sodium,checked,evidence);
+  if(hex(secret.subarray(32))!==checked.context.senderSigningKey)throw Error('INVALID_KEY');
+  const contexts=await keyContexts(provider,checked);
+  const packets=[];
+  for(const [index,document] of checked.documents.entries()){
+   const context=contexts[index];
+   const packet=await useSourceKey({documentId:document.documentId,recipeId:document.recipeId},
+    key=>makeKeyPackage(sodium,context,key,secret));
+   verifyStoredKeyPackage(sodium,packet,context);
+   packets.push(new Uint8Array(packet));
+  }
+  return sealDeviceCopy(sodium,fileDomain,checked.context.transcriptHash,checked.proof.transcript.responder,secret,
+   {version:1,head:checked.head,item:checked.item,selection:checked.selection,set,packets});
+ }finally{secret.fill(0)}
+}
+
+/** Verify the file and open the complete key set before invoking the installer. */
+export async function withOpenedOwnDeviceSetFile({file,wrappingSecret,evidence,withKeys,...options}) {
+ const {sodium,provider}=options;
+ if(!(file instanceof Uint8Array)||file.length<=112||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
+ const secret=new Uint8Array(wrappingSecret);
+ try{
+  evidence=structuredClone(evidence);
+  if(hex(sodium.crypto_scalarmult_base(secret))!==hex(evidence.transcript.responder.wrappingPublicKey))
+   throw Error('INVALID_KEY');
+  const contents=openDeviceCopy(sodium,fileDomain,file,evidence.hash,evidence.transcript,secret);
+  const fileHash=pairingDigest(sodium,file);
+  if(!exact(contents,['version','head','item','selection','set','packets'])||contents.version!==1)
+   throw Error('INVALID_FILE');
+  const {item,head,selection,set,packets}=contents;
+  const parentRecord=structuredClone(options.parentRecord);
+  const parent=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(parentRecord.authorityState));
+  const nextState={...parent,events:[...parent.events,item],selections:[...parent.selections,selection],activeHead:head};
+  const next={scope:parentRecord.scope,revision:parentRecord.revision+1,acceptedParent:head,
+   authorityState:authorityBytes(nextState),authorizationSnapshot:await snapshotId(provider,nextState)};
+  const checked=await verifyOwnDeviceSetSuccessor({...options,parentRecord,next,set,proposal:evidence});
+  requireLocalEvidence(sodium,checked,evidence);
+  const contexts=await keyContexts(provider,checked);
+  if(!Array.isArray(packets)||packets.length!==contexts.length)throw Error('INVALID_KEY_PACKAGE');
+  for(const [index,context] of contexts.entries())verifyStoredKeyPackage(sodium,packets[index],context);
+  const keys=[];
+  const open=index=>index===contexts.length
+   ? withKeys({checked,next,set,packets,keys,fileHash})
+   : withOpenedKeyPackage(sodium,packets[index],contexts[index],secret,key=>{
+     keys.push({documentId:contexts[index].projectionId,key});
+     return open(index+1);
+    });
+  return await open(0);
+ }finally{secret.fill(0)}
 }

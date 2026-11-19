@@ -1,4 +1,5 @@
-import {captureOwnDeviceCopySet,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor} from '../pairing/household-own-device-set.mjs';
+import {captureOwnDeviceCopySet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
+import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
 import {householdCompromise} from './household-compromise.mjs';
@@ -1625,6 +1626,44 @@ test('selected recipe shopping copies and current-only admission survive durable
    assert.equal(document.targetDocumentId,await recipeDocumentId(targetScope,a.root.head,a.provider,document.recipeId));
    assert.notEqual(document.targetDocumentId,document.documentId);
   }
+  const evidence={...peer,hash:peer.oob.hash};
+  const fileOptions={storage:a.storage,parentRecord,pin:a.root.head,provider:a.provider,sodium,LoroDoc,evidence};
+  assert.ok(signedCopy.documents.length>=3);
+  const testKeys=new Map(signedCopy.documents.map((document,index)=>[document.documentId,new Uint8Array(32).fill(index+1)]));
+  const requested=[];
+  const pairingFile=await sealOwnDeviceSetFile({...fileOptions,next:copyTransition.next,set:capturedCopy.set,
+   signingSecret:sponsorKeys.signingSecret,useSourceKey:({documentId},use)=>{
+    requested.push(documentId);
+    return use(testKeys.get(documentId));
+   }});
+  assert.deepEqual(requested,signedCopy.documents.map(document=>document.documentId));
+  const openedKeys=[];
+  const openPairingFile=(file,wrappingSecret=nextWrap.privateKey)=>withOpenedOwnDeviceSetFile({
+   ...fileOptions,file,wrappingSecret,withKeys:({next,keys,fileHash})=>{
+    assert.deepEqual(next,copyTransition.next);
+    assert.equal(fileHash,pairingDigest(sodium,pairingFile));
+    assert.deepEqual(keys,signedCopy.documents.map(document=>({
+     documentId:document.targetDocumentId,key:testKeys.get(document.documentId)
+    })));
+    openedKeys.push(...keys.map(({key})=>key));
+   }
+  });
+  await openPairingFile(pairingFile);
+  assert.equal(openedKeys.length,signedCopy.documents.length);
+  assert.ok(openedKeys.every(key=>key.every(byte=>byte===0)));
+  const fileDomain='household-own-device-set-file';
+  const openedFile=openDeviceCopy(sodium,fileDomain,pairingFile,evidence.hash,evidence.transcript,nextWrap.privateKey);
+  const [rootPacket,firstRecipePacket,secondRecipePacket,...remainingPackets]=openedFile.packets;
+  for(const [packets,error] of [
+   [[rootPacket,firstRecipePacket,...remainingPackets],/INVALID_KEY_PACKAGE/],
+   [[rootPacket,secondRecipePacket,firstRecipePacket,...remainingPackets],/INVALID_PROOF/],
+  ]){
+   const changed=sealDeviceCopy(sodium,fileDomain,evidence.hash,evidence.transcript.responder,sponsorKeys.signingSecret,
+    {...openedFile,packets});
+   await assert.rejects(openPairingFile(changed),error);
+  }
+  await assert.rejects(openPairingFile(pairingFile,existingWrap.privateKey),/INVALID_KEY/);
+  assert.equal(openedKeys.length,signedCopy.documents.length);
   const verifiedCopy=await verifyAuthority(copyTransition.state,a.root.head,a.provider,{pendingOwnDeviceSet:signedCopy.head});
   const child=verifiedCopy.nodes.get(signedCopy.head);
   assert.deepEqual(child.roster,parent.roster);
