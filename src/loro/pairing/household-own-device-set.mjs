@@ -6,7 +6,7 @@ import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} fro
 import {recipeDocumentId} from '../domain/recipe-document.mjs';
 import {exact,inspectOwnDeviceSnapshot,must,ownDeviceCopyHash,sameOwnDevice,verifyOwnDeviceDocumentCopy,verifyOwnDeviceSuccessor} from './household-own-device.mjs';
 import {makeKeyPackage,verifyStoredKeyPackage,withOpenedKeyPackage} from './key-package.mjs';
-import {prepareEstablishedOwnDeviceFanout} from './household-own-device-established-file.mjs';
+import {prepareEstablishedOwnDeviceFanout,withOpenedEstablishedOwnDeviceTransition} from './household-own-device-established-file.mjs';
 import {MAX_PERSONAL_PAIRING_FILE,openDeviceCopy,pairingDigest,sealDeviceCopy,verifyDeviceCopyFile} from './personal-copy.mjs';
 
 const fileDomain='household-own-device-set-file';
@@ -335,6 +335,63 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
    return await install(committed);
   }
  }finally{secret.fill(0);signer.fill(0)}
+}
+
+/** Internal seam: checked, next and opened must come directly from the verified
+ * established transition opener. The local runtime supplies the guarded bytes. */
+export async function commitVerifiedEstablishedOwnDeviceSet({storage,runtime,provider,sodium,pin,parentRecord,evidence,file,signer,keys,deviceId,checked,next,opened}) {
+ if(runtime.storage!==storage||runtime.scope.scopeId!==parentRecord.scope.id||runtime.authority.rootPin!==pin||runtime.authority.provider!==provider)throw Error('INVALID_AUTHORITY');
+ const recipient=evidence.transcript.responder;
+ if(recipient.deviceId!==deviceId||signer.length!==64||!sameOwnDevice(sodium,signer.subarray(32),recipient.signingPublicKey))throw Error('INVALID_KEY');
+ const challenge=domain('household-own-device-established-signer-check-v1',{deviceId});
+ if(!sodium.crypto_sign_verify_detached(sodium.crypto_sign_detached(challenge,signer),challenge,recipient.signingPublicKey))throw Error('INVALID_KEY');
+ let local;
+ try { local=await observeSelectedSourceSet(runtime,{verifyCheckpointHistory:true}); }
+ catch(error) {
+  if(['INCOMPLETE_SOURCE','INSUFFICIENT_EVIDENCE','MISSING_DOCUMENT','INVALID_RECIPE_DOCUMENT','CONFLICT'].includes(error.message))throw Error('LOCAL_EDITS_CONFLICT');
+  throw error;
+ }
+ const {sources,guard}=local;
+ if(!sameOwnDevice(sodium,guard.expectedAuthority.record,{revision:parentRecord.revision,acceptedParent:parentRecord.acceptedParent,authorizationSnapshot:parentRecord.authorizationSnapshot})||
+    sources.length!==checked.documents.length)throw Error('LOCAL_EDITS_CONFLICT');
+ for(const [index,source] of sources.entries()){
+  const document=checked.documents[index];
+  if(source.runtime.recipeId!==document.recipeId||source.runtime.scope.documentId!==document.documentId||
+     !sameOwnDevice(sodium,await policyBaseline(source.doc,provider),document.baseline))throw Error('LOCAL_EDITS_CONFLICT');
+ }
+ const operationId=checked.item.event.proposalId,guardId=evidence.guard.guardId;
+ const fileHash=pairingDigest(sodium,file),transcriptHash=evidence.oob.hash;
+ const body={scope:parentRecord.scope,pin,operationId,guardId,ceremonyGuard:evidence.guard,transcriptHash,fileHash,parent:parentRecord,
+  child:next,deviceId,copyHash:checked.context.manifestHash};
+ const signature=hex(sodium.crypto_sign_detached(domain('household-own-device-established-receipt-v1',body),signer));
+ const documents=[];
+ for(const [index,document] of checked.documents.entries()){
+  const {documentId,key}=opened[index];
+  const {keyOperationId,identity}=await targetKeyIdentity(provider,parentRecord.scope,pin,checked,documentId,deviceId);
+  const localKey=await keys.preparePairedDataKey(keyOperationId,identity,key);
+  documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,documentId,bytes:document.copy.snapshot,
+   identities:document.identities,sources:document.copy.sources,policies:document.copy.policies,localKey});
+ }
+ const result=must(await storage.commitHouseholdOwnDeviceSet({operationId,guardId,expected:parentRecord,next,guard,
+  copyHash:checked.context.manifestHash,file,documents,recipient:{deviceId,fileHash,signature,kind:'established',transcriptHash}}));
+ return {scope:parentRecord.scope,head:checked.head,replayed:result.replayed};
+}
+
+/** First installation on an established device. Replay and runtime reopening are
+ * intentionally unavailable until their retained receipt verifier is implemented. */
+export async function installEstablishedOwnDeviceSet({storage,runtime,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret,signingSecret,keys,deviceId}) {
+ ({parentRecord,evidence,file}=structuredClone({parentRecord,evidence,file}));
+ if(runtime.storage!==storage||runtime.scope.authorDevice!==deviceId||runtime.scope.scopeId!==parentRecord.scope.id||
+    runtime.authority.rootPin!==pin||runtime.authority.provider!==provider)throw Error('INVALID_AUTHORITY');
+ const current=must(await storage.readPairingAuthority(parentRecord.scope));
+ if(!sameOwnDevice(sodium,current,parentRecord))throw Error('INVALID_AUTHORITY');
+ const secret=new Uint8Array(wrappingSecret),signer=new Uint8Array(signingSecret);
+ try {
+  return await withOpenedEstablishedOwnDeviceTransition({storage,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret:secret,
+   withKeys:async({checked,next,keys:opened})=>{
+    return commitVerifiedEstablishedOwnDeviceSet({storage,runtime,provider,sodium,pin,parentRecord,evidence,file,signer,keys,deviceId,checked,next,opened});
+   }});
+ } finally {secret.fill(0);signer.fill(0)}
 }
 
 /** Reopen only a complete, still-current paired household copy. */

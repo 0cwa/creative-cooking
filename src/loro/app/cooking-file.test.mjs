@@ -1,4 +1,4 @@
-import {publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
+import {commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
@@ -1773,6 +1773,62 @@ test('selected recipe shopping copies and current-only admission survive durable
   const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,establishedEvidence,
    signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId});
   assert.equal(published.head,signedCopy.head);
+  // Installer proof with a deliberately matching publisher snapshot. This is not
+  // a claim that independent same-head authorization snapshots are identical.
+  const proofDb=new DatabaseSync(join(pairedDir,'established-proof.sqlite'));
+  t.after(()=>proofDb.close());
+  const proofConnection={executeSync(sql,params=[]){const statement=proofDb.prepare(sql);
+   return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};}};
+  const proofStorage=openSQLiteStorage(proofConnection);
+  const proofPut=proofDb.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
+  const resetProof=()=>{proofDb.prepare('DELETE FROM loro_records').run();for(const row of beforePublish)proofPut.run(row.key,row.value);};
+  const proofRows=()=>proofDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+  resetProof();
+  const proofKeys=proofStorage.localKeys(sponsorMaster,sodium);
+  const openProofRuntime=async()=>openPeer(proofStorage,await resolveOriginalHousehold({...sealOptions,storage:proofStorage,deviceId:a.deviceId}),
+   enable(proofKeys,a.signingTestKey.privateKey,sponsorWrap.privateKey),signingRef,wrapping);
+  let proofPeer=await openProofRuntime();
+  const establishedIndex=establishedRecipients.findIndex(row=>row.deviceId===b.deviceId);
+  const establishedFile=published.establishedRecipients[establishedIndex].ciphertext;
+  const establishedProof=establishedEvidence[establishedIndex];
+  let preparedCount=0;
+  const guardedKeys={preparePairedDataKey:(...args)=>{preparedCount++;return proofKeys.preparePairedDataKey(...args)}};
+  let proofKeyHashes=[];
+  const installProof=()=>withOpenedEstablishedOwnDeviceTransition({storage:proofStorage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   withKeys:({checked,next,keys:opened})=>{proofKeyHashes=opened.map(({key})=>pairingDigest(sodium,key));return commitVerifiedEstablishedOwnDeviceSet({storage:proofStorage,runtime:proofPeer.runtime,
+    provider:a.provider,sodium,pin:a.root.head,parentRecord,evidence:establishedProof,file:establishedFile,
+    signer:b.signingTestKey.privateKey,keys:guardedKeys,deviceId:b.deviceId,checked,next,opened});}});
+  const localRecipe=await proofPeer.householdContent.readRecipe(added.id);
+  const divergent={...edited,title:'Recipient local edit survives'};
+  const divergentCommands=planRecipeAction({doc:localRecipe.doc,before:edited,after:divergent,
+   actionId:'established-local-divergence',author:a.deviceId,at});
+  await proofPeer.householdContent.execute('established-local-divergence',divergentCommands,added.id);
+  const divergentRows=proofRows();
+  await assert.rejects(installProof,/LOCAL_EDITS_CONFLICT/);
+  assert.equal(preparedCount,0);
+  assert.deepEqual(proofRows(),divergentRows);
+  assert.equal(projectCooking((await proofPeer.householdContent.readRecipe(added.id)).doc).recipes[0].title,divergent.title);
+  resetProof();proofPeer=await openProofRuntime();
+  const installedEstablished=await installProof();
+  assert.deepEqual(installedEstablished,{scope,head:signedCopy.head,replayed:false});
+  assert.equal(preparedCount,signedCopy.documents.length);
+  const establishedSaved=must(await proofStorage.readHouseholdOwnDeviceSetRetained(scope,eventV5.proposalId));
+  assert.equal(establishedSaved.guardId,establishedProof.guard.guardId);
+  assert.equal(establishedSaved.recipient.transcriptHash,establishedProof.oob.hash);
+  const receiptBody={scope,pin:a.root.head,operationId:eventV5.proposalId,guardId:establishedProof.guard.guardId,
+   ceremonyGuard:establishedProof.guard,transcriptHash:establishedProof.oob.hash,fileHash:pairingDigest(sodium,establishedFile),
+   parent:parentRecord,child:copyTransition.next,deviceId:b.deviceId,copyHash:capturedCopy.copyHash};
+  assert.ok(sodium.crypto_sign_verify_detached(sodium.from_hex(establishedSaved.recipient.signature),
+   domain('household-own-device-established-receipt-v1',receiptBody),b.signingTestKey.publicKey));
+  for(const [index,document] of signedCopy.documents.entries()){
+   assert.deepEqual(establishedSaved.documents[index].document.bytes,document.copy.snapshot);
+   const epochId=await selectedSourceHash(a.provider,'household-own-device-key-slot-v1',{
+    scope,pin:a.root.head,head:signedCopy.head,epochId:signedCopy.context.epochId,documentId:document.targetDocumentId});
+   const keyOperationId=await selectedSourceHash(a.provider,'household-own-device-key-operation-v1',{epochId,deviceId:b.deviceId});
+   const identity={version:1,scope,deviceId:b.deviceId,purpose:'data',epochId};
+   await proofKeys.use(keyOperationId,identity,key=>assert.equal(pairingDigest(sodium,key),proofKeyHashes[index]));
+  }
   const pairingFile=published.file;
   assert.ok(pairingFile.length>112);
   const sourceKeyHash=await sponsorCatalog.useIdentity({version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:parent.epochId},
