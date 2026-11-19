@@ -1,5 +1,5 @@
 import {
- authorityBytes,encodeEvidence,snapshotId,verifyAuthority
+ authorityBytes,encodeEvidence,readAuthority,snapshotId,verifyAuthority
 } from '../authority/chain.mjs';
 import {admissionThreshold,domain} from '../authority/validator.mjs';
 import {checkOwnDeviceCeremony,ownDeviceHash,ownDeviceSignal} from '../authority/own-device.mjs';
@@ -119,6 +119,20 @@ export function householdOwnDevice({
    throw Error('INVALID_AUTHORITY');
   return result;
  }
+ async function retainedLegacySponsor(proposal){
+  const saved=must(await storage.readHouseholdOwnDeviceRelease(scope,proposal.transcript.sessionId,false));
+  if(!saved?.file)return false;
+  const selected=await readAuthority(storage,scope,pin,provider);
+  if(selected.activeHead!==saved.next.acceptedParent)return false;
+  // Require the storage baseline and the signed successor to match the selected state.
+  must(await storage.readHouseholdOwnDeviceRelease(scope,proposal.transcript.sessionId));
+  const {record,oob}=await inspectProposal(proposal,'initiator');
+  const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:record,next:saved.next,proposal:{hash:oob.hash,guard:proposal.guard}});
+  verifyDeviceCopyFile(s,HOUSEHOLD_OWN_DEVICE_FILE,saved.file,oob.hash,proposal.transcript.initiator.signingPublicKey);
+  if(checked.proof.guard.guardId!==saved.guardId||!same(checked.item,selected.state.events.at(-1))||
+     !same(checked.selection,selected.state.selections.at(-1)))throw Error('INVALID_AUTHORITY');
+  return true;
+ }
  async function propose(incoming,confirmedFingerprint){
   const item=parse(incoming),r=await readRequest(item),old=await read('initiator');
   if(fingerprint({deviceId:r.deviceId,signingKey:r.signingKey,wrappingKey:r.wrappingKey})!==confirmedFingerprint)throw Error('OOB_REQUIRED');
@@ -196,7 +210,7 @@ export function householdOwnDevice({
   const saved=await read(role);
   if(!saved)return null;
   if(role==='initiator'&&(!belongs(saved.proposal)||
-    !await retainedSponsor(saved.proposal)&&!await reusable(saved.proposal,await current())))return null;
+    !await retainedSponsor(saved.proposal)&&!await retainedLegacySponsor(saved.proposal)&&!await reusable(saved.proposal,await current())))return null;
   const {view}=await inspectProposal(saved.proposal,role);
   const sc=saved.proposal.bundle.scope;
   let installed=null;
@@ -382,18 +396,24 @@ export function householdOwnDevice({
   const update=parse(incoming);
   if(explicit!==true||!exact(update,['version','item','selection','head'])||update.version!==1||
      !update.item?.ownDevice||!hex64(update.head))throw Error('INVALID_OWN_DEVICE');
-  const {item,selection,head}=update,live=await current(),sponsor=item.event.authorDeviceId;
-  if(!live.parent.runtime.acceptedRecipients.includes(deviceId)||sponsor===deviceId||
-     item.event.subject.deviceId===deviceId)throw Error('STALE_AUTHORITY');
-  if(head===live.record.acceptedParent){
-   const saved=must(await storage.readHouseholdOwnDeviceRelease(scope,item.event.proposalId,false));
-   if(saved?.file===null&&saved.next.acceptedParent===head){
+  const {item,selection,head}=update, sponsor=item.event.authorDeviceId;
+  // A completed adoption advances durable authority while the mounted runtime is stale.
+  // Authenticate an exact no-write replay against that selected authority first.
+  const selected=await readAuthority(storage,scope,pin,provider);
+  if(head===selected.activeHead){
+   const saved=must(await storage.readHouseholdOwnDeviceRelease(scope,item.event.proposalId));
+   const verified=await verifyAuthority(selected.state,pin,provider), parent=verified.nodes.get(head);
+   if(saved?.file===null&&saved.next.acceptedParent===head&&
+      parent?.runtime.acceptedRecipients.includes(deviceId)&&sponsor!==deviceId&&item.event.subject.deviceId!==deviceId){
     const retained=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(saved.next.authorityState));
     if(same(item,retained.events.at(-1))&&same(selection,retained.selections.at(-1))&&
-       same(selection,live.state.selections.at(-1)))return {scope,head,replayed:true};
+       same(item,selected.state.events.at(-1))&&same(selection,selected.state.selections.at(-1)))return {scope,head,replayed:true};
    }
    throw Error('STALE_AUTHORITY');
   }
+  const live=await current();
+  if(!live.parent.runtime.acceptedRecipients.includes(deviceId)||sponsor===deviceId||
+     item.event.subject.deviceId===deviceId)throw Error('STALE_AUTHORITY');
   if(item.event.parentHead!==live.record.acceptedParent)throw Error('STALE_AUTHORITY');
   const nextState={...live.state,events:[...live.state.events,item],selections:[...live.state.selections,selection],activeHead:head};
   const next={scope,revision:live.record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
