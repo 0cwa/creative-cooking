@@ -102,9 +102,8 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
       }
     };
 
-    // Only a durable pending record in the main workspace proves this
-    // allocator has never been exposed. Legacy receipts can reuse a verified
-    // counter but cannot authorize creating one.
+    // A new enrollment records permission to initialize alongside its identity.
+    // A pending row from an older build can only reuse an existing counter.
     function joined({scope, pin, operationId, confirmedParent}, mode) {
       scope = structuredClone(scope);
       if (!household(scope) || !hash(pin) || !/^receive-[0-9a-f]{64}$/.test(operationId)) throw Error('MALFORMED');
@@ -122,18 +121,26 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
             !Object.entries(identity).every(([field, value]) => record[field] === value))) throw Error('ENROLLMENT_CONFLICT');
         }
         checkEnrollment(enrollment);
-        if (activation !== undefined && (!activation || Object.keys(activation).length !== Object.keys(identity).length ||
-          !Object.entries(identity).every(([field, value]) => activation[field] === value))) throw Error('ENROLLMENT_CONFLICT');
+        const mayInitialize = activation?.stage === 'pending';
+        if (activation !== undefined && (!activation ||
+          Object.keys(activation).length !== Object.keys(identity).length + Number(mayInitialize) ||
+          !Object.entries(identity).every(([field, value]) => activation[field] === value) ||
+          (mayInitialize && enrollment?.stage !== 'pending'))) throw Error('ENROLLMENT_CONFLICT');
         const legacy = enrollment?.stage === 'active' ? undefined :
           await run(false, tx => tx.get(JSON.stringify(['enrollment', scope.id])));
         checkEnrollment(legacy);
-        const alreadyActive = activation !== undefined || enrollment?.stage === 'active' || legacy?.stage === 'active';
+        const alreadyActive = (activation !== undefined && !mayInitialize) ||
+          enrollment?.stage === 'active' || legacy?.stage === 'active';
         if (mode === 'prepare') {
           if (found.value || await admission()) return null;
           if (alreadyActive) throw Error('MISSING_ADMISSION');
           const established = await storage.householdRecipient.hasDevice(scope.id, deviceId);
           if (!established.ok || established.value) throw Error('MISSING_ENROLLMENT');
-          if (!enrollment) await workspaceRun(true, tx => tx.put(key, {...identity, stage:'pending'}));
+          if (!enrollment && !legacy) await workspaceRun(true, async tx => {
+            const pending = {...identity, stage:'pending'};
+            await tx.put(key, pending);
+            await tx.put(activationKey(scope.id), pending);
+          });
           return null;
         }
         const verified=await admission();
@@ -142,7 +149,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         if((verified.installedSet || activation !== undefined)&&!enrollment&&!legacy)throw Error('MISSING_ENROLLMENT');
         const counters = openDatabase(`${name}-${operationId}`);
         try {
-          const initialize = mode === 'finalize' && enrollment?.stage === 'pending' && !alreadyActive;
+          const initialize = mode === 'finalize' && mayInitialize && !alreadyActive;
           const sequences = openNativeSequences(counters, [scope.id], initialize);
           if (enrollment?.stage !== 'active' || activation === undefined) {
             await workspaceRun(true, async tx => {

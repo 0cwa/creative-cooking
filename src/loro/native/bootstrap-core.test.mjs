@@ -931,8 +931,12 @@ test('own-device household release and install roll back, reopen and preserve di
   const damaged=new Uint8Array(file);damaged[damaged.length-1]^=1;
   await assert.rejects(fresh.householdPairing.ownDevice.install(damaged),/INVALID_FILE/);
   writes=0;faultName=freshName;faultWrite=2;
-  await assert.rejects(fresh.householdPairing.ownDevice.install(file),/IO/);
+  await assert.rejects(fresh.householdPairing.ownDevice.install(file),/INJECTED/);
   assert.equal(writes,2);
+  assert.deepEqual(rows(freshName),freshRows);
+  writes=0;faultWrite=3;
+  await assert.rejects(fresh.householdPairing.ownDevice.install(file),/IO/);
+  assert.equal(writes,3);
   faultName='';
   for(let boundary=1;boundary<=16;boundary++){
    writes=0;faultName=freshName;faultWrite=boundary;
@@ -941,7 +945,7 @@ test('own-device household release and install roll back, reopen and preserve di
    faultName='';
    fresh.close();fresh=await open(freshName);
    // Counter preparation is durable but has never enabled a cooking write.
-   const stable=rows(freshName).filter(row=>!JSON.parse(row.key)[0].startsWith('native-household-enrollment'));
+   const stable=rows(freshName).filter(row=>!['native-household-enrollment','native-household-activation'].includes(JSON.parse(row.key)[0]));
    assert.deepEqual(stable,freshRows);
    assert.equal((await readStore(freshName,storage=>storage.readPairingAuthority(scope))).value,null);
   }

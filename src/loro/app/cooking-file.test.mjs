@@ -1806,6 +1806,17 @@ test('selected recipe shopping copies and current-only admission survive durable
   try{
    assert.deepEqual(missingCounter.executeSync("SELECT name FROM sqlite_master WHERE type='table'").rows,[]);
   }finally{missingCounter.close()}
+  // A pre-upgrade active enrollment never had an independent activation record.
+  const activationSlot=JSON.stringify(['native-household-activation',scope.id]);
+  const savedActivation=pairedDb.prepare('SELECT value FROM loro_records WHERE key=?').get(activationSlot).value;
+  pairedDb.prepare('DELETE FROM loro_records WHERE key=?').run(activationSlot);
+  rmSync(join(pairedDir,`${pairedName}-${pairedEnrollmentId}.sqlite`));
+  await assert.rejects(pairedJoin.finalizeJoinedSequences(pairedEnrollment),/MISSING_SEQUENCES/);
+  const preUpgradeCounter=openPairedDatabase(`${pairedName}-${pairedEnrollmentId}`);
+  try{
+   assert.deepEqual(preUpgradeCounter.executeSync("SELECT name FROM sqlite_master WHERE type='table'").rows,[]);
+  }finally{preUpgradeCounter.close()}
+  pairedDb.prepare('INSERT INTO loro_records(key,value) VALUES (?,?)').run(activationSlot,savedActivation);
   pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(savedEnrollment,enrollmentSlot);
   const reopenOptions={storage:pairedStorage,scope,operationId:evidence.transcript.sessionId,pin:fileOptions.pin,
    provider:fileOptions.provider,sodium,LoroDoc,keys:pairedKeys,wrappingSecret:nextWrap.privateKey};
