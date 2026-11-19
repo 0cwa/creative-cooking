@@ -627,6 +627,33 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true as const,value:snapshot(record)};
     });}catch(e){return fail(mapError(e));}
   }
+  /** Structural evidence only. Authenticate the receipt, proof, documents and keys before use. */
+  async readActivatedPolicyDocumentSet(scope:string,targetHead:string) {
+    if(!validId(scope)||!validId(targetHead))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const receipt:PolicySetReceipt|undefined=await tx.get(key('policy-set-activation',scope,targetHead));
+      if(!receipt)return {ok:true as const,value:null};
+      const staged:StagedPolicyDocumentSet|undefined=await tx.get(key('policy-staged-set',scope,targetHead));
+      const authority=await tx.get(key('pairing-authority','household',scope));
+      if(!staged || !sameRecord(authority,receipt.next) || staged.sourceHead!==receipt.expected.acceptedParent ||
+        staged.targetHead!==receipt.next.acceptedParent || staged.mapping.length!==receipt.targets.length ||
+        staged.mapping.some((row,i)=>row.targetDocumentId!==receipt.targets[i].targetDocumentId)) return corrupt();
+      let size=staged.proof.length+staged.mapping.reduce((n,row)=>n+row.baseline.length,0);
+      const documents=[];
+      for(const row of staged.mapping){
+        const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
+        const doc=await tx.get(key('document',scope,row.targetDocumentId));
+        const parent=await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId));
+        if(owner!==targetHead || !doc || !(doc.bytes instanceof Uint8Array) || !doc.bytes.length ||
+          doc.bytes.length>MAX_SELECTED_SOURCE_BYTES || !revision(doc.revision) ||
+          !sameRecord(parent,{head:staged.sourceHead,documentId:row.sourceDocumentId})) return corrupt();
+        size+=doc.bytes.length;
+        if(size>MAX_SELECTED_SET_BYTES)return corrupt();
+        documents.push({documentId:row.targetDocumentId,bytes:doc.bytes,revision:doc.revision});
+      }
+      return {ok:true as const,value:snapshot({receipt,staged,documents})};
+    });}catch(e){return fail(mapError(e));}
+  }
   private async requireStagedPolicyTargets(tx:Tx,scope:string,record:StagedPolicyDocumentSet) {
     for(const row of record.mapping){
       const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
