@@ -2210,7 +2210,7 @@ test('selected recipe shopping copies and current-only admission survive durable
      const view=Object.create(storage), reopen=storage.reopenBranchDocument.bind(storage);
      view.reopenBranchDocument=async(authority,id)=>id===rootMember.documentId?{ok:true,value:{...rootStored,bytes}}:reopen(authority,id);
      const probe=new OfflineRuntime({storage:view,codec:sponsor.runtime.codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:'data',authority:{rootPin:a.root.head,provider:a.provider,activatedPolicy:{targetHead:policyHash,keys,resolved}}});
-     await assert.rejects(()=>probe.document(),/UNVERIFIED_SEED/);
+     await assert.rejects(()=>probe.document(),/INVALID_ACTIVATED_HISTORY/);
     };
     await checkTarget(childMember.policySeed.snapshot);
     const changed=new LoroDoc();changed.import(rootStored.bytes);changed.setPeerId('999998');
@@ -2224,7 +2224,7 @@ test('selected recipe shopping copies and current-only admission survive durable
     const forged=new LoroDoc();forged.import(saved.bytes);forged.setPeerId('999999');
     forged.getMap('domain-effects').set('forged',{version:3,seedId:'forged',effectId:'forged',commandId:'forged'});
     await transaction(true,tx=>tx.put(slot,{revision:saved.revision+1,bytes:forged.export({mode:'snapshot'})}));
-    await assert.rejects(async()=>{await (await runtime.forRecipe(added.id)).document()},/UNVERIFIED_SEED/);
+    await assert.rejects(async()=>{await (await runtime.forRecipe(added.id)).document()},/INVALID_ACTIVATED_HISTORY/);
     assert.deepEqual(a.rows(),sourceRows);
    }finally{db.close()}
   }
