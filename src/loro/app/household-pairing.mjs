@@ -50,7 +50,8 @@ export function householdPairing({
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
-    ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value==='function'?legacy(value):value])),
+    ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value!=='function'?value:
+      runtime.authority?.installedSet?.paired&&['history','resume','publish'].includes(key)?active(value):legacy(value)])),
     readmission:readmission&&Object.fromEntries(Object.entries(readmission).map(([name,method])=>[name,legacy(method)])),
     revocation:Object.fromEntries(Object.entries(revocation).map(([name,method])=>[name,legacy((first,...args)=>{
       if((first?.proposal??first)?.item?.event?.kind==='recoverDevice')throw Error('INVALID_REVOCATION');

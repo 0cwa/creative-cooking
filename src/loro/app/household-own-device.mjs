@@ -1,8 +1,8 @@
 import {
- authorityBytes,encodeEvidence,readAuthority,resolveRuntimeAuthority,snapshotId,verifyAuthority
+ authorityBytes,encodeEvidence,resolveRuntimeAuthority,snapshotId,verifyAuthority
 } from '../authority/chain.mjs';
 import {admissionThreshold,domain} from '../authority/validator.mjs';
-import {checkOwnDeviceCeremony,ownDeviceSignal} from '../authority/own-device.mjs';
+import {checkOwnDeviceCeremony,ownDeviceHash,ownDeviceSignal} from '../authority/own-device.mjs';
 import {policyBaseline,verifyPolicyBaseline} from '../authority/policy-baseline.mjs';
 import {durableSession} from '../pairing/durable-session.mjs';
 import {makeKeyPackage,withOpenedKeyPackage} from '../pairing/key-package.mjs';
@@ -15,6 +15,8 @@ import {
 } from '../pairing/household-own-device.mjs';
 import {verifyHouseholdParentRecord} from './household-parent.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
+import {captureOwnDeviceCopySet,installOwnDeviceSetFile,isOwnDeviceSetFile,publishOwnDeviceSet,reopenOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
+import {openSelectedRecipeCatalog} from './selected-recipe-catalog.mjs';
 
 const roles=['initiator','responder'];
 const other=role=>role==='initiator'?'responder':'initiator';
@@ -101,6 +103,16 @@ export function householdOwnDevice({
   const saved=must(await storage.readHouseholdOwnDeviceRelease(scope,proposal.transcript.sessionId,false));
   return !!saved?.file&&same(saved.next,live.record);
  }
+ async function retainedSponsor(proposal){
+  const saved=must(await storage.readHouseholdOwnDeviceSetRetained(scope,proposal.transcript.sessionId));
+  if(!saved)return null;
+  const result=await reopenOwnDeviceSet({storage,scope,pin,provider,sodium:s,LoroDoc,keys,
+   operationId:proposal.transcript.sessionId,wrappingSecret:undefined});
+  if(!result.file||result.item.event.authorDeviceId!==deviceId||saved.guardId!==proposal.guard.guardId||
+    result.item.event.subject.transcriptHash!==ownDeviceHash(s,proposal.transcript,proposal.guard))
+   throw Error('INVALID_AUTHORITY');
+  return result;
+ }
  async function propose(incoming,confirmedFingerprint){
   const item=parse(incoming),r=await readRequest(item),old=await read('initiator');
   if(fingerprint({deviceId:r.deviceId,signingKey:r.signingKey,wrappingKey:r.wrappingKey})!==confirmedFingerprint)throw Error('OOB_REQUIRED');
@@ -177,14 +189,17 @@ export function householdOwnDevice({
  async function resume(role){
   const saved=await read(role);
   if(!saved)return null;
-  if(role==='initiator'&&!await reusable(saved.proposal,await current()))return null;
+  if(role==='initiator'&&(!belongs(saved.proposal)||
+    !await retainedSponsor(saved.proposal)&&!await reusable(saved.proposal,await current())))return null;
   const {view}=await inspectProposal(saved.proposal,role);
   const sc=saved.proposal.bundle.scope;
   let installed=null;
   if(role==='responder'&&saved.confirmed){
    const {operationId}=householdReceiverIds(s,sc,deviceId),receipt=must(await storage.householdRecipient.find(sc.id,operationId));
-   if(receipt?.ownDevice&&receipt.guardId===saved.proposal.guard.guardId){
-    const joined={name,storage,scope:sc,pin:saved.proposal.bundle.rootPin,provider,deviceId,operationId};
+   const paired=must(await storage.readHouseholdOwnDeviceSetReceipt(sc,saved.proposal.transcript.sessionId));
+   if(receipt?.ownDevice&&receipt.guardId===saved.proposal.guard.guardId||paired?.recipient.deviceId===deviceId){
+    const joined={name,storage,scope:sc,pin:saved.proposal.bundle.rootPin,provider,deviceId,operationId,
+     confirmedParent:saved.proposal.bundle.selectedHead};
     const opened=await finalizeJoinedSequences(joined);
     try{installed={scope:sc,head:opened.resolved.scope.branchHead};}finally{opened.sequences.close();}
    }
@@ -196,6 +211,8 @@ export function householdOwnDevice({
    const {bundle,transcript,guard,adultId,peerId}=proposal;
    if(code!==oob.hash||!same(scope,bundle.scope)||pin!==bundle.rootPin)throw Error('OOB_REQUIRED');
    const {messages}=await session.evidence();
+   const savedSet=await retainedSponsor(proposal);
+   if(savedSet)return {file:savedSet.file,replayed:true,head:savedSet.head,update:''};
    const prior=must(await storage.readHouseholdOwnDeviceRelease(scope,transcript.sessionId));
    if(prior){
     const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:record,next:prior.next,proposal:{hash:oob.hash,guard}});
@@ -207,6 +224,20 @@ export function householdOwnDevice({
    const live=await current(), expectedAuthority=await runtime.authorize();
    if(record.authorizationSnapshot!==live.record.authorizationSnapshot||live.record.revision!==proposal.parentRevision||adultId!==live.resolved.adultId||
       !same(expectedAuthority,live.resolved.expectedAuthority))throw Error('STALE_AUTHORITY');
+   if((await openSelectedRecipeCatalog(runtime)).entries.length){
+    if(runtime.authority.installedSet||live.parent.runtime.acceptedRecipients.length!==1)throw Error('UNSUPPORTED_VERSION');
+    const captured=await captureOwnDeviceCopySet({runtime,service,sodium:s,peerId,seedId:transcript.sessionId});
+    const signed=await signCopy(live,proposal,oob,messages,5,{
+     baseline:captured.set.documents[0].baseline,copyHash:captured.copyHash
+    });
+    const {file,head}=await publishOwnDeviceSet({storage,provider,sodium:s,LoroDoc,pin,parentRecord:live.record,next:signed.next,
+     captured,evidence:{transcript,guard,messages,hash:oob.hash},keys,deviceId,signingSecret:secrets.signingSecret,
+     useSourceKey:({documentId},use)=>{
+      if(!captured.set.documents.some(document=>document.documentId===documentId))throw Error('INVALID_KEY');
+      return keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:live.parent.epochId},use);
+     }});
+    return {file,replayed:false,head,update:''};
+   }
    const documentId=live.resolved.scope.documentId, stored=must(await storage.reopenBranchDocument(expectedAuthority,documentId));
    const source={documentId,revision:stored?.revision??null,bytes:stored?.bytes??null};
    const snapshot=source.bytes??new LoroDoc().export({mode:'snapshot'});
@@ -224,13 +255,28 @@ export function householdOwnDevice({
     }
    }
    const copy={snapshot,seed,seedSnapshot,sources,policies:[...policies.values()].sort((a,b)=>a.policyHash<b.policyHash?-1:1)};
-   const parent=live.parent,receiver=oob.pins.responder;
-   const event={version:4,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:scope.id,parentHead:parent.head,
+   const {item,head,next,nextState,selection}=await signCopy(live,proposal,oob,messages,4,{
+    baseline:await policyBaseline(doc,provider),copyHash:ownDeviceCopyHash(s,copy),sourcesHash:ownDeviceSourcesHash(s,sources)
+   });
+   await verifyAuthority(nextState,pin,provider);
+   const context=ownDevicePacketContext(item,oob,head);
+   const packet=await keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:context.epochId},
+    key=>makeKeyPackage(s,context,key,secrets.signingSecret));
+   const file=sealDeviceCopy(s,HOUSEHOLD_OWN_DEVICE_FILE,oob.hash,transcript.responder,secrets.signingSecret,
+    {version:1,head,item,selection,copy,packet});
+   must(await storage.commitHouseholdOwnDevice({operationId:transcript.sessionId,guardId:guard.guardId,expected:live.record,
+    next,source,document:{documentId:context.projectionId,bytes:snapshot},file,sources}));
+   return {file,replayed:false,head,update:text({version:1,item,selection,head})};
+  });
+ }
+ async function signCopy(live,{transcript,guard,adultId,peerId},oob,messages,version,copy){
+   const {parent,record}=live,receiver=oob.pins.responder;
+   const event={version,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:scope.id,parentHead:parent.head,
     policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,proposalId:transcript.sessionId,
     kind:'pairOwnDevice',authorDeviceId:deviceId,frozenAdultRoster:parent.roster,nextPolicy:null,subject:{
      adultId,deviceId:receiver.deviceId,signingKeyRef:receiver.signingKey,wrappingKeyRef:receiver.wrappingKey,
      peerId,documentId:'paired-'+transcript.sessionId,parentSnapshot:record.authorizationSnapshot,parentRevision:live.record.revision,
-     transcriptHash:oob.hash,baseline:await policyBaseline(doc,provider),copyHash:ownDeviceCopyHash(s,copy),sourcesHash:ownDeviceSourcesHash(s,sources)
+     transcriptHash:oob.hash,...copy
     }};
    const head=s.to_hex(await provider.hash(domain('event',event)));
    const item={event,approvals:[],authorSignature:s.to_hex(await provider.sign(signingKey,domain('event-signature',event))),
@@ -239,16 +285,7 @@ export function householdOwnDevice({
    const signature=s.to_hex(await provider.sign(signingKey,domain('select-head',{root:pin,householdId:scope.id,...selection})));
    const nextState={...live.state,events:[...live.state.events,item],selections:[...live.state.selections,{...selection,signature}],activeHead:head};
    const next={scope,revision:live.record.revision+1,acceptedParent:head,authorizationSnapshot:await snapshotId(provider,nextState),authorityState:authorityBytes(nextState)};
-   await verifyAuthority(nextState,pin,provider);
-   const context=ownDevicePacketContext(item,oob,head);
-   const packet=await keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:context.epochId},
-    key=>makeKeyPackage(s,context,key,secrets.signingSecret));
-   const file=sealDeviceCopy(s,HOUSEHOLD_OWN_DEVICE_FILE,oob.hash,transcript.responder,secrets.signingSecret,
-    {version:1,head,item,selection:{...selection,signature},copy,packet});
-   must(await storage.commitHouseholdOwnDevice({operationId:transcript.sessionId,guardId:guard.guardId,expected:live.record,
-    next,source,document:{documentId:context.projectionId,bytes:snapshot},file,sources}));
-   return {file,replayed:false,head,update:text({version:1,item,selection:{...selection,signature},head})};
-  });
+   return {item,head,next,nextState,selection:{...selection,signature}};
  }
  async function install(file){
   if(!(file instanceof Uint8Array)||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
@@ -258,6 +295,15 @@ export function householdOwnDevice({
    const confirmed=(await pins.list()).find(x=>x.scope.id===sc.id);
    if(confirmed?.pin!==bundle.rootPin||confirmed.head!==record.acceptedParent)throw Error('OOB_REQUIRED');
    const evidence=await session.evidence();
+   if(isOwnDeviceSetFile(s,file,oob.hash,transcript.initiator.signingPublicKey)){
+    const {operationId}=householdReceiverIds(s,sc,deviceId);
+    const joined={name,storage,scope:sc,pin:bundle.rootPin,provider,deviceId,operationId,confirmedParent:record.acceptedParent};
+    const result=await installOwnDeviceSetFile({storage,provider,sodium:s,LoroDoc,pin:bundle.rootPin,parentRecord:record,
+     evidence:{transcript,guard,messages:evidence.messages,hash:oob.hash},file,keys,deviceId,...secrets,
+     prepareEnrollment:()=>prepareJoinedSequences(joined)});
+    (await finalizeJoinedSequences(joined)).sequences.close();
+    return result;
+   }
    const contents=openDeviceCopy(s,HOUSEHOLD_OWN_DEVICE_FILE,file,oob.hash,transcript,secrets.wrappingSecret);
    if(!exact(contents,['version','head','item','selection','copy','packet'])||contents.version!==1)throw Error('INVALID_FILE');
    const {item,selection,head,copy,packet}=contents, {snapshot,seed,seedSnapshot,sources,policies}=copy;
@@ -331,7 +377,7 @@ export function householdOwnDevice({
   return {scope,head};
  }
  async function history(){
-  const status=await readAuthority(storage,scope,pin,provider),verified=await verifyAuthority(status.state,pin,provider);
+  const {current:status,verified}=await service.authority();
   const selected=verified.nodes.get(status.activeHead), ancestry=[];
   let head=status.activeHead;
   while(verified.nodes.has(head)&&head!==pin){

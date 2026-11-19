@@ -9,6 +9,10 @@ import {makeKeyPackage,verifyStoredKeyPackage,withOpenedKeyPackage} from './key-
 import {MAX_PERSONAL_PAIRING_FILE,openDeviceCopy,pairingDigest,sealDeviceCopy,verifyDeviceCopyFile} from './personal-copy.mjs';
 
 const fileDomain='household-own-device-set-file';
+export function isOwnDeviceSetFile(sodium,file,hash,sender){
+ try{verifyDeviceCopyFile(sodium,fileDomain,file,hash,sender);return true}
+ catch{return false}
+}
 
 /** Locate a candidate receipt. The caller must verify the retained copy. */
 export async function selectedOwnDeviceSet(record,state,provider) {
@@ -249,7 +253,8 @@ export async function withOpenedOwnDeviceSetFile({file,wrappingSecret,evidence,w
 }
 
 /** Install a verified file against the recipient's independently confirmed parent. */
-export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret,signingSecret,keys,deviceId}) {
+export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret,signingSecret,keys,deviceId,
+ prepareEnrollment=/** @type {(()=>Promise<unknown>)|undefined} */(undefined)}) {
  if(!(file instanceof Uint8Array)||file.length<=112||file.length>MAX_PERSONAL_PAIRING_FILE)throw Error('INVALID_FILE');
  ({parentRecord,evidence,file}=structuredClone({parentRecord,evidence,file}));
  const scope=parentRecord.scope,operationId=evidence.transcript.sessionId,fileHash=pairingDigest(sodium,file);
@@ -271,6 +276,12 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
     const signature=prior?.recipient.signature??hex(sodium.crypto_sign_detached(receipt,signer));
     if(!sodium.crypto_sign_verify_detached(sodium.from_hex(signature),receipt,checked.proof.transcript.responder.signingPublicKey))
      throw Error('INVALID_PROOF');
+    if(!prior&&prepareEnrollment){
+     const current=must(await storage.readPairingAuthority(scope));
+     if(!current)must(await storage.retainPublicHouseholdParent(parentRecord));
+     else if(!same(current,parentRecord))throw Error('CONFLICT');
+     await prepareEnrollment();
+    }
     const documents=[];
     for(const [index,document] of checked.documents.entries()){
      const {documentId,key}=opened[index];
@@ -286,7 +297,8 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
  }
  try{
   let prior=await readReceipt();
-  if(!prior&&!same(must(await storage.readPairingAuthority(scope)),parentRecord)){
+  const current=prior?null:must(await storage.readPairingAuthority(scope));
+  if(!prior&&!same(current,parentRecord)&&(current||!prepareEnrollment)){
    prior=await readReceipt();
    if(!prior)throw Error('STALE_AUTHORITY');
   }

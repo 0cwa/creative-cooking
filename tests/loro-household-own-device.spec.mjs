@@ -64,8 +64,8 @@ async function authority(page,scopeId){
  },scopeId);
 }
 
-test('same-adult household Settings verifies, resumes, installs and opens a separate device',async({browser,baseURL})=>{
- test.setTimeout(120000);
+for(const copiesRecipes of [false,true])test(`same-adult household Settings verifies, resumes, installs and opens a separate device${copiesRecipes?' with separate recipes':''}`,async({browser,baseURL})=>{
+ test.setTimeout(180000);
  const sponsorContext=await browser.newContext({baseURL}),receiverContext=await browser.newContext({baseURL});
  try{
   const sponsor=await sponsorContext.newPage(),receiver=await receiverContext.newPage();
@@ -73,6 +73,16 @@ test('same-adult household Settings verifies, resumes, installs and opens a sepa
   await start(sponsor);
   await start(receiver);
   await addIngredient(sponsor,'Sponsor basil');
+  const recipe='Paired market stew';
+  if(copiesRecipes){
+   await sponsor.goto('./recipes');
+   await label(sponsor,'Add recipe').click();
+   await label(sponsor,'New recipe title').fill(recipe);
+   await label(sponsor,'New recipe ingredients').fill('2 cups carrots');
+   await label(sponsor,'New recipe steps').fill('Stir, then simmer.');
+   await label(sponsor,'Save new recipe').click();
+   await expect(label(sponsor,'Open recipe '+recipe)).toBeVisible();
+  }
   await addIngredient(receiver,'Original receiver thyme');
   await receiver.goto('./chef');
   await label(receiver,'Message Chef').fill('Receiver private cooking notes');
@@ -149,10 +159,25 @@ test('same-adult household Settings verifies, resumes, installs and opens a sepa
   await notice(receiver,'Paired device coriander');
 
   const after=await authority(receiver,scope);
+  expect(after.events.at(-1).event.version).toBe(copiesRecipes?5:4);
   expect(after.headers).toEqual([expect.objectContaining({authorDevice:transcript.responder.deviceId,deviceSequence:1,
    documentId:after.events.at(-1).event.subject.documentId,branchHead:after.head})]);
   await click(sponsor,'Reopen household after device pairing');
   await notice(sponsor,'Sponsor basil');
+  if(copiesRecipes){
+   await receiver.goto('./recipes');
+   await label(receiver,'Open recipe '+recipe).click();
+   await label(receiver,'Edit recipe '+recipe).click();
+   const edited='Paired market stew with basil';
+   await label(receiver,'Recipe title').fill(edited);
+   await label(receiver,'Save recipe changes').click();
+   await expect(receiver.getByRole('dialog').getByText(edited,{exact:true})).toBeVisible();
+   await expect.poll(async()=>(await authority(receiver,scope)).headers,
+    {timeout:15_000}).toContainEqual(expect.objectContaining({documentId:expect.stringMatching(/^recipe-v1-/),
+    authorDevice:transcript.responder.deviceId,branchHead:after.head,disclosureIncomplete:true}));
+   await receiver.reload();
+   await expect(label(receiver,'Open recipe '+edited)).toBeVisible();
+  }
   const [source,joined]=[sponsor,receiver];
   for(const page of [source,joined]){
    await settings(page);
@@ -162,12 +187,17 @@ test('same-adult household Settings verifies, resumes, installs and opens a sepa
    expect(text).toContain(`Paired ${transcript.responder.deviceId} by ${transcript.initiator.deviceId} for ${adultId}`);
   }
   expect(await label(sponsor,'Verified household device history').textContent()).toBe(await label(receiver,'Verified household device history').textContent());
+  if(copiesRecipes){
+   await click(sponsor,'Sponsor my other household device');
+   expect((await download(sponsor,'Save encrypted household pairing file')).equals(file)).toBe(true);
+  }
   await receiver.goto('./chef');
   await notice(receiver,'Receiver private cooking notes');
   await receiver.goto('./settings');
   await click(receiver,'Show device identity');
   await click(receiver,'Return to original local household');
-  await notice(receiver,'Original receiver thyme');
+  try{await notice(receiver,'Original receiver thyme')}
+  catch(error){console.error('Return to original household',receiver.url(),await receiver.getByRole('alert').allTextContents());throw error}
   await settings(receiver);
   await click(receiver,'Receive my household access');
   await expect(button(receiver,'Open paired household')).toBeVisible();
