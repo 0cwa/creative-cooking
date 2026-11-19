@@ -72,6 +72,23 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  assert.deepEqual(activated.value.receipt.provenance,provenance);
  assert.deepEqual(activated.value.staged,retained.value);
  assert.deepEqual(activated.value.documents.map(d=>d.documentId),input.mapping.map(r=>r.targetDocumentId));
+ // Preverified return evidence; the application must authenticate this and source keys.
+ const returned={...next,revision:2,acceptedParent:'old',authorityState:bytes(11)};
+ const returnInput={receipt:activated.value.receipt,staged:activated.value.staged,next:returned,sourceDocuments:[{documentId:'root',document:{bytes:bytes(1),revision:0}},{documentId:child,document:{bytes:bytes(2),revision:0}}],targetDocuments:activated.value.documents,sourcePointer:null,targetPointer:null};
+ const rejectReturn=async(input=returnInput)=>{const saved=rows();assert.equal((await store.commitPolicyDocumentSetReturn(input)).ok,false);assert.deepEqual(rows(),saved)};
+ put(['pairing-authority','household','h'],record);await rejectReturn();put(['pairing-authority','household','h'],next);
+ db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['policy-set-activation','h','new']));await rejectReturn();put(['policy-set-activation','h','new'],receipt);
+ put(['policy-set-activation','h','new'],{...receipt,provenance:{...provenance,signature:'cd'.repeat(64)}});await rejectReturn();put(['policy-set-activation','h','new'],receipt);
+ put(['policy-disclosure-head','h','old'],'changed');await rejectReturn();put(['policy-disclosure-head','h','old'],null);
+ db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['disclosure-active','h']));await rejectReturn();put(['disclosure-active','h'],null);
+ await rejectReturn({...returnInput,staged:{...returnInput.staged,proof:bytes(10)}});
+ localFail='policy-set-return';await rejectReturn();localFail='';
+ const beforeReturn=rows();assert.equal((await store.commitPolicyDocumentSetReturn(returnInput)).ok,true);
+ const returnMap=new Map(rows().map(r=>[r.key,r.value])), priorMap=new Map(beforeReturn.map(r=>[r.key,r.value]));
+ assert.deepEqual([...new Set([...priorMap.keys(),...returnMap.keys()])].filter(k=>priorMap.get(k)!==returnMap.get(k)).sort(),[['pairing-authority','household','h'],['policy-disclosure-head','h','new']].map(JSON.stringify).sort());
+ assert.deepEqual((await store.readPairingAuthority(scope)).value,returned);
+ // Restore the fixture for the remaining activation and disclosure checks.
+ put(['pairing-authority','household','h'],next);db.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['policy-disclosure-head','h','new']));
  put(['document','h','target-child'],{bytes:bytes(7),revision:2});
  assert.deepEqual((await read()).value.documents[1],{documentId:'target-child',bytes:bytes(7),revision:2});
  put(['document-owner','h','target-child'],'other'); assert.equal((await read()).error.code,'CORRUPT');

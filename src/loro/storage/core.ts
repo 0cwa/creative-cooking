@@ -732,6 +732,42 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}
   }
+  /** Caller authenticates the return, receipt, staged proof, source snapshots and keys before calling. */
+  async commitPolicyDocumentSetReturn(input:{receipt:PolicySetReceipt;staged:StagedPolicyDocumentSet;next:PairingAuthorityRecord;sourceDocuments:{documentId:string;document:{bytes:Uint8Array;revision:number}|null}[];targetDocuments:{documentId:string;bytes:Uint8Array;revision:number}[];sourcePointer:string|null;targetPointer:string|null}) {
+    input=snapshot(input);
+    const {receipt,staged,next,sourceDocuments,targetDocuments,sourcePointer,targetPointer}=input;
+    if(!validPolicySetReceipt(receipt)||!validStagedPolicyDocumentSet(staged)||!validatePairingAuthority(next).ok ||
+      !sameRecord(next.scope,receipt.next.scope)||next.revision!==receipt.next.revision+1||next.acceptedParent!==receipt.expected.acceptedParent ||
+      staged.sourceHead!==receipt.expected.acceptedParent||staged.targetHead!==receipt.next.acceptedParent||
+      staged.mapping.length!==receipt.targets.length||staged.mapping.some((r,i)=>r.targetDocumentId!==receipt.targets[i].targetDocumentId)||
+      !denseArray(sourceDocuments,(d:any)=>fields(d,['documentId','document'])&&validId(d.documentId)&&(d.document===null||fields(d.document,['bytes','revision'])&&d.document.bytes instanceof Uint8Array&&d.document.bytes.length>0&&revision(d.document.revision)))||
+      !denseArray(targetDocuments,(d:any)=>fields(d,['documentId','bytes','revision'])&&validId(d.documentId)&&d.bytes instanceof Uint8Array&&d.bytes.length>0&&revision(d.revision))||
+      sourceDocuments.length!==staged.mapping.length||targetDocuments.length!==staged.mapping.length||
+      staged.mapping.some((r,i)=>sourceDocuments[i].documentId!==r.sourceDocumentId||targetDocuments[i].documentId!==r.targetDocumentId)||
+      !(sourcePointer===null||validId(sourcePointer))||!(targetPointer===null||validId(targetPointer)))return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      const scope=next.scope.id;
+      if(!sameRecord(await tx.get(key('pairing-authority','household',scope)),receipt.next)||
+        !sameRecord(await tx.get(key('policy-set-activation',scope,staged.targetHead)),receipt)||
+        !sameRecord(await tx.get(key('policy-staged-set',scope,staged.targetHead)),staged)||
+        !sameRecord(await tx.get(key('policy-disclosure-head',scope,staged.sourceHead)),sourcePointer)||
+        !sameRecord(await tx.get(key('disclosure-active',scope)),targetPointer))conflict();
+      for(let i=0;i<staged.mapping.length;i++){
+        const row=staged.mapping[i], source=sourceDocuments[i], target=targetDocuments[i];
+        const sourceOwner=await tx.get(key('document-owner',scope,row.sourceDocumentId));
+        const sourceDoc=await tx.get(key('document',scope,row.sourceDocumentId));
+        if(source.document===null ? sourceOwner!==undefined||sourceDoc!==undefined : sourceOwner!==staged.sourceHead||!sameRecord(sourceDoc,source.document))conflict();
+        if(await tx.get(key('document-owner',scope,row.targetDocumentId))!==staged.targetHead||
+          !sameRecord(await tx.get(key('document',scope,row.targetDocumentId)),{bytes:target.bytes,revision:target.revision})||
+          !sameRecord(await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId)),{head:staged.sourceHead,documentId:row.sourceDocumentId}))conflict();
+      }
+      await tx.put(key('policy-disclosure-head',scope,staged.targetHead),targetPointer);
+      await tx.put(key('disclosure-active',scope),sourcePointer);
+      this.fault?.('policy-set-return');
+      await tx.put(key('pairing-authority','household',scope),next);
+      return {ok:true as const,value:undefined};
+    });}catch(e){return fail(mapError(e));}
+  }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
     const scope=p.expectedAuthority.scope.id;
     const authority=await tx.get(key('pairing-authority','household',scope));
