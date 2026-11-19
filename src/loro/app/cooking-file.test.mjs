@@ -192,7 +192,7 @@ function fixtureSessionStore(connection){
 }
 
 test('mounted admission rule stages a signed recipe set',async t=>{
- const [a]=await household(t), keys=a.storage.localKeys(testMaster(),sodium);
+ const [a]=await household(t,{onDisk:true}), keys=a.storage.localKeys(testMaster(),sodium);
  await keys.provision('rule-master');
  const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
  await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
@@ -207,13 +207,39 @@ test('mounted admission rule stages a signed recipe set',async t=>{
  const signingKeys=Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='rule-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)});
  const signing={publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'rule-signing'};
  const runtime=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:await resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
+ {
+  const {verifySelectedEvidence}=await import('../compromise/selected-evidence.mjs');
+  const root=must(await a.storage.getLocalOperation(scope.id,'rule-root'));
+  const child=must(await a.storage.getLocalOperation(scope.id,'rule-recipe'));
+  const candidate=(operation,documentId)=>{const object=operation.commit.outbound[0].object;return {sourceId:'fixture',objectId:object.id,documentId,bytes:object.bytes};};
+  const batch=[candidate(root,runtime.scope.documentId),candidate(child,(await runtime.forRecipe('rule-recipe')).scope.documentId)];
+  const before=a.rows();
+  const verified=await verifySelectedEvidence(runtime,batch);
+  assert.deepEqual(verified.results.map(row=>row.status),['verified','verified'],JSON.stringify(verified.results));
+  assert.deepEqual(verified.results.map(row=>row.recipeId),[null,'rule-recipe']);
+  assert.deepEqual(verified.results[1].bytes,batch[1].bytes);
+  assert.deepEqual(a.rows(),before);
+  const other=await a.runtime.forRecipe('rule-sibling');
+  const sibling={...after,id:'rule-sibling'};
+  await executeAction(other,{reserve:async()=>3},'rule-sibling',planRecipeAction({doc:(await other.document()).doc,before:null,after:sibling,actionId:'rule-sibling',author:a.deviceId,at:after.createdAt}),a.service);
+  const otherId=(await runtime.forRecipe('rule-sibling')).scope.documentId;
+  assert.equal((await verifySelectedEvidence(runtime,[{...batch[1],documentId:otherId}])).results[0].status,'rejected');
+  const bad=JSON.parse(new TextDecoder().decode(batch[1].bytes));bad.signature='0'.repeat(128);
+  assert.equal((await verifySelectedEvidence(runtime,[{...batch[1],bytes:new TextEncoder().encode(JSON.stringify(bad))}])).results[0].status,'rejected');
+  assert.equal((await verifySelectedEvidence(runtime,[{...batch[1],documentId:'missing'}])).results[0].status,'unavailable');
+  await assert.rejects(()=>verifySelectedEvidence(runtime,Array(REVIEW_LIMITS.objects+1).fill(batch[0])),/TOO_LARGE/);
+  const check=a.storage.checkSelectedHouseholdSources.bind(a.storage);let calls=0;
+  a.storage.checkSelectedHouseholdSources=async guard=>++calls===2?{ok:false,error:{code:'CONFLICT'}}:check(guard);
+  try {await assert.rejects(()=>verifySelectedEvidence(runtime,batch),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=check;}
+
+ }
  const pairing={name:'fixture',sodium,storage:a.storage,provider:a.provider,store:fixtureSessionStore(a.connection),scope,pin:a.root.head,deviceId:a.deviceId,adultId:'adult',runtime,service:a.service,keys:signingKeys,signing,wrapping:{},LoroDoc};
  const api=householdPairing({...pairing,selectedHousehold:false}).admissionRule;
  const joinedRules=householdPairing({...pairing,selectedHousehold:true}).admissionRule;
  const proposal={policy:{kind:'unanimous',fixedCount:null},expectedHead:a.root.head,explicit:true};
  await assert.rejects(()=>joinedRules.propose(proposal),/UNSUPPORTED_VERSION/);
  const item=await api.propose(proposal);
- assert.equal(item.event.version,6); assert.equal(item.event.subject.documentCount,2);
+ assert.equal(item.event.version,6); assert.equal(item.event.subject.documentCount,3);
  const review=await api.review(item), approved=await api.approve({item,confirmedEventHash:review.eventHash,explicit:true});
  await assert.rejects(()=>joinedRules.review(item),/UNSUPPORTED_VERSION/);
  await assert.rejects(()=>joinedRules.retain({item:approved.item,confirmedEventHash:review.eventHash,explicit:true}),/UNSUPPORTED_VERSION/);
