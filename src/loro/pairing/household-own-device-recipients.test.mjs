@@ -5,6 +5,7 @@ import {domain} from '../authority/validator.mjs';
 import {existingRecipientContextBytes} from '../authority/ceremony.mjs';
 import {ceremonyBytes} from './candidate-v2.mjs';
 import {durableSession} from './durable-session.mjs';
+import {sealEstablishedOwnDeviceFile,withOpenedEstablishedOwnDeviceFile} from './household-own-device-established-file.mjs';
 import {ownDeviceRecipientSignal,verifyOwnDeviceRecipients} from './household-own-device-recipients.mjs';
 await sodium.ready;
 const hex=b=>sodium.to_hex(b);
@@ -24,6 +25,22 @@ test('own-device recipient proofs bind every established recipient to the signed
   return {transcript,guard,oob,messages:a.evidence().messages,context};
  }
  const verify=evidence=>verifyOwnDeviceRecipients({sodium,provider,successor,parent,authorizationSnapshot:'snapshot',evidence}),b=evidence('B'),c=evidence('C');
- assert.deepEqual((await verify([c,b])).map(x=>x.deviceId),['B','C']);
+ await assert.rejects(verifyOwnDeviceRecipients({sodium,provider,successor,parent:{...parent,head:'different'},authorizationSnapshot:'snapshot',evidence:[b,c]}));
+ const recipients=await verify([c,b]);
+ assert.deepEqual(recipients.map(x=>x.deviceId),['B','C']);
+ const context={version:1,transcriptHash:b.oob.hash,releaseId:'session',scopeKind:'household',scopeId:'home',purpose:'data',epochId:'epoch',generation:1,
+  senderDevice:'A',senderSigningKey:hex(keys.A.sign.publicKey),senderWrappingKey:hex(keys.A.box.publicKey),recipientDevice:'N',recipientSigningKey:hex(keys.X.sign.publicKey),recipientWrappingKey:hex(keys.X.box.publicKey),policyHash:'policy',grantHash:head,projectionId:'doc1',manifestHash:event.subject.copyHash};
+ const checked={head,context,documents:[{targetDocumentId:'doc1',copy:'one'},{targetDocumentId:'doc2',copy:'two'}]};
+ const documentKeys=new Map(checked.documents.map(d=>[d.targetDocumentId,sodium.randombytes_buf(32)]));
+ const files=[];
+ for(const [i,ev] of [b,c].entries())files.push(await sealEstablishedOwnDeviceFile({sodium,provider,checked,recipient:recipients[i],evidence:ev,signingSecret:keys.A.sign.privateKey,withDocumentKey:(id,fn)=>fn(documentKeys.get(id))}));
+ const opened=[];
+ for(const [i,ev] of [b,c].entries())await withOpenedEstablishedOwnDeviceFile({sodium,provider,checked,recipient:recipients[i],evidence:ev,file:files[i],wrappingSecret:keys[ev.context.recipientDeviceId].box.privateKey,withKeys:ks=>opened.push(ks.map(x=>hex(x.key)))});
+ assert.deepEqual(opened[0],opened[1]);assert.notEqual(opened[0][0],opened[0][1]);
+ const open=(file,recipient=recipients[0],ev=b,view=checked)=>withOpenedEstablishedOwnDeviceFile({sodium,provider,checked:view,recipient,evidence:ev,file,wrappingSecret:keys[ev.context.recipientDeviceId].box.privateKey,withKeys:()=>assert.fail('unexpected keys')});
+ await assert.rejects(open(files[0],recipients[1],c));
+ const tampered=files[0].slice();tampered[tampered.length-1]^=1;await assert.rejects(open(tampered));
+ await assert.rejects(open(files[0],recipients[0],b,{...checked,documents:[{...checked.documents[0],copy:'changed'},checked.documents[1]]}));
+ await assert.rejects(open(files[0],recipients[0],b,{...checked,head:'changed'}));
  for(const bad of [[b],[b,c,c],[evidence('B',{copyHash:'cd'.repeat(32)}),c],[evidence('B',{eventHash:'ef'.repeat(32)}),c],[evidence('B',{signalHead:'ef'.repeat(32)}),c],[evidence('B',{parent:'wrong'}),c],[evidence('B',{sponsor:'C'}),c],[evidence('B',{signer:'X'}),c],[evidence('B',{action:'inviteAdult'}),c]])await assert.rejects(verify(bad));
 });
