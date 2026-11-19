@@ -180,8 +180,11 @@ const validBranchDocument = (x: unknown): x is BranchDocument => fields(x,['head
 const validBranchRevision = (x: unknown): x is BranchRevision => fields(x,['head','documentId','revision']) && validId(x.head) && validId(x.documentId) && (x.revision===null || revision(x.revision));
 const projectionCanonical = (v: unknown): unknown => v instanceof Uint8Array ? Array.from(v) : Array.isArray(v) ? v.map(projectionCanonical) : object(v) ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,projectionCanonical(v[k])])) : v;
 function projectionSetValid(x:Record<string,any>,set:unknown):set is ProjectionDocumentSet {
- if (!(fields(set,['version','mode','recipientSignature','catalog','seeds','childKeys']) && set.version===1 ||
-       fields(set,['version','mode','recipientSignature','catalog','seeds','childKeys','publisherParent','publisherSelection','ciphertextHash']) &&
+ const base=['version','mode','recipientSignature','catalog','seeds','childKeys'];
+ if (!(fields(set,base) && set.version===1 ||
+       fields(set,[...base,'ciphertextHash']) && set.version===1 && set.mode==='recipient' &&
+       typeof set.ciphertextHash==='string' && /^[0-9a-f]{64}$/.test(set.ciphertextHash) ||
+       fields(set,[...base,'publisherParent','publisherSelection','ciphertextHash']) &&
        set.version===2 && set.mode==='recipient' && object(set.publisherParent) && object(set.publisherSelection) &&
        typeof set.ciphertextHash==='string' && /^[0-9a-f]{64}$/.test(set.ciphertextHash)) ||
      !['publisher','recipient'].includes(set.mode) || !Array.isArray(x.documents) || !Array.isArray(x.guardIds) ||

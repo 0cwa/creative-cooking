@@ -2,7 +2,7 @@ import {readAuthority,verifyAuthority} from '../authority/chain.mjs';
 import {checkAdmissionAgreement,checkGrantSignatures,checkGrantManifest} from '../authority/grant.mjs';
 import {domain,validateSuccessor} from '../authority/validator.mjs';
 import {preparePolicyProjection,verifyPolicyProjection,verifySourcePolicyProjection} from '../disclosure/policy-seed.mjs';
-import {prepareCurrentDocumentSet,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
+import {prepareCurrentDocumentSet,requirePublicRecipeHistory,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
 
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const hash=async(provider,purpose,value)=>{const b=await provider.hash(domain(purpose,value));if(!(b instanceof Uint8Array)||b.length!==32)throw Error('INVALID_PROOF');return hex(b)};
@@ -28,7 +28,7 @@ async function signedGrant({provider,scope,parent,eventHash,subject,delegation,m
 }
 
 async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,runtime,service,
- adultId,deviceId,item,parent,author,delegation,eventHash,binding,restartStale,randomUUID}){
+ adultId,deviceId,item,parent,parentState,author,delegation,eventHash,binding,restartStale,randomUUID}){
  const slot=`household-grant-draft:${parent.head}`;
  const setBinding=JSON.stringify([...JSON.parse(binding),5]);
  const subject=item.event.subject;
@@ -53,6 +53,7 @@ async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,
   if(retained.version!==2||retained.status!=='ceremony-and-source-required'||retained.grant?.keyEnvelopeRefs?.[0]!==draft.packageId||
      retained.grant?.delegationHash!==delegation)throw Error('CORRUPT_DRAFT');
   const {manifest,documents,grant}=retained;
+  requirePublicRecipeHistory(parentState,new Set(manifest.entries.map(entry=>entry.recipeId)));
   await verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc:runtime.LoroDoc});
   try{await verifyCurrentDocumentSetSource({runtime,service,item,manifest,documents});}
   catch(error){if(error?.message==='SOURCE_CHANGED')throw Error('STALE_DOCUMENT_SET_DRAFT');throw error;}
@@ -86,6 +87,7 @@ async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,
  let retained=draft.result;
  if(!retained){
   const {manifest,manifestHash,documents}=await prepareCurrentDocumentSet({runtime,service,item,allocateSeed});
+  requirePublicRecipeHistory(parentState,new Set(manifest.entries.map(entry=>entry.recipeId)));
   const grant=await signedGrant({provider,scope,parent,eventHash,subject,delegation,manifestHash,
    packageId:draft.packageId,author,adultId,deviceId});
   const result={version:2,grant,manifest,documents,status:'ceremony-and-source-required'};
@@ -116,7 +118,7 @@ export async function prepareHouseholdGrant({storage,scope,pin,provider,store,so
  const catalog=await storage.hasSelectedRecipeCatalog(expectedAuthority);
  if(!catalog.ok)throw Error(catalog.error.code);
  if(catalog.value)return prepareDocumentSetGrant({storage,scope:sc,pin,provider,store,sodium,runtime,service,
-  adultId,deviceId,item:proposal,parent,author,delegation,eventHash,binding,restartStale,randomUUID});
+  adultId,deviceId,item:proposal,parent,parentState:authority.state,author,delegation,eventHash,binding,restartStale,randomUUID});
  if(restartStale)throw Error('NO_STALE_INVITATION');
  const ids=await store.transaction(tx=>{const slot=`household-grant-draft:${parent.head}`,legacy=tx.get('household-grant-draft'),old=tx.get(slot);if(old){if(old.binding!==binding)throw Error('DRAFT_CONFLICT');return old}if(legacy){let prior;try{prior=JSON.parse(legacy.binding)}catch{throw Error('CORRUPT_DRAFT')}if(!Array.isArray(prior)||prior.length!==7)throw Error('CORRUPT_DRAFT');if(prior[3]===parent.head){if(legacy.binding!==binding)throw Error('DRAFT_CONFLICT');return legacy}}const used=new Set([...Object.values(parent.runtime.authorPeers),...proposal.event.subject.devices.map(d=>d.peerId)]);const peer=allocatePeer(sodium,used);const next={version:1,binding,seedId:randomUUID(),peerId:peer,packageId:randomUUID()};tx.put(slot,next);return next});
  if(ids.version!==1||ids.binding!==binding||typeof ids.seedId!=='string'||!/^[0-9a-f-]{36}$/.test(ids.seedId)||typeof ids.packageId!=='string'||!/^[0-9a-f-]{36}$/.test(ids.packageId)||typeof ids.peerId!=='string'||!/^[1-9][0-9]{0,19}$/.test(ids.peerId)||BigInt(ids.peerId)>18446744073709551615n||Object.values(parent.runtime.authorPeers).includes(ids.peerId)||proposal.event.subject.devices.some(d=>d.peerId===ids.peerId))throw Error('CORRUPT_DRAFT');

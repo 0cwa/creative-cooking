@@ -1,5 +1,5 @@
-import {authorityBytes,encodeEvidence,readAuthority,snapshotId,verifyAuthority} from '../authority/chain.mjs';
-import {verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
+import {authorityBytes,encodeEvidence,matchesInstalledSetAuthority,readAuthority,snapshotId,verifyAuthority} from '../authority/chain.mjs';
+import {requirePublicRecipeHistory,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
 import {domain} from '../authority/validator.mjs';
 import {selectedSourceHash} from '../projection/selected-sources.mjs';
 import {admissionPackage} from './household-admission-package.mjs';
@@ -104,7 +104,7 @@ async function proofAtParent({storage,scope,pin,provider,LoroDoc,item,selection,
   const checked=await verifyCurrentDocumentSet({storage,scope,pin,provider,
     item:{event:item.event,authorSignature:item.authorSignature,approvals:item.approvals},grant,manifest,documents,LoroDoc});
   if(!same(old.record,checked.record))throw Error('CONFLICT');
-  return {...checked,...await nextAuthority({pin,provider,parentState:old.state,record:old.record,item,selection})};
+  return {...checked,parentState:old.state,...await nextAuthority({pin,provider,parentState:old.state,record:old.record,item,selection})};
 }
 
 async function receiptBytes(provider,publication){
@@ -119,7 +119,8 @@ async function receiptBytes(provider,publication){
     authorizationSnapshot:publication.expectedAuthority.record.authorizationSnapshot,acceptedHead:publication.admissionEventHash,
     manifestHash:publication.manifest.id,grantHash:publication.grantHash,epochId:publication.epochId,packets,
     ...(publication.documentSet.version===2?{publisherParent:publication.documentSet.publisherParent,
-      publisherSelection:publication.documentSet.publisherSelection,ciphertextHash:publication.documentSet.ciphertextHash}: {})});
+      publisherSelection:publication.documentSet.publisherSelection}: {}),
+    ...(publication.documentSet.ciphertextHash!==undefined?{ciphertextHash:publication.documentSet.ciphertextHash}:{})});
 }
 
 function forStorage({checked,item,documents,operationId,guardIds,mode,packets,keys,pendingEdits}){
@@ -251,6 +252,7 @@ export async function publishHouseholdDocumentSet({storage,scope,pin,provider,so
     };
     return await writeOrReplay(storage,scope.id,operationId,async()=>{
       const checked=await proofAtParent({storage,scope,pin,provider,LoroDoc:runtime.LoroDoc,item:packed,selection,documents});
+      requirePublicRecipeHistory(checked.parentState,new Set(manifest.entries.map(entry=>entry.recipeId)));
       const source=await verifyCurrentDocumentSetSource({runtime,service,item,manifest,documents});
       if(!same(source.expectedAuthority,expectedAuthority(checked.record)))throw Error('CONFLICT');
       const pendingEdits=must(await storage.listBranchLocalOperations(source.expectedAuthority));
@@ -291,8 +293,8 @@ export async function publishHouseholdDocumentSet({storage,scope,pin,provider,so
  * The caller must transport this payload encrypted to the ceremony recipient. */
 export async function householdDocumentSetRelease({sodium,storage,scope,pin,provider,operationId,recipientDevice,LoroDoc}){
   const saved=await readInstalledHouseholdDocumentSet({sodium,storage,scope,pin,provider,operationId,LoroDoc});
-  const current=must(await storage.readPairingAuthority(scope));
-  if(saved.mode!=='publisher'||!same(current,saved.publication.nextAuthority))throw Error('STALE_AUTHORITY');
+  const {record:current,state}=await verifyPublicParent(storage,scope,pin,provider);
+  if(saved.mode!=='publisher'||!matchesInstalledSetAuthority(current,state,saved.publication.nextAuthority))throw Error('STALE_AUTHORITY');
   const packets=saved.publication.packages.filter(packet=>packet.recipientDevice===recipientDevice);
   if(packets.length!==saved.documents.length)throw Error('UNAUTHORIZED_DEVICE');
   if(saved.item.admission.grant.recipientDevices.includes(recipientDevice))
@@ -309,7 +311,7 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
   if(!release || !(release.version===1&&Object.keys(release).sort().join(',')==='documents,item,packets,selection,version'||
     release.version===2&&Object.keys(release).sort().join(',')==='documents,item,packets,publisherParent,selection,version') ||
     release.version===2&&recipientKind!=='existing' ||
-    release.version===2&&(typeof ciphertextHash!=='string'||!/^[0-9a-f]{64}$/.test(ciphertextHash))){
+    recipientKind==='existing'&&(typeof ciphertextHash!=='string'||!/^[0-9a-f]{64}$/.test(ciphertextHash))){
     throw Error('INVALID_DOCUMENT_SET');
   }
   const secrets=cloneSecrets(keys);
@@ -351,10 +353,10 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
     const replay=async prior=>{
       const saved=await readInstalledHouseholdDocumentSet({sodium,storage,scope,pin,provider,operationId,LoroDoc});
       const installed=saved.publication;
-      if(saved.mode!=='recipient'||!same(item,saved.item)||
+      if(saved.mode!=='recipient'||release.version!==installed.documentSet.version||
+        (installed.documentSet.ciphertextHash!==undefined&&ciphertextHash!==installed.documentSet.ciphertextHash)||!same(item,saved.item)||
         !same(selection,saved.publication.documentSet.version===2?saved.publication.documentSet.publisherSelection:saved.selection)||
-        (release.version===2&&(!same(release.publisherParent,saved.publication.documentSet.publisherParent)||
-          ciphertextHash!==saved.publication.documentSet.ciphertextHash))||!same(documents,saved.documents)||
+        (release.version===2&&!same(release.publisherParent,installed.documentSet.publisherParent))||!same(documents,saved.documents)||
         !same(packets,installed.packages)||installed.localKey.record.operationId!==keyOperationId||
         installed.localKey.record.identity.deviceId!==recipientDevice) throw Error('CONFLICT');
       const {parentStorage}=await parentFromPublication({scope,pin,provider,publication:prior});
@@ -392,8 +394,8 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
         publication.documentSet.version=2;
         publication.documentSet.publisherParent=release.publisherParent;
         publication.documentSet.publisherSelection=selection;
-        publication.documentSet.ciphertextHash=ciphertextHash;
       }
+      if(recipientKind==='existing')publication.documentSet.ciphertextHash=ciphertextHash;
       publication.documentSet.recipientSignature=sodium.crypto_sign_detached(await receiptBytes(provider,publication),secrets.signingSecret);
       if(recipientKind!=='existing')await prepareEnrollment?.();
       return {...must(await storage.publishProjection(publication)),head:checked.eventHash};

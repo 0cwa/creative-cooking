@@ -88,6 +88,14 @@ export async function checkCurrentDocumentSetManifest({pin,parent,item,eventHash
   return target;
 }
 
+/** The legacy public authority bundle includes earlier manifests verbatim. */
+export function requirePublicRecipeHistory(state,liveRecipeIds) {
+  for(const {admission} of state.events) {
+    if(admission?.manifest?.version===5&&admission.manifest.entries.some(({recipeId})=>
+      recipeId!==null&&!liveRecipeIds.has(recipeId))) throw Error('REMOVED_RECIPE_HISTORY');
+  }
+}
+
 async function digestManifest(provider,manifest) {
   return selectedSourceHash(provider,'projection-manifest',manifest);
 }
@@ -227,8 +235,8 @@ async function verifyDocuments({manifest,documents,provider,pin,state,LoroDoc}) 
 
 /** Verify a complete current-cooking set against the recipient's independently
  * retained parent and the existing admission agreement and grant signatures. */
-export async function verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc}) {
-  ({item,grant,manifest,documents}=structuredClone({item,grant,manifest,documents}));
+export async function verifyCurrentDocumentSetGrant({storage,scope,pin,provider,item,grant,manifest}) {
+  ({item,grant,manifest}=structuredClone({item,grant,manifest}));
   const {record,state,nodes}=await verifyPublicParent(storage,scope,pin,provider);
   const parent=nodes.get(record.acceptedParent);
   const eventHash=await admissionEvent(parent,item,provider);
@@ -250,8 +258,14 @@ export async function verifyCurrentDocumentSet({storage,scope,pin,provider,item,
     }
   }
   if (!delegated) throw Error('DELEGATION_REQUIRED');
-  await verifyDocuments({manifest,documents,provider,pin,state,LoroDoc});
-  return {record,eventHash,grantHash:proof.grantHash,manifest,documents};
+  return {record,eventHash,grantHash:proof.grantHash,manifest,state};
+}
+
+export async function verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc}) {
+  documents=structuredClone(documents);
+  const {state,...checked}=await verifyCurrentDocumentSetGrant({storage,scope,pin,provider,item,grant,manifest});
+  await verifyDocuments({manifest:checked.manifest,documents,provider,pin,state,LoroDoc});
+  return {...checked,documents};
 }
 
 /** A publisher must rederive the signed draft from the selected source. A

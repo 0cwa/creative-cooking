@@ -2,7 +2,7 @@
 // are trust inputs; this module does not perform human identity enrollment.
 import {validateSuccessor, validParent, domain, isPolicyDocumentId, isRemoval, removedDevice} from './validator.mjs';
 import {policyBranchAncestors,recoverPolicyBaseline,verifyRetainedPolicyBaseline} from './policy-baseline.mjs';
-import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, validPolicySeedManifest} from './grant.mjs';
+import {checkAdmissionAgreement, checkGrantSignatures, checkGrantManifest, checkGrantManifestMetadata, validPolicySeedManifest} from './grant.mjs';
 import {checkHouseholdCeremonies,checkExistingRecipientCeremonies} from './ceremony.mjs';
 import {verifyRevocation, revocationPackage, verifyRevocationSeed, projectRemovalSeed} from '../compromise/revocation.mjs';
 import {verifyOwnDeviceEvent} from './own-device.mjs';
@@ -346,6 +346,18 @@ export async function checkoutPolicyHead({storage,scope,pin,provider,LoroDoc,adu
  if (!result.ok) throw Error(result.error.code);
  return {head:targetHead};
 }
+/** Compare an already verified authority with the signed installed state. */
+export function matchesInstalledSetAuthority(record,state,installedRecord) {
+ const published=JSON.parse(dec.decode(installedRecord.authorityState));
+ const prior=published.agreements??[],current=state.agreements??[];
+ const additions=current.slice(prior.length);
+ return record.revision===installedRecord.revision+additions.length &&
+  same(record.scope,installedRecord.scope) && record.acceptedParent===installedRecord.acceptedParent &&
+  same(current.slice(0,prior.length),prior) && current.length>=prior.length &&
+  additions.every(agreement=>agreement.parentHead===state.activeHead) &&
+  same({...state,agreements:prior},{...published,agreements:prior});
+}
+
 /** Resolve only from a pinned and replayed selected head, never from runtime options. */
 async function resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,installed) {
  const {record,state,nodes}=await load(storage,scope,pin,provider), selected=nodes.get(state.activeHead);
@@ -353,19 +365,7 @@ async function resolveRuntimeAuthorityInternal(storage,scope,pin,provider,author
  // A verified delegation may be appended after installation. Keep every
  // published event and selection byte-for-byte bound to the original receipt;
  // only agreements for this selected head can extend that state.
- const installedRecord=installed?.publication.nextAuthority;
- let installedStateMatches=false;
- if(installedRecord){
-  const published=JSON.parse(dec.decode(installedRecord.authorityState));
-  const prior=published.agreements??[], current=state.agreements??[];
-  const additions=current.slice(prior.length);
-  installedStateMatches=record.revision===installedRecord.revision+additions.length &&
-   same(record.scope,installedRecord.scope) && record.acceptedParent===installedRecord.acceptedParent &&
-   same(current.slice(0,prior.length),prior) && current.length>=prior.length &&
-   additions.every(agreement=>agreement.parentHead===state.activeHead) &&
-   same({...state,agreements:prior},{...published,agreements:prior});
- }
- if(selectedSet && (!installed || !installedStateMatches ||
+ if(selectedSet && (!installed || !matchesInstalledSetAuthority(record,state,installed.publication.nextAuthority) ||
    !same(selectedSet,installed.item) || installed.selection.to!==state.activeHead)) throw Error('UNSUPPORTED_VERSION');
  if(installed && !selectedSet) throw Error('INVALID_AUTHORITY');
  const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();
@@ -425,8 +425,8 @@ export async function acceptAdmissionAgreementWithOutcome(storage,scope,pin,prov
 }
 
 /** Resolve admission evidence from the current pinned authority, without releasing keys. */
-export async function checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot) {
- item=copy(item); grant=copy(grant); manifest=copy(manifest); snapshot=new Uint8Array(snapshot);
+async function checkCurrentAdmissionAssociation(storage,scope,pin,provider,item,grant,manifest,associate) {
+ item=copy(item); grant=copy(grant); manifest=copy(manifest);
  const {record,state,nodes}=await load(storage,scope,pin,provider), parent=nodes.get(state.activeHead);
  if(item?.event?.kind!=='inviteAdult' || item.event.parentHead!==state.activeHead) throw Error('CONFLICT');
  const admission=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
@@ -441,9 +441,19 @@ export async function checkCurrentAdmission(storage,scope,pin,provider,item,gran
   if(r.status==='accepted' && r.delegationHash===grant.delegationHash && JSON.stringify(agreement.sourcePolicyHashes)===JSON.stringify(grant.sourcePolicyHashes)) accepted=true;
  }
  if(!accepted) throw Error('DELEGATION_REQUIRED');
- const association=await checkGrantManifest(parent,grant,manifest,snapshot,provider);
+ const association=await associate(parent,grant,manifest,provider);
  if(association.reason!=='SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED') throw Error(association.reason || 'INVALID_MANIFEST');
  return {status:'pending',reason:'CEREMONY_AND_SOURCE_EVIDENCE_REQUIRED',admissionEventHash:admission.eventHash,grantHash:proof.grantHash,authorityRevision:record.revision,authorizationSnapshot:record.authorizationSnapshot};
+}
+
+export async function checkCurrentAdmission(storage,scope,pin,provider,item,grant,manifest,snapshot) {
+ snapshot=new Uint8Array(snapshot);
+ return checkCurrentAdmissionAssociation(storage,scope,pin,provider,item,grant,manifest,
+  (parent,grant,manifest,provider)=>checkGrantManifest(parent,grant,manifest,snapshot,provider));
+}
+
+export async function checkCurrentAdmissionMetadata(storage,scope,pin,provider,item,grant,manifest) {
+ return checkCurrentAdmissionAssociation(storage,scope,pin,provider,item,grant,manifest,checkGrantManifestMetadata);
 }
 
 /** Verify the complete proof bundle at the selected parent. This does not publish

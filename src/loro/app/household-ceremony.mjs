@@ -1,6 +1,6 @@
 import {checkCurrentAdmission,readAuthority,verifyAuthority} from '../authority/chain.mjs';
 import {householdSessionContextBytes} from '../pairing/durable-session.mjs';
-import {verifyCurrentDocumentSet} from '../projection/current-document-set.mjs';
+import {requirePublicRecipeHistory,verifyCurrentDocumentSet} from '../projection/current-document-set.mjs';
 import {domain} from '../authority/validator.mjs';
 import {ceremonyBytes} from '../pairing/candidate-v2.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -37,6 +37,7 @@ export async function prepareHouseholdCeremony({storage,scope,pin,provider,store
  const current=await readAuthority(storage,sc,pin,provider),verified=await verifyAuthority(current.state,pin,provider),
   parent=verified.nodes.get(current.activeHead),sender=parent?.devices.find(x=>x.active&&x.deviceId===deviceId&&x.adultId===adultId),
   recipient=eventItem.event.subject.devices;
+ if(documentSet)requirePublicRecipeHistory(current.state,new Set(m.entries.map(entry=>entry.recipeId)));
  if(!sender||current.revision!==checked.authorityRevision||recipient.length!==1||eventItem.event.parentHead!==current.activeHead)throw Error('INVALID_AUTHORITY');
  const subject=eventItem.event.subject;if(JSON.stringify(g.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId))||g.newDocumentGeneration!==subject.newGeneration||g.newEpochId!==subject.newEpochId||m.newDocumentId!==subject.documentId)throw Error('CONTEXT_MISMATCH');
  const context={version:1,householdId:sc.id,parentHead:current.activeHead,admissionEventHash:checked.admissionEventHash,sponsorAdult:adultId,recipientAdult:eventItem.event.subject.adultId,sponsorDeviceId:deviceId,sponsorSigningKeyRef:sender.signingKeyRef,sponsorWrappingKeyRef:wrappingPublicKey,recipientDeviceId:recipient[0].deviceId,recipientSigningKeyRef:recipient[0].signingKeyRef,recipientWrappingKeyRef:recipient[0].wrappingKeyRef},binding=JSON.stringify([sc.kind,sc.id,pin,current.activeHead,checked.authorizationSnapshot,checked.admissionEventHash,checked.grantHash,deviceId,wrappingPublicKey]);

@@ -86,15 +86,15 @@ export function householdPairing({
       installed.add(listener);
       return () => installed.delete(listener);
     },
-    prepareExistingCeremony: active(input => prepareExistingCeremony({...input, ...preparation, wrappingPublicKey,LoroDoc})),
-    verifyExistingCeremony: active(input => verifyExistingCeremony({...input, ...member, sodium, wrappingPublicKey,LoroDoc})),
+    prepareExistingCeremony: active(input => prepareExistingCeremony({...input, ...preparation, wrappingPublicKey})),
+    verifyExistingCeremony: active(input => verifyExistingCeremony({...input, ...member, sodium, wrappingPublicKey})),
     reviewGrant: active(input => reviewHouseholdGrant({...input, ...cooking})),
     approveGrant: active(input => approveHouseholdGrant({...input, ...cooking})),
     collectGrant: active(input => collectHouseholdGrantApproval({...input, ...cooking})),
     collectInvite: active(input => collectHouseholdInviteApproval({...input, ...member})),
     reviewInvite: active(item => reviewHouseholdInvite({...member, item})),
     approveInvite: active(input => approveHouseholdInvite({...input, ...member})),
-    exportParent: active(() => exportHouseholdParent(authority)),
+    exportParent: active(() => exportHouseholdParent({...authority,runtime})),
     acceptParent: active(async input => {
       const args = structuredClone(input);
       const result = await acceptHouseholdParent({...args, storage, provider});

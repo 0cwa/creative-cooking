@@ -42,7 +42,8 @@ import {replayAuthenticated} from '../domain/replay.mjs';
 import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
-import {prepareCurrentDocumentSet,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
+import {exportHouseholdParent} from './household-parent.mjs';
+import {prepareCurrentDocumentSet,requirePublicRecipeHistory,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
 import {householdDocumentSetRelease,publishHouseholdDocumentSet,readInstalledHouseholdDocumentSet,installedDocumentSetContent} from '../pairing/household-document-set.mjs';
 import {encodeHouseholdDocumentSetFile,installHouseholdFile,sealHouseholdFile} from '../pairing/household-file.mjs';
 import {durableSession,householdSessionContextBytes} from '../pairing/durable-session.mjs';
@@ -1292,6 +1293,19 @@ test('selected recipe shopping copies and current-only admission survive durable
  const legacyBytes=reseal(legacyRelease),legacySignature=sodium.crypto_sign_detached(domain('household-sealed-file',{
   scopeId:scope.id,operationId,recipientDevice:b.deviceId,digest:legacyDigest,
   cipherHash:sodium.to_hex(sodium.crypto_generichash(32,legacyBytes))}),sponsorKeys.signingSecret);
+ // Legacy wire files installed now still get a ciphertext-bound receipt.
+ const legacyDb=new DatabaseSync(':memory:');
+ t.after(()=>legacyDb.close());
+ const legacyStorage=openSQLiteStorage({executeSync(sql,params=[]){
+  const statement=legacyDb.prepare(sql);
+  return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+ }});
+ const insertLegacy=legacyDb.prepare('INSERT INTO loro_records VALUES (?,?)');
+ for(const {key,value} of beforeExisting)insertLegacy.run(key,key===authoritySlot?beforePublisher.find(row=>row.key===key).value:value);
+ const legacyOptions={...existingOptions,storage:legacyStorage,bytes:legacyBytes};
+ assert.deepEqual(await installHouseholdFile(legacyOptions),{replayed:false,head:eventHash});
+ assert.deepEqual(await installHouseholdFile(legacyOptions),{replayed:true,head:eventHash});
+ await assert.rejects(()=>installHouseholdFile({...legacyOptions,bytes:reseal(legacyRelease)}),/CONFLICT/);
  const readSealed=a.storage.readHouseholdSealedFile;
  a.storage.readHouseholdSealedFile=async()=>({ok:true,value:{version:1,digest:legacyDigest,bytes:legacyBytes,signature:legacySignature}});
  try{assert.deepEqual(await sealHouseholdFile({...sealOptions,recipientDevice:b.deviceId}),legacyBytes);}
@@ -1709,6 +1723,9 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(redacted.manifest.entries.some(entry=>entry.recipeId===recipeId),false);
   assert.ok(redacted.manifest.catalog.removed.length>0);
   assert.ok(redacted.manifest.entries.some(entry=>entry.recipeId===added.id));
+  const publicAuthority=await readAuthority(a.storage,scope,a.root.head,a.provider);
+  assert.throws(()=>requirePublicRecipeHistory(publicAuthority.state,new Set(redacted.manifest.entries.map(entry=>entry.recipeId))),/REMOVED_RECIPE_HISTORY/);
+  await assert.rejects(()=>exportHouseholdParent({storage:a.storage,scope,pin:a.root.head,provider:a.provider,runtime:sponsor.runtime}),/REMOVED_RECIPE_HISTORY/);
   const redactedRoot=new LoroDoc();redactedRoot.import(redacted.documents[0].seed.snapshot);
   assert.equal(projectCooking(redactedRoot).shopping.items.some(item=>item.recipeId===recipeId),false);
   a.provider.verify=previousVerify;
@@ -1744,6 +1761,8 @@ test('selected recipe shopping copies and current-only admission survive durable
  freshFault=null;
  reopenFresh();
  assert.deepEqual(freshRows(),beforeDelegation);
+ await acceptAdmissionAgreement(a.storage,scope,a.root.head,extendedProvider,nextSigned);
+ assert.deepEqual(await sealHouseholdFile({...sealOptions,provider:extendedProvider}),sealed);
  const retainedHash=await acceptAdmissionAgreement(freshStorage,scope,a.root.head,extendedProvider,nextSigned);
  assert.equal(await acceptAdmissionAgreement(freshStorage,scope,a.root.head,extendedProvider,nextSigned),retainedHash);
  reopenFresh();

@@ -53,13 +53,24 @@ export async function checkAdmissionAgreement(parent,agreement,provider) {
 /** V2 binds the privacy-preserving policy sidecar without changing v1. */
 export function validPolicySeedManifest(manifest){return !!(manifest&&[2,3,4].includes(manifest.version)&&exact(manifest,['version','sourceDocument','sourceCheckpointHash','sourcePolicyHashes','projectedStateHash','newDocumentId','newGeneration','schemaVersion','sourceRevision','policyBundleHash'])&&Number.isSafeInteger(manifest.sourceRevision)&&manifest.sourceRevision>=0&&id(manifest.policyBundleHash)&&new RegExp(`^registry-seed-v${manifest.version}\\|[0-9a-f-]{36}\\|[1-9][0-9]*$`).test(manifest.schemaVersion));}
 /** Check the signed manifest association; source authorization and projection semantics remain separate. */
-export async function checkGrantManifest(parent,grant,manifest,snapshot,provider) {
+export async function checkGrantManifestMetadata(parent,grant,manifest,provider) {
  try {
   parent=structuredClone(parent); grant=structuredClone(grant); manifest=structuredClone(manifest);
-  if(!validParent(parent) || !(manifest.version===1&&exact(manifest,['version','sourceDocument','sourceCheckpointHash','sourcePolicyHashes','projectedStateHash','newDocumentId','newGeneration','schemaVersion']) || validPolicySeedManifest(manifest)) || ![manifest.sourceDocument,manifest.sourceCheckpointHash,manifest.projectedStateHash,manifest.newDocumentId,manifest.schemaVersion].every(id) || !list(manifest.sourcePolicyHashes,64) || !(snapshot instanceof Uint8Array) || !snapshot.length || snapshot.length>8*1024*1024 || manifest.sourceDocument!==parent.runtime.documentId || manifest.newDocumentId===parent.runtime.documentId || manifest.newGeneration!==grant.newDocumentGeneration || JSON.stringify(manifest.sourcePolicyHashes)!==JSON.stringify(grant.sourcePolicyHashes)) return {status:'deny',reason:'INVALID_MANIFEST'};
-  const snapshotDigest=await provider.hash(domain('projection-snapshot',hex(snapshot)));
+  if(!validParent(parent) || !(manifest.version===1&&exact(manifest,['version','sourceDocument','sourceCheckpointHash','sourcePolicyHashes','projectedStateHash','newDocumentId','newGeneration','schemaVersion']) || validPolicySeedManifest(manifest)) || ![manifest.sourceDocument,manifest.sourceCheckpointHash,manifest.projectedStateHash,manifest.newDocumentId,manifest.schemaVersion].every(id) || !list(manifest.sourcePolicyHashes,64) || manifest.sourceDocument!==parent.runtime.documentId || manifest.newDocumentId===parent.runtime.documentId || manifest.newGeneration!==grant.newDocumentGeneration || JSON.stringify(manifest.sourcePolicyHashes)!==JSON.stringify(grant.sourcePolicyHashes)) return {status:'deny',reason:'INVALID_MANIFEST'};
   const manifestDigest=await provider.hash(domain('projection-manifest',manifest));
-  if(!(snapshotDigest instanceof Uint8Array) || snapshotDigest.length!==32 || !(manifestDigest instanceof Uint8Array) || manifestDigest.length!==32 || hex(snapshotDigest)!==manifest.projectedStateHash || hex(manifestDigest)!==grant.projectionManifestHash) return {status:'deny',reason:'INVALID_MANIFEST'};
+  if(!(manifestDigest instanceof Uint8Array) || manifestDigest.length!==32 || hex(manifestDigest)!==grant.projectionManifestHash) return {status:'deny',reason:'INVALID_MANIFEST'};
   return {status:'pending',reason:'SOURCE_AND_PROJECTION_EVIDENCE_REQUIRED'};
  } catch { return {status:'deny',reason:'INVALID_MANIFEST'} }
+}
+
+export async function checkGrantManifest(parent,grant,manifest,snapshot,provider) {
+ const deny={status:'deny',reason:'INVALID_MANIFEST'};
+ try {
+  if(!(snapshot instanceof Uint8Array)||!snapshot.length||snapshot.length>8*1024*1024)return deny;
+  const expected=manifest?.projectedStateHash, encoded=hex(snapshot);
+  const association=await checkGrantManifestMetadata(parent,grant,manifest,provider);
+  if(association.status==='deny')return association;
+  const digest=await provider.hash(domain('projection-snapshot',encoded));
+  return digest instanceof Uint8Array&&digest.length===32&&hex(digest)===expected?association:deny;
+ } catch {return deny;}
 }

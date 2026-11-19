@@ -1,4 +1,4 @@
-import {readAuthority,resolveRuntimeAuthority,verifyAuthority} from '../authority/chain.mjs';
+import {readAuthority,resolveRuntimeAuthority,snapshotId,verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {durableSession} from './durable-session.mjs';
 import {revocationPackage} from '../compromise/revocation.mjs';
@@ -34,9 +34,9 @@ export async function sealHouseholdFile({sodium,storage,scope,pin,provider,sessi
   if(!transition)throw Error('INVALID_AUTHORITY');
   let expectedAuthority;
   if(set){
-   const r=p.nextAuthority;
-   if(r.revision!==current.revision||p.documentSet.mode!=='publisher')throw Error('STALE_AUTHORITY');
-   expectedAuthority={version:2,scope:sc,record:{revision:r.revision,acceptedParent:r.acceptedParent,authorizationSnapshot:r.authorizationSnapshot}};
+   if(p.documentSet.mode!=='publisher')throw Error('STALE_AUTHORITY');
+   expectedAuthority={version:2,scope:sc,record:{revision:current.revision,acceptedParent:current.activeHead,
+     authorizationSnapshot:await snapshotId(provider,current.state)}};
   }else{
    const authorized=await resolveRuntimeAuthority(storage,sc,pin,provider,transition.localDeviceId);
    if(authorized.scope.branchHead!==current.activeHead||authorized.expectedAuthority.record.revision!==current.revision)throw Error('STALE_AUTHORITY');

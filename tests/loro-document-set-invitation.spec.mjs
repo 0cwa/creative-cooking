@@ -533,6 +533,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await expect(label(sponsor,'Existing-device verification message')).toBeVisible({timeout:60_000});
   const existingOffer=await text(sponsor,'Existing-device verification message');
   const existingCode=await text(sponsor,'Existing-device verification code');
+  expect(Object.keys(JSON.parse(existingOffer).args).sort()).toEqual(['grant','item','manifest','publisherParent']);
   await button(reopened,'Verify an existing device').click();
   await button(reopened,'Verify this existing device').click();
   const wrongParent=JSON.parse(existingOffer);wrongParent.args.publisherParent.authorizationSnapshot='0'.repeat(64);
