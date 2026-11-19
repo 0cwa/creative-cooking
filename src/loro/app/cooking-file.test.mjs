@@ -228,6 +228,31 @@ test('mounted admission rule stages a signed recipe set',async t=>{
   assert.equal((await verifySelectedEvidence(runtime,[{...batch[1],bytes:new TextEncoder().encode(JSON.stringify(bad))}])).results[0].status,'rejected');
   assert.equal((await verifySelectedEvidence(runtime,[{...batch[1],documentId:'missing'}])).results[0].status,'unavailable');
   await assert.rejects(()=>verifySelectedEvidence(runtime,Array(REVIEW_LIMITS.objects+1).fill(batch[0])),/TOO_LARGE/);
+  const {buildSelectedOperationReport,verifySelectedOperationReport}=await import('../compromise/selected-report.mjs');
+  const boundary={documentId:batch[1].documentId,objectId:batch[1].objectId};
+  const reportBefore=a.rows();
+  const plan=await buildSelectedOperationReport(runtime,{candidates:batch,suspectDevice:'device-1',boundary});
+  const verify=report=>verifySelectedOperationReport(runtime,{report,candidates:batch});
+  assert.deepEqual((await verify(plan.report)).evidence.map(row=>row.recipeId),[null,'rule-recipe']);
+  await assert.rejects(()=>buildSelectedOperationReport(runtime,{candidates:batch,suspectDevice:'device-1',boundary:{...boundary,documentId:otherId}}),/INVALID_BOUNDARY/);
+  await assert.rejects(()=>buildSelectedOperationReport(runtime,{candidates:[batch[0],{...batch[1],documentId:otherId}],suspectDevice:'device-1',boundary:{...boundary,documentId:otherId}}),/UNVERIFIED_EVIDENCE/);
+  const changed=structuredClone(plan.report);changed.payload.observation.manifest.catalog.hash='0'.repeat(64);
+  await assert.rejects(()=>verify(changed),/INVALID_REPORT_SIGNATURE/);
+  const signedWrong=structuredClone(plan.report);signedWrong.signature='0'.repeat(128);
+  await assert.rejects(()=>verify(signedWrong),/INVALID_REPORT_SIGNATURE/);
+  const alteredBytes=batch.map(row=>({...row,bytes:new Uint8Array(row.bytes)}));alteredBytes[1].bytes[0]^=1;
+  await assert.rejects(()=>verifySelectedOperationReport(runtime,{report:plan.report,candidates:alteredBytes}),/EVIDENCE_MISMATCH/);
+  await assert.rejects(()=>buildSelectedOperationReport(runtime,{candidates:[batch[0],batch[0]],suspectDevice:'device-1',boundary:{documentId:batch[0].documentId,objectId:batch[0].objectId}}),/DUPLICATE_EVIDENCE/);
+  const authorization=runtime.authorization.bind(runtime);
+  runtime.authorization=async()=>{const auth=await authorization();return {...auth,expectedAuthority:{...auth.expectedAuthority,record:{...auth.expectedAuthority.record,authorizationSnapshot:'stale'}}};};
+  try {await assert.rejects(()=>verify(plan.report),/STALE_AUTHORITY/);} finally {runtime.authorization=authorization;}
+  assert.deepEqual(a.rows(),reportBefore);
+  const staleHead=structuredClone(plan.report);staleHead.payload.head='wrong-head';
+  await assert.rejects(()=>verify(staleHead),/STALE_AUTHORITY/);
+  const guardCheck=a.storage.checkSelectedHouseholdSources.bind(a.storage);let guardCalls=0;
+  a.storage.checkSelectedHouseholdSources=async guard=>++guardCalls===3?{ok:false,error:{code:'CONFLICT'}}:guardCheck(guard);
+  try {await assert.rejects(()=>buildSelectedOperationReport(runtime,{candidates:batch,suspectDevice:'device-1',boundary}),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=guardCheck;}
+  assert.deepEqual(a.rows(),reportBefore);
   const check=a.storage.checkSelectedHouseholdSources.bind(a.storage);let calls=0;
   a.storage.checkSelectedHouseholdSources=async guard=>++calls===2?{ok:false,error:{code:'CONFLICT'}}:check(guard);
   try {await assert.rejects(()=>verifySelectedEvidence(runtime,batch),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=check;}

@@ -15,7 +15,7 @@ export async function verifySelectedEvidence(runtime,candidates) {
   if(item.bytes.length>REVIEW_LIMITS.objectBytes||total>REVIEW_LIMITS.bytes)throw Error('TOO_LARGE');
   return {...item,bytes:new Uint8Array(item.bytes)};
  });
- const {sources,guard}=await observeSelectedSourceSet(runtime);
+ const {sources,guard,signed}=await observeSelectedSourceSet(runtime);
  const routes=new Map(sources.map(source=>[source.runtime.scope.documentId,source]));
  const results=[];
  for(const item of batch){
@@ -35,5 +35,5 @@ export async function verifySelectedEvidence(runtime,candidates) {
  }
  const checked=await runtime.storage.checkSelectedHouseholdSources(guard);
  if(!checked.ok)throw Error(checked.error.code);
- return {results,guard};
+ return {results,guard,signed};
 }
