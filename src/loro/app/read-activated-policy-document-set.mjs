@@ -11,16 +11,31 @@ import defaultSodium from 'libsodium-wrappers';
 const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
 const same=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
 
-/** Authenticate a retained activation. The caller supplies an independent pin and local device. */
-export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys,sodium=defaultSodium}) {
+/** Verify a past activation without asserting that it is currently selected. */
+export async function readHistoricalPolicyActivationEvidence(args) {
+ const proof=await verifyActivationEvidence(args, false);
+ return structuredClone({targetHead:proof.targetHead,sourceHead:proof.sourceHead,expected:proof.expected,next:proof.record,
+  documents:proof.documents.map(({recipeId,documentId,revision,targetDocumentId,operationId,identity})=>
+   ({recipeId,documentId,revision,targetDocumentId,operationId,identity}))});
+}
+
+/** Authenticate an activation only while its exact authority is selected. */
+export async function readVerifiedActivatedPolicyDocumentSet(args) {
+ return verifyActivationEvidence(args, true);
+}
+
+async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys,sodium=defaultSodium}, selected) {
  scope=structuredClone(scope);
  if(scope?.kind!=='household' || typeof deviceId!=='string') throw Error('INVALID_AUTHORITY');
  const loaded=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead);
  if(!loaded.ok) throw Error(loaded.error.code);
  if(!loaded.value) throw Error('ACTIVATION_NOT_FOUND');
  const {receipt,staged,documents}=structuredClone(loaded.value);
- const current=await storage.readPairingAuthority(scope);
- if(!current.ok || !same(current.value,receipt.next) || !same(receipt.expected.scope,scope) || !same(receipt.next.scope,scope)) throw Error('INVALID_AUTHORITY');
+ if(!receipt || !same(receipt.expected?.scope,scope) || !same(receipt.next?.scope,scope)) throw Error('INVALID_AUTHORITY');
+ if(selected) {
+  const current=await storage.readPairingAuthority(scope);
+  if(!current.ok || !same(current.value,receipt.next)) throw Error('INVALID_AUTHORITY');
+ }
  const view={readPairingAuthority:async requested=>same(requested,scope)?{ok:true,value:structuredClone(receipt.expected)}:{ok:false,error:'INVALID_AUTHORITY'}};
  let envelope;
  try {envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(staged.proof));} catch {throw Error('INVALID_STAGED_PROOF');}
@@ -117,8 +132,10 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
   }
   provenance=body.rows;
  }
- const again=await storage.readPairingAuthority(scope);
- if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
+ if(selected) {
+  const again=await storage.readPairingAuthority(scope);
+  if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
+ }
  return structuredClone({targetHead,sourceHead:staged.sourceHead,expected:receipt.expected,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
   provenance,verifiedProvenance:receipt.provenance??null,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
    if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');

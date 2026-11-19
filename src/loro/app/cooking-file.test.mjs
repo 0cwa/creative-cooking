@@ -1,4 +1,4 @@
-import {readVerifiedActivatedPolicyDocumentSet} from './read-activated-policy-document-set.mjs';
+import {readVerifiedActivatedPolicyDocumentSet,readHistoricalPolicyActivationEvidence} from './read-activated-policy-document-set.mjs';
 import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {stageVerifiedPolicyDocumentSet,readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject,matchPolicyDocumentSetEvent} from '../authority/policy-document-set.mjs';
@@ -321,13 +321,24 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>a.service.authority(),/UNSUPPORTED_VERSION/);
 
  const evidence=must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead));
- const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));await assert.rejects(()=>resolve({storage}));};
+ const historicalStorage=Object.assign(Object.create(a.storage),{readPairingAuthority:async()=>({ok:true,value:structuredClone(expected)})});
+ const historical=await readHistoricalPolicyActivationEvidence({...args,storage:historicalStorage});
+ assert.deepEqual(historical.expected,evidence.receipt.expected);
+ assert.deepEqual(historical.next,evidence.receipt.next);
+ assert.equal(historical.documents.length,2);
+ assert.ok(historical.documents.every(document=>!('policySeed' in document)));
+ await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage:historicalStorage}));
+ await assert.rejects(()=>readHistoricalPolicyActivationEvidence({...args,storage:missingReceipt}));
+ await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage:missingReceipt}));
+ assert.deepEqual(a.rows(),before);
+ const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));await assert.rejects(()=>readHistoricalPolicyActivationEvidence({...args,storage}));await assert.rejects(()=>resolve({storage}));};
  await altered(x=>{x.receipt.provenance.signature='0'.repeat(128)});
  await altered(async x=>{const body=JSON.parse(new TextDecoder().decode(x.receipt.provenance.statement))[2];body.rows[0].sources.pop();body.rows[0].identities.pop();x.receipt.provenance.statement=domain('policy-provenance-receipt-v1',body);x.receipt.provenance.signature=await sign('policy-provenance-receipt-v1',body)});
  const legacy=structuredClone(evidence);delete legacy.receipt.provenance;
  const legacyStorage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:legacy})});
  assert.equal((await readVerifiedActivatedPolicyDocumentSet({...args,storage:legacyStorage})).provenance,null);
  await assert.rejects(()=>readActivatedPolicySource({...args,storage:legacyStorage,documentId:childRow.targetDocumentId,effectId:inherited.effectId}),/SOURCE_PROVENANCE_REQUIRED/);
+ await altered(x=>{x.staged.proof[0]^=1});
  await altered(x=>{x.receipt.next.authorityState[0]^=1});
  await altered(async x=>{const n=JSON.parse(new TextDecoder().decode(x.receipt.next.authorityState));n.selections.at(-1).signature='0'.repeat(128);x.receipt.next.authorityState=authorityBytes(n);x.receipt.next.authorizationSnapshot=await snapshotId(a.provider,n)});
  await altered(x=>{x.receipt.targets[1].identity.epochId='wrong'});
@@ -337,11 +348,13 @@ test('retained policy activation authenticates signed history and local keys',as
  const laterStorage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:edited})});
  assert.equal((await readVerifiedActivatedPolicyDocumentSet({...args,storage:laterStorage})).documents[1].revision,1);
  await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,pin:'wrong'}));
+ await assert.rejects(()=>readHistoricalPolicyActivationEvidence({...args,pin:'wrong'}));
  let authorityReads=0;const racingStorage=Object.assign(Object.create(a.storage),{readPairingAuthority:async sc=>{const result=await a.storage.readPairingAuthority(sc);if(++authorityReads===2)result.value.revision++;return result;}});
  await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage:racingStorage}),/STALE_SOURCE/);
  const slot=prepared[0].record.identity, key=JSON.stringify(['local-key','household',scope.id,a.deviceId,'data',slot.epochId]);
  const saved=a.rows().find(row=>row.key===key); a.connection.executeSync('DELETE FROM loro_records WHERE key=?',[key]);
  await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet(args));
+ await assert.rejects(()=>readHistoricalPolicyActivationEvidence(args));
  await assert.rejects(()=>activateStagedPolicyDocumentSet(confirm),/STALE_SOURCE/);
  await assert.rejects(()=>resolve({}));
  await assert.rejects(()=>mounted.authorize());
