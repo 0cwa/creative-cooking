@@ -49,6 +49,6 @@ export async function withOpenedAdultRemovalRelease({storage,scope,pin,provider,
   const record={scope,revision:expectedRevision+1,acceptedParent:checked.eventHash,authorizationSnapshot:await snapshotId(provider,state),authorityState:authorityBytes(state)};
   const now=await verifyPublicParent(storage,scope,pin,provider);
   if(!same(now.record,local.record))throw Error('STALE_AUTHORITY');
-  return callback({documents:opened.documents,keys:opened.keys,selection:structuredClone(selection),record,expected:structuredClone(local.record)});
+  return callback({documents:opened.documents,keys:opened.keys,selection:structuredClone(selection),record,child:structuredClone(verified.child),expected:structuredClone(local.record)});
  });
 }

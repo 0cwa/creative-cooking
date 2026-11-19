@@ -1143,6 +1143,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         const stored=await tx.get(key('document',scope,d.documentId));
         if(await tx.get(key('document-owner',scope,d.documentId))!==saved.next.acceptedParent||
           !stored||stored.revision!==0||!sameBytes(stored.bytes,d.bytes)||
+          !sameRecord(await tx.get(key('local-master-catalog')),d.localKey.catalog)||
           !sameRecord(await findLocalKey(tx,d.localKey.record.operationId,d.localKey.record.identity),d.localKey.record))return corrupt();
       }
       return {ok:true as const,value:snapshot(saved)};

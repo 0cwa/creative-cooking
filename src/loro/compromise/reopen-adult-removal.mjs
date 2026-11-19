@@ -11,7 +11,7 @@ const fromHex=s=>{if(typeof s!=='string'||s.length%2||!/^[0-9a-f]+$/.test(s))thr
 const read=r=>{if(!r.ok)throw Error('INVALID_RECEIPT');return r.value};
 
 /** Reverify the retained recipient receipt and its exact current rows, without writes. */
-export async function reopenAdultRemovalRecipient({storage,scope,operationId,pin,provider,sodium,LoroDoc,keys,wrappingSecret,recipientDeviceId,release,confirmedHead,confirmedGrantHash,expectedRevision}) {
+export async function verifyRetainedAdultRemovalRecipient({storage,scope,operationId,pin,provider,sodium,LoroDoc,keys,wrappingSecret,recipientDeviceId,release,confirmedHead,confirmedGrantHash,expectedRevision}) {
  ({scope,release}=structuredClone({scope,release}));
  const saved=read(await storage.readAdultRemovalRecipient(scope.id,operationId));
  if(!saved)return null;
@@ -27,15 +27,17 @@ export async function reopenAdultRemovalRecipient({storage,scope,operationId,pin
  const proposal={item:publisher.item,grant:publisher.grant,manifest:publisher.manifest,recipientBindings:publisher.recipientBindings};
  const retainedRelease={bytes:saved.ciphertext,proof:fromHex(body.publisherProof),publisherRecord:saved.publisherRecord,proposal};
  if(release && !same(release,retainedRelease))throw Error('RETRY_MISMATCH');
+ expectedRevision ??= saved.expected.revision; confirmedHead ??= body.eventHash; confirmedGrantHash ??= body.grantHash;
  if(expectedRevision!==saved.expected.revision || confirmedHead!==body.eventHash || confirmedGrantHash!==body.grantHash || operationId!==body.operationId || saved.manifestHash!==proposal.grant.manifestHash)throw Error('RETRY_MISMATCH');
  return withOpenedAdultRemovalRelease({storage:view,scope,pin,provider,sodium,LoroDoc,release:retainedRelease,recipientDeviceId,wrappingSecret,localSelection:body.selection,confirmedHead,confirmedGrantHash,expectedRevision},async opened=>{
   if(!same(opened.record,saved.next)||!same(opened.expected,saved.expected)||opened.documents.length!==saved.documents.length)throw Error('INVALID_RECEIPT');
-  const targets=[];
+  const targets=[],members=[];
   for(const [i,entry] of proposal.manifest.entries.entries()){
    const {recipeId,sourceDocumentId,sourceRevision,documentId}=entry, d=saved.documents[i], doc=opened.documents[i];
    const slot=await adultRemovalKeySlot(provider,scope,proposal.manifest,recipientDeviceId,documentId);
    if(!same({recipeId,sourceDocumentId,sourceRevision,documentId},{recipeId:d.recipeId,sourceDocumentId:d.sourceDocumentId,sourceRevision:d.sourceRevision,documentId:d.documentId}) || !same(doc.seed.snapshot,d.bytes) || !same(slot,{operationId:d.localKey.record.operationId,identity:d.localKey.record.identity}))throw Error('INVALID_RECEIPT');
    await keys.use(slot.operationId,slot.identity,key=>{if(!sodium.memcmp(key,opened.keys[i]))throw Error('INVALID_KEY')});
+   members.push({recipeId,documentId,seed:doc.seed,keySlot:slot});
    const {snapshot,...seed}=doc.seed;
    targets.push({recipeId,sourceDocumentId,sourceRevision,documentId,...slot,seed,policyBundle:doc.policyBundle,
     snapshotHash:hex(sodium.crypto_generichash(32,snapshot)),keyHash:hex(sodium.crypto_generichash(32,opened.keys[i])),
@@ -47,6 +49,13 @@ export async function reopenAdultRemovalRecipient({storage,scope,operationId,pin
   if(!same(body,expectedBody))throw Error('INVALID_RECEIPT');
   const now=read(await storage.readPairingAuthority(scope));
   if(!same(now,saved.next))throw Error('STALE_AUTHORITY');
-  return {head:saved.next.acceptedParent};
+  return structuredClone({record:saved.next,child:opened.child,members});
  });
+}
+
+/** Preserve the exact-retry result shape while authenticating retained evidence. */
+export async function reopenAdultRemovalRecipient(options) {
+ if(typeof options.confirmedHead!=='string'||typeof options.confirmedGrantHash!=='string'||!Number.isSafeInteger(options.expectedRevision))throw Error('RETRY_MISMATCH');
+ const verified=await verifyRetainedAdultRemovalRecipient(options);
+ return verified?{head:verified.record.acceptedParent}:null;
 }

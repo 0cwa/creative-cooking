@@ -1,3 +1,4 @@
+import {resolveAdultRemovalReceipt} from '../compromise/resolve-adult-removal.mjs';
 import {reopenAdultRemovalRecipient} from '../compromise/reopen-adult-removal.mjs';
 import {installAdultRemovalRelease} from '../compromise/install-adult-removal.mjs';
 import {adultRemovalKeySlot} from '../compromise/publish-adult-removal-set.mjs';
@@ -574,11 +575,37 @@ test('adult removal complete-set proposal binds its signed head and projected do
    assert.deepEqual(await installAdultRemovalRelease({...installOptions,storage:lostStorage}),{head:confirmed.eventHash});
   });
   b.close(); b.open();
+  const sponsorOptions={role:'sponsor',deviceId:a.deviceId,storage:a.storage,scope,operationId:publication.operationId,pin,provider:a.provider,sodium,LoroDoc,keys:a.keys()};
+  const sponsorRows=a.rows();
+  const sponsorMetadata=await resolveAdultRemovalReceipt(sponsorOptions);
+  assert.deepEqual(sponsorMetadata.record,publication.next);
+  assert.deepEqual(sponsorMetadata.child,candidate.child);
+  assert.deepEqual(sponsorMetadata.members.map(m=>m.documentId),prepared.documents.map(d=>d.documentId));
+  for(const [i,member] of sponsorMetadata.members.entries()){
+   assert.deepEqual(member.seed,prepared.documents[i].seed);
+   assert.deepEqual(member.keySlot,await adultRemovalKeySlot(a.provider,scope,prepared.manifest,a.deviceId,member.documentId));
+  }
+  await assert.rejects(()=>resolveAdultRemovalReceipt({...sponsorOptions,deviceId:b.deviceId}));
+  const damaged=structuredClone(retained.value);damaged.files[0].bytes[0]^=1;
+  const damagedStorage={readAdultRemovalPublication:async()=>({ok:true,value:damaged}),readPairingAuthority:(...args)=>a.storage.readPairingAuthority(...args)};
+  await assert.rejects(()=>resolveAdultRemovalReceipt({...sponsorOptions,storage:damagedStorage}));
+  assert.deepEqual(a.rows(),sponsorRows);
   const reconnectedRows=b.rows();
   await b.keys().useIdentity(wrapperIdentity(b.deviceId),async wrappingSecret=>{
    let signs=0;
    const retry={storage:b.storage,scope,pin,provider:b.provider,sodium,LoroDoc,keys:b.keys(),release:released,recipientDeviceId:b.deviceId,wrappingSecret,
     signSelection:()=>{signs++;throw Error('must not sign');},confirmedHead:confirmed.eventHash,confirmedGrantHash:confirmed.grantHash,expectedRevision:localParent.revision};
+   const recipientOptions={role:'recipient',deviceId:b.deviceId,storage:b.storage,scope,operationId:publication.operationId,pin,provider:b.provider,sodium,LoroDoc,keys:b.keys(),wrappingSecret};
+   const recipientMetadata=await resolveAdultRemovalReceipt(recipientOptions);
+   assert.deepEqual(recipientMetadata.record,(await b.storage.readPairingAuthority(scope)).value);
+   assert.equal(recipientMetadata.record.revision,localParent.revision+1);
+   assert.deepEqual(recipientMetadata.child,sponsorMetadata.child);
+   assert.deepEqual(recipientMetadata.members.map(m=>m.documentId),sponsorMetadata.members.map(m=>m.documentId));
+   for(const [i,member] of recipientMetadata.members.entries()){
+    assert.deepEqual(member.seed,prepared.documents[i].seed);
+    assert.deepEqual(member.keySlot,await adultRemovalKeySlot(b.provider,scope,prepared.manifest,b.deviceId,member.documentId));
+   }
+   await assert.rejects(()=>resolveAdultRemovalReceipt({...recipientOptions,deviceId:a.deviceId}));
    assert.deepEqual(await reopenAdultRemovalRecipient({...retry,operationId:publication.operationId}),{head:confirmed.eventHash});
    assert.deepEqual(await installAdultRemovalRelease(retry),{head:confirmed.eventHash});
    assert.equal(signs,0);assert.deepEqual(b.rows(),reconnectedRows);
@@ -604,7 +631,7 @@ test('adult removal complete-set proposal binds its signed head and projected do
     if(i===3)changed.bytes.__storageBytes[0]^=1;
     if(i===4)changed.manifestId='0'.repeat(64);
     b.replaceRow(key,JSON.stringify(changed));
-    try {await assert.rejects(()=>installAdultRemovalRelease(retry));} finally {b.replaceRow(key,original);}
+    try {await assert.rejects(()=>installAdultRemovalRelease(retry));await assert.rejects(()=>resolveAdultRemovalReceipt(recipientOptions));} finally {b.replaceRow(key,original);}
     assert.deepEqual(b.rows(),reconnectedRows);
    }
    assert.equal(signs,0);
@@ -808,6 +835,38 @@ test('SQLite adult removal excludes all target devices and atomically rotates th
   const held=a.rows();
   assert.equal((await a.runtime.recoverInbox()).length,2);
   assert.deepEqual(a.rows(),held);
+ });
+});
+
+test('sponsor reopens a complete-set publication with no external recipient',async()=>{
+ await withRotationFixture({owners:{a:'alpha',c:'gamma'},policy:{kind:'unanimous',fixedCount:null}},async([a,c],root,pin)=>{
+  const draft=await a.service.prepare({targetAdultId:'gamma',bindings:[],explicit:true});
+  const prepared=await prepareAdultRemovalDocumentSet({runtime:a.runtime,service:a.runtime.disclosure,item:draft.proposal.item,
+   allocateSeed:()=>({seedId:'11111111-1111-4111-8111-000000000001',peerId:'901'})});
+  const {state,nodes}=await verifyPublicParent(a.storage,scope,pin,a.provider),item=structuredClone(draft.proposal.item),subject=item.event.subject;
+  const grant={version:3,householdId:root.householdId,parentHead:root.head,eventHash:prepared.eventHash,
+   newEpochId:subject.newEpochId,newGeneration:subject.newGeneration,documentId:subject.documentId,manifestHash:prepared.manifestHash,
+   recipients:['a'],packageRefs:['package-a'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only',signatures:[]};
+  const body=Object.fromEntries(Object.entries(grant).filter(([key])=>key!=='signatures'));
+  for(const participant of [a,c]){
+   const voter={adultId:participant.adultId,deviceId:participant.deviceId};
+   const approval={version:1,householdId:root.householdId,eventHash:prepared.eventHash,parentHead:root.head,policyHash:root.policyHash,generation:root.generation,epochId:root.epochId,...voter};
+   const sign=async(purpose,value)=>sodium.to_hex(await participant.provider.sign(participant.signingKey,domain(purpose,value)));
+   item.approvals.push({...approval,signature:await sign('approval-signature',approval)});
+   grant.signatures.push({...voter,signature:await sign('adult-removal-set-grant-vote-v3',{grant:body,...voter})});
+  }
+  const proposal={item,grant,manifest:prepared.manifest,recipientBindings:draft.proposal.recipientBindings};
+  const checked=await verifyAdultRemovalGrant({provider:a.provider,pin,parent:nodes.get(state.activeHead),nodes,state,...proposal});
+  const result=await publishAdultRemovalDocumentSet({runtime:a.runtime,service:a.runtime.disclosure,sodium,keys:a.keys(),signingKey:a.signingKey,
+   withSigningSecret:fn=>a.keys().useIdentity(signerIdentity(a.deviceId),fn),proposal,confirmation:{explicit:true,eventHash:checked.eventHash,grantHash:checked.grantHash}});
+  a.close();a.open(); const rows=a.rows();
+  const opts={role:'sponsor',deviceId:a.deviceId,storage:a.storage,scope,operationId:result.operationId,pin,provider:a.provider,sodium,LoroDoc,keys:a.keys()};
+  const verified=await resolveAdultRemovalReceipt(opts);
+  assert.equal(verified.record.acceptedParent,checked.eventHash);
+  assert.deepEqual(verified.members.map(m=>m.documentId),prepared.documents.map(d=>d.documentId));
+  await assert.rejects(()=>releaseAdultRemoval({...opts,recipientDeviceId:a.deviceId}),/INVALID_RECIPIENT/);
+  await assert.rejects(()=>releaseAdultRemoval({...opts,recipientDeviceId:'c'}),/INVALID_RECIPIENT/);
+  assert.deepEqual(a.rows(),rows);
  });
 });
 
