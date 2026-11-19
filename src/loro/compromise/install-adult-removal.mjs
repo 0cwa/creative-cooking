@@ -3,15 +3,20 @@ import {domain} from '../authority/validator.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {adultRemovalKeySlot} from './publish-adult-removal-set.mjs';
 import {withOpenedAdultRemovalRelease} from './open-adult-removal.mjs';
+import {reopenAdultRemovalRecipient} from './reopen-adult-removal.mjs';
 import {digest,hex,verifySignature} from './revocation.mjs';
 
 const same=(a,b)=>hex(authorityBytes(a))===hex(authorityBytes(b));
 const receiptRecord=r=>({...r,authorityState:hex(r.authorityState)});
 
-/** Install only a freshly verified addressed release. Replay and reopen are unsupported. */
+/** Install a verified addressed release, or authenticate an exact retained retry. */
 export async function installAdultRemovalRelease(options) {
  options={...options,scope:structuredClone(options.scope),release:structuredClone(options.release),localSelection:structuredClone(options.localSelection)};
  const {storage,scope,pin,provider,sodium,keys,recipientDeviceId,signSelection,release,confirmedHead,confirmedGrantHash}=options;
+ const operationId=release.proposal.item.event.proposalId;
+ const reopen=()=>reopenAdultRemovalRecipient({...options,operationId});
+ const prior=await reopen();
+ if(prior)return prior;
  const local=await verifyPublicParent(storage,scope,pin,provider);
  if(local.record.revision!==options.expectedRevision)throw Error('STALE_AUTHORITY');
  const recipient=local.nodes.get(local.state.activeHead).devices.find(d=>d.active&&d.deviceId===recipientDeviceId);
@@ -35,9 +40,15 @@ export async function installAdultRemovalRelease(options) {
   const proof=domain('adult-removal-recipient-receipt-v1',body);
   const signature=hex(await signSelection(proof));
   if(!await verifySignature(provider,recipient.signingKeyRef,'adult-removal-recipient-receipt-v1',body,signature))throw Error('INVALID_SIGNER');
-  const result=await storage.commitAdultRemovalRecipient({version:1,operationId:item.event.proposalId,recipientDeviceId,manifestHash:release.proposal.grant.manifestHash,
+  let result;
+  try { result=await storage.commitAdultRemovalRecipient({version:1,operationId:item.event.proposalId,recipientDeviceId,manifestHash:release.proposal.grant.manifestHash,
    proof,signature,ciphertext:release.bytes,publisherRecord:release.publisherRecord,expected:opened.expected,next:opened.record,documents});
-  if(!result.ok)throw Error(result.error.code);
+   if(!result.ok)throw Error(result.error.code);
+  } catch(error) {
+   const recovered=await reopen();
+   if(recovered)return recovered;
+   throw error;
+  }
   return {head:opened.record.acceptedParent};
  });
 }

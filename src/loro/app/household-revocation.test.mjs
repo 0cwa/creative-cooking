@@ -1,3 +1,4 @@
+import {reopenAdultRemovalRecipient} from '../compromise/reopen-adult-removal.mjs';
 import {installAdultRemovalRelease} from '../compromise/install-adult-removal.mjs';
 import {adultRemovalKeySlot} from '../compromise/publish-adult-removal-set.mjs';
 import {withOpenedAdultRemovalRelease} from '../compromise/open-adult-removal.mjs';
@@ -561,13 +562,52 @@ test('adult removal complete-set proposal binds its signed head and projected do
     try {await assert.rejects(()=>installAdultRemovalRelease(installOptions),/IO/);} finally {b.fault=null;}
     assert.deepEqual(b.rows(),beforeInstall);
    }
-   const staleStorage={readPairingAuthority:(...args)=>b.storage.readPairingAuthority(...args),commitAdultRemovalRecipient:input=>{
+   const staleStorage={readAdultRemovalRecipient:(...args)=>b.storage.readAdultRemovalRecipient(...args),readPairingAuthority:(...args)=>b.storage.readPairingAuthority(...args),commitAdultRemovalRecipient:input=>{
     const stale=structuredClone(input);stale.expected.authorizationSnapshot='0'.repeat(64);
     return b.storage.commitAdultRemovalRecipient(stale);
    }};
    await assert.rejects(()=>installAdultRemovalRelease({...installOptions,storage:staleStorage}),/CONFLICT/);
    assert.deepEqual(b.rows(),beforeInstall);
-   assert.deepEqual(await installAdultRemovalRelease(installOptions),{head:confirmed.eventHash});
+   const lostStorage={readAdultRemovalRecipient:(...args)=>b.storage.readAdultRemovalRecipient(...args),readPairingAuthority:(...args)=>b.storage.readPairingAuthority(...args),commitAdultRemovalRecipient:async input=>{
+    const result=await b.storage.commitAdultRemovalRecipient(input);assert.equal(result.ok,true);throw Error('response lost');
+   }};
+   assert.deepEqual(await installAdultRemovalRelease({...installOptions,storage:lostStorage}),{head:confirmed.eventHash});
+  });
+  b.close(); b.open();
+  const reconnectedRows=b.rows();
+  await b.keys().useIdentity(wrapperIdentity(b.deviceId),async wrappingSecret=>{
+   let signs=0;
+   const retry={storage:b.storage,scope,pin,provider:b.provider,sodium,LoroDoc,keys:b.keys(),release:released,recipientDeviceId:b.deviceId,wrappingSecret,
+    signSelection:()=>{signs++;throw Error('must not sign');},confirmedHead:confirmed.eventHash,confirmedGrantHash:confirmed.grantHash,expectedRevision:localParent.revision};
+   assert.deepEqual(await reopenAdultRemovalRecipient({...retry,operationId:publication.operationId}),{head:confirmed.eventHash});
+   assert.deepEqual(await installAdultRemovalRelease(retry),{head:confirmed.eventHash});
+   assert.equal(signs,0);assert.deepEqual(b.rows(),reconnectedRows);
+   for(const changed of [
+    {...retry,release:{...released,bytes:Uint8Array.from(released.bytes,(v,i)=>i===0?v^1:v)}},
+    {...retry,release:{...released,proof:Uint8Array.from(released.proof,(v,i)=>i===0?v^1:v)}},
+    {...retry,confirmedGrantHash:'wrong'}, {...retry,confirmedHead:'wrong'}, {...retry,expectedRevision:localParent.revision+1},
+    {...retry,release:{...released,publisherRecord:{...released.publisherRecord,revision:released.publisherRecord.revision+1}}}
+   ])await assert.rejects(()=>installAdultRemovalRelease(changed));
+   const keySlot=await adultRemovalKeySlot(b.provider,scope,prepared.manifest,b.deviceId,prepared.manifest.entries[0].documentId);
+   const rowKeys=[
+    JSON.stringify(['adult-removal-recipient',scope.id,publication.operationId]),
+    JSON.stringify(['document',scope.id,prepared.manifest.entries[0].documentId]),
+    JSON.stringify(['local-key-operation',keySlot.operationId]),
+    JSON.stringify(['document',scope.id,prepared.manifest.entries[0].documentId]),
+    JSON.stringify(['projection-document-set',scope.id,confirmed.eventHash])
+   ];
+   for(const [i,key] of rowKeys.entries()){
+    const original=reconnectedRows.find(row=>row.key===key).value,changed=JSON.parse(original);
+    if(i===0)changed.signature='0'.repeat(128);
+    if(i===1)changed.revision=1;
+    if(i===2)changed.wrapped.__storageBytes[0]^=1;
+    if(i===3)changed.bytes.__storageBytes[0]^=1;
+    if(i===4)changed.manifestId='0'.repeat(64);
+    b.replaceRow(key,JSON.stringify(changed));
+    try {await assert.rejects(()=>installAdultRemovalRelease(retry));} finally {b.replaceRow(key,original);}
+    assert.deepEqual(b.rows(),reconnectedRows);
+   }
+   assert.equal(signs,0);
   });
   const installedRows=new Map(b.rows().map(row=>[row.key,row.value]));
   for(const row of beforeInstall)if(row.key!==JSON.stringify(['pairing-authority','household',scope.id]))assert.equal(installedRows.get(row.key),row.value);

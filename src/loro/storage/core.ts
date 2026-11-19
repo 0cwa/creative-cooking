@@ -1112,6 +1112,25 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}
   }
+  /** Structural read only; authentication belongs to the recipient verifier. */
+  async readAdultRemovalRecipient(scope:string,operationId:string) {
+    if(!validId(scope)||!validId(operationId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const saved:AdultRemovalRecipient|undefined=await tx.get(key('adult-removal-recipient',scope,operationId));
+      if(saved===undefined)return {ok:true as const,value:null};
+      if(!validAdultRemovalRecipient(saved)||saved.operationId!==operationId||saved.expected.scope.id!==scope||
+        !sameRecord(await tx.get(key('pairing-authority','household',scope)),saved.next)||
+        !sameRecord(await tx.get(key('projection-document-set',scope,saved.next.acceptedParent)),adultRemovalCatalog({...saved,sponsorDeviceId:saved.recipientDeviceId,files:[]})))return corrupt();
+      for(const d of saved.documents){
+        const stored=await tx.get(key('document',scope,d.documentId));
+        if(await tx.get(key('document-owner',scope,d.documentId))!==saved.next.acceptedParent||
+          !stored||stored.revision!==0||!(stored.bytes instanceof Uint8Array)||!sameBytes(stored.bytes,d.bytes)||
+          !sameRecord(await tx.get(key('local-master-catalog')),d.localKey.catalog)||
+          !sameRecord(await findLocalKey(tx,d.localKey.record.operationId,d.localKey.record.identity),d.localKey.record))return corrupt();
+      }
+      return {ok:true as const,value:snapshot(saved)};
+    });}catch(e){return fail(mapError(e));}
+  }
   /** Structural evidence only. The ordinary authority loader still rejects this transition. */
   async readAdultRemovalPublication(scope:string,operationId:string) {
     if(!validId(scope)||!validId(operationId))return fail('MALFORMED');
