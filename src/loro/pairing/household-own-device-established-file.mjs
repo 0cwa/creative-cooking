@@ -3,6 +3,7 @@ import {selectedSourceHash} from '../projection/selected-sources.mjs';
 import {exact,sameOwnDevice} from './household-own-device.mjs';
 import {makeKeyPackage,verifyStoredKeyPackage,withOpenedKeyPackage} from './key-package.mjs';
 import {openDeviceCopy,sealDeviceCopy} from './personal-copy.mjs';
+import {verifyOwnDeviceRecipients} from './household-own-device-recipients.mjs';
 
 const fileDomain='household-own-device-established-file-v1';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
@@ -40,6 +41,42 @@ export async function sealEstablishedOwnDeviceFile({sodium,provider,checked,reci
  }
  return sealDeviceCopy(sodium,fileDomain,recipient.transcriptHash,evidence.transcript.responder,signingSecret,
   {version:1,head:checked.head,copyHash:checked.context.manifestHash,documents:checked.documents,packets});
+}
+
+/** Recheck every ceremony before constructing packets. The caller invokes packetFor
+ * once per document inside prepareForAtomicInstall, then seals only after all
+ * documents have packets. These transient files must not be offered before an
+ * atomic publication retains them. Installation still needs an independently
+ * verified successor and copy set; the established file does not carry those. */
+export async function prepareEstablishedOwnDeviceFanout({sodium,provider,checked,parent,authorizationSnapshot,evidence,signingSecret}) {
+ const proofs=structuredClone(evidence);
+ const recipients=await verifyOwnDeviceRecipients({sodium,provider,successor:checked,parent,authorizationSnapshot,evidence:proofs});
+ const routes=await Promise.all(recipients.map(async recipient=>{
+  const proof=proofs.find(e=>e.context.recipientDeviceId===recipient.deviceId);
+  const cs=await contexts({sodium,provider,checked,recipient,evidence:proof});
+  if(hex(signingSecret.subarray(32))!==cs[0].senderSigningKey)throw Error('INVALID_KEY');
+  return {recipient,proof,cs};
+ }));
+ return {
+  packetFor(index,key) {
+   if(!Number.isInteger(index)||index<0||index>=checked.documents.length)throw Error('INVALID_PROOF');
+   return routes.map(({cs})=>{
+    const packet=makeKeyPackage(sodium,cs[index],key,signingSecret);
+    verifyStoredKeyPackage(sodium,packet,cs[index]);
+    return packet;
+   });
+  },
+  seal(packets) {
+   if(!Array.isArray(packets)||packets.length!==checked.documents.length||
+      packets.some(row=>!Array.isArray(row)||row.length!==routes.length))throw Error('INVALID_PROOF');
+   return routes.map(({recipient,proof,cs},i)=>{
+    const selected=packets.map(row=>row[i]);
+    selected.forEach((packet,j)=>verifyStoredKeyPackage(sodium,packet,cs[j]));
+    return {recipient,file:sealDeviceCopy(sodium,fileDomain,recipient.transcriptHash,proof.transcript.responder,signingSecret,
+     {version:1,head:checked.head,copyHash:checked.context.manifestHash,documents:checked.documents,packets:selected})};
+   });
+  }
+ };
 }
 
 /** The callback receives ephemeral keys only after the entire file matches the
