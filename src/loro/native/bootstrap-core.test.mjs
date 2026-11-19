@@ -935,6 +935,22 @@ async function ownDeviceScenario(prepareOnly=false,publishPrepared=false) {
     await assert.rejects(established.installEstablished(changedFile,proof));
     const changedProof=structuredClone(proof);changedProof.messages.acks.responder.signature='0'.repeat(128);
     await assert.rejects(established.installEstablished(recipientFile,changedProof));
+    const counterName=adultName+'-'+(await import('../app/household-transfer.mjs')).householdReceiverIds(sodium,scope,adult.deviceId).operationId;
+    const counterRows=()=>{const db=new DatabaseSync(join(dir,counterName+'.sqlite'));try{return db.prepare('SELECT * FROM loro_sequence_counters').all()}finally{db.close()}};
+    const counterBefore=counterRows();
+    adult.close();adult=await open(adultName);
+    const adopted=await readStore(adultName,storage=>storage.readPairingAuthority(scope));
+    assert.equal(adopted.value.acceptedParent,published.head);
+    assert.deepEqual(counterRows(),counterBefore);
+    assert.ok((await pantry(adult)).includes('shared-basil'));
+    await addPantry(adult,'reopened-adult');
+    assert.ok((await pantry(adult)).includes('reopened-adult'));
+    assert.ok(counterRows()[0].value>counterBefore[0].value);
+    adult.close();adult=null;
+    const counterPath=join(dir,counterName+'.sqlite'),counterBackup=counterPath+'.backup';
+    copyFileSync(counterPath,counterBackup);rmSync(counterPath);
+    try { await assert.rejects(open(adultName),/MISSING_SEQUENCES/); }
+    finally { rmSync(counterPath,{force:true});copyFileSync(counterBackup,counterPath);rmSync(counterBackup); }
     return;
    }
    await addPantry(sponsor,'changed-after-preparation');

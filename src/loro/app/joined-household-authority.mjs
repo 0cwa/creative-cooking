@@ -3,6 +3,7 @@ import {readInstalledHouseholdDocumentSet} from '../pairing/household-document-s
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
+import {domain} from '../authority/validator.mjs';
 
 const decoder=new TextDecoder('utf-8',{fatal:true});
 
@@ -22,11 +23,54 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
   const receipt=await storage.readHouseholdOwnDeviceSetReceipt(scope,pairedOperation);
   const savedPin=(await pins?.list())?.find(value=>value?.scope?.kind==='household'&&value.scope.id===scope.id);
   if(!receipt.ok||!receipt.value||receipt.value.recipient.deviceId!==deviceId||
-    !savedPin||savedPin.pin!==pin||savedPin.head!==receipt.value.expected.acceptedParent||
+    !savedPin||savedPin.pin!==pin||
+    (receipt.value.recipient.kind!=='established'&&savedPin.head!==receipt.value.expected.acceptedParent)||
     (confirmedParent!==undefined&&confirmedParent!==savedPin.head))throw Error('INVALID_ADMISSION');
   const installedSet={operationId:pairedOperation,paired};
   const resolved=await resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice:deviceId,sodium,
    LoroDoc:paired.LoroDoc,...installedSet});
+  if(receipt.value.recipient.kind==='established'){
+   // The paired receipt authenticates the adopted child and its immediate
+   // parent. The independent pin still belongs to the original admission.
+   const {state:chain}=resolved.pairedAuthority;
+   const selections=chain.selections;
+   const selectedHeads=[pin,...selections.map(selection=>selection.to)];
+   const parentIndex=selectedHeads.lastIndexOf(receipt.value.expected.acceptedParent);
+   const childIndex=selectedHeads.lastIndexOf(resolved.head ?? chain.activeHead);
+   const pinIndex=selectedHeads.indexOf(savedPin.head);
+   if(pinIndex<0||parentIndex<pinIndex||childIndex!==parentIndex+1||
+      selectedHeads[childIndex]!==chain.activeHead)throw Error('INVALID_ADMISSION');
+   let originHead;
+   if(legacy){
+    const checked=await storage.householdRecipient.check(legacy);
+    if(!checked.ok||checked.value!==true||legacy.scopeId!==scope.id||
+       legacy.receiptBody?.recipientDevice!==deviceId||legacy.expectedAuthority.acceptedParent!==savedPin.head)
+     throw Error('INVALID_ADMISSION');
+    originHead=legacy.nextAuthority.acceptedParent;
+   }else{
+    const origin=chain.events.find(item=>item.admission?.manifest?.version===5&&
+      item.event.parentHead===savedPin.head&&item.admission.grant.recipientDevices.includes(deviceId)&&
+      selections.some(selection=>selection.from===savedPin.head&&selection.to===item.admission.grant.admissionEventHash));
+    if(!origin)throw Error('INVALID_ADMISSION');
+    const first=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId:origin.admission.operationId});
+    originHead=origin.admission.grant.admissionEventHash;
+    if(first.mode!=='recipient'||first.selection.from!==savedPin.head||first.selection.to!==originHead||
+       first.item.admission.grant.admissionEventHash!==originHead||
+       first.publication.localKey.record.identity.deviceId!==deviceId)throw Error('INVALID_ADMISSION');
+   }
+   const originIndex=selectedHeads.indexOf(originHead,pinIndex+1);
+   if(originIndex!==pinIndex+1||originIndex>parentIndex)throw Error('INVALID_ADMISSION');
+   // Selection can move to a sibling; require actual event ancestry as well.
+   const parents=new Map();
+   for(const item of chain.events){
+    const hash=await provider.hash(domain('event',item.event));
+    parents.set(Array.from(hash,b=>b.toString(16).padStart(2,'0')).join(''),item.event.parentHead);
+   }
+   let head=chain.activeHead;
+   const ancestors=new Set();
+   while(head&&!ancestors.has(head)){ancestors.add(head);head=parents.get(head)}
+   if(!ancestors.has(originHead)||!ancestors.has(savedPin.head)||!ancestors.has(receipt.value.expected.acceptedParent))throw Error('INVALID_ADMISSION');
+  }
   return {resolved,installedSet};
  }
  const selectedSet=state?.events?.some(item=>item.admission?.manifest?.version===5&&
