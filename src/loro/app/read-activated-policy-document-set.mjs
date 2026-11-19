@@ -105,7 +105,7 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
  }
  const again=await storage.readPairingAuthority(scope);
  if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
- return structuredClone({targetHead,sourceHead:staged.sourceHead,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
+ return structuredClone({targetHead,sourceHead:staged.sourceHead,expected:receipt.expected,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
   provenance,verifiedProvenance:receipt.provenance??null,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
    if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');
    return {recipeId:row.recipeId,documentId,revision,...receipt.targets[i],policySeed:source?.seed??null};})});

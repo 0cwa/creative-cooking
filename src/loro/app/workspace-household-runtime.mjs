@@ -10,6 +10,7 @@ import {localProvider} from './local-provider.mjs';
 import {installedRecipeDelivery} from './installed-recipe-delivery.mjs';
 import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
+import {readVerifiedActivatedPolicyDocumentSet} from './read-activated-policy-document-set.mjs';
 import {readRecipeCatalog} from './selected-recipe-catalog.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 
@@ -24,15 +25,26 @@ export async function prepareWorkspacePolicyDocumentKeys(runtime,targetHead,keys
  return preparePolicyDocumentKeys({runtime,targetHead,keys,withSourceDocumentKey:reader});
 }
 
-/** Activate one explicitly confirmed staged successor from a mounted source.
- * A completed activation is not replayed: a retry fails once the source changes. */
+/** Activate one explicitly confirmed staged successor from a mounted source. */
 export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHead,expectedSourceRevision,targetHead,service,sodium,keys}) {
  const mount=policyMounts.get(runtime);
  if(!mount || mount.activated || mount.paired || keys!==mount.keys)throw Error('INVALID_SOURCE_READER');
  if(typeof expectedSourceHead!=='string' || !expectedSourceHead || !Number.isSafeInteger(expectedSourceRevision) || expectedSourceRevision<0 || typeof targetHead!=='string' || !targetHead)throw Error('INVALID_CONFIRMATION');
+ const recover=async (next)=>{
+  try {
+   if(runtime.storage!==mount.storage || runtime.authority!==mount.authority || mount.authority.rootPin!==mount.pin || mount.authority.provider!==mount.provider || !same(runtime.scope,mount.scope) || runtime.keyRef!==mount.scope.epochId || expectedSourceHead!==mount.scope.branchHead || expectedSourceRevision!==mount.expected.record.revision) return null;
+   const opened=await readVerifiedActivatedPolicyDocumentSet({storage:mount.storage,LoroDoc:mount.LoroDoc,pin:mount.pin,provider:mount.provider,scope:mount.expected.scope,deviceId:mount.scope.authorDevice,targetHead,keys:mount.keys,sodium:mount.sodium});
+   const prior=opened.expected, selected=mount.expected.record;
+   if(!opened.verifiedProvenance || prior.acceptedParent!==selected.acceptedParent || prior.revision!==selected.revision || prior.authorizationSnapshot!==selected.authorizationSnapshot || !same(prior.scope,mount.expected.scope) || (mount.record && !same(prior,mount.record)) || (next && !same(opened.record,next))) return null;
+   return {targetHead,record:opened.record};
+  } catch {return null;}
+ };
  const current=await runtime.storage.readPairingAuthority({kind:'household',id:runtime.scope.scopeId});
  if(!current.ok)throw Error(current.error.code);
- if(!current.value || current.value.acceptedParent!==expectedSourceHead || current.value.revision!==expectedSourceRevision)throw Error('STALE_SOURCE');
+ if(!current.value || current.value.acceptedParent!==expectedSourceHead || current.value.revision!==expectedSourceRevision) {
+  const recovered=await recover(); if(recovered)return recovered;
+  throw Error('STALE_SOURCE');
+ }
  const verified=await readVerifiedPolicyDocumentSet({runtime,targetHead});
  const expected=verified.current;
  if(expected.acceptedParent!==expectedSourceHead || expected.revision!==expectedSourceRevision || runtime.scope.branchHead!==expectedSourceHead)throw Error('STALE_SOURCE');
@@ -50,8 +62,14 @@ export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHea
  const nextState=structuredClone(state); nextState.events.push(verified.item); nextState.selections.push(selection); nextState.activeHead=targetHead;
  const next={...expected,revision:expected.revision+1,acceptedParent:targetHead,authorizationSnapshot:await snapshotId(runtime.authority.provider,nextState),authorityState:authorityBytes(nextState)};
  const provenance=await buildPolicyProvenanceReceipt({runtime,targetHead,service,sodium,guard:captured.guard,next});
- const result=await runtime.storage.commitPolicyDocumentSetSelection({guard:captured.guard,targetHead,proof:verified.stage.proof,mapping:verified.stage.mapping,expected,next,deviceId:runtime.scope.authorDevice,prepared,provenance});
- if(!result.ok)throw Error(result.error.code);
+ let result;
+ try {
+  result=await runtime.storage.commitPolicyDocumentSetSelection({guard:captured.guard,targetHead,proof:verified.stage.proof,mapping:verified.stage.mapping,expected,next,deviceId:runtime.scope.authorDevice,prepared,provenance});
+  if(!result.ok)throw Error(result.error.code);
+ } catch(error) {
+  const recovered=await recover(next); if(recovered)return recovered;
+  throw error;
+ }
  return {targetHead,record:next};
 }
 
@@ -134,7 +152,9 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  if(installation||activatedPolicy)await runtime.authorize();
  const originalScope=structuredClone(scope), authority=runtime.authority;
  const useContent=deliveryContent??content;
- policyMounts.set(runtime,{keys,signing:structuredClone(signing),activated:!!activatedPolicy,paired:!!paired});
+ const mountedRecord=await storage.readPairingAuthority(householdScope);
+ const record=mountedRecord.ok && mountedRecord.value && mountedRecord.value.revision===resolved.expectedAuthority?.record.revision && mountedRecord.value.acceptedParent===resolved.expectedAuthority?.record.acceptedParent && mountedRecord.value.authorizationSnapshot===resolved.expectedAuthority?.record.authorizationSnapshot ? structuredClone(mountedRecord.value) : null;
+ policyMounts.set(runtime,{record,keys,signing:structuredClone(signing),activated:!!activatedPolicy,paired:!!paired,storage,authority,scope:originalScope,expected:structuredClone(resolved.expectedAuthority),pin,provider,LoroDoc,sodium});
  policyReaders.set(runtime,async (route,fn)=>{
   const check=()=>{
    if(runtime.authority!==authority || runtime.storage!==storage || authority.rootPin!==pin || authority.provider!==provider ||
