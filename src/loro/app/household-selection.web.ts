@@ -7,7 +7,7 @@ export function householdSelection({name,meta,...dependencies}:any){
  if(!locks)throw Error('LOCK_UNAVAILABLE');
  return selectedHousehold({
   ...dependencies,
-  openJoined:(input:any)=>openJoinedSequences({...input,name,pins:dependencies.pins}),
+  openJoined:(input:any)=>openJoinedSequences({...input,name,pins:dependencies.pins,paired:dependencies.paired}),
   lock:<T,>(mode:'shared'|'exclusive',use:()=>Promise<T>)=>locks.request(`creative-cooking/bootstrap/v1/${name}`,{mode},use),
   readStored:()=>{
    const store=meta.transaction('metadata','readonly').objectStore('metadata');

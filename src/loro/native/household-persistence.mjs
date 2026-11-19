@@ -41,7 +41,7 @@ export function returnToOriginalHousehold(name, run) {
   return lockWorkspace(name, 'selection', () => saveSelection(run, null));
 }
 
-export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun, master, storage, provider, sodium, deviceId}) {
+export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun, master, storage, provider, sodium, deviceId, paired=undefined}) {
   // This connection is separate from the document and sequence transactions.
   const db = openDatabase(`${name}-pairing`);
   try {
@@ -110,7 +110,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
       return lockWorkspace(name, 'enrollment', async () => {
         const found = await storage.householdRecipient.find(scope.id, operationId);
         if (!found.ok) throw Error('INVALID_ADMISSION');
-        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value});
+        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired});
         const key = enrollmentKey(scope.id);
         const enrollment = await workspaceRun(false, tx => tx.get(key));
         const identity = {version:1, scopeId:scope.id, pin, deviceId, operationId};

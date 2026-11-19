@@ -2,12 +2,13 @@ import {resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority
 import {readInstalledHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
+import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 
 const decoder=new TextDecoder('utf-8',{fatal:true});
 
 /** Discover the local receipt from pinned selected authority. A public parent
  * alone does not authorize creating or exposing a sequence counter. */
-export async function joinedHouseholdAuthority({storage,scope,pin,provider,deviceId,sodium,operationId,confirmedParent,legacy,pins}) {
+export async function joinedHouseholdAuthority({storage,scope,pin,provider,deviceId,sodium,operationId,confirmedParent,legacy,pins,paired=undefined}) {
  scope=structuredClone(scope);
  legacy=structuredClone(legacy);
  const raw=await storage.readPairingAuthority(scope);
@@ -15,6 +16,19 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
  let state;
  try { state=raw.value&&JSON.parse(decoder.decode(raw.value.authorityState)); }
  catch { throw Error('INVALID_ADMISSION'); }
+ const pairedOperation=await selectedOwnDeviceSet(raw.value,state,provider);
+ if(pairedOperation){
+  if(!paired||operationId!==householdReceiverIds(sodium,scope,deviceId).operationId)throw Error('INVALID_ADMISSION');
+  const receipt=await storage.readHouseholdOwnDeviceSetReceipt(scope,pairedOperation);
+  const savedPin=(await pins?.list())?.find(value=>value?.scope?.kind==='household'&&value.scope.id===scope.id);
+  if(!receipt.ok||!receipt.value||receipt.value.recipient.deviceId!==deviceId||
+    !savedPin||savedPin.pin!==pin||savedPin.head!==receipt.value.expected.acceptedParent||
+    (confirmedParent!==undefined&&confirmedParent!==savedPin.head))throw Error('INVALID_ADMISSION');
+  const installedSet={operationId:pairedOperation,paired};
+  const resolved=await resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice:deviceId,sodium,
+   LoroDoc:paired.LoroDoc,...installedSet});
+  return {resolved,installedSet};
+ }
  const selectedSet=state?.events?.some(item=>item.admission?.manifest?.version===5&&
   item.admission.grant.admissionEventHash===raw.value.acceptedParent);
  if(!selectedSet&&!legacy)return null;

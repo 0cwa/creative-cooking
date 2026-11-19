@@ -10,6 +10,16 @@ import {MAX_PERSONAL_PAIRING_FILE,openDeviceCopy,pairingDigest,sealDeviceCopy,ve
 
 const fileDomain='household-own-device-set-file';
 
+/** Locate a candidate receipt. The caller must verify the retained copy. */
+export async function selectedOwnDeviceSet(record,state,provider) {
+ for(const item of state?.events??[]){
+  if(item?.event?.version===5&&item.event.kind==='pairOwnDevice'&&item.ownDevice&&
+     await selectedSourceHash(provider,'event',item.event)===record.acceptedParent)
+   return item.event.proposalId;
+ }
+ return null;
+}
+
 const hex=bytes=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 const validPeerId=value=>typeof value==='string'&&/^[1-9][0-9]{0,19}$/.test(value)&&BigInt(value)<=18446744073709551615n;
 const copyFields=['recipeId','documentId','revision','baseline','copy'];

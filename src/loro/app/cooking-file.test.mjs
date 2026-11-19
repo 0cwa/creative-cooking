@@ -1684,10 +1684,11 @@ test('selected recipe shopping copies and current-only admission survive durable
   const pairedPath=join(pairedDir,'peer.sqlite');
   let pairedDb=new DatabaseSync(pairedPath),pairedFault=0;
   t.after(()=>{pairedDb.close();rmSync(pairedDir,{recursive:true});});
-  const pairedStorage=openSQLiteStorage({executeSync(sql,params=[]){
+  const pairedConnection={executeSync(sql,params=[]){
    const statement=pairedDb.prepare(sql);
    return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
-  }},boundary=>{
+  }};
+  const pairedStorage=openSQLiteStorage(pairedConnection,boundary=>{
    if(boundary==='household-own-device-set'&&pairedFault>0&&--pairedFault===0)throw Error('injected');
   });
   const pairedRows=()=>pairedDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
@@ -1697,6 +1698,23 @@ test('selected recipe shopping copies and current-only admission survive durable
   await pairedKeys.provision('paired-set-master');
   const pairedOptions={...fileOptions,storage:pairedStorage,parentRecord:pairedParent,
    keys:pairedKeys,deviceId:peer.transcript.responder.deviceId,wrappingSecret:nextWrap.privateKey,signingSecret:nextRecipient.privateKey};
+  const pairedName='paired-recipient-fixture';
+  function openPairedDatabase(name){
+   const db=new DatabaseSync(join(pairedDir,`${name}.sqlite`));
+   return {executeSync(sql,params=[]){
+    const statement=db.prepare(sql);
+    return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+   },close:()=>db.close()};
+  }
+  const openPairedJoin=()=>openNativeHouseholdPersistence({name:pairedName,openDatabase:openPairedDatabase,
+   workspaceRun:openSQLiteTransaction(pairedConnection),master:pairedMaster,storage:pairedStorage,provider:a.provider,
+   sodium,deviceId:pairedOptions.deviceId,paired:{keys:pairedKeys,LoroDoc,useWrapping:use=>use(nextWrap.privateKey)}});
+  let pairedJoin=openPairedJoin();
+  t.after(()=>pairedJoin.close());
+  const {operationId:pairedEnrollmentId}=householdReceiverIds(sodium,scope,pairedOptions.deviceId);
+  const pairedEnrollment={scope,pin:a.root.head,operationId:pairedEnrollmentId,confirmedParent:pairedParent.acceptedParent};
+  await pairedJoin.pins.save({version:1,scope,pin:a.root.head,head:pairedParent.acceptedParent});
+  await pairedJoin.prepareJoinedSequences(pairedEnrollment);
   const pairedBefore=pairedRows();
   pairedFault=signedCopy.documents.reduce((count,document)=>count+4+2*document.identities.length,5);
   await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),/IO/);
@@ -1705,12 +1723,39 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.deepEqual(pairedRows(),pairedBefore);
   assert.deepEqual(await installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),
    {scope,head:signedCopy.head,replayed:false});
+  await assert.rejects(pairedJoin.selection.select(scope,signedCopy.head),/INCOMPLETE_ENROLLMENT/);
+  (await pairedJoin.finalizeJoinedSequences(pairedEnrollment)).sequences.close();
+  await pairedJoin.selection.select(scope,signedCopy.head);
   for(const doc of signedCopy.documents){
    const saved=must(await pairedStorage.reopenDocument(scope.id,doc.targetDocumentId));
    assert.deepEqual(saved.bytes,doc.copy.snapshot);
    assert.equal(saved.revision,0);
   }
   pairedDb.close();pairedDb=new DatabaseSync(pairedPath);
+  pairedJoin.close();pairedJoin=openPairedJoin();
+  const pairedSelection=await pairedJoin.selection.openSelected();
+  assert.equal(pairedSelection.resolved.scope.branchHead,signedCopy.head);
+  assert.equal(pairedSelection.installedSet.operationId,evidence.transcript.sessionId);
+  const reserved=await pairedSelection.sequences.reserve(scope.id,'paired-before-restart');
+  pairedSelection.sequences.close();
+  const again=await pairedJoin.selection.openSelected();
+  assert.deepEqual(await again.sequences.reserve(scope.id,'paired-before-restart'),reserved);
+  again.sequences.close();
+  await assert.rejects(pairedJoin.finalizeJoinedSequences({...pairedEnrollment,confirmedParent:'0'.repeat(64)}),/INVALID_ADMISSION/);
+  const pairedPinDb=openPairedDatabase(`${pairedName}-pairing`),pairedPinRun=openSQLiteTransaction(pairedPinDb);
+  const pairedPinSlot=JSON.stringify(['pin',scope.id]);
+  try{
+   const savedPin=await pairedPinRun(false,tx=>tx.get(pairedPinSlot));
+   const badPin=await pairedMaster.wrap('workspace-master',new TextEncoder().encode(JSON.stringify({
+    version:1,scope,pin:a.root.head,head:'0'.repeat(64)
+   })),new TextEncoder().encode(`creative-cooking/household-pin/v1/${scope.id}`));
+   await pairedPinRun(true,tx=>tx.put(pairedPinSlot,badPin));
+   await assert.rejects(pairedJoin.selection.openSelected(),/INVALID_ADMISSION/);
+   await pairedPinRun(true,tx=>tx.put(pairedPinSlot,savedPin));
+  }finally{pairedPinDb.close()}
+  rmSync(join(pairedDir,`${pairedName}-${pairedEnrollmentId}.sqlite`));
+  await assert.rejects(pairedJoin.selection.openSelected(),/MISSING_SEQUENCES/);
+  await assert.rejects(pairedJoin.finalizeJoinedSequences(pairedEnrollment),/MISSING_SEQUENCES/);
   const reopenOptions={storage:pairedStorage,scope,operationId:evidence.transcript.sessionId,pin:fileOptions.pin,
    provider:fileOptions.provider,sodium,LoroDoc,keys:pairedKeys,wrappingSecret:nextWrap.privateKey};
   const reopenedSet=await reopenOwnDeviceSet(reopenOptions);
@@ -1818,6 +1863,10 @@ test('selected recipe shopping copies and current-only admission survive durable
   const publishedRows=sponsorRows();
   const reopenedSponsor=await reopenOwnDeviceSet(sponsorReopenOptions);
   assert.equal(reopenedSponsor.head,signedCopy.head);
+  const selectedSponsor=await resolveOriginalHousehold({storage:publishStorage,scope,pin:a.root.head,
+   provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys:sponsorReopenOptions.keys}});
+  assert.equal(selectedSponsor.resolved.scope.branchHead,signedCopy.head);
+  assert.equal(selectedSponsor.installedSet.operationId,evidence.transcript.sessionId);
   assert.deepEqual(reopenedSponsor.file,published.file);
   assert.deepEqual(reopenedSponsor.documents.map(({documentId,identity})=>[documentId,identity.deviceId]),
    signedCopy.documents.map(doc=>[doc.targetDocumentId,a.deviceId]));
@@ -1828,6 +1877,8 @@ test('selected recipe shopping copies and current-only admission survive durable
   alteredSponsorReceipt.sponsor.keyHashes[0]='0'.repeat(64);
   publishDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(alteredSponsorReceipt),sponsorReceiptSlot);
   await assert.rejects(reopenOwnDeviceSet(sponsorReopenOptions),/INVALID_PROOF/);
+  await assert.rejects(resolveOriginalHousehold({storage:publishStorage,scope,pin:a.root.head,
+   provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys:sponsorReopenOptions.keys}}),/INVALID_PROOF/);
   publishDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(sponsorReceiptRow.value,sponsorReceiptSlot);
   pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(receiptValue,receiptSlot);
   const openPaired=async (storage,deviceId,keys,signingSecret,useWrapping)=>{

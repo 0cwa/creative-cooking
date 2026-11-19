@@ -83,8 +83,9 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const ensure=async(scope,initialize)=>{const old=await storage.readPairingAuthority(scope);if(!old.ok)throw Error(old.error);if(!old.value){if(ready)throw Error('MISSING_AUTHORITY');try{await initialize()}catch(e){const raced=await storage.readPairingAuthority(scope);if(!raced.ok||!raced.value)throw e}}};
   await ensure({kind:'household',id:r.house},()=>initializeAuthority(storage,root,root.head,provider));
   await ensure({kind:'personal',id:r.personal},()=>initializePersonalAuthority(storage,{kind:'personal',id:r.personal},pin,provider,{version:1,root:personalRoot,signature}));
+  const paired={keys,LoroDoc,useWrapping:use=>keys.use(wrapping.operationId,wrapping.identity,use)};
   const originalHouse=await resolveOriginalHousehold({storage,scope:{kind:'household',id:r.house},pin:root.head,
-   provider,deviceId:r.device,sodium,LoroDoc});
+   provider,deviceId:r.device,sodium,LoroDoc,paired});
   const originalPersonal={scopeId:r.personal,pin},personalSelection=await storage.readPersonalSelection(r.device);
   if(!personalSelection.ok)throw Error(personalSelection.error);
   const selectedPersonal=personalSelection.value??originalPersonal;
@@ -97,7 +98,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    return;
   }
   const runtime=(resolved,kind,rootPin)=>{const p=localProvider(sodium,keys,{signing:{...signing,publicKey:signingRef},content:(epoch,fn)=>keys.useIdentity(identity(kind,resolved.scope.scopeId,'data',epoch),fn)});return new OfflineRuntime({storage,codec:candidateCodec(p),LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:resolved.scope.epochId,authority:{kind,rootPin,provider,selectionIndex:resolved.selectionIndex}})};
-  pairing=openNativeHouseholdPersistence({name,openDatabase,workspaceRun,master,storage,provider,sodium,deviceId:r.device});
+  pairing=openNativeHouseholdPersistence({name,openDatabase,workspaceRun,master,storage,provider,sodium,deviceId:r.device,paired});
   const {selection,pins,store,prepareJoinedSequences,finalizeJoinedSequences}=pairing;
   const selected=await selection.openSelected();
   joinedSequences=selected?.sequences;

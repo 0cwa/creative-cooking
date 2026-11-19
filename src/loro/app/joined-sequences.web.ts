@@ -11,7 +11,7 @@ const request=<T,>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{
 // separate counter is made available. A pending counter has never been handed
 // to a runtime, so interrupted initialization can safely resume; an active
 // counter must always exist and is never recreated.
-async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,operationId,confirmedParent,mode}:{name:string;storage:any;scope:any;pin:string;pins?:{list():Promise<unknown[]>};provider:any;deviceId:string;operationId:string;confirmedParent?:string;mode:'prepare'|'finalize'|'open'}) {
+async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,operationId,confirmedParent,paired,mode}:{name:string;storage:any;scope:any;pin:string;pins?:{list():Promise<unknown[]>};provider:any;deviceId:string;operationId:string;confirmedParent?:string;paired?:any;mode:'prepare'|'finalize'|'open'}) {
  if(!/^[a-z0-9-]{1,100}$/.test(name)||!validPairingScope(scope)||scope.kind!=='household'||typeof pin!=='string'||!pin||typeof deviceId!=='string'||!deviceId||typeof operationId!=='string'||!operationId)throw Error('MALFORMED');
  scope={kind:scope.kind,id:scope.id};
  await sodium.ready;
@@ -22,7 +22,7 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
  return locks.request(`creative-cooking/joined-sequences/v1/${name}`,{mode:'exclusive'},async()=>{
   const found=await storage.householdRecipient.find(scope.id,operationId);if(!found.ok)throw Error('INVALID_ADMISSION');
   const verified=mode==='prepare'&&found.value?null:
-   await joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value});
+   await joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired});
   if(mode!=='prepare'&&!verified)throw Error('MISSING_ADMISSION');
   const db=await new Promise<IDBDatabase>((resolve,reject)=>{const q=indexedDB.open(`${name}-joined`,1);q.onupgradeneeded=()=>q.result.createObjectStore('enrollments');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
   const bindingKey=[scope.id,'counter-binding'];
