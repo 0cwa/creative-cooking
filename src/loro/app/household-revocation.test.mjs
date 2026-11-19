@@ -19,7 +19,8 @@ import {householdTransfer} from './household-transfer.mjs';
 import {exportHouseholdParent,acceptHouseholdParent} from './household-parent.mjs';
 import {continuityBindingBytes,continuityBindingHash,continuityPublicKey,recoveryClaimBytes,recoveryClaimHash} from '../recovery/readmission.mjs';
 import {householdRevocation} from './household-revocation.mjs';
-import {digest} from '../compromise/revocation.mjs';
+import {digest,verifySignature} from '../compromise/revocation.mjs';
+import {publishAdultRemovalDocumentSet} from '../compromise/publish-adult-removal-set.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {localProvider} from './local-provider.mjs';
 import {commitCookingBatchWithPolicy} from '../disclosure/cooking.mjs';
@@ -456,17 +457,45 @@ test('adult removal complete-set proposal binds its signed head and projected do
     assert.deepEqual(a.rows(),untouched);
    } finally {a.replaceRow(key,original);}
   }
-  assert.equal((await commit()).ok,true);
+  const confirmed=await verifyAdultRemovalGrant(publicOptions);
+  const publish=confirmation=>publishAdultRemovalDocumentSet({
+   runtime:a.runtime,service:a.runtime.disclosure,keys:a.keys(),sodium,signingKey:a.signingKey,
+   withSigningSecret:fn=>a.keys().useIdentity(signerIdentity(a.deviceId),fn),
+   proposal:{item:publicOptions.item,grant,manifest:prepared.manifest,recipientBindings:publicOptions.recipientBindings},
+   confirmation:{eventHash:confirmed.eventHash,grantHash:confirmed.grantHash,explicit:true,...confirmation}
+  });
+  await assert.rejects(()=>publish({grantHash:'wrong'}),/REVIEW_CHANGED/);
+  const sourceKey=JSON.stringify(['document',scope.id,documents[1].sourceDocumentId]);
+  const originalSource=before.find(row=>row.key===sourceKey).value, alteredSource=JSON.parse(originalSource);
+  alteredSource.revision++;a.replaceRow(sourceKey,JSON.stringify(alteredSource));
+  try {await assert.rejects(()=>publish(),/SOURCE_CHANGED/);}
+  finally {a.replaceRow(sourceKey,originalSource);}
+  a.fault=point=>{if(point==='adult-removal-files')throw Error('rotation interrupted');};
+  try {await assert.rejects(()=>publish(),/IO/);}
+  finally {a.fault=null;}
+  assert.deepEqual(a.rows(),before);
+  assert.deepEqual(await publish(),{operationId:publication.operationId,head:publication.next.acceptedParent});
   a.close();a.open();
   const retained=await readPublication();
   assert.equal(retained.ok,true,retained.error?.code);
-  assert.deepEqual(retained.value,publication);
+  assert.deepEqual(retained.value.next,publication.next);
+  const {body:publishedProof,signature:publisherSignature}=JSON.parse(new TextDecoder().decode(retained.value.proof))[2];
+  assert.equal(await verifySignature(a.provider,a.signingKey,'adult-removal-publication-v1',publishedProof,publisherSignature),true);
   assert.deepEqual((await a.storage.readPairingAuthority(scope)).value,publication.next);
   const saved=new Map(a.rows().map(({key,value})=>[key,value]));
   for(const row of before)if(row.key!==JSON.stringify(['pairing-authority','household',scope.id]))assert.equal(saved.get(row.key),row.value);
-  for(const [index,d] of documents.entries()){
-   await a.keys().use(d.localKey.record.operationId,d.localKey.record.identity,key=>assert.deepEqual(key,dataKeys[index]));
-  }
+  const storedFile=retained.value.files[0];
+  assert.deepEqual(publishedProof.fileCommitments,[{recipientDeviceId:b.deviceId,fileHash:sodium.to_hex(sodium.crypto_generichash(32,storedFile.bytes))}]);
+  await b.keys().useIdentity(wrapperIdentity(b.deviceId),wrappingSecret=>
+   withOpenedAdultRemovalFile({...codecOptions,file:storedFile.bytes,wrappingSecret},async ({keys,documents})=>{
+    assert.deepEqual(documents,prepared.documents);
+    for(const [index,d] of retained.value.documents.entries()){
+     const {operationId,identity}=d.localKey.record;
+     await a.keys().use(operationId,identity,key=>assert.deepEqual(key,keys[index]));
+     assert.equal(publishedProof.keyCommitments[index].wrappedHash,
+      await digest(a.provider,'adult-removal-wrapped-key-v1',sodium.to_hex(d.localKey.record.wrapped)));
+    }
+   }));
   dataKeys.forEach(key=>key.fill(0));
   const badManifest=structuredClone(prepared.manifest); badManifest.entries[1].snapshotHash='0'.repeat(64);
   await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,manifest:badManifest}),/INVALID_GRANT/);
