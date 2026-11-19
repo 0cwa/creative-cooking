@@ -1,5 +1,5 @@
 import {authorityBytes,snapshotId} from '../authority/chain.mjs';
-import {policyBaseline} from '../authority/policy-baseline.mjs';
+import {policyBaseline,verifyRetainedPolicyBaseline} from '../authority/policy-baseline.mjs';
 import {domain} from '../authority/validator.mjs';
 import {MAX_SELECTED_CHILDREN,MAX_SELECTED_SET_BYTES} from '../contracts/runtime-storage.ts';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
@@ -249,4 +249,39 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
    return await install(committed);
   }
  }finally{secret.fill(0);signer.fill(0)}
+}
+
+/** Reopen only a complete, still-current recipient installation. */
+export async function reopenOwnDeviceSet({storage,scope,operationId,pin,provider,sodium,LoroDoc,keys,wrappingSecret}) {
+ const saved=must(await storage.readHouseholdOwnDeviceSetRetained(scope,operationId));
+ if(!saved)throw Error('INVALID_AUTHORITY');
+ const checked=await verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord:saved.expected,next:saved.next,eventVersion:5});
+ const evidence={...checked.proof,hash:checked.context.transcriptHash};
+ const fileHash=pairingDigest(sodium,saved.file);
+ const receipt=domain('household-own-device-set-receipt',{scope,pin,operationId,deviceId:saved.recipient.deviceId,fileHash,
+  head:checked.head,guardId:checked.proof.guard.guardId,parent:saved.expected.authorizationSnapshot,copyHash:checked.context.manifestHash});
+ if(saved.guardId!==checked.proof.guard.guardId||saved.copyHash!==checked.context.manifestHash||
+    saved.recipient.deviceId!==checked.context.recipientDevice||saved.recipient.fileHash!==fileHash||
+    !sodium.crypto_sign_verify_detached(sodium.from_hex(saved.recipient.signature),receipt,checked.proof.transcript.responder.signingPublicKey))throw Error('INVALID_PROOF');
+ const parentView={readPairingAuthority:async requested=>({ok:true,value:sameOwnDevice(sodium,requested,scope)?saved.expected:null})};
+ return withOpenedOwnDeviceSetFile({storage:parentView,provider,sodium,LoroDoc,pin,parentRecord:saved.expected,evidence,file:saved.file,wrappingSecret,
+  withKeys:async({checked:opened,keys:packetKeys})=>{
+   if(saved.documents.length!==opened.documents.length)throw Error('INVALID_COPY');
+   const identities=[];
+   for(const [index,doc] of opened.documents.entries()){
+    const retained=saved.documents[index],documentId=doc.targetDocumentId;
+    if(!sameOwnDevice(sodium,{recipeId:doc.recipeId,sourceDocumentId:doc.documentId,documentId},
+      {recipeId:retained.recipeId,sourceDocumentId:retained.sourceDocumentId,documentId:retained.documentId})||
+      !sameOwnDevice(sodium,retained.sources,doc.copy.sources))throw Error('INVALID_COPY');
+    if(!Number.isSafeInteger(retained.document.revision)||retained.document.revision<0||!(retained.document.bytes instanceof Uint8Array))throw Error('INVALID_COPY');
+    if(retained.document.revision===0&&!sameOwnDevice(sodium,retained.document.bytes,doc.copy.snapshot))throw Error('INVALID_COPY');
+    await verifyRetainedPolicyBaseline(LoroDoc,retained.document,doc.baseline,provider);
+    const epochId=await selectedSourceHash(provider,'household-own-device-key-slot-v1',{scope,pin,head:opened.head,epochId:opened.context.epochId,documentId});
+    const keyOperationId=await selectedSourceHash(provider,'household-own-device-key-operation-v1',{epochId,deviceId:saved.recipient.deviceId});
+    const identity={version:1,scope,deviceId:saved.recipient.deviceId,purpose:'data',epochId};
+    await keys.use(keyOperationId,identity,key=>{if(!sameOwnDevice(sodium,key,packetKeys[index].key))throw Error('INVALID_KEY')});
+    identities.push({recipeId:doc.recipeId,documentId,keyOperationId,identity});
+   }
+   return structuredClone({head:opened.head,item:opened.item,selection:opened.selection,documents:identities});
+  }});
 }

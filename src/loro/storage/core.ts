@@ -838,6 +838,27 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       return {ok:true as const,value:{replayed:false}};
     });}catch(error){return fail(mapError(error));}
   }
+  async readHouseholdOwnDeviceSetRetained(scope:PairingScope,operationId:string) {
+    if(!validPairingScope(scope)||scope.kind!=='household'||!validId(operationId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const op=key('household-own-device-set',scope.id,operationId),saved=await tx.get(op);
+      if(saved===undefined)return {ok:true as const,value:null};
+      if(!saved.recipient||!sameRecord(saved.expected?.scope,scope)||!sameRecord(saved.next?.scope,scope)||
+        !sameRecord(await tx.get(key('pairing-authority','household',scope.id)),saved.next)||
+        await tx.get(key('pairing-guard',saved.guardId))!==op||!Array.isArray(saved.mapping)||!validPairingFile(saved.file))return corrupt();
+      const documents=[];
+      for(const mapping of saved.mapping){
+        const {documentId,sourceDocumentId}=mapping;
+        const document=await tx.get(key('document',scope.id,documentId));
+        const link=await tx.get(key('household-own-device-parent',scope.id,documentId));
+        const sources=await tx.get(key('household-own-device-sources',scope.id,documentId));
+        if(!document||!sources||!sameRecord(link,{head:saved.expected.acceptedParent,documentId:sourceDocumentId})||
+          await tx.get(key('document-owner',scope.id,documentId))!==saved.next.acceptedParent)return corrupt();
+        documents.push({...mapping,document,sources});
+      }
+      return {ok:true as const,value:snapshot({...saved,documents})};
+    });}catch(error){return fail(mapError(error));}
+  }
   async readHouseholdOwnDeviceSetReceipt(scope:PairingScope,operationId:string) {
     if(!validPairingScope(scope)||scope.kind!=='household'||!validId(operationId))return fail('MALFORMED');
     try{return await this.run(false,async tx=>{

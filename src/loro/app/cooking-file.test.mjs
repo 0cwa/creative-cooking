@@ -1,4 +1,4 @@
-import {captureOwnDeviceCopySet,installOwnDeviceSetFile,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
+import {captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
@@ -1710,6 +1710,19 @@ test('selected recipe shopping copies and current-only admission survive durable
    assert.equal(saved.revision,0);
   }
   pairedDb.close();pairedDb=new DatabaseSync(pairedPath);
+  const reopenOptions={storage:pairedStorage,scope,operationId:evidence.transcript.sessionId,pin:fileOptions.pin,
+   provider:fileOptions.provider,sodium,LoroDoc,keys:pairedKeys,wrappingSecret:nextWrap.privateKey};
+  const reopenedSet=await reopenOwnDeviceSet(reopenOptions);
+  assert.equal(reopenedSet.head,signedCopy.head);
+  assert.equal(reopenedSet.documents.length,signedCopy.documents.length);
+  const targetSlot=JSON.stringify(['document',scope.id,signedCopy.documents[0].targetDocumentId]);
+  const targetValue=pairedDb.prepare('SELECT value FROM loro_records WHERE key=?').get(targetSlot).value;
+  const damagedTarget=JSON.parse(targetValue);
+  damagedTarget.revision=1;
+  damagedTarget.bytes=JSON.parse(JSON.stringify(damagedTarget.bytes));
+  pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify({...damagedTarget,bytes:[]}),targetSlot);
+  await assert.rejects(reopenOwnDeviceSet(reopenOptions));
+  pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(targetValue,targetSlot);
   const pairedAfter=pairedRows();
   assert.deepEqual(await installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),
    {scope,head:signedCopy.head,replayed:true});
