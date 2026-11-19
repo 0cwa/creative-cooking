@@ -160,6 +160,29 @@ export async function sealOwnDeviceSetFile({signingSecret,useSourceKey,evidence,
  }finally{secret.fill(0)}
 }
 
+/** Publish the captured set atomically before returning its encrypted file. */
+export async function publishOwnDeviceSet({storage,provider,sodium,LoroDoc,pin,parentRecord,next,captured,evidence,signingSecret,useSourceKey,keys,deviceId}) {
+ const {set,guard}=structuredClone(captured);
+ const checked=await verifyOwnDeviceSetSuccessor({storage,provider,sodium,LoroDoc,pin,parentRecord,next,set,proposal:evidence});
+ requireLocalEvidence(sodium,checked,evidence);
+ if(deviceId!==checked.context.senderDevice)throw Error('INVALID_KEY');
+ const keyHashes=new Map();
+ const file=await sealOwnDeviceSetFile({storage,provider,sodium,LoroDoc,pin,parentRecord,next,set,evidence,signingSecret,
+  useSourceKey:(source,use)=>useSourceKey(source,key=>{keyHashes.set(source.documentId,hex(sodium.crypto_generichash(32,key)));return use(key)})});
+ const documents=[];
+ for(const document of checked.documents){
+  const documentId=document.targetDocumentId;
+  const epochId=await selectedSourceHash(provider,'household-own-device-key-slot-v1',{scope:parentRecord.scope,pin,head:checked.head,epochId:checked.context.epochId,documentId});
+  const keyOperationId=await selectedSourceHash(provider,'household-own-device-key-operation-v1',{epochId,deviceId});
+  const identity={version:1,scope:parentRecord.scope,deviceId,purpose:'data',epochId};
+  const localKey=await useSourceKey({documentId:document.documentId,recipeId:document.recipeId},key=>{if(hex(sodium.crypto_generichash(32,key))!==keyHashes.get(document.documentId))throw Error('INVALID_KEY');return keys.preparePairedDataKey(keyOperationId,identity,key)});
+  documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,documentId,bytes:document.copy.snapshot,sources:document.copy.sources,localKey});
+ }
+ must(await storage.commitHouseholdOwnDeviceSet({operationId:evidence.transcript.sessionId,guardId:checked.proof.guard.guardId,
+  expected:parentRecord,next,guard,copyHash:checked.context.manifestHash,file,documents,sponsor:{deviceId,set}}));
+ return {scope:parentRecord.scope,head:checked.head,file};
+}
+
 /** Verify the file and open the complete key set before invoking the installer. */
 export async function withOpenedOwnDeviceSetFile({file,wrappingSecret,evidence,withKeys,...options}) {
  const {sodium,provider}=options;

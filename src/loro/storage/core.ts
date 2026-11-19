@@ -95,7 +95,7 @@ type OwnDeviceSetPublication = {
   copyHash:string; file:Uint8Array;
   documents:{recipeId:string|null; sourceDocumentId:string; documentId:string; bytes:Uint8Array;
     sources:{effectId:string;policyHashes:string[]}[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
-} & ({guard:SelectedHouseholdSources;recipient?:never} |
+} & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:{deviceId:string;set:unknown}} |
      {guard?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
@@ -768,6 +768,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   async commitHouseholdOwnDeviceSet(input:OwnDeviceSetPublication) {
     input=snapshot(input);
     const {operationId,guardId,expected,next,guard,recipient,copyHash,file,documents}=input;
+    const sponsor='sponsor' in input?input.sponsor:undefined;
     if(!validId(operationId)||!validId(guardId)||!validatePairingAuthority(expected).ok||
       !validatePairingAuthority(next).ok||expected.scope.kind!=='household'||!sameRecord(expected.scope,next.scope)||
       next.revision!==expected.revision+1||next.acceptedParent===expected.acceptedParent||!hexOf(copyHash,64)||
@@ -803,7 +804,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const authority=key('pairing-authority','household',scope),op=key('household-own-device-set',scope,operationId),guardSlot=key('pairing-guard',guardId);
       const current=await tx.get(authority),saved=await tx.get(op);
       const mapping=documents.map(({recipeId,sourceDocumentId,documentId})=>({recipeId,sourceDocumentId,documentId}));
-      const retained={version:1,next,guardId,copyHash,file,mapping,...(recipient?{expected,recipient}:{})};
+      const retained={version:1,next,guardId,copyHash,file,mapping,...(recipient?{expected,recipient}:sponsor?{expected,sponsor}:{})};
       if(saved&&recipient){
         if(!sameRecord(current,next)||await tx.get(guardSlot)!==op||!sameBytes(saved.file,file)||
           !sameRecord({...saved,file:null},{...retained,file:null}))return conflict();

@@ -1,4 +1,4 @@
-import {captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
+import {publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
@@ -1794,12 +1794,35 @@ test('selected recipe shopping copies and current-only admission survive durable
   tamperedObservation.manifest.children[0].checkpointHash='0'.repeat(64);
   await assert.rejects(()=>verifySelectedSourceSet({storage:a.storage,scope,pin:a.root.head,
    provider:a.provider,signed:tamperedObservation}),/INVALID_SOURCE_SIGNATURE/);
+  // Clone the current fixture rows into an isolated disk database for sponsor publication.
+  let publishDb=new DatabaseSync(join(pairedDir,'sponsor.sqlite'));
+  const publishStorage=openSQLiteStorage({executeSync(sql,params=[]){
+   const statement=publishDb.prepare(sql);
+   return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+  }});
+  t.after(()=>publishDb.close());
+  const beforePublish=a.rows();
+  const put=publishDb.prepare('INSERT INTO loro_records (key,value) VALUES (?,?)');
+  for(const row of beforePublish)put.run(row.key,row.value);
+  const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,
+   signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId,
+   useSourceKey:({documentId},use)=>use(testKeys.get(documentId))});
+  assert.equal(published.head,signedCopy.head);
+  assert.ok(published.file.length>112);
+  publishDb.close();publishDb=new DatabaseSync(join(pairedDir,'sponsor.sqlite'));
+  for(const doc of signedCopy.documents)assert.deepEqual(must(await publishStorage.reopenDocument(scope.id,doc.targetDocumentId)).bytes,doc.copy.snapshot);
+  assert.deepEqual(a.rows(),beforePublish);
   const raceDoc=await sponsor.householdContent.readRecipe(added.id);
   const raceCommands=planRecipeAction({doc:raceDoc.doc,before:edited,after:{...edited,title:'Revision race'},
    actionId:'projection-source-race',author:a.deviceId,at});
   await sponsor.householdContent.execute('projection-source-race',raceCommands,added.id);
   assert.equal((await a.storage.checkSelectedHouseholdSources(observedInstalled.guard)).error.code,'CONFLICT');
   assert.equal((await a.storage.checkSelectedHouseholdSources(capturedCopy.guard)).error.code,'CONFLICT');
+  const beforeStalePublish=a.rows();
+  await assert.rejects(()=>publishOwnDeviceSet({...fileOptions,next:copyTransition.next,captured:capturedCopy,
+   signingSecret:sponsorKeys.signingSecret,keys:sponsorCatalog,deviceId:a.deviceId,
+   useSourceKey:({documentId},use)=>use(testKeys.get(documentId))}),/CONFLICT/);
+  assert.deepEqual(a.rows(),beforeStalePublish);
   a.provider.verify=previousVerify;
   const beforeReceive=freshRows();
   await assert.rejects(()=>newcomer.files.receive(editBytes),/RECIPE_CREATION_REQUIRED/);
