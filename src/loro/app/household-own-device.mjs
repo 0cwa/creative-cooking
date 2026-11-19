@@ -357,9 +357,9 @@ export function householdOwnDevice({
   const stored=must(await storage.reopenBranchDocument(expected,documentId));
   const doc=new LoroDoc();
   if(stored)doc.import(stored.bytes);
-  // The signed frontier must already be present locally. Any later local
-  // edits stay in the original document for historical review.
+  // Do not switch the active document away from locally newer edits.
   const baseline=await verifyPolicyBaseline(doc,LoroDoc,item.event.subject.baseline,provider);
+  if(!same(await policyBaseline(doc,provider),item.event.subject.baseline))throw Error('LOCAL_EDITS_CONFLICT');
   const retained=must(await storage.readProjectionSeed(expected,documentId));
   const snapshot=baseline.export({mode:'snapshot'});
   const {identities}=inspectOwnDeviceSnapshot({LoroDoc,snapshot,peerId:item.event.subject.peerId,

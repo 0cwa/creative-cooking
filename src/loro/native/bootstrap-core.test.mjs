@@ -898,6 +898,19 @@ test('own-device household release and install roll back, reopen and preserve di
   wrongScope.item.event.householdId='unrelated-household';
   await assert.rejects(adult.householdPairing.ownDevice.acceptExisting(JSON.stringify(wrongScope),true),/INVALID/);
   assert.equal((await getNode(adultName)).head,before.head);
+  // A recipient can write after the sponsor captured the signed copy.
+  // Adoption must leave that write and the old authority accessible after reopen.
+  adult.close();
+  const adultPath=join(dir,adultName+'.sqlite'), backupPath=join(dir,adultName+'-before-divergence.sqlite');
+  copyFileSync(adultPath,backupPath);
+  adult=await open(adultName);
+  await addPantry(adult,'recipient-late-edit');
+  await assert.rejects(adult.householdPairing.ownDevice.acceptExisting(update,true),/LOCAL_EDITS_CONFLICT/);
+  adult.close();adult=await open(adultName);
+  assert.equal((await getNode(adultName)).head,before.head);
+  assert.ok((await pantry(adult)).includes('recipient-late-edit'));
+  adult.close();copyFileSync(backupPath,adultPath);rmSync(backupPath);
+  adult=await open(adultName);
   await adult.householdPairing.ownDevice.acceptExisting(update,true);
   const adopted=rows(adultName);
   assert.deepEqual(await adult.householdPairing.ownDevice.acceptExisting(update,true),{scope,head,replayed:true});
