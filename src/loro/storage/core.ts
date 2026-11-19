@@ -670,7 +670,9 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const staged:StagedPolicyDocumentSet={version:1,sourceHead:expected?.acceptedParent,targetHead,proof,mapping};
     if(!validatePairingAuthority(expected).ok || !validatePairingAuthority(next).ok || expected.scope.kind!=='household' ||
       !sameRecord(expected.scope,next.scope) || next.revision!==expected.revision+1 || next.acceptedParent!==targetHead ||
-      !validId(deviceId) || !validStagedPolicyDocumentSet(staged) || !guard || !sameRecord(guard.expectedAuthority?.record,expected) ||
+      !validId(deviceId) || !validStagedPolicyDocumentSet(staged) || !guard ||
+      guard.expectedAuthority?.record?.revision!==expected.revision || guard.expectedAuthority?.record?.acceptedParent!==expected.acceptedParent ||
+      guard.expectedAuthority?.record?.authorizationSnapshot!==expected.authorizationSnapshot ||
       !sameRecord(guard.expectedAuthority?.scope,expected.scope) || guard.binding?.branchHead!==staged.sourceHead ||
       !this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority) ||
       !denseArray(guard.entries,entry=>object(entry)&&validId(entry.recipeId)&&validId(entry.documentId)) ||
@@ -689,6 +691,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try{return await this.run(true,async tx=>{
       await this.requireSelectedHouseholdSources(tx,guard);
       const scope=expected.scope.id;
+      if(!sameRecord(await tx.get(key('pairing-authority','household',scope)),expected))conflict();
       if(!sameRecord(await tx.get(key('policy-staged-set',scope,targetHead)),staged))conflict();
       await this.requireStagedPolicyTargets(tx,scope,staged);
       if(await tx.get(key('policy-set-activation',scope,targetHead))!==undefined)conflict();

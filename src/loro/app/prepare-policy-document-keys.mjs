@@ -24,12 +24,7 @@ export async function preparePolicyDocumentKeys({runtime,targetHead,keys,withSou
    expected.record.authorizationSnapshot!==initial.current.authorizationSnapshot) throw Error('INVALID_AUTHORITY');
  const prepared=[];
  for(const row of initial.stage.mapping) {
-  const binding={scopeId:scope.scopeId,rootPin:pin,sourceHead:scope.branchHead,targetHead,
-   epochId:scope.epochId,generation:scope.documentGeneration,deviceId:scope.authorDevice,
-   sourceDocumentId:row.sourceDocumentId,targetDocumentId:row.targetDocumentId};
-  const epochId=await selectedSourceHash(provider,'policy-target-key-slot-v1',binding);
-  const operationId=await selectedSourceHash(provider,'policy-target-key-operation-v1',binding);
-  const identity={version:1,scope:{kind:'household',id:scope.scopeId},deviceId:scope.authorDevice,purpose:'data',epochId};
+  const {binding,operationId,identity}=await policyTargetKeySlot({scope,pin,provider,targetHead,row});
   let called=false, result;
   await withSourceDocumentKey(structuredClone(binding),async key=>{
    if(called) throw Error('INVALID_SOURCE_READER');
@@ -45,4 +40,14 @@ export async function preparePolicyDocumentKeys({runtime,targetHead,keys,withSou
    authority.rootPin!==pin || authority.provider!==provider || runtime.keyRef!==scope.epochId ||
    !same(expected,current) || !same(initial,again)) throw Error('STALE_SOURCE');
  return prepared;
+}
+
+/** Derive the exact durable local slot for a verified target route. */
+export async function policyTargetKeySlot({scope,pin,provider,targetHead,row}) {
+ const binding={scopeId:scope.scopeId,rootPin:pin,sourceHead:scope.branchHead,targetHead,
+  epochId:scope.epochId,generation:scope.documentGeneration,deviceId:scope.authorDevice,
+  sourceDocumentId:row.sourceDocumentId,targetDocumentId:row.targetDocumentId};
+ const epochId=await selectedSourceHash(provider,'policy-target-key-slot-v1',binding);
+ const operationId=await selectedSourceHash(provider,'policy-target-key-operation-v1',binding);
+ return {binding,operationId,identity:{version:1,scope:{kind:'household',id:scope.scopeId},deviceId:scope.authorDevice,purpose:'data',epochId}};
 }

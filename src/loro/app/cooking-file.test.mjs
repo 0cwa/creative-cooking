@@ -1,3 +1,4 @@
+import {readVerifiedActivatedPolicyDocumentSet} from './read-activated-policy-document-set.mjs';
 import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {stageVerifiedPolicyDocumentSet,readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject,matchPolicyDocumentSetEvent} from '../authority/policy-document-set.mjs';
@@ -189,6 +190,57 @@ function fixtureSessionStore(connection){
   }catch(error){connection.executeSync('ROLLBACK');throw error;}
  }};
 }
+
+test('retained policy activation authenticates signed history and local keys',async t=>{
+ const [a]=await household(t), master=testMaster(), keys=a.storage.localKeys(master,sodium);
+ await keys.provision('retained-master');
+ const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
+ await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
+ await a.edit('retained-root',1);
+ const recipe=await a.runtime.forRecipe('retained-recipe');
+ const after={id:'retained-recipe',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
+ const {doc}=await recipe.document();
+ const commands=planRecipeAction({doc,before:null,after,actionId:'retained-recipe',author:a.deviceId,at:'2026-01-01T00:00:00Z'});
+ await executeAction(recipe,{reserve:async()=>2},'retained-recipe',commands,a.service);
+ const full=await observePolicyDocumentSet(a.runtime), options={storage:a.storage,scope,pin:a.root.head,provider:a.provider,LoroDoc,signed:full.signed,retained:full.sources.map(x=>({documentId:x.runtime.scope.documentId,revision:x.revision,bytes:x.bytes??new Uint8Array()}))};
+ const subject=await policyDocumentSetSubject(options), manifest=full.signed.body.observation.manifest;
+ const parent=(await verifyPolicyDocumentSet(options)).selected;
+ const event={version:6,kind:'changePolicy',authorDeviceId:a.deviceId,householdId:scope.id,parentHead:parent.head,epochId:parent.epochId,generation:parent.generation,subject,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',policyHash:parent.policyHash,proposalId:'retained-policy',frozenAdultRoster:parent.roster,nextPolicy:parent.policy};
+ const targetHead=sodium.to_hex(await a.provider.hash(domain('event',event))),author=parent.devices.find(d=>d.deviceId===a.deviceId);
+ const sign=async(kind,value)=>sodium.to_hex(await a.provider.sign(author.signingKeyRef,domain(kind,value)));
+ const vote={version:1,householdId:scope.id,eventHash:targetHead,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,adultId:author.adultId,deviceId:a.deviceId};
+ const item={event,authorSignature:await sign('event-signature',event),approvals:[{...vote,signature:await sign('approval-signature',vote)}]};
+ const staged=await stageVerifiedPolicyDocumentSet({runtime:a.runtime,item,signed:full.signed});
+ const prepared=await preparePolicyDocumentKeys({runtime:a.runtime,targetHead,keys,withSourceDocumentKey:async(_route,use)=>use(new Uint8Array(32).fill(7))});
+ const expected=must(await a.storage.readPairingAuthority(scope)), state=JSON.parse(new TextDecoder().decode(expected.authorityState));
+ const selection={from:parent.head,to:targetHead,deviceId:a.deviceId,index:state.selections.length};
+ selection.signature=await sign('select-head',{root:a.root.head,householdId:scope.id,...selection});
+ const nextState={...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:targetHead};
+ const next={...expected,revision:expected.revision+1,acceptedParent:targetHead,authorizationSnapshot:await snapshotId(a.provider,nextState),authorityState:authorityBytes(nextState)};
+ assert.deepEqual(Object.keys(full.guard.expectedAuthority.record).sort(),['acceptedParent','authorizationSnapshot','revision']);
+ must(await a.storage.commitPolicyDocumentSetSelection({guard:full.guard,targetHead,proof:must(await a.storage.readStagedPolicyDocumentSet(scope.id,targetHead)).proof,mapping:staged.mapping,expected,next,deviceId:a.deviceId,prepared}));
+ const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
+ const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
+ assert.equal(verified.documents.length,2); assert.deepEqual(a.rows(),before);
+ const evidence=must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead));
+ const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));};
+ await altered(x=>{x.receipt.next.authorityState[0]^=1});
+ await altered(async x=>{const n=JSON.parse(new TextDecoder().decode(x.receipt.next.authorityState));n.selections.at(-1).signature='0'.repeat(128);x.receipt.next.authorityState=authorityBytes(n);x.receipt.next.authorizationSnapshot=await snapshotId(a.provider,n)});
+ await altered(x=>{x.receipt.targets[1].identity.epochId='wrong'});
+ await altered(x=>{x.staged.mapping[1].targetDocumentId='wrong'});
+ await altered(x=>{const bad=new LoroDoc();bad.setPeerId('999');bad.getMap('tamper').set('x',1);x.documents[1].bytes=bad.export({mode:'snapshot'});x.documents[1].revision=1});
+ const edited=structuredClone(evidence), later=new LoroDoc();later.import(edited.documents[1].bytes);later.setPeerId('999');later.getMap('later-edit').set('x',1);edited.documents[1].bytes=later.export({mode:'snapshot'});edited.documents[1].revision=1;
+ const laterStorage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:edited})});
+ assert.equal((await readVerifiedActivatedPolicyDocumentSet({...args,storage:laterStorage})).documents[1].revision,1);
+ await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,pin:'wrong'}));
+ let authorityReads=0;const racingStorage=Object.assign(Object.create(a.storage),{readPairingAuthority:async sc=>{const result=await a.storage.readPairingAuthority(sc);if(++authorityReads===2)result.value.revision++;return result;}});
+ await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage:racingStorage}),/STALE_SOURCE/);
+ const slot=prepared[0].record.identity, key=JSON.stringify(['local-key','household',scope.id,a.deviceId,'data',slot.epochId]);
+ const saved=a.rows().find(row=>row.key===key); a.connection.executeSync('DELETE FROM loro_records WHERE key=?',[key]);
+ await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet(args));
+ a.connection.executeSync('INSERT INTO loro_records (key,value) VALUES (?,?)',[saved.key,saved.value]);
+ assert.deepEqual(a.rows(),before);
+});
 
 test('pinned recipe documents retain competing encrypted edits independently and roll back failed writes',async t=>{
  const [a,b]=await household(t,{onDisk:true});

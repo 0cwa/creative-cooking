@@ -43,7 +43,13 @@ export async function readVerifiedPolicyDocumentSet({runtime,targetHead}) {
  const loaded=await storage.readStagedPolicyDocumentSet(runtime.scope.scopeId,targetHead);
  if(!loaded.ok) throw Error(loaded.error.code);
  if(!loaded.value) throw Error('STAGE_NOT_FOUND');
- const stage=loaded.value;
+ return verifyStagedPolicyDocumentSet({storage,LoroDoc,pin,provider,stage:loaded.value,scope:runtime.scope,targetHead});
+}
+
+/** Verify immutable stage evidence against the caller's pinned storage view. */
+export async function verifyStagedPolicyDocumentSet({storage,LoroDoc,pin,provider,stage,scope,targetHead}) {
+ stage=structuredClone(stage);
+ scope=structuredClone(scope);
  let envelope;
  try { envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(stage.proof)); }
  catch { throw Error('INVALID_STAGED_PROOF'); }
@@ -64,7 +70,7 @@ export async function readVerifiedPolicyDocumentSet({runtime,targetHead}) {
   const {policyBaseline}=await import('../authority/policy-baseline.mjs');
   if(!same(await policyBaseline(doc,provider),await policyBaseline(new LoroDoc(),provider))) throw Error('INVALID_STAGED_PROOF');
  }
- const options={storage,scope:{kind:'household',id:runtime.scope.scopeId},pin,provider,LoroDoc,signed,retained};
+ const options={storage,scope:{kind:'household',id:scope.scopeId},pin,provider,LoroDoc,signed,retained};
  const verified=await verifyPolicyDocumentSet(options);
  if(verified.record.revision!==manifest.authorityRevision || verified.record.authorizationSnapshot!==manifest.authorizationSnapshot ||
    verified.selected.head!==stage.sourceHead || !same(parent,verified.selected)) throw Error('STALE_SOURCE');
@@ -72,7 +78,7 @@ export async function readVerifiedPolicyDocumentSet({runtime,targetHead}) {
  const result=await validateSuccessor(verified.selected,item.event,item.authorSignature,item.approvals,provider);
  if(result.status!=='validated') throw Error(result.reason||'INVALID_PROOF');
  if(result.eventHash!==targetHead || stage.targetHead!==targetHead) throw Error('INVALID_STAGED_PROOF');
- const target={...runtime.scope,branchHead:targetHead,documentId:`policy-${targetHead}`};
+ const target={...scope,branchHead:targetHead,documentId:`policy-${targetHead}`};
  for(let i=0;i<stage.mapping.length;i++) {
   const row=stage.mapping[i], claim=claims[i], recipeId=i===0?null:claim.recipeId;
   const expected=recipeId===null?target.documentId:await recipeDocumentId(target,pin,provider,recipeId);

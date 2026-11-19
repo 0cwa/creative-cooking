@@ -19,7 +19,7 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  put(['document-owner','h','root'],'old'); put(['document','h','root'],{bytes:bytes(1),revision:0});
  put(['document-owner','h',child],'old'); put(['document','h',child],{bytes:bytes(2),revision:0});
  put(['projection-document-set','h','old'],{manifestId:'manifest',operationId:'operation',catalog:[{recipeId:'recipe',documentId:child}]});
- const guard={binding:{version:1,rootPin:'pin',scopeId:'h',branchHead:'old',sourceDocumentId:'root',documentGeneration:1,epochId:'epoch'},expectedAuthority:{version:2,scope,record},catalogRevision:0,root:{documentId:'root',bytes:bytes(1),revision:0},entries:[],members:[{recipeId:'recipe',documentId:child,bytes:bytes(2),revision:0}]};
+ const guard={binding:{version:1,rootPin:'pin',scopeId:'h',branchHead:'old',sourceDocumentId:'root',documentGeneration:1,epochId:'epoch'},expectedAuthority:{version:2,scope,record:{revision:record.revision,acceptedParent:record.acceptedParent,authorizationSnapshot:record.authorizationSnapshot}},catalogRevision:0,root:{documentId:'root',bytes:bytes(1),revision:0},entries:[],members:[{recipeId:'recipe',documentId:child,bytes:bytes(2),revision:0}]};
  const input={guard,targetHead:'new',proof:bytes(9),mapping:[{recipeId:null,sourceDocumentId:'root',targetDocumentId:'policy-new',baseline:bytes(3)},{recipeId:'recipe',sourceDocumentId:child,targetDocumentId:'target-child',baseline:bytes(4)}]};
  const rows=()=>db.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
  const before=rows(); fail=true; assert.equal((await store.stagePolicyDocumentSet(input)).ok,false); fail=false; assert.deepEqual(rows(),before);
@@ -41,7 +41,12 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  }
  const next={...record,revision:1,acceptedParent:'new',authorityState:bytes(8)};
  const selection={...input,expected:record,next,deviceId:'device',prepared};
- const stagedRows=rows(); keyFail=true;
+ const stagedRows=rows();
+ put(['pairing-authority','household','h'],{...record,authorityState:bytes(99)});
+ assert.equal((await store.commitPolicyDocumentSetSelection(selection)).error.code,'CONFLICT');
+ put(['pairing-authority','household','h'],record);
+ assert.deepEqual(rows(),stagedRows);
+ keyFail=true;
  assert.equal((await store.commitPolicyDocumentSetSelection(selection)).ok,false); keyFail=false;
  assert.deepEqual(rows(),stagedRows);
  put(['document','h',child],{bytes:bytes(5),revision:0}); const stale=rows();
