@@ -230,7 +230,15 @@ test('retained policy activation authenticates signed history and local keys',as
  const nextState={...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:targetHead};
  const next={...expected,revision:expected.revision+1,acceptedParent:targetHead,authorizationSnapshot:await snapshotId(a.provider,nextState),authorityState:authorityBytes(nextState)};
  assert.deepEqual(Object.keys(full.guard.expectedAuthority.record).sort(),['acceptedParent','authorizationSnapshot','revision']);
- must(await a.storage.commitPolicyDocumentSetSelection({guard:full.guard,targetHead,proof:must(await a.storage.readStagedPolicyDocumentSet(scope.id,targetHead)).proof,mapping:staged.mapping,expected,next,deviceId:a.deviceId,prepared}));
+ const {buildPolicyProvenanceReceipt}=await import('./build-policy-provenance-receipt.mjs');
+ const receiptArgs={runtime:a.runtime,targetHead,service:a.service,sodium,guard:full.guard,next};
+ const beforeReceipt=a.rows(), wrongGuard=structuredClone(full.guard); wrongGuard.root.revision++;
+ await assert.rejects(()=>buildPolicyProvenanceReceipt({...receiptArgs,guard:wrongGuard}),/STALE_SOURCE/);
+ assert.deepEqual(a.rows(),beforeReceipt);
+ const provenance=await buildPolicyProvenanceReceipt(receiptArgs);
+ assert.equal(await a.provider.verify(author.signingKeyRef,provenance.statement,Uint8Array.from(provenance.signature.match(/../g),x=>parseInt(x,16))),true);
+ must(await a.storage.commitPolicyDocumentSetSelection({guard:full.guard,targetHead,proof:must(await a.storage.readStagedPolicyDocumentSet(scope.id,targetHead)).proof,mapping:staged.mapping,expected,next,deviceId:a.deviceId,prepared,provenance}));
+ assert.deepEqual(must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead)).receipt.provenance,provenance);
  const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
  assert.equal(verified.documents.length,2); assert.deepEqual(a.rows(),before);

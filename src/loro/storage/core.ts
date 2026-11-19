@@ -56,9 +56,11 @@ type PolicyCheckout = {
 export type PolicyDocumentSetMapping = {recipeId:string|null;sourceDocumentId:string;targetDocumentId:string;baseline:Uint8Array};
 export type StagedPolicyDocumentSet = {version:1;sourceHead:string;targetHead:string;proof:Uint8Array;mapping:PolicyDocumentSetMapping[]};
 export type StagePolicyDocumentSetInput = {guard:SelectedHouseholdSources;targetHead:string;proof:Uint8Array;mapping:PolicyDocumentSetMapping[]};
-type PolicySetSelection = StagePolicyDocumentSetInput & {expected:PairingAuthorityRecord;next:PairingAuthorityRecord;deviceId:string;prepared:{targetDocumentId:string;record:LocalKeyRecord;catalog:ReadyMasterCatalog}[]};
-type PolicySetReceipt = {version:1;expected:PairingAuthorityRecord;next:PairingAuthorityRecord;targets:{targetDocumentId:string;operationId:string;identity:LocalKeyRecord['identity']}[]};
-const validPolicySetReceipt = (v:any):v is PolicySetReceipt => fields(v,['version','expected','next','targets']) && v.version===1 && validatePairingAuthority(v.expected).ok && validatePairingAuthority(v.next).ok && v.expected.scope.kind==='household' && sameRecord(v.expected.scope,v.next.scope) && v.next.revision===v.expected.revision+1 && v.expected.acceptedParent!==v.next.acceptedParent && denseArray(v.targets,(x:any)=>fields(x,['targetDocumentId','operationId','identity']) && validId(x.targetDocumentId) && validId(x.operationId) && validLocalIdentity(x.identity) && x.identity.purpose==='data' && sameRecord(x.identity.scope,v.expected.scope)) && v.targets.length>0 && v.targets.length<=MAX_SELECTED_CHILDREN+1 && new Set(v.targets.map((x:any)=>x.targetDocumentId)).size===v.targets.length && new Set(v.targets.map((x:any)=>x.operationId)).size===v.targets.length && new Set(v.targets.map((x:any)=>x.identity.epochId)).size===v.targets.length && v.targets.every((x:any)=>x.identity.deviceId===v.targets[0].identity.deviceId);
+type PolicyProvenance = {statement:Uint8Array;signature:string};
+type PolicySetSelection = StagePolicyDocumentSetInput & {provenance?:PolicyProvenance;expected:PairingAuthorityRecord;next:PairingAuthorityRecord;deviceId:string;prepared:{targetDocumentId:string;record:LocalKeyRecord;catalog:ReadyMasterCatalog}[]};
+type PolicySetReceipt = {version:1;provenance?:PolicyProvenance;expected:PairingAuthorityRecord;next:PairingAuthorityRecord;targets:{targetDocumentId:string;operationId:string;identity:LocalKeyRecord['identity']}[]};
+const validPolicyProvenance = (v:any):v is PolicyProvenance => fields(v,['statement','signature']) && v.statement instanceof Uint8Array && v.statement.length>0 && v.statement.length<=MAX_SELECTED_SET_BYTES && hexOf(v.signature,128);
+const validPolicySetReceipt = (v:any):v is PolicySetReceipt => (fields(v,['version','expected','next','targets']) || fields(v,['version','expected','next','targets','provenance']) && validPolicyProvenance(v.provenance)) && v.version===1 && validatePairingAuthority(v.expected).ok && validatePairingAuthority(v.next).ok && v.expected.scope.kind==='household' && sameRecord(v.expected.scope,v.next.scope) && v.next.revision===v.expected.revision+1 && v.expected.acceptedParent!==v.next.acceptedParent && denseArray(v.targets,(x:any)=>fields(x,['targetDocumentId','operationId','identity']) && validId(x.targetDocumentId) && validId(x.operationId) && validLocalIdentity(x.identity) && x.identity.purpose==='data' && sameRecord(x.identity.scope,v.expected.scope)) && v.targets.length>0 && v.targets.length<=MAX_SELECTED_CHILDREN+1 && new Set(v.targets.map((x:any)=>x.targetDocumentId)).size===v.targets.length && new Set(v.targets.map((x:any)=>x.operationId)).size===v.targets.length && new Set(v.targets.map((x:any)=>x.identity.epochId)).size===v.targets.length && v.targets.every((x:any)=>x.identity.deviceId===v.targets[0].identity.deviceId);
 export type TransactionRunner = <T>(write: boolean, body: (tx: Tx) => Promise<T>) => Promise<T>;
 const key = (...parts: string[]) => JSON.stringify(parts);
 const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
@@ -666,7 +668,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   /** Internal preverified selection: authentication and key preparation are the caller's responsibility. */
   async commitPolicyDocumentSetSelection(input:PolicySetSelection) {
     input=snapshot(input);
-    const {guard,targetHead,proof,mapping,expected,next,deviceId,prepared}=input;
+    const {guard,targetHead,proof,mapping,expected,next,deviceId,prepared,provenance}=input;
     const staged:StagedPolicyDocumentSet={version:1,sourceHead:expected?.acceptedParent,targetHead,proof,mapping};
     if(!validatePairingAuthority(expected).ok || !validatePairingAuthority(next).ok || expected.scope.kind!=='household' ||
       !sameRecord(expected.scope,next.scope) || next.revision!==expected.revision+1 || next.acceptedParent!==targetHead ||
@@ -686,7 +688,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       new Set(prepared.map(p=>p.record.identity.epochId)).size!==prepared.length) return fail('MALFORMED');
     const sources=[{recipeId:null,documentId:guard.binding.sourceDocumentId}, ...[...guard.entries,...(guard.members??[])].sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0)];
     if(sources.length!==mapping.length || sources.some((r,i)=>r.recipeId!==mapping[i].recipeId || r.documentId!==mapping[i].sourceDocumentId)) return fail('MALFORMED');
-    const receipt:PolicySetReceipt={version:1,expected,next,targets:prepared.map(p=>({targetDocumentId:p.targetDocumentId,operationId:p.record.operationId,identity:p.record.identity}))};
+    const receipt:PolicySetReceipt={version:1,expected,next,targets:prepared.map(p=>({targetDocumentId:p.targetDocumentId,operationId:p.record.operationId,identity:p.record.identity})),...(provenance===undefined?{}:{provenance})};
     if(!validPolicySetReceipt(receipt))return fail('MALFORMED');
     try{return await this.run(true,async tx=>{
       await this.requireSelectedHouseholdSources(tx,guard);

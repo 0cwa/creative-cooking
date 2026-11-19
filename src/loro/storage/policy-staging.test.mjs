@@ -40,8 +40,11 @@ test('policy set staging is atomic, checks selected members and rejects occupied
   prepared.push({targetDocumentId:row.targetDocumentId,...await local.preparePairedDataKey(`op-${i}`,identity,new Uint8Array(32).fill(i+1))});
  }
  const next={...record,revision:1,acceptedParent:'new',authorityState:bytes(8)};
- const selection={...input,expected:record,next,deviceId:'device',prepared};
+ const provenance={statement:bytes(1,2,3),signature:'ab'.repeat(64)};
+ const selection={...input,provenance,expected:record,next,deviceId:'device',prepared};
  const stagedRows=rows();
+ assert.equal((await store.commitPolicyDocumentSetSelection({...selection,provenance:{...provenance,signature:'bad'}})).error.code,'MALFORMED');
+ assert.deepEqual(rows(),stagedRows);
  put(['pairing-authority','household','h'],{...record,authorityState:bytes(99)});
  assert.equal((await store.commitPolicyDocumentSetSelection(selection)).error.code,'CONFLICT');
  put(['pairing-authority','household','h'],record);
@@ -65,6 +68,7 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  assert.deepEqual(receipt.targets,prepared.map(p=>({targetDocumentId:p.targetDocumentId,operationId:p.record.operationId,identity:p.record.identity})));
  const read=()=>store.readActivatedPolicyDocumentSet('h','new');
  const activated=await read(); assert.equal(activated.ok,true);
+ assert.deepEqual(activated.value.receipt.provenance,provenance);
  assert.deepEqual(activated.value.staged,retained.value);
  assert.deepEqual(activated.value.documents.map(d=>d.documentId),input.mapping.map(r=>r.targetDocumentId));
  put(['document','h','target-child'],{bytes:bytes(7),revision:2});
