@@ -1,3 +1,4 @@
+import {domain} from './validator.mjs';
 // Validate per-device ceremony proofs against a frozen, independently pinned parent.
 // Evidence alone never authorizes key release or proves human identity.
 import {offerBytes,verifyHouseholdSessionEvidence} from '../pairing/durable-session.mjs';
@@ -29,6 +30,10 @@ export function existingRecipientContextBytes(c) {
  const fields=['version','householdId','parentHead','admissionEventHash','newEpochId','sponsorDeviceId','recipientDeviceId','recipientWrappingKey'];
  if(!exact(c,fields) || c.version!==1 || !fields.slice(1).every(k=>typeof c[k]==='string' && c[k].length>0 && new TextEncoder().encode(c[k]).length<=256) || !/^[0-9a-f]{64}$/.test(c.recipientWrappingKey) || c.sponsorDeviceId===c.recipientDeviceId) throw Error('MALFORMED');
  return new TextEncoder().encode(JSON.stringify(['creative-cooking/existing-recipient/v1',fields.map(k=>c[k])]));
+}
+export function existingDocumentSetSignal(grantHash){
+ if(typeof grantHash!=='string'||!/^[0-9a-f]{64}$/.test(grantHash))throw Error('INVALID_PROOF');
+ return domain('existing-document-set-ceremony',{version:5,grantHash});
 }
 /** Both transcript participants are resolved against the parent signing-key pins;
  * their signed acknowledgements attest checking sealed challenge responses. */

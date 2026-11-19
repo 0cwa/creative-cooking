@@ -29,7 +29,6 @@ async function signedGrant({provider,scope,parent,eventHash,subject,delegation,m
 
 async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,runtime,service,
  adultId,deviceId,item,parent,author,delegation,eventHash,binding,restartStale,randomUUID}){
- if(parent.runtime.acceptedRecipients.some(device=>device!==deviceId))throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
  const slot=`household-grant-draft:${parent.head}`;
  const setBinding=JSON.stringify([...JSON.parse(binding),5]);
  const subject=item.event.subject;
@@ -99,7 +98,9 @@ async function prepareDocumentSetGrant({storage,scope,pin,provider,store,sodium,
   });
  }
  await verifyGrant(retained);
- return structuredClone(retained);
+ const publisherParent=await storage.readPairingAuthority(scope);
+ if(!publisherParent.ok||!publisherParent.value||publisherParent.value.authorizationSnapshot!==retained.manifest.authorizationSnapshot)throw Error('SOURCE_CHANGED');
+ return structuredClone({...retained,publisherParent:publisherParent.value});
 }
 
 /** Prepare a source-bound grant. Current-cooking delegation must already be

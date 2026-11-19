@@ -71,7 +71,7 @@ export function householdPairing({
       publish:active(transfer.publish),
       seal:active(transfer.seal),
       publishedFiles:active(transfer.publishedFiles),
-      installExisting:legacy(transfer.installExisting),
+      installExisting:active(transfer.installExisting),
       completedProof:active(transfer.completedProof),
       async install(input) {
         const result = await active(transfer.install)(input);
@@ -86,8 +86,8 @@ export function householdPairing({
       installed.add(listener);
       return () => installed.delete(listener);
     },
-    prepareExistingCeremony: active(input => prepareExistingCeremony({...input, ...preparation, wrappingPublicKey})),
-    verifyExistingCeremony: active(input => verifyExistingCeremony({...input, ...member, sodium, wrappingPublicKey})),
+    prepareExistingCeremony: active(input => prepareExistingCeremony({...input, ...preparation, wrappingPublicKey,LoroDoc})),
+    verifyExistingCeremony: active(input => verifyExistingCeremony({...input, ...member, sodium, wrappingPublicKey,LoroDoc})),
     reviewGrant: active(input => reviewHouseholdGrant({...input, ...cooking})),
     approveGrant: active(input => approveHouseholdGrant({...input, ...cooking})),
     collectGrant: active(input => collectHouseholdGrantApproval({...input, ...cooking})),
@@ -103,10 +103,10 @@ export function householdPairing({
     }),
     acceptedParents: active(() => pins.list()),
     prepareDelegation: active(input => prepareHouseholdDelegation({...input, ...member})),
-    acceptDelegation: legacy(input => acceptHouseholdDelegation({...input, ...authority})),
-    prepareInvite: legacy(input => prepareHouseholdInvite({...input, ...preparation})),
-    prepareGrant: legacy(input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID})),
-    prepareCeremony: legacy(input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey,LoroDoc})),
+    acceptDelegation: active(input => acceptHouseholdDelegation({...input, ...authority})),
+    prepareInvite: active(input => prepareHouseholdInvite({...input, ...preparation})),
+    prepareGrant: active(input => prepareHouseholdGrant({...input, ...cooking, store, sodium, randomUUID})),
+    prepareCeremony: active(input => prepareHouseholdCeremony({...input, ...preparation, wrappingPublicKey,LoroDoc})),
     verifyOffer: active(input => verifyHouseholdOffer({...input, storage, pins, provider, sodium, identity,LoroDoc})),
     session(input) {
       const session = householdSession({...input, sodium, store, keys, signing, wrapping});

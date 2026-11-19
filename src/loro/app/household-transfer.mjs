@@ -1,3 +1,4 @@
+import {existingDocumentSetSignal} from '../authority/ceremony.mjs';
 import {publishHouseholdAdmission,readAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {selectedSourceHash} from '../projection/selected-sources.mjs';
 import {publishHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
@@ -34,14 +35,13 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   const prior=await storage.getProjectionPublication(ownScope.id,operationId);
   if(!prior.ok)throw Error(prior.error);
   if(prior.value&&!!prior.value.documentSet!==documentSet||
-     runtime.authority?.installedSet&&(!documentSet||!prior.value))throw Error('UNSUPPORTED_VERSION');
+     runtime.authority?.installedSet&&!documentSet)throw Error('UNSUPPORTED_VERSION');
   if(documentSet){
-   if(data.existingCeremonies.length||!prior.value&&runtime.scope.acceptedRecipients.some(device=>device!==deviceId)){
-    throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
-   }
    const {signatures,...unsigned}=data.grant??{};
    const grantHash=await selectedSourceHash(provider,'current-state-grant',unsigned);
-   if(!data.ceremonies.every(proof=>matchesInvitationSignaling(proof?.transcript,proof?.context,5,grantHash)))throw Error('INVALID_PROOF');
+   if(!data.ceremonies.every(proof=>matchesInvitationSignaling(proof?.transcript,proof?.context,5,grantHash))||
+      !prior.value&&!data.existingCeremonies.every(proof=>Array.isArray(proof?.transcript?.signaling)&&proof.transcript.signaling.length===2&&
+       hex(proof.transcript.signaling[1])===hex(existingDocumentSetSignal(grantHash))))throw Error('INVALID_PROOF');
   }
   return withSecrets(async secret=>{
    for(const proof of [...data.ceremonies,...data.existingCeremonies])await completedOrganizerProof(proof,secret);
@@ -117,6 +117,12 @@ export function householdTransfer({name,sodium,storage,master,provider,sessionSt
   // This device already has an allocator for the active scope. A new admission
   // has its own receipt and epoch key, without enrollment or counter creation.
   const result=await withSecrets(secret=>installHouseholdFile({sodium,bytes,keys:secret,storage,scope:ownScope,pin,provider,sessionStore,recipientDevice:deviceId,LoroDoc,master,recipientKind:'existing',identify:eventHash=>existingDeviceIds(sodium,ownScope,deviceId,eventHash)}));
+  if(result.head&&!result.acceptedHead){
+   const current=await readAuthority(storage,ownScope,pin,provider);
+   const item=current.state.events.find(entry=>entry.admission?.grant?.admissionEventHash===result.head);
+   if(!item||item.admission.manifest?.version!==5)throw Error('INVALID_AUTHORITY');
+   return {replayed:result.replayed,acceptedHead:result.head,generation:item.event.subject.newGeneration};
+  }
   return {replayed:result.replayed,acceptedHead:result.acceptedHead,generation:result.generation};
  }
  async function readRecoveryParent(confirmed){

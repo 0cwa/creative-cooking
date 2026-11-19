@@ -38,7 +38,6 @@ export async function prepareHouseholdCeremony({storage,scope,pin,provider,store
   parent=verified.nodes.get(current.activeHead),sender=parent?.devices.find(x=>x.active&&x.deviceId===deviceId&&x.adultId===adultId),
   recipient=eventItem.event.subject.devices;
  if(!sender||current.revision!==checked.authorityRevision||recipient.length!==1||eventItem.event.parentHead!==current.activeHead)throw Error('INVALID_AUTHORITY');
- if(documentSet&&parent.runtime.acceptedRecipients.some(device=>device!==deviceId))throw Error('DOCUMENT_SET_EXISTING_DEVICES_UNSUPPORTED');
  const subject=eventItem.event.subject;if(JSON.stringify(g.recipientDevices)!==JSON.stringify(subject.devices.map(d=>d.deviceId))||g.newDocumentGeneration!==subject.newGeneration||g.newEpochId!==subject.newEpochId||m.newDocumentId!==subject.documentId)throw Error('CONTEXT_MISMATCH');
  const context={version:1,householdId:sc.id,parentHead:current.activeHead,admissionEventHash:checked.admissionEventHash,sponsorAdult:adultId,recipientAdult:eventItem.event.subject.adultId,sponsorDeviceId:deviceId,sponsorSigningKeyRef:sender.signingKeyRef,sponsorWrappingKeyRef:wrappingPublicKey,recipientDeviceId:recipient[0].deviceId,recipientSigningKeyRef:recipient[0].signingKeyRef,recipientWrappingKeyRef:recipient[0].wrappingKeyRef},binding=JSON.stringify([sc.kind,sc.id,pin,current.activeHead,checked.authorizationSnapshot,checked.admissionEventHash,checked.grantHash,deviceId,wrappingPublicKey]);
  const saved=await store.transaction(tx=>{

@@ -27,7 +27,11 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
  }
  if(!selectedSet)return {resolved:await resolveRuntimeAuthority(storage,scope,pin,provider,deviceId),installedSet:null};
  if(operationId!==householdReceiverIds(sodium,scope,deviceId).operationId)throw Error('INVALID_ADMISSION');
- const {record,state:verified}=await verifyPublicParent(storage,scope,pin,provider);
+ const {record,state:verified,nodes}=await verifyPublicParent(storage,scope,pin,provider);
+ // A new adult may have pinned a public v5 parent without possessing any of
+ // its documents. That is not an installed receipt or an active counter.
+ if(!legacy&&confirmedParent!==undefined&&record.acceptedParent===confirmedParent&&
+   !nodes.get(record.acceptedParent)?.devices.some(device=>device.active&&device.deviceId===deviceId))return null;
  const selected=verified.events.find(item=>item.admission?.manifest?.version===5&&
   item.admission.grant.admissionEventHash===record.acceptedParent);
  if(!selected)throw Error('INVALID_ADMISSION');
@@ -35,11 +39,26 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
  const installed=await readInstalledHouseholdDocumentSet(options);
  const savedPin=(await pins?.list())?.find(value=>value?.scope?.kind==='household'&&value.scope.id===scope.id);
  if(!savedPin||savedPin.pin!==pin||(confirmedParent!==undefined&&savedPin.head!==confirmedParent)||
-   (legacy?legacy.expectedAuthority.acceptedParent!==savedPin.head:installed.selection.from!==savedPin.head)){
-  throw Error('INVALID_ADMISSION');
+   legacy&&legacy.expectedAuthority.acceptedParent!==savedPin.head)throw Error('INVALID_ADMISSION');
+ if(installed.mode!=='recipient'||installed.publication.localKey.record.identity.deviceId!==deviceId)throw Error('INVALID_ADMISSION');
+ if(!legacy){
+  // A previously joined device keeps its original enrollment and pin when it
+  // installs a successor. Revalidate that original receipt and its signed
+  // selection before accepting a later existing-device receipt.
+  const origin=verified.events.find(item=>item.admission?.manifest?.version===5&&
+    item.event.parentHead===savedPin.head&&item.admission.grant.recipientDevices.includes(deviceId)&&
+    verified.selections.some(selection=>selection.to===item.admission.grant.admissionEventHash));
+  if(!origin)throw Error('INVALID_ADMISSION');
+  const first=await readInstalledHouseholdDocumentSet({...options,operationId:origin.admission.operationId});
+  if(first.mode!=='recipient'||first.selection.from!==savedPin.head||
+     first.selection.to!==origin.admission.grant.admissionEventHash||
+     first.item.admission.grant.admissionEventHash!==origin.admission.grant.admissionEventHash||
+     first.publication.localKey.record.identity.deviceId!==deviceId||
+     !first.item.admission.grant.recipientDevices.includes(deviceId))throw Error('INVALID_ADMISSION');
+  if(installed.item.admission.operationId!==origin.admission.operationId&&installed.publication.documentSet.version!==2){
+   throw Error('INVALID_ADMISSION');
+  }
  }
- if(installed.mode!=='recipient'||installed.publication.localKey.record.identity.deviceId!==deviceId||
-   (!legacy&&!selected.admission.grant.recipientDevices.includes(deviceId)))throw Error('INVALID_ADMISSION');
  const resolved=await resolveInstalledSetAuthority({...options,authorDevice:deviceId});
  return {resolved,installedSet:{operationId:options.operationId}};
 }

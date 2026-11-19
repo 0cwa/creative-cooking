@@ -26,7 +26,8 @@ const settings=async page=>{
 };
 
 test('Settings transfers and reopens a verified recipe document set and new recipes',async({browser,baseURL})=>{
- test.setTimeout(180_000);
+ test.setTimeout(600_000);
+ const thirdContext=await browser.newContext({baseURL,acceptDownloads:true});
  const sponsorContext=await browser.newContext({baseURL,acceptDownloads:true});
  const newcomerContext=await browser.newContext({baseURL});
  try{
@@ -475,6 +476,185 @@ test('Settings transfers and reopens a verified recipe document set and new reci
    await recheckNewcomer.close();
   }
 
+  // Admit a third independently initialized adult from the already installed
+  // two-adult document set, using the normal Settings controls on every peer.
+  const third=await thirdContext.newPage();third.setDefaultTimeout(20_000);
+  await third.goto(app);
+  await button(third,'Start fresh local preview').click();
+  await button(third,'Review household policy').click();
+  await button(third,'Accept this household policy').click();
+  await expect(third.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+  await settings(third);
+  const thirdIdentity=await text(third,'Public device identity');
+  await settings(sponsor);
+  await settings(reopened);
+  const oldIdentity=await text(reopened,'Public device identity');
+  for(const page of [sponsor,reopened]){
+   await button(page,'Agree to share current cooking').click();
+   await button(page,'Sign current-cooking agreement').click();
+   await expect(label(page,'Signed current-cooking agreement')).toBeVisible();
+  }
+  const agreements=await Promise.all([text(sponsor,'Signed current-cooking agreement'),text(reopened,'Signed current-cooking agreement')]);
+  for(const page of [sponsor,reopened]){
+   for(const agreement of agreements){
+    await label(page,'Signed current-cooking agreement input').fill(agreement);
+    await button(page,'Add signed agreement').click();
+   }
+   await button(page,'Verify and retain all agreements').click();
+   await expect(page.getByText(/^All required signatures were verified/)).toBeVisible();
+  }
+  await button(sponsor,'Review an adult invitation').click();
+  await label(sponsor,'New invitee public identity').fill(thirdIdentity);
+  await button(sponsor,'Create public invitation proposal').click();
+  await expect(label(sponsor,'Invitation proposal')).toBeVisible();
+  const thirdProposal=await text(sponsor,'Invitation proposal');
+  await button(sponsor,'Review current-cooking grant').click();
+  await label(sponsor,'Approved invitation for grant').fill(thirdProposal);
+  await button(sponsor,'Prepare current-cooking grant').click();
+  await expect(label(sponsor,'Prepared cooking grant')).toBeVisible({timeout:90_000}).catch(async error=>{
+   console.error('Grant preparation status:',await sponsor.getByRole('alert').allTextContents());throw error;
+  });
+  const unsignedGrant=await text(sponsor,'Prepared cooking grant');
+  await button(reopened,'Review current-cooking grant').click();
+  await label(reopened,'Cooking grant to review').fill(unsignedGrant);
+  await button(reopened,'Inspect proposed cooking grant').click();
+  await expect(label(reopened,'Proposed current cooking')).toContainText(edited,{timeout:60_000});
+  await button(reopened,'Sign reviewed cooking grant').click();
+  await expect(label(reopened,'Signed cooking grant approval')).toBeVisible();
+  await label(sponsor,'Cooking grant to review').fill(unsignedGrant);
+  await label(sponsor,'Cooking grant approval input').fill(await text(reopened,'Signed cooking grant approval'));
+  await button(sponsor,'Verify and collect grant approval').click();
+  await expect(label(sponsor,'Cooking grant with collected approvals')).toBeVisible({timeout:60_000});
+  const collected=await text(sponsor,'Cooking grant with collected approvals');
+  await button(sponsor,'Verify an existing device').click();
+  await label(sponsor,'Collected grant for existing device').fill(collected);
+  await label(sponsor,'Existing device public identity').fill(oldIdentity);
+  await button(sponsor,'Prepare existing-device verification').click();
+  await expect(label(sponsor,'Existing-device verification message')).toBeVisible({timeout:60_000});
+  const existingOffer=await text(sponsor,'Existing-device verification message');
+  const existingCode=await text(sponsor,'Existing-device verification code');
+  await button(reopened,'Verify an existing device').click();
+  await button(reopened,'Verify this existing device').click();
+  const wrongParent=JSON.parse(existingOffer);wrongParent.args.publisherParent.authorizationSnapshot='0'.repeat(64);
+  await label(reopened,'Existing-device verification message input').fill(JSON.stringify(wrongParent));
+  await label(reopened,'Confirmed existing-device code').fill(existingCode);
+  await button(reopened,'Start existing-device verification').click();
+  await expect(reopened.getByText('INVALID_AUTHORITY',{exact:true})).toBeVisible({timeout:60_000});
+  const wrongSignal=JSON.parse(existingOffer);wrongSignal.ceremony.transcript.signaling[1].__bytes[0]^=1;
+  await label(reopened,'Existing-device verification message input').fill(JSON.stringify(wrongSignal));
+  await label(reopened,'Confirmed existing-device code').fill(existingCode);
+  await button(reopened,'Start existing-device verification').click();
+  await expect(reopened.getByText('INVALID_PROOF',{exact:true})).toBeVisible({timeout:60_000});
+  await label(reopened,'Existing-device verification message input').fill(existingOffer);
+  for(const page of [sponsor,reopened]){
+   await label(page,'Confirmed existing-device code').fill(existingCode);
+   await button(page,'Start existing-device verification').click();
+  }
+  for(const state of ['Exchange the response with the other device.','Exchange the ack with the other device.','Existing-device verification complete.']){
+   const [left,right]=await Promise.all([text(sponsor,'Existing-device outgoing message'),text(reopened,'Existing-device outgoing message')]);
+   await label(sponsor,'Other existing-device message').fill(right);
+   await label(reopened,'Other existing-device message').fill(left);
+   for(const page of [sponsor,reopened]){
+    await button(page,'Continue existing-device verification').click();
+    await expect(page.getByText(state,{exact:true})).toBeVisible({timeout:60_000}).catch(async error=>{
+     console.error('Existing-device verification:',await page.getByRole('alert').allTextContents());throw error;
+    });
+   }
+  }
+  await button(sponsor,'Show existing-device evidence').click();
+  const existingProof=await text(sponsor,'Existing-device evidence');
+  await label(sponsor,'Collected grant for invitation').fill(collected);
+  await button(sponsor,'Prepare invitation from collected grant').click();
+  await expect(label(sponsor,'Public invitation message')).toBeVisible();
+  const nextOffer=await text(sponsor,'Public invitation message'),nextCode=await text(sponsor,'Invitation verification code');
+  await label(sponsor,'Completed existing-device evidence').fill(existingProof);
+  await button(sponsor,'Collect existing-device evidence').click();
+  await button(sponsor,'Show public household authority').click();
+  await label(third,'Household authority bundle').fill(await text(sponsor,'Public household authority'));
+  await label(third,'Confirmed household root').fill(await text(sponsor,'Household root to compare'));
+  await label(third,'Confirmed household head').fill(await text(sponsor,'Household head to compare'));
+  await button(third,'Verify and accept public authority').click();
+  await button(third,'Join invitation').click();
+  await label(third,'Public invitation message input').fill(nextOffer);
+  for(const page of [sponsor,third]){
+   await label(page,'Confirmed invitation code').fill(nextCode);
+   await button(page,'Start or resume device verification').click();
+  }
+  for(const state of ['Exchange your response with the other device.','Exchange your acknowledgement with the other device.','Both devices have completed verification.']){
+   const [left,right]=await Promise.all([text(sponsor,'Your verification message'),text(third,'Your verification message')]);
+   await label(sponsor,'Other device verification message').fill(right);
+   await label(third,'Other device verification message').fill(left);
+   for(const page of [sponsor,third]){
+    await button(page,'Continue device verification').click();
+    await expect(page.getByText(state,{exact:true})).toBeVisible({timeout:60_000});
+   }
+  }
+  await button(sponsor,'Publish verified household generation').click();
+  await expect(sponsor.getByText(/Household generation 3 was published/)).toBeVisible({timeout:120_000}).catch(async error=>{console.error('Publication status:',await sponsor.getByRole('alert').allTextContents());throw error;});
+  const oldDevice=JSON.parse(oldIdentity).deviceId,thirdDevice=JSON.parse(thirdIdentity).deviceId;
+  const oldFile=await download(`Download encrypted file for existing device ${oldDevice}`);
+  const thirdFile=await download(`Download encrypted file for new device ${thirdDevice}`);
+  const oldChooser=reopened.waitForEvent('filechooser');
+  await button(reopened,'Install and open household generation').click();
+  await (await oldChooser).setFiles({name:'existing.bin',mimeType:'application/octet-stream',buffer:oldFile});
+  await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
+  await reopened.goto(app+'settings');
+  await expect(label(reopened,'Household document generation')).toHaveText('Household generation 3',{timeout:60_000});
+  const thirdChooser=third.waitForEvent('filechooser');
+  await button(third,'Choose encrypted household file').click();
+  await (await thirdChooser).setFiles({name:'third.bin',mimeType:'application/octet-stream',buffer:thirdFile});
+  await expect(third.getByText(/^Household installed\./)).toBeVisible({timeout:90_000}).catch(async error=>{console.error('Third install:',await third.getByRole('alert').allTextContents());throw error;});
+  await button(third,'Open this shared household').click();
+  await expect(third.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
+  await third.goto(app+'settings');
+  await expect(label(third,'Household document generation')).toHaveText('Household generation 3',{timeout:60_000});
+  await button(sponsor,'Reopen household after admission').click();
+  await expect(sponsor.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
+  await sponsor.goto(app+'settings');
+  await expect(label(sponsor,'Household document generation')).toHaveText('Household generation 3',{timeout:60_000});
+  for(const page of [sponsor,reopened,third])await checkCooking(page,edited,'Fresh turnips');
+  await third.goto(app+'recipes');
+  await expect(label(third,'Open recipe '+originalTitle)).toHaveCount(0);
+  const thirdEdit='Third adult saved recipe',thirdShopping='Third adult saved shopping';
+  await third.goto(app+'recipes');
+  await label(third,'Open recipe '+edited).click();
+  await label(third,'Edit recipe '+edited).click();
+  await label(third,'Recipe title').fill(thirdEdit);
+  await label(third,'Save recipe changes').click();
+  await expect(third.getByRole('dialog').getByText(thirdEdit,{exact:true})).toBeVisible();
+  await label(third,'Close recipe').click();
+  await third.getByRole('tab',{name:/Pantry/}).click();
+  await expect(third.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
+  await third.goto(app+'shopping');
+  await label(third,'Shopping item name').fill(thirdShopping);
+  await button(third,'Add').click();
+  await expect(third.getByTestId('shopping-local-persistence-status')).toHaveText('Saved on this device only.');
+  await third.goto(app+'recipes');
+  await expect(label(third,'Open recipe '+thirdEdit)).toBeVisible({timeout:60_000});
+  await third.goto(app+'settings');
+  await button(third,'Exchange encrypted cooking files').click();
+  const thirdUpdates=third.getByRole('button',{name:/^Download encrypted update /});
+  await expect(thirdUpdates).not.toHaveCount(0);
+  const thirdFiles=[];
+  for(const control of await thirdUpdates.all()){
+   const pending=third.waitForEvent('download');await control.click();
+   const downloaded=await pending,buffer=await readFile(await downloaded.path());
+   thirdFiles.push({buffer,envelope:JSON.parse(buffer)});await downloaded.delete();
+  }
+  thirdFiles.sort((a,b)=>a.envelope.header.deviceSequence-b.envelope.header.deviceSequence);
+  expect(new Set(thirdFiles.map(file=>file.envelope.header.documentId)).size).toBeGreaterThan(1);
+  for(const page of [sponsor,reopened])for(const {buffer} of thirdFiles){
+   await page.goto(app+'settings');await button(page,'Exchange encrypted cooking files').click();
+   const pending=page.waitForEvent('filechooser'),loaded=page.waitForEvent('load');
+   await button(page,'Choose encrypted cooking update').click();
+   await (await pending).setFiles({name:'third-update.bin',mimeType:'application/octet-stream',buffer});
+   await loaded;
+  }
+  for(const page of [sponsor,reopened]){
+   await checkCooking(page,thirdEdit,'Fresh turnips');
+   await expect(page.getByText(thirdShopping,{exact:true})).toBeVisible();
+  }
+
   await reopened.goto(app);
   await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await button(reopened,'Open settings').click();
@@ -489,6 +669,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
  }finally{
   await newcomerContext.close();
   await sponsorContext.close();
+  await thirdContext.close();
  }
 });
 

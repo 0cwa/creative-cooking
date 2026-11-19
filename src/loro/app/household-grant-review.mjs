@@ -3,7 +3,7 @@ import {checkAdmissionAgreement,checkGrantSignatures,checkGrantManifest} from '.
 import {projectCooking,projectRecipes} from '../domain/app-projection.mjs';
 import {domain,validateSuccessor} from '../authority/validator.mjs';
 import {verifyPolicyProjection} from '../disclosure/policy-seed.mjs';
-import {verifyCurrentDocumentSet} from '../projection/current-document-set.mjs';
+import {verifyDocumentSetAtPublisher} from './household-document-set-proof.mjs';
 const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 async function checked({storage,scope,pin,provider,runtime,service,adultId,deviceId,item,prepared}) {
  scope=structuredClone(scope);item=structuredClone(item);prepared=structuredClone(prepared);
@@ -13,7 +13,7 @@ async function checked({storage,scope,pin,provider,runtime,service,adultId,devic
  const {grant,manifest,seed,policyBundle,documents}=prepared??{},signed=await checkGrantSignatures(parent,grant,provider);
  if(manifest?.version===5){
   if(prepared.version!==2||seed!==undefined||policyBundle!==undefined)throw Error('INVALID_PROOF');
-  const verified=await verifyCurrentDocumentSet({storage,scope,pin,provider,item,grant,manifest,documents,LoroDoc:runtime.LoroDoc});
+  const verified=await verifyDocumentSetAtPublisher({storage,scope,pin,provider,item,grant,manifest,documents,publisherParent:prepared.publisherParent,LoroDoc:runtime.LoroDoc});
   const projected=verified.documents.map(({seed})=>{const doc=new runtime.LoroDoc();doc.import(seed.snapshot);return doc;});
   const cooking=projectCooking(projected[0]);
   cooking.recipes.push(...projected.slice(1).flatMap(projectRecipes));
