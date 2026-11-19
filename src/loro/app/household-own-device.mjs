@@ -16,6 +16,10 @@ import {
 import {verifyHouseholdParentRecord} from './household-parent.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
 import {captureOwnDeviceCopySet,installOwnDeviceSetFile,isOwnDeviceSetFile,publishOwnDeviceSet,reopenOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
+import {existingRecipientContextBytes} from '../authority/ceremony.mjs';
+import {ownDeviceRecipientSignal} from '../pairing/household-own-device-recipients.mjs';
+import {preflightOwnDeviceLocalTransition} from '../pairing/household-own-device-local-transition.mjs';
+import {ceremonyBytes} from '../pairing/candidate-v2.mjs';
 import {openSelectedRecipeCatalog} from './selected-recipe-catalog.mjs';
 
 const roles=['initiator','responder'];
@@ -266,6 +270,63 @@ export function householdOwnDevice({
    return structuredClone(result);
   });
  }
+ // Check the offered metadata against both the selected local authority and the
+ // signed, completed newcomer transition before exposing session parameters.
+ async function checkEstablishedOffer(offer,local,recipient) {
+  if(!exact(offer,['version','publisherParent','publisherNext','context','transcript','guard'])||offer.version!==1)throw Error('INVALID_PROOF');
+  const {publisherParent,publisherNext,context:c,transcript:t,guard:g}=offer;
+  const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:publisherParent,next:publisherNext,eventVersion:5});
+  const preflight=await preflightOwnDeviceLocalTransition({sodium:s,provider,pin,localParent:local.record,publisherParent,publisherNext,deviceId:recipient.deviceId});
+  const parent=preflight.parent,event=checked.item.event,sponsor=parent.devices.find(d=>d.active&&d.deviceId===event.authorDeviceId),
+   target=parent.devices.find(d=>d.active&&d.deviceId===recipient.deviceId&&d.adultId===recipient.adultId);
+  const expected={version:1,householdId:scope.id,parentHead:parent.head,admissionEventHash:checked.head,newEpochId:event.epochId,
+   sponsorDeviceId:event.authorDeviceId,recipientDeviceId:recipient.deviceId,recipientWrappingKey:recipient.wrappingKey};
+  if(!sponsor||!target||!parent.runtime.acceptedRecipients.includes(sponsor.deviceId)||!parent.runtime.acceptedRecipients.includes(target.deviceId)||
+     sponsor.deviceId===target.deviceId||event.subject.deviceId===target.deviceId||target.signingKeyRef!==recipient.signingKey||
+     !hex64(recipient.wrappingKey)||!same(c,expected)||t?.action!=='pairOwnDevice'||t.purpose!=='data'||!same(t.scope,scope)||
+     t.acceptedParent!==parent.head||t.authorizationSnapshot!==publisherParent.authorizationSnapshot||g?.direction!=='initiator-to-responder'||g.purpose!=='data'||
+     t.initiator?.deviceId!==sponsor.deviceId||s.to_hex(t.initiator.signingPublicKey)!==sponsor.signingKeyRef||
+     s.to_hex(t.initiator.wrappingPublicKey)!==s.to_hex(checked.proof.transcript.initiator.wrappingPublicKey)||
+     t.responder?.deviceId!==recipient.deviceId||s.to_hex(t.responder.signingPublicKey)!==recipient.signingKey||
+     s.to_hex(t.responder.wrappingPublicKey)!==recipient.wrappingKey||!Array.isArray(t.signaling)||t.signaling.length!==2||
+     !same(t.signaling[0],existingRecipientContextBytes(expected))||!same(t.signaling[1],ownDeviceRecipientSignal(checked.head,event.subject.copyHash,event.epochId)))throw Error('INVALID_PROOF');
+  const hash=digest(ceremonyBytes(t,g));
+  const pins=Object.fromEntries(roles.map(role=>[role,{deviceId:t[role].deviceId,signingKey:s.to_hex(t[role].signingPublicKey),wrappingKey:s.to_hex(t[role].wrappingPublicKey)}]));
+  return {context:structuredClone(c),transcript:structuredClone(t),guard:structuredClone(g),oob:{hash,pins}};
+ }
+ async function prepareEstablishedOffer(code,recipientIdentity){
+  const recipient=structuredClone(recipientIdentity);
+  if(!exact(recipient,['version','adultId','deviceId','signingKey','wrappingKey'])||recipient.version!==1||!id(recipient.adultId)||!id(recipient.deviceId)||!hex64(recipient.signingKey)||!hex64(recipient.wrappingKey))throw Error('INVALID_PROOF');
+  const prepared=await prepareSet(code),live=await current(),savedInitiator=await read('initiator'),proposal=savedInitiator?.proposal;
+  const retained=proposal&&await read('set-preparation:'+JSON.stringify([scope.id,pin,proposal.transcript.sessionId]));
+  if(!retained||!prepared.requiredRecipientIds.includes(recipient.deviceId)||!same(prepared.parent,{head:live.record.acceptedParent,authorizationSnapshot:live.record.authorizationSnapshot,revision:live.record.revision}))throw Error('INVALID_AUTHORITY');
+  const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:live.record,next:retained.next,proposal:{hash:code,guard:proposal.guard},eventVersion:5});
+  if(!same(prepared.transition,{item:checked.item,selection:checked.selection,head:checked.head})||!same(checked.proof.messages,retained.messages))throw Error('SOURCE_CHANGED');
+  const target=live.parent.devices.find(d=>d.active&&d.deviceId===recipient.deviceId&&d.adultId===recipient.adultId);
+  if(!target||target.signingKeyRef!==recipient.signingKey||!hex64(recipient.wrappingKey))throw Error('INVALID_AUTHORITY');
+  const context={version:1,householdId:scope.id,parentHead:live.record.acceptedParent,admissionEventHash:checked.head,newEpochId:checked.item.event.epochId,sponsorDeviceId:deviceId,recipientDeviceId:recipient.deviceId,recipientWrappingKey:recipient.wrappingKey};
+  const binding=JSON.stringify([scope,pin,checked.head,live.record.authorizationSnapshot,recipient,wrappingKey]);
+  const saved=await store.transaction(tx=>{
+   const key=slot('established-offer:'+digest(new TextEncoder().encode(binding))),old=tx.get(key);if(old)return old;
+   const transcript={version:1,sessionId:randomUUID(),action:'pairOwnDevice',scope,purpose:'data',acceptedParent:live.record.acceptedParent,authorizationSnapshot:live.record.authorizationSnapshot,
+    initiator:participant('initiator',own,s.to_hex(s.randombytes_buf(32))),responder:participant('responder',recipient,s.to_hex(s.randombytes_buf(32))),
+    signaling:[existingRecipientContextBytes(context),ownDeviceRecipientSignal(checked.head,checked.item.event.subject.copyHash,checked.item.event.epochId)]};
+   const guard={version:1,guardId:randomUUID(),scope,direction:'initiator-to-responder',purpose:'data'};
+   const offer={version:1,publisherParent:live.record,publisherNext:retained.next,context,transcript,guard};tx.put(key,offer);return offer;
+  });
+  if(!same(saved.publisherParent,live.record)||!same(saved.publisherNext,retained.next))throw Error('CORRUPT_DRAFT');
+  const result=await checkEstablishedOffer(saved,live,recipient),encoded=text(saved);
+  if(new TextEncoder().encode(encoded).length>MAX_HOUSEHOLD_OWN_DEVICE_MESSAGE)throw Error('TOO_LARGE');
+  return {...result,text:encoded};
+ }
+ async function verifyEstablishedOffer(incoming,confirmedHash){
+  if(!hex64(confirmedHash))throw Error('CONFIRMATION_REQUIRED');
+  const offer=parse(incoming),live=await current();
+  if(!same(await runtime.authorize(),live.resolved.expectedAuthority))throw Error('STALE_AUTHORITY');
+  const result=await checkEstablishedOffer(offer,live,identity);
+  if(result.oob.hash!==confirmedHash)throw Error('CONFIRMATION_REQUIRED');
+  return result;
+ }
  async function publish(code){
   return withSession('initiator',async({proposal,record,oob,secrets,session})=>{
    const {bundle,transcript,guard,adultId,peerId}=proposal;
@@ -458,5 +519,5 @@ export function householdOwnDevice({
    policy:selected.policy,devices:selected.devices,events:ancestry.reverse()};
  }
  return {deviceId,fingerprint:fingerprint(own),rootPin:pin,request,propose,inspect:async incoming=>(await inspectProposal(parse(incoming),'responder')).view,
-  confirm,accept,resume,prepareSet,publish,install,acceptExisting,history};
+  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publish,install,acceptExisting,history};
 }

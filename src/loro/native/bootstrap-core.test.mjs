@@ -870,6 +870,21 @@ async function ownDeviceScenario(prepareOnly=false) {
    const exact=structuredClone(prepared);
    assert.deepEqual(await initiator.prepareSet(proposal.code),exact);
    assert.deepEqual(prepared.requiredRecipientIds,[adult.householdPairing.identity.deviceId]);
+   const established=adult.householdPairing.ownDevice,recipient=adult.householdPairing.identity;
+   const offer=await initiator.prepareEstablishedOffer(proposal.code,recipient);
+   assert.deepEqual(await initiator.prepareEstablishedOffer(proposal.code,recipient),offer);
+   const verifiedOffer=await established.verifyEstablishedOffer(offer.text,offer.oob.hash);
+   assert.deepEqual(verifiedOffer,{context:offer.context,transcript:offer.transcript,guard:offer.guard,oob:offer.oob});
+   await assert.rejects(established.verifyEstablishedOffer(offer.text,'0'.repeat(64)),/CONFIRMATION_REQUIRED/);
+   await assert.rejects(initiator.prepareEstablishedOffer(proposal.code,{...recipient,signingKey:'0'.repeat(64)}));
+   await assert.rejects(initiator.prepareEstablishedOffer(proposal.code,{...recipient,deviceId:fresh.householdPairing.identity.deviceId}));
+   const tampered=JSON.parse(offer.text);tampered.context.newEpochId='wrong';
+   await assert.rejects(established.verifyEstablishedOffer(JSON.stringify(tampered),offer.oob.hash));
+   const wrongWrap=await initiator.prepareEstablishedOffer(proposal.code,{...recipient,wrappingKey:'0'.repeat(64)});
+   await assert.rejects(established.verifyEstablishedOffer(wrongWrap.text,wrongWrap.oob.hash));
+   const wrongTransition=JSON.parse(offer.text);wrongTransition.publisherNext.acceptedParent='0'.repeat(64);
+   await assert.rejects(established.verifyEstablishedOffer(JSON.stringify(wrongTransition),offer.oob.hash));
+   await assert.rejects(sponsor.householdPairing.ownDevice.verifyEstablishedOffer(offer.text,offer.oob.hash));
    assert.equal(prepared.transition.item.event.version,5);
    assert.equal(prepared.parent.head,before.head);
    assert.equal(prepared.code,proposal.code);
@@ -894,6 +909,7 @@ async function ownDeviceScenario(prepareOnly=false) {
    assert.deepEqual(await initiator.prepareSet(proposal.code),exact);
    await addPantry(sponsor,'changed-after-preparation');
    await assert.rejects(initiator.prepareSet(proposal.code),/SOURCE_CHANGED/);
+   await assert.rejects(initiator.prepareEstablishedOffer(proposal.code,recipient),/SOURCE_CHANGED/);
    return;
   }
   const sponsorRows=rows(sponsorName),freshRows=rows(freshName);
