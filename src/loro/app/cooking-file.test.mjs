@@ -1044,6 +1044,8 @@ test('selected recipe shopping copies and current-only admission survive durable
  await joinStore.prepareJoinedSequences(enrollment);
  const install=(bytes=sealed)=>installHouseholdFile({...newcomerOptions,...confirmedInvitation,bytes});
  const beforeNewcomer=freshRows();
+ await assert.rejects(()=>installHouseholdFile({...newcomerOptions,bytes:sealed,recipientKind:'existing'}),/INVALID_AUTHORITY/);
+ assert.deepEqual(freshRows(),beforeNewcomer);
  for(const field of Object.keys(confirmedInvitation)){
   await assert.rejects(()=>installHouseholdFile({...newcomerOptions,...confirmedInvitation,[field]:'0'.repeat(64),
    bytes:sealed,prepareEnrollment:()=>assert.fail('Unverified invitation reached enrollment')}),/INVALID_PROOF/);
@@ -1303,6 +1305,11 @@ test('selected recipe shopping copies and current-only admission survive durable
  const insertLegacy=legacyDb.prepare('INSERT INTO loro_records VALUES (?,?)');
  for(const {key,value} of beforeExisting)insertLegacy.run(key,key===authoritySlot?beforePublisher.find(row=>row.key===key).value:value);
  const legacyOptions={...existingOptions,storage:legacyStorage,bytes:legacyBytes};
+ const readLegacyRows=legacyDb.prepare('SELECT key,value FROM loro_records ORDER BY key');
+ const beforeLegacy=readLegacyRows.all();
+ await assert.rejects(()=>installHouseholdFile({...legacyOptions,recipientKind:'document-set',
+  prepareEnrollment:()=>assert.fail('An existing device reached newcomer enrollment')}),/INVALID_AUTHORITY/);
+ assert.deepEqual(readLegacyRows.all(),beforeLegacy);
  assert.deepEqual(await installHouseholdFile(legacyOptions),{replayed:false,head:eventHash});
  assert.deepEqual(await installHouseholdFile(legacyOptions),{replayed:true,head:eventHash});
  await assert.rejects(()=>installHouseholdFile({...legacyOptions,bytes:reseal(legacyRelease)}),/CONFLICT/);

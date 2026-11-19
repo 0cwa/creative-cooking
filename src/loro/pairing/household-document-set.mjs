@@ -339,7 +339,7 @@ export async function installHouseholdDocumentSet({sodium,storage,scope,pin,prov
       }else checked=await proofAtParent({storage:parentStorage,scope,pin,provider,LoroDoc,item,selection,documents});
       if(confirmedParent!==undefined&&checked.record.acceptedParent!==confirmedParent)throw Error('INVALID_AUTHORITY');
       const route=await contextsFor({sodium,provider,parent:checked.parent,record:checked.publisherRecord??checked.record,item,recipientDevice});
-      if(recipientKind==='existing' && route.kind!=='existing')throw Error('INVALID_AUTHORITY');
+      if(recipientKind!==(route.kind==='existing'?'existing':'document-set'))throw Error('INVALID_AUTHORITY');
       if([confirmedEventHash,confirmedGrantHash,confirmedTranscriptHash].some(value=>value!==undefined)&&
          (checked.eventHash!==confirmedEventHash||checked.grantHash!==confirmedGrantHash||
           route.proof.oob.hash!==confirmedTranscriptHash||!item.admission.grant.recipientDevices.includes(recipientDevice))){
