@@ -1811,6 +1811,22 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.ok(published.file.length>112);
   publishDb.close();publishDb=new DatabaseSync(join(pairedDir,'sponsor.sqlite'));
   for(const doc of signedCopy.documents)assert.deepEqual(must(await publishStorage.reopenDocument(scope.id,doc.targetDocumentId)).bytes,doc.copy.snapshot);
+  const sponsorReopenOptions={...fileOptions,storage:publishStorage,scope,
+   operationId:evidence.transcript.sessionId,keys:publishStorage.localKeys(sponsorMaster,sodium)};
+  const sponsorRows=()=>publishDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+  const publishedRows=sponsorRows();
+  const reopenedSponsor=await reopenOwnDeviceSet(sponsorReopenOptions);
+  assert.equal(reopenedSponsor.head,signedCopy.head);
+  assert.deepEqual(reopenedSponsor.file,published.file);
+  assert.deepEqual(reopenedSponsor.documents.map(({documentId,identity})=>[documentId,identity.deviceId]),
+   signedCopy.documents.map(doc=>[doc.targetDocumentId,a.deviceId]));
+  assert.deepEqual(sponsorRows(),publishedRows);
+  const sponsorReceiptSlot=JSON.stringify(['household-own-device-set',scope.id,evidence.transcript.sessionId]);
+  const sponsorReceiptRow=publishedRows.find(row=>row.key===sponsorReceiptSlot);
+  const alteredSponsorReceipt=JSON.parse(sponsorReceiptRow.value);
+  alteredSponsorReceipt.sponsor.keyHashes[0]='0'.repeat(64);
+  publishDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(alteredSponsorReceipt),sponsorReceiptSlot);
+  await assert.rejects(reopenOwnDeviceSet(sponsorReopenOptions),/INVALID_PROOF/);
   assert.deepEqual(a.rows(),beforePublish);
   const raceDoc=await sponsor.householdContent.readRecipe(added.id);
   const raceCommands=planRecipeAction({doc:raceDoc.doc,before:edited,after:{...edited,title:'Revision race'},

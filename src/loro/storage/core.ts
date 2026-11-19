@@ -95,8 +95,8 @@ type OwnDeviceSetPublication = {
   copyHash:string; file:Uint8Array;
   documents:{recipeId:string|null; sourceDocumentId:string; documentId:string; bytes:Uint8Array;
     sources:{effectId:string;policyHashes:string[]}[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
-} & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:{deviceId:string;set:unknown}} |
-     {guard?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
+} & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:{deviceId:string;set:unknown;keyHashes:string[];signature:string}} |
+     {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
 type PersonalPairingPublication = {
   expected:PairingAuthorityRecord;
   source:{documentId:string;revision:number|null;bytes:Uint8Array|null};
@@ -105,6 +105,9 @@ type PersonalPairingPublication = {
 };
 const validPairingFile = (value:unknown): value is Uint8Array =>
   value instanceof Uint8Array && value.length>112 && value.length<=7*1024*1024;
+const validOwnDeviceSetSponsor = (value:any, count:number) =>
+  fields(value,['deviceId','set','keyHashes','signature'])&&validId(value.deviceId)&&object(value.set)&&
+  denseArray(value.keyHashes,hash=>hexOf(hash,64))&&value.keyHashes.length===count&&hexOf(value.signature,128);
 const validPersonalReceipt = (value:unknown): value is PersonalRotationReceipt =>
   fields(value,['requestHash','transfer']) && hexOf(value.requestHash,64) &&
   (value.transfer===null || (fields(value.transfer,['parent','item','senderWrappingKey','sealedSnapshot','packages']) &&
@@ -152,7 +155,9 @@ const validateRecord = (k: string, v: any) => {
       const base=['version','next','guardId','copyHash','file','mapping'];
       valid=(fields(v,base)||fields(v,[...base,'expected','recipient'])&&validatePairingAuthority(v.expected).ok&&
         fields(v.recipient,['deviceId','fileHash','signature'])&&validId(v.recipient.deviceId)&&
-        hexOf(v.recipient.fileHash,64)&&hexOf(v.recipient.signature,128))&&
+        hexOf(v.recipient.fileHash,64)&&hexOf(v.recipient.signature,128)||
+        fields(v,[...base,'expected','sponsor'])&&validatePairingAuthority(v.expected).ok&&
+        validOwnDeviceSetSponsor(v.sponsor,v.mapping?.length))&&
         v.version===1&&validatePairingAuthority(v.next).ok&&validId(v.guardId)&&hexOf(v.copyHash,64)&&validPairingFile(v.file)&&
         denseArray(v.mapping,row=>fields(row,['recipeId','sourceDocumentId','documentId'])&&(row.recipeId===null||validId(row.recipeId))&&validId(row.sourceDocumentId)&&validId(row.documentId));
       break;
@@ -787,9 +792,11 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       documents.some(d=>d.documentId===d.sourceDocumentId)||
       new Set(documents.map(d=>d.sourceDocumentId)).size!==documents.length)return fail('MALFORMED');
     if(recipient){
-      if(guard!==undefined||!fields(recipient,['deviceId','fileHash','signature'])||!validId(recipient.deviceId)||
+      if(guard!==undefined||sponsor!==undefined||!fields(recipient,['deviceId','fileHash','signature'])||!validId(recipient.deviceId)||
         !hexOf(recipient.fileHash,64)||!hexOf(recipient.signature,128))return fail('MALFORMED');
     }else{
+      if(sponsor!==undefined&&(!validOwnDeviceSetSponsor(sponsor,documents.length)||
+        documents.some(d=>d.localKey.record.identity.deviceId!==sponsor.deviceId)))return fail('MALFORMED');
       if(!guard?.expectedAuthority||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||
         guard.binding.scopeId!==expected.scope.id||guard.binding.branchHead!==expected.acceptedParent||
         !denseArray(guard.entries,entry=>object(entry)&&validId(entry.recipeId))||guard.catalogRevision!==guard.entries.length||
@@ -844,7 +851,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try{return await this.run(false,async tx=>{
       const op=key('household-own-device-set',scope.id,operationId),saved=await tx.get(op);
       if(saved===undefined)return {ok:true as const,value:null};
-      if(!saved.recipient||!sameRecord(saved.expected?.scope,scope)||!sameRecord(saved.next?.scope,scope)||
+      if((!saved.recipient&&!saved.sponsor)||!sameRecord(saved.expected?.scope,scope)||!sameRecord(saved.next?.scope,scope)||
         !sameRecord(await tx.get(key('pairing-authority','household',scope.id)),saved.next)||
         await tx.get(key('pairing-guard',saved.guardId))!==op||!Array.isArray(saved.mapping)||!validPairingFile(saved.file))return corrupt();
       const documents=[];
