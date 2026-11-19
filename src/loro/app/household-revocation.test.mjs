@@ -1,3 +1,4 @@
+import {householdPairing} from './household-pairing.mjs';
 import {openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {resolveAdultRemovalReceipt} from '../compromise/resolve-adult-removal.mjs';
 import {reopenAdultRemovalRecipient} from '../compromise/reopen-adult-removal.mjs';
@@ -129,6 +130,9 @@ async function withRotationFixture({owners,policy,guest},run){
     const runtime=new OfflineRuntime({storage,LoroDoc,decodeImportBlobMeta,scope:auth.scope,codec:candidateCodec(provider),
      keyRef:auth.scope.epochId,authority:{rootPin:pin,provider,selectionIndex:auth.selectionIndex}});
     runtime.disclosure=disclosureService({storage,scope,rootPin:pin,provider,deviceId});
+    participant.pairing=householdPairing({name:'fixture',sodium,storage,master,provider,store:bind(states),scope,pin,deviceId,adultId,
+     runtime,service:runtime.disclosure,pins:{list:async()=>[]},keys:keys(),signing,wrapping,signingKey,wrappingPublicKey,
+     selection:{},selectedHousehold:false,LoroDoc,randomUUID:()=>crypto.randomUUID(),withCurrent});
     Object.assign(participant,{runtime,service:householdRevocation({
      storage,scope,pin,provider,sodium,master,runtime,deviceId,adultId,signingKey,wrappingPublicKey,store:bind(states),
      withSecrets,LoroDoc,randomUUID:()=>crypto.randomUUID()
@@ -349,6 +353,36 @@ test('adult removal complete-set proposal binds its signed head and projected do
   const recipe=await a.runtime.forRecipe('soup');
   recipe.disclosure=a.runtime.disclosure;
   await apply(recipe,1,'recipe-create','soup-create',{recipe:{id:'soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:a.deviceId,at});
+  const originalRows=a.rows(),publicDraft=await a.pairing.adultRemoval.prepare({targetAdultId:'gamma',bindings:[await b.service.binding()],explicit:true});
+  assert.equal(publicDraft.complete,false);assert.equal(publicDraft.excludedAdultId,'gamma');
+  assert.deepEqual(publicDraft.excludedDevices.sort(),['c','tablet']);
+  assert(!JSON.stringify(publicDraft.proposal).includes('Soup'));
+  assert(!JSON.stringify(publicDraft.proposal).includes('snapshot\"'));
+  const reviewed=await b.pairing.adultRemoval.review({proposal:publicDraft.proposal});
+  assert.equal(reviewed.confirmation,publicDraft.confirmation);
+  await assert.rejects(()=>a.pairing.adultRemoval.approve({proposal:publicDraft.proposal,confirmed:'wrong',explicit:true}),/REVIEW_CHANGED/);
+  const approvedA=await a.pairing.adultRemoval.approve({proposal:publicDraft.proposal,confirmed:publicDraft.confirmation,explicit:true});
+  await assert.rejects(()=>a.pairing.adultRemoval.approve({proposal:approvedA.proposal,confirmed:approvedA.confirmation,explicit:true}),/ALREADY_APPROVED/);
+  const approvedB=await b.pairing.adultRemoval.approve({proposal:approvedA.proposal,confirmed:approvedA.confirmation,explicit:true});
+  assert.equal(approvedB.complete,true);assert.equal(approvedB.approvals,2);
+  const parentProof=await verifyPublicParent(a.storage,scope,pin,a.provider);
+  assert.equal((await verifyAdultRemovalGrant({provider:a.provider,pin,parent:parentProof.nodes.get(parentProof.state.activeHead),nodes:parentProof.nodes,state:parentProof.state,...approvedB.proposal})).complete,true);
+  assert.deepEqual(a.rows(),originalRows);
+  const authorityRow=originalRows.find(row=>row.key===JSON.stringify(['pairing-authority','household',scope.id]));
+  const originalSign=a.provider.sign;let changedDuringVote=false;
+  a.provider.sign=async(...args)=>{
+   const signed=await originalSign(...args);
+   if(!changedDuringVote){const changed=JSON.parse(authorityRow.value);changed.revision++;a.replaceRow(authorityRow.key,JSON.stringify(changed));changedDuringVote=true;}
+   return signed;
+  };
+  try{await assert.rejects(()=>a.pairing.adultRemoval.approve({proposal:publicDraft.proposal,confirmed:publicDraft.confirmation,explicit:true}),/STALE_AUTHORITY/);}
+  finally{a.provider.sign=originalSign;a.replaceRow(authorityRow.key,authorityRow.value);}
+  assert.deepEqual(a.rows(),originalRows);
+  for(const restricted of [{adultRemoval:{}},{activatedPolicy:{}},{returnedPolicy:{}},{installedSet:{paired:{}}}]){
+   const prior=a.runtime.authority;a.runtime.authority={...prior,...restricted};
+   try{await assert.rejects(()=>a.pairing.adultRemoval.review({proposal:publicDraft.proposal}),/UNSUPPORTED_VERSION/);}
+   finally{a.runtime.authority=prior;}
+  }
   const draft=await a.service.prepare({targetAdultId:'gamma',bindings:[await b.service.binding()],explicit:true});
   let allocation=0;
   const prepared=await prepareAdultRemovalDocumentSet({runtime:a.runtime,service:a.runtime.disclosure,item:draft.proposal.item,

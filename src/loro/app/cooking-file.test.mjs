@@ -1890,6 +1890,23 @@ test('selected recipe shopping copies and current-only admission survive durable
    finally{delete sponsor.runtime.authorization;}
   }finally{a.provider.verify=verify;signing.privateKey.fill(0);wrapping.privateKey.fill(0);}
  });
+ await t.test('installed admission prepares a public complete-set adult removal',async()=>{
+  const entries=new Map(),store={transaction:async fn=>fn({get:key=>entries.get(key),put:(key,value)=>entries.set(key,structuredClone(value))})};
+  const service=householdPairing({name:'fixture',sodium,storage:a.storage,provider:a.provider,store,scope,pin:a.root.head,
+   deviceId:a.deviceId,adultId:'adult',runtime:sponsor.runtime,service:sponsor.service,keys:signerKeys,
+   signing:{operationId:'test-signing'},wrapping:{operationId:'test-wrapping'},signingKey:signingRef,
+   wrappingPublicKey:sodium.to_hex(sponsorWrap.publicKey),LoroDoc});
+  const body={version:1,scopeId:scope.id,parentHead:eventHash,deviceId:b.deviceId,wrappingKey:sodium.to_hex(existingWrap.publicKey)};
+  const binding={...body,signature:sodium.to_hex(await a.provider.sign(a.root.devices.find(d=>d.deviceId===b.deviceId).signingKeyRef,domain('revocation-recipient',body)))};
+  const rows=a.rows();
+  const draft=await service.adultRemoval.prepare({targetAdultId:'newcomer',bindings:[binding],explicit:true});
+  assert.equal(draft.proposal.manifest.version,6);
+  assert.deepEqual(draft.proposal.manifest.entries.map(row=>row.recipeId),[null,'racing-child',recipeId,'sibling']);
+  assert(!JSON.stringify(draft.proposal).includes('Purple carrot'));
+  const approved=await service.adultRemoval.approve({proposal:draft.proposal,confirmed:draft.confirmation,explicit:true});
+  assert.equal(approved.complete,true);
+  assert.deepEqual(a.rows(),rows);
+ });
  let newcomer=await openPeer(freshStorage,newcomerSelection,receiverKeys,receiverRef);
  const recipeRuntime=await sponsor.runtime.forRecipe(recipeId);
  await assert.rejects(()=>sponsor.runtime.forRecipe('outside-signed-catalog'),/INVALID_RECIPE_DOCUMENT/);

@@ -1,5 +1,6 @@
 import {householdOwnDevice} from './household-own-device.mjs';
 import {householdReadmission} from './household-readmission.mjs';
+import {householdAdultRemoval} from './household-adult-removal.mjs';
 import {householdRevocation} from './household-revocation.mjs';
 import {prepareExistingCeremony,verifyExistingCeremony} from './household-existing-ceremony.mjs';
 import {reviewHouseholdGrant,approveHouseholdGrant,collectHouseholdGrantApproval} from './household-grant-review.mjs';
@@ -44,6 +45,7 @@ export function householdPairing({
     withSecrets, prepareJoinedSequences, finalizeJoinedSequences
   });
   const revocation=householdRevocation({...preparation,master,runtime,signingKey,wrappingPublicKey,withSecrets,LoroDoc,sha256});
+  const adultRemoval=householdAdultRemoval({...member,sodium,runtime,service,signingKey,randomUUID,revocation});
   const readmission=continuity&&householdReadmission({...authority,sodium,runtime,rotation:revocation,withSecrets,
     deviceId,signingKey,wrappingPublicKey,pins,transfer,...continuity});
   const ownDevice=householdOwnDevice({name,sodium,storage,scope,pin,provider,store,pins,identity,runtime,service,keys,master,withSecrets,
@@ -51,6 +53,7 @@ export function householdPairing({
   const installed = new Set();
   return {
     identity, selection, selectedHousehold,
+    adultRemoval:Object.fromEntries(Object.entries(adultRemoval).map(([name,method])=>[name,active(method)])),
     ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value!=='function'?value:
       (runtime.authority?.installedSet?.paired&&['history','resume','publish','publishPreparedSet','recoverPreparedSet','installEstablished'].includes(key)||
        runtime.authority?.installedSet&&!runtime.authority.installedSet.paired&&['request','propose','inspect','confirm','accept','resume','history','prepareSet','publishPreparedSet','recoverPreparedSet','prepareEstablishedOffer','verifyEstablishedOffer','installEstablished'].includes(key))?active(value):legacy(value)])),
