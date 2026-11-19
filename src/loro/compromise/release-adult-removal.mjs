@@ -40,5 +40,5 @@ export async function releaseAdultRemoval({storage,scope,operationId,pin,provide
   if(!fields(file,['recipientDeviceId','bytes']) || !fields(commitment,['recipientDeviceId','fileHash']) || file.recipientDeviceId!==id || commitment.recipientDeviceId!==id || commitment.fileHash!==hex(sodium.crypto_generichash(32,file.bytes)))throw Error('INVALID_FILE');
  }
  if(!same(must(await storage.readPairingAuthority(scope)),saved.next))throw Error('STALE_AUTHORITY');
- return {bytes:saved.files[recipients.indexOf(recipientDeviceId)].bytes.slice(),proposal:{item:body.item,grant:body.grant,manifest:body.manifest,recipientBindings:body.recipientBindings},publisherRecord:saved.next};
+ return {bytes:saved.files[recipients.indexOf(recipientDeviceId)].bytes.slice(),proof:saved.proof.slice(),proposal:{item:body.item,grant:body.grant,manifest:body.manifest,recipientBindings:body.recipientBindings},publisherRecord:saved.next};
 }

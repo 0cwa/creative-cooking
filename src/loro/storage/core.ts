@@ -187,6 +187,18 @@ function validAdultRemovalPublication(value:unknown):value is AdultRemovalPublic
 const adultRemovalCatalog=(p:AdultRemovalPublication)=>({
   manifestId:p.manifestHash,operationId:p.operationId,catalog:p.documents.slice(1).map(({recipeId,documentId})=>({recipeId,documentId}))
 });
+type AdultRemovalRecipient = {
+  version:1; operationId:string; recipientDeviceId:string; manifestHash:string; proof:Uint8Array; signature:string;
+  ciphertext:Uint8Array; publisherRecord:PairingAuthorityRecord; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
+  documents:AdultRemovalPublication['documents'];
+};
+function validAdultRemovalRecipient(v:unknown):v is AdultRemovalRecipient {
+ if(!fields(v,['version','operationId','recipientDeviceId','manifestHash','proof','signature','ciphertext','publisherRecord','expected','next','documents']) ||
+   !hexOf(v.signature,128) || !validPairingFile(v.ciphertext) || !validatePairingAuthority(v.publisherRecord).ok ||
+   !sameRecord(v.publisherRecord.scope,v.expected?.scope) || v.publisherRecord.acceptedParent!==v.next?.acceptedParent) return false;
+ return validAdultRemovalPublication({version:v.version,operationId:v.operationId,sponsorDeviceId:v.recipientDeviceId,
+   manifestHash:v.manifestHash,proof:v.proof,expected:v.expected,next:v.next,documents:v.documents,files:[]});
+}
 const validEstablishedRecipients = (value:unknown) => {
   if(!fields(value,['version','entries'])||value.version!==1||!Array.isArray(value.entries)||
     value.entries.length<1||value.entries.length>MAX_ESTABLISHED_RECIPIENTS||
@@ -242,6 +254,7 @@ const validateRecord = (k: string, v: any) => {
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
     case 'policy-set-activation': valid=parts.length===3 && validId(parts[1]) && validPolicySetReceipt(v) && v.expected.scope.id===parts[1] && v.next.acceptedParent===parts[2]; break;
     case 'policy-staged-set': valid=validStagedPolicyDocumentSet(v) && parts.length===3 && v.targetHead===parts[2]; break;
+    case 'adult-removal-recipient': valid=parts.length===3 && validAdultRemovalRecipient(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
     case 'adult-removal-publication': valid=parts.length===3 && validAdultRemovalPublication(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
     case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
@@ -1071,6 +1084,30 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await tx.put(catalog,adultRemovalCatalog(input));
       await tx.put(publication,input);
       this.fault?.('adult-removal-files');
+      await tx.put(authority,next);
+      return {ok:true as const,value:undefined};
+    });}catch(e){return fail(mapError(e));}
+  }
+  /** First write only, after the caller authenticates the recipient receipt and opened file. */
+  async commitAdultRemovalRecipient(input:AdultRemovalRecipient) {
+    input=snapshot(input);
+    if(!validAdultRemovalRecipient(input))return fail('MALFORMED');
+    const {expected,next,operationId,documents}=input, scope=expected.scope.id;
+    try{return await this.run(true,async tx=>{
+      const authority=key('pairing-authority','household',scope), receipt=key('adult-removal-recipient',scope,operationId);
+      const catalog=key('projection-document-set',scope,next.acceptedParent);
+      if(!sameRecord(await tx.get(authority),expected)||await tx.get(receipt)!==undefined||await tx.get(catalog)!==undefined)conflict();
+      for(const d of documents)if(await tx.get(key('document-owner',scope,d.documentId))!==undefined||
+        await tx.get(key('document',scope,d.documentId))!==undefined||await tx.get(key('projection-document',scope,d.documentId))!==undefined)conflict();
+      for(const {localKey} of documents)if((await installLocalKey(tx,localKey.record,localKey.catalog)).replayed)conflict();
+      this.fault?.('adult-removal-recipient-keys');
+      for(const d of documents){
+        await tx.put(key('document-owner',scope,d.documentId),next.acceptedParent);
+        await tx.put(key('document',scope,d.documentId),{bytes:d.bytes,revision:0});
+      }
+      await tx.put(catalog,adultRemovalCatalog({ ...input,sponsorDeviceId:input.recipientDeviceId,files:[] }));
+      await tx.put(receipt,input);
+      this.fault?.('adult-removal-recipient-receipt');
       await tx.put(authority,next);
       return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}

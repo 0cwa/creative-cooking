@@ -4,7 +4,7 @@ import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {withOpenedAdultRemovalFile} from '../pairing/adult-removal-file.mjs';
 import {verifyAdultRemovalGrant} from './adult-removal-grant.mjs';
 import {verifyRetainedAdultRemovalSuccessor} from './adult-removal-successor.mjs';
-import {hex} from './revocation.mjs';
+import {hex,verifySignature} from './revocation.mjs';
 
 const same=(a,b)=>hex(authorityBytes(a))===hex(authorityBytes(b));
 
@@ -26,6 +26,10 @@ export async function withOpenedAdultRemovalRelease({storage,scope,pin,provider,
  if(local.state.activeHead!==publisher.state.activeHead || !same(parent,localParent))throw Error('INVALID_PARENT');
  const recipient=localParent.devices.find(d=>d.active&&d.deviceId===recipientDeviceId);
  if(!recipient || recipientDeviceId===item.event.authorDeviceId || !grant.recipients.includes(recipientDeviceId))throw Error('INVALID_RECIPIENT');
+ let signed;
+ try { signed=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(release.proof)); } catch {throw Error('INVALID_PROOF');}
+ const author=parent.devices.find(d=>d.active&&d.deviceId===item.event.authorDeviceId), proof=signed?.[2], body=proof?.body;
+ if(!Array.isArray(signed)||signed.length!==3||signed[0]!=='creative-cooking/authority-candidate/v1'||signed[1]!=='adult-removal-publication-v1'||!same(release.proof,domain(signed[1],proof))||!author||!await verifySignature(provider,author.signingKeyRef,signed[1],body,proof.signature)||!same({item:body.item,grant:body.grant,manifest:body.manifest,recipientBindings:body.recipientBindings},proposal)||body.nextSnapshot!==publisherRecord.authorizationSnapshot||body.parentSnapshot!==parentRecord.authorizationSnapshot||body.deviceId!==item.event.authorDeviceId||!same(body.scope,scope)||body.operationId!==item.event.proposalId||!body.fileCommitments?.some(f=>f.recipientDeviceId===recipientDeviceId&&f.fileHash===hex(sodium.crypto_generichash(32,bytes))))throw Error('INVALID_PROOF');
  const options={provider,pin,parent,state:publisher.state,nodes:publisher.nodes,item,grant,manifest,recipientBindings,LoroDoc};
  const checked=await verifyAdultRemovalGrant(options);
  if(checked.eventHash!==confirmedHead || checked.grantHash!==confirmedGrantHash)throw Error('REVIEW_CHANGED');
@@ -45,6 +49,6 @@ export async function withOpenedAdultRemovalRelease({storage,scope,pin,provider,
   const record={scope,revision:expectedRevision+1,acceptedParent:checked.eventHash,authorizationSnapshot:await snapshotId(provider,state),authorityState:authorityBytes(state)};
   const now=await verifyPublicParent(storage,scope,pin,provider);
   if(!same(now.record,local.record))throw Error('STALE_AUTHORITY');
-  return callback({documents:opened.documents,keys:opened.keys,selection:structuredClone(selection),record});
+  return callback({documents:opened.documents,keys:opened.keys,selection:structuredClone(selection),record,expected:structuredClone(local.record)});
  });
 }
