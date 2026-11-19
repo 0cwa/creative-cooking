@@ -1,5 +1,6 @@
 import {validPairingScope} from '../contracts/pairing.ts';
 import sodium from 'libsodium-wrappers';
+import {discoverSelectedAdultRemoval} from './adult-removal-discovery.mjs';
 import {joinedHouseholdAuthority} from './joined-household-authority.mjs';
 import {openSequences} from './sequences.web.ts';
 
@@ -21,8 +22,9 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
  const locks=globalThis.navigator?.locks;if(!locks)throw Error('LOCK_UNAVAILABLE');
  return locks.request(`creative-cooking/joined-sequences/v1/${name}`,{mode:'exclusive'},async()=>{
   const found=await storage.householdRecipient.find(scope.id,operationId);if(!found.ok)throw Error('INVALID_ADMISSION');
+  if(mode!=='open'){const current=await storage.readPairingAuthority(scope);if(!current.ok||await discoverSelectedAdultRemoval(current.value,provider))throw Error('INVALID_ADMISSION');}
   const verified=mode==='prepare'&&found.value?null:
-   await joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired,allowActivatedPolicy:mode==='open'});
+   await joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired,allowActivatedPolicy:mode==='open',allowAdultRemoval:mode==='open'});
   if(mode!=='prepare'&&!verified)throw Error('MISSING_ADMISSION');
   const db=await new Promise<IDBDatabase>((resolve,reject)=>{const q=indexedDB.open(`${name}-joined`,1);q.onupgradeneeded=()=>q.result.createObjectStore('enrollments');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
   const bindingKey=[scope.id,'counter-binding'];
@@ -57,7 +59,7 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    const legacyName=!pairedEnrollment&&savedBinding===undefined&&enrollment?.version===1&&typeof enrollment.sequenceName==='string'&&/^joined-[a-z0-9-]{36}$/.test(enrollment.sequenceName);
    const boundName=enrollment?.version===2&&enrollment.sequenceName===sequenceName&&
     (anchored||unannotated||!pairedEnrollment&&savedBinding===undefined);
-   if(verified?.activatedPolicy && !(boundName && anchored && enrollment.stage==='active'))throw Error('MISSING_ENROLLMENT');
+   if((verified?.activatedPolicy||verified?.adultRemoval) && !(boundName && anchored && enrollment.stage==='active'))throw Error('MISSING_ENROLLMENT');
    if(!(boundName||legacyName)||!['pending','active'].includes(enrollment.stage)||enrollment.scopeId!==scope.id||enrollment.pin!==pin||enrollment.deviceId!==deviceId||enrollment.operationId!==operationId)throw Error('ENROLLMENT_CONFLICT');
    if(mode==='prepare'){
     if(enrollment.stage!=='pending'&&!found.value&&!verified)throw Error('ENROLLMENT_CONFLICT');
@@ -73,7 +75,7 @@ async function joinedSequences({name,storage,scope,pin,pins,provider,deviceId,op
    }
    const finalize=mode==='finalize'&&enrollment.stage==='pending';
    sequences=await openSequences(enrollment.sequenceName,[scope.id],finalize,enrollment.version===2?binding:null);
-   if(!verified?.activatedPolicy&&(finalize||boundName&&!anchored))await put({...enrollment,stage:'active'});
+   if(!verified?.activatedPolicy&&!verified?.adultRemoval&&(finalize||boundName&&!anchored))await put({...enrollment,stage:'active'});
    return {sequences,...verified!};
   } catch(e) {sequences?.close();throw e} finally {db.close()}
  });

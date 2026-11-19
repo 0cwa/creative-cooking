@@ -17,7 +17,7 @@ import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {readVerifiedActivatedPolicyDocumentSet,readPolicyReturnActivationEvidence} from './read-activated-policy-document-set.mjs';
 import {readRecipeCatalog} from './selected-recipe-catalog.mjs';
-import {PAIRING_LIMITS} from '../contracts/pairing.ts';
+import {discoverSelectedAdultRemoval} from './adult-removal-discovery.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 import {unsupportedPolicySource} from '../authority/policy-document-set.mjs';
 
@@ -194,20 +194,10 @@ export async function resolveOriginalHousehold({storage,scope,pin,provider,devic
  if(!initial.ok)throw Error(initial.error.code??initial.error);
  if(initial.value){
   const raw=initial.value;
-  if(!(raw.authorityState instanceof Uint8Array)||raw.authorityState.length>PAIRING_LIMITS.itemBytes)throw Error('INVALID_AUTHORITY');
-  let state;try{state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw.authorityState));}catch{throw Error('INVALID_AUTHORITY');}
-  if(!Array.isArray(state.events)||state.events.length>128||!Array.isArray(state.selections)||state.selections.length>128)throw Error('INVALID_AUTHORITY');
-  const matches=[];
-  for(const item of state.events){
-   if(item?.event?.version!==2||item.event.kind!=='removeAdult'||item.rotation?.grant?.version!==3)continue;
-   const hash=await provider.hash(domain('event',item.event));
-   if(!(hash instanceof Uint8Array)||hash.length!==32)throw Error('INVALID_AUTHORITY');
-   if(Array.from(hash,x=>x.toString(16).padStart(2,'0')).join('')===raw.acceptedParent)matches.push(item);
-  }
-  if(matches.length){
-   const item=matches[0],last=state.selections.at(-1),operationId=item.event.proposalId;
-   if(matches.length!==1||state.activeHead!==raw.acceptedParent||last?.to!==raw.acceptedParent||typeof operationId!=='string'||!operationId||new TextEncoder().encode(operationId).length>PAIRING_LIMITS.idBytes||typeof item.event.authorDeviceId!=='string'||!paired?.keys)throw Error('INVALID_AUTHORITY');
-   const role=item.event.authorDeviceId===deviceId?'sponsor':'recipient';
+  const candidate=await discoverSelectedAdultRemoval(raw,provider);
+  if(candidate){
+   if(!paired?.keys)throw Error('INVALID_AUTHORITY');
+   const {operationId,authorDeviceId}=candidate,role=authorDeviceId===deviceId?'sponsor':'recipient';
    const adultRemoval={operationId,role,withWrapping:paired.useWrapping};
    const resolved=await resolveAdultRemovalRuntimeAuthority({storage,scope,pin,provider,authorDevice:deviceId,operationId,role,sodium,LoroDoc,keys:paired.keys,withWrapping:paired.useWrapping});
    const current=await storage.readPairingAuthority(scope);

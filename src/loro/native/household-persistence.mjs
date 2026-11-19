@@ -110,7 +110,7 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
       return lockWorkspace(name, 'enrollment', async () => {
         const found = await storage.householdRecipient.find(scope.id, operationId);
         if (!found.ok) throw Error('INVALID_ADMISSION');
-        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired,allowActivatedPolicy:mode==='open'});
+        const admission=()=>joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired,allowActivatedPolicy:mode==='open',allowAdultRemoval:mode==='open'});
         const key = enrollmentKey(scope.id);
         const [enrollment, activation] = await workspaceRun(false, async tx =>
           [await tx.get(key), await tx.get(activationKey(scope.id))]);
@@ -145,14 +145,14 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         }
         const verified=await admission();
         if (!verified) throw Error('MISSING_ADMISSION');
-        if (verified.activatedPolicy && (enrollment?.stage !== 'active' || !activation || mayInitialize)) throw Error('MISSING_ENROLLMENT');
+        if ((verified.activatedPolicy || verified.adultRemoval) && (enrollment?.stage !== 'active' || !activation || mayInitialize)) throw Error('MISSING_ENROLLMENT');
         if (mode === 'open' && (enrollment??legacy)?.stage === 'pending') throw Error('INCOMPLETE_ENROLLMENT');
         if((verified.installedSet || activation !== undefined)&&!enrollment&&!legacy)throw Error('MISSING_ENROLLMENT');
         const counters = openDatabase(`${name}-${operationId}`);
         try {
           const initialize = mode === 'finalize' && mayInitialize && !alreadyActive;
           const sequences = openNativeSequences(counters, [scope.id], initialize);
-          if (!verified.activatedPolicy && (enrollment?.stage !== 'active' || activation === undefined)) {
+          if (!(verified.activatedPolicy || verified.adultRemoval) && (enrollment?.stage !== 'active' || activation === undefined)) {
             await workspaceRun(true, async tx => {
               await tx.put(key, {...identity, stage:'active'});
               await tx.put(activationKey(scope.id), identity);
