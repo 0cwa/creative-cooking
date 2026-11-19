@@ -25,7 +25,7 @@ export function selectedOperationReportService(runtime) {
    let report;try{report=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(reportBytes));}catch{throw Error('CORRUPT');}
    if(!same(canonicalReportBytes(report),reportBytes))throw Error('CORRUPT');
    const verified=await verifySelectedOperationReport(runtime,{report,candidates:stored.objects});
-   return {reportHash,report:verified.report,evidence:verified.evidence};
+   return {reportHash,report:verified.report,evidence:verified.evidence,guard:verified.guard};
   },
  };
 }

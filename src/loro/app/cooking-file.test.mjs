@@ -191,6 +191,64 @@ function fixtureSessionStore(connection){
  }};
 }
 
+test('frozen selected retention holds a shopping copy when its recipe field is excluded',async t=>{
+ const [a]=await household(t,{onDisk:true}),keys=a.storage.localKeys(testMaster(),sodium);
+ await keys.provision('retention-master');
+ const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
+ await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
+ const at='2026-01-01T00:00:00Z',child=await a.runtime.forRecipe('retention-recipe');let seq=0;
+ const sequences={reserve:async()=>++seq},save=(runtime,id,commands)=>executeAction(runtime,sequences,id,commands,a.service);
+ const beforeRecipe={id:'retention-recipe',title:'Soup',portions:2,ingredients:[{id:'carrot',name:'Carrot',amount:'1 cup',needsShopping:true}],steps:[],stepIds:[],createdAt:at,updatedAt:at};
+ const creation=planRecipeAction({doc:(await child.document()).doc,before:null,after:beforeRecipe,actionId:'retention-create',author:a.deviceId,at});
+ await save(child,'retention-create',creation);
+ const changedRecipe={...beforeRecipe,ingredients:[{...beforeRecipe.ingredients[0],amount:'2 cups'}]};
+ const field=planRecipeAction({doc:(await child.document()).doc,before:beforeRecipe,after:changedRecipe,actionId:'retention-field',author:a.deviceId,at});
+ await save(child,'retention-field',field);
+ const selected=await openSelectedRecipeCatalog(a.runtime),before=projectCooking(selected.parent.doc);
+ const list={id:'retention-list',name:'Market',currentCycleId:'retention-cycle',createdAt:at,updatedAt:at};
+ const cycle={id:'retention-cycle',listId:list.id,startedAt:at};
+ const copied={id:'retention-item',listId:list.id,name:'Carrot',recipeId:beforeRecipe.id,ingredientId:'carrot',displayQuantity:'2 cups',purchaseCycleId:cycle.id,checked:false,createdAt:at,updatedAt:at};
+ const shopping=planShoppingAction({doc:selected.parent.doc,recipeCatalog:selected,before:before.shopping,after:{lists:[list],cycles:[cycle],items:[copied],purchases:[]},pantryBefore:before.pantry,pantryAfter:before.pantry,actionId:'retention-copy',author:a.deviceId,at});
+ await save(a.runtime,'retention-copy',shopping);
+ const pantry={version:1,kind:'pantry-create',commandId:'retention-pantry',effectId:'retention-pantry',dependencyEffectIds:[],data:{itemId:'retention-pantry',name:'Beans',preference:3,author:a.deviceId,at}};
+ await save(a.runtime,'retention-pantry',[pantry]);
+ const identity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:a.root.epochId};
+ const sourceKey=await keys.preparePairedDataKey('retention-source',identity,a.dataKey),{installLocalKey}=await import('../storage/local-keys.ts');
+ await openSQLiteTransaction(a.connection)(true,tx=>installLocalKey(tx,sourceKey.record,sourceKey.catalog));
+ const signingKeys=Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='retention-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)});
+ const runtime=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:await resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
+ const candidates=[];
+ for(const [action,documentId] of [['retention-create',child.scope.documentId],['retention-field',child.scope.documentId],['retention-copy',runtime.scope.documentId],['retention-pantry',runtime.scope.documentId]]){
+  const operation=must(await a.storage.getLocalOperation(scope.id,action));for(const {object} of operation.commit.outbound)candidates.push({sourceId:'outbound',documentId,objectId:object.id,bytes:object.bytes});
+ }
+ const copy=shopping.find(command=>command.data.itemId===copied.id),prerequisite=field.find(command=>command.data.field==='amount');
+ assert.ok(copy.data.recipeSource.effectIds.includes(prerequisite.effectId));
+ const {buildSelectedOperationReport}=await import('../compromise/selected-report.mjs');
+ const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
+ const {planSelectedRetention}=await import('../compromise/selected-retention.mjs');
+ const report=await buildSelectedOperationReport(runtime,{candidates,suspectDevice:'device-1',boundary:{documentId:child.scope.documentId,objectId:candidates[0].objectId}});
+ const {reportHash}=await selectedOperationReportService(runtime).freeze({report:report.report,candidates});
+ const all=report.evidence.map(row=>row.evidence.command.effectId),selectedIds=all.filter(id=>id!==prerequisite.effectId),beforeRows=a.rows();
+ const plan=await planSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds});
+ const row=id=>plan.rows.find(row=>row.effectId===id);
+ assert.equal(row(prerequisite.effectId).status,'excluded');
+ assert.equal(row(copy.effectId).status,'held');
+ assert.equal(row(copy.effectId).reason,'EXCLUDED_DEPENDENCY');
+ assert.equal(row('retention-pantry').status,'retained');
+ assert.equal(row(copy.effectId).documentId,runtime.scope.documentId);
+ assert.equal(row(prerequisite.effectId).recipeId,beforeRecipe.id);
+ assert.deepEqual(a.rows(),beforeRows);
+ assert.deepEqual(await planSelectedRetention(runtime,{reportHash,selectedEffectIds:[...selectedIds].reverse()}),plan);
+ const allPlan=await planSelectedRetention(runtime,{reportHash,selectedEffectIds:all});
+ const fieldRow=allPlan.rows.find(row=>row.effectId===prerequisite.effectId),copyRow=allPlan.rows.find(row=>row.effectId===copy.effectId);
+ assert.equal(copyRow.status,'retained');assert.ok(fieldRow.order<copyRow.order);
+ await assert.rejects(()=>planSelectedRetention(runtime,{reportHash,selectedEffectIds:['not-in-batch']}),/UNKNOWN_EFFECT/);
+ const check=a.storage.checkSelectedHouseholdSources.bind(a.storage);let checks=0;
+ a.storage.checkSelectedHouseholdSources=async guard=>++checks===7?{ok:false,error:{code:'CONFLICT'}}:check(guard);
+ try {await assert.rejects(()=>planSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds}),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=check;}
+ assert.deepEqual(a.rows(),beforeRows);
+});
+
 test('mounted admission rule stages a signed recipe set',async t=>{
  const [a]=await household(t,{onDisk:true}), keys=a.storage.localKeys(testMaster(),sodium);
  await keys.provision('rule-master');
