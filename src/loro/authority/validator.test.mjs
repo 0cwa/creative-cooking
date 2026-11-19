@@ -55,3 +55,16 @@ test('v2 invite signs exact recipient keys, peers and fresh runtime; legacy rema
  const approvals=[{...approval,signature:sign('a1','approval-signature',approval)}], sig=sign('a1','event-signature',e);
  for(const change of [{...subject,devices:[{...subject.devices[0],signingKeyRef:'other'}]},{...subject,devices:[{...subject.devices[0],peerId:'1'}]},{...subject,documentId:'cooking'},{...subject,newEpochId:'epoch'}]) assert.notEqual((await validateSuccessor(parent,{...e,subject:change},sig,approvals,provider)).reason,'ADMISSION_AND_PROJECTION_REQUIRED');
 });
+
+test('v6 policy set subject uses the existing author and adult quorum rules; v3 remains valid',async()=>{
+ const baseline={frontiers:[],historyHash:'a'.repeat(64)};
+ const e=event({version:6,subject:{baseline,setHash:'b'.repeat(64),documentCount:2}});
+ assert.equal((await run(parent,e,[['a','a1']])).reason,'QUORUM_REQUIRED');
+ assert.equal((await run(parent,e,[['a','a1'],['b','b1']])).status,'validated');
+ assert.equal((await validateSuccessor(parent,e,'0'.repeat(128),[],provider)).reason,'INVALID_PROOF');
+ const sig=sign('a1','event-signature',e);
+ assert.equal((await validateSuccessor(parent,{...e,subject:{...e.subject,setHash:'c'.repeat(64)}},sig,[],provider)).reason,'INVALID_PROOF');
+ for(const changed of [{kind:'pairOwnDevice'},{version:7},{subject:{...e.subject,documentCount:0}},{subject:baseline}])
+  assert.equal((await run(parent,{...e,...changed},[])).reason,'INVALID_INPUT');
+ assert.equal((await run(parent,event({version:3,subject:baseline}),[['a','a1'],['b','b1']])).status,'validated');
+});

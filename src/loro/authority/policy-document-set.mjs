@@ -59,3 +59,25 @@ export async function verifyPolicyDocumentSet({storage,scope,pin,provider,LoroDo
   }
   return verified;
 }
+
+/** Authenticate the complete set before deriving or matching the compact event subject. */
+export async function policyDocumentSetSubject(options) {
+  const signed=structuredClone(options.signed);
+  await verifyPolicyDocumentSet({...options,signed});
+  return {baseline:structuredClone(signed.body.documents[0].baseline),
+    setHash:await selectedSourceHash(options.provider,'policy-document-set-subject-v1',signed),
+    documentCount:signed.body.documents.length};
+}
+
+export async function matchPolicyDocumentSetEvent(options,event) {
+  event=structuredClone(event);
+  const signed=structuredClone(options.signed);
+  const subject=await policyDocumentSetSubject({...options,signed});
+  const manifest=signed.body.observation.manifest;
+  if(event?.version!==6 || event.kind!=='changePolicy' || event.authorDeviceId!==signed.deviceId ||
+    event.householdId!==manifest.householdId || event.parentHead!==manifest.parentHead ||
+    event.epochId!==manifest.epochId || event.generation!==manifest.generation ||
+    hex(domain('policy-document-set-subject-comparison',event.subject))!==hex(domain('policy-document-set-subject-comparison',subject)))
+    throw Error('POLICY_DOCUMENT_SET_EVENT_MISMATCH');
+  return subject;
+}

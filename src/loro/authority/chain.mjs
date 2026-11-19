@@ -35,6 +35,7 @@ export async function verifyAuthority(state,pin,provider,{pendingOwnDeviceSet=nu
  const wrappingFingerprints=new Map(), wrappingByHead=new Map([[pin,new Map()]]), pairingHeads=new Set(), pairingGuards=new Set();
  for(const item of state.events) {
   if (!item || Array.isArray(item) || !['approvals,authorSignature,event','admission,approvals,authorSignature,event','approvals,authorSignature,event,rotation','approvals,authorSignature,event,ownDevice'].includes(Object.keys(item).sort().join(','))) throw Error('MALFORMED');
+  if(item.event?.version===6)throw Error('UNSUPPORTED_VERSION');
   const parent=nodes.get(item.event?.parentHead); if (!parent) throw Error('MISSING_PARENT');
   const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
   if(Object.hasOwn(item,'ownDevice')&&item.event.kind!=='pairOwnDevice')throw Error('INVALID_OWN_DEVICE');
@@ -299,7 +300,8 @@ export function observeSuccessorWithOutcome(storage,scope,pin,provider,item,expe
 
 async function observePolicySuccessor(storage,scope,pin,provider,item,retry,expectedParent) {
  scope=copy(scope);
- item=copy(item); const {record,state,nodes}=await load(storage,scope,pin,provider);
+ item=copy(item); if(item.event?.version===6)throw Error('UNSUPPORTED_VERSION');
+ const {record,state,nodes}=await load(storage,scope,pin,provider);
  const parent=nodes.get(item.event?.parentHead); if(!parent)throw Error('MISSING_PARENT');
  const r=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
  if(r.status!=='validated')throw Error(r.reason);

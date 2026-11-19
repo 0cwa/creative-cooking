@@ -1,4 +1,4 @@
-import {observePolicyDocumentSet,verifyPolicyDocumentSet} from '../authority/policy-document-set.mjs';
+import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject,matchPolicyDocumentSetEvent} from '../authority/policy-document-set.mjs';
 import {householdPairing} from './household-pairing.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {installEstablishedOwnDeviceSet,commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
@@ -697,6 +697,19 @@ test('selected recipe shopping copies and current-only admission survive durable
  const retained=full.sources.map(source=>({documentId:source.runtime.scope.documentId,revision:source.revision,bytes:source.bytes??new Uint8Array()}));
  const verifyFull=(signed=full.signed,docs=retained,pin=b.root.head)=>verifyPolicyDocumentSet({storage:b.storage,scope,pin,provider:b.provider,LoroDoc,signed,retained:docs});
  await verifyFull();
+ const setOptions={storage:b.storage,scope,pin:b.root.head,provider:b.provider,LoroDoc,signed:full.signed,retained};
+ const subject=await policyDocumentSetSubject(setOptions);
+ const setManifest=full.signed.body.observation.manifest;
+ const policyEvent={version:6,kind:'changePolicy',authorDeviceId:full.signed.deviceId,householdId:setManifest.householdId,
+  parentHead:setManifest.parentHead,epochId:setManifest.epochId,generation:setManifest.generation,subject};
+ assert.equal(subject.documentCount,3);
+ assert.deepEqual(subject.baseline,full.signed.body.documents[0].baseline);
+ await matchPolicyDocumentSetEvent(setOptions,policyEvent);
+ for(const change of [{version:3},{kind:'pairOwnDevice'},{authorDeviceId:'wrong'},{householdId:'wrong'},
+  {parentHead:'wrong'},{epochId:'wrong'},{generation:setManifest.generation+1},
+  {subject:{...subject,setHash:'0'.repeat(64)}},{subject:{...subject,documentCount:1}},
+  {subject:{...subject,baseline:{...subject.baseline,historyHash:'0'.repeat(64)}}}])
+  await assert.rejects(()=>matchPolicyDocumentSetEvent(setOptions,{...policyEvent,...change}),/POLICY_DOCUMENT_SET_EVENT_MISMATCH/);
  await assert.rejects(()=>verifyFull(full.signed,retained.slice(0,-1)),/INVALID_POLICY_DOCUMENT_SET/);
  await assert.rejects(()=>verifyFull(full.signed,[retained[0],retained[1],retained[1]]),/INVALID_POLICY_DOCUMENT_SET/);
  const modified=structuredClone(full.signed); modified.body.documents[1].baseline.historyHash='0'.repeat(64);

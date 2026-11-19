@@ -170,3 +170,17 @@ test('household resolver returns immutable signing key references from the pinne
  const result=await resolveRuntimeAuthority(storage,scope,candidate.head,provider,'a');assert.deepEqual(result.signingKeyRefs,{a:'different-key',b:'b'});assert.throws(()=>{result.signingKeyRefs.a='wrong'},TypeError);assert.equal((await resolveRuntimeAuthority(storage,scope,candidate.head,provider,'a')).signingKeyRefs.a,'different-key');
  } finally {database.close()}
 });
+
+test('v6 policy document sets cannot be replayed or retained as active authority',async()=>{
+ const {database,storage}=isolatedStore();
+ try {
+  await initializeAuthority(storage,root,root.head,provider);
+  const e={...event('set'),version:6,subject:{baseline:{frontiers:[],historyHash:'a'.repeat(64)},setHash:'b'.repeat(64),documentCount:2}};
+  const eventHash=hex(await provider.hash(domain('event',e)));
+  const approval={version:1,householdId:'house',eventHash,parentHead:root.head,policyHash:root.policyHash,generation:1,epochId:'epoch',adultId:'a',deviceId:'a'};
+  const entry={event:e,authorSignature:sign('a','event-signature',e),approvals:[{...approval,signature:sign('a','approval-signature',approval)}]};
+  await assert.rejects(verifyAuthority({version:1,root,events:[entry],selections:[],activeHead:root.head},root.head,provider),/UNSUPPORTED_VERSION/);
+  await assert.rejects(observeSuccessor(storage,scope,root.head,provider,entry),/UNSUPPORTED_VERSION/);
+  assert.equal((await readAuthority(storage,scope,root.head,provider)).activeHead,root.head);
+ } finally {database.close();}
+});
