@@ -1,4 +1,4 @@
-import {stageVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
+import {stageVerifiedPolicyDocumentSet,readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject,matchPolicyDocumentSetEvent} from '../authority/policy-document-set.mjs';
 import {householdPairing} from './household-pairing.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
@@ -727,6 +727,13 @@ test('selected recipe shopping copies and current-only admission survive durable
  assert.equal(staged.mapping[0].targetDocumentId,`policy-${eventHash}`);
  const savedStage=await a.storage.readStagedPolicyDocumentSet(scope.id,eventHash);
  assert.equal(savedStage.ok,true); assert.deepEqual(savedStage.value.mapping,staged.mapping);
+ const readStage=()=>readVerifiedPolicyDocumentSet({runtime:a.runtime,targetHead:eventHash});
+ assert.equal((await readStage()).targetHead,eventHash);
+ for(const mutate of [s=>{s.proof=new Uint8Array([...s.proof,32])},s=>{s.mapping[1].targetDocumentId='substitute'},s=>{s.mapping[1].baseline[0]^=1},s=>{s.sourceHead='wrong'}]) {
+  const fake=structuredClone(savedStage.value); mutate(fake);
+  const storage=Object.assign(Object.create(a.storage),{readStagedPolicyDocumentSet:async()=>({ok:true,value:fake})});
+  await assert.rejects(()=>readVerifiedPolicyDocumentSet({runtime:Object.assign(Object.create(a.runtime),{storage}),targetHead:eventHash}));
+ }
  assert.equal((await verifyFull()).selected.head,parent.head);
  }
 

@@ -35,3 +35,50 @@ export async function stageVerifiedPolicyDocumentSet({runtime,item,signed}) {
  if(!staged.ok) throw Error(staged.error.code);
  return {targetHead,mapping};
 }
+
+/** Authenticate a staged set while its independently pinned source is current.
+ * The returned records must be compared again in the eventual atomic transaction. */
+export async function readVerifiedPolicyDocumentSet({runtime,targetHead}) {
+ const {storage,LoroDoc,authority}=runtime, {provider,rootPin:pin}=authority;
+ const loaded=await storage.readStagedPolicyDocumentSet(runtime.scope.scopeId,targetHead);
+ if(!loaded.ok) throw Error(loaded.error.code);
+ if(!loaded.value) throw Error('STAGE_NOT_FOUND');
+ const stage=loaded.value;
+ let envelope;
+ try { envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(stage.proof)); }
+ catch { throw Error('INVALID_STAGED_PROOF'); }
+ if(!Array.isArray(envelope) || envelope.length!==3 || envelope[0]!=='creative-cooking/authority-candidate/v1' ||
+   envelope[1]!=='staged-policy-document-set-v1' || !envelope[2] || typeof envelope[2]!=='object' ||
+   Array.isArray(envelope[2]) || Object.keys(envelope[2]).sort().join(',')!=='item,parent,signed,version' ||
+   envelope[2].version!==1 || !sameBytes(domain(envelope[1],envelope[2]),stage.proof)) throw Error('INVALID_STAGED_PROOF');
+ const {item,signed,parent}=envelope[2], manifest=signed?.body?.observation?.manifest;
+ if(!manifest || stage.mapping.length!==manifest.children?.length+1) throw Error('INVALID_STAGED_PROOF');
+ const claims=[manifest.root,...manifest.children];
+ const retained=stage.mapping.map((row,i)=>({documentId:row.sourceDocumentId,revision:claims[i].revision,
+   bytes:claims[i].checkpointHash===null?new Uint8Array():row.baseline}));
+ // An absent root is stored as a real empty snapshot, not arbitrary bytes.
+ if(manifest.root.checkpointHash===null) {
+  const doc=new LoroDoc();
+  try { if(doc.import(stage.mapping[0].baseline).pending?.size) throw Error(); }
+  catch { throw Error('INVALID_STAGED_PROOF'); }
+  const {policyBaseline}=await import('../authority/policy-baseline.mjs');
+  if(!same(await policyBaseline(doc,provider),await policyBaseline(new LoroDoc(),provider))) throw Error('INVALID_STAGED_PROOF');
+ }
+ const options={storage,scope:{kind:'household',id:runtime.scope.scopeId},pin,provider,LoroDoc,signed,retained};
+ const verified=await verifyPolicyDocumentSet(options);
+ if(verified.record.revision!==manifest.authorityRevision || verified.record.authorizationSnapshot!==manifest.authorizationSnapshot ||
+   verified.selected.head!==stage.sourceHead || !same(parent,verified.selected)) throw Error('STALE_SOURCE');
+ await matchPolicyDocumentSetEvent(options,item?.event);
+ const result=await validateSuccessor(verified.selected,item.event,item.authorSignature,item.approvals,provider);
+ if(result.status!=='validated') throw Error(result.reason||'INVALID_PROOF');
+ if(result.eventHash!==targetHead || stage.targetHead!==targetHead) throw Error('INVALID_STAGED_PROOF');
+ const target={...runtime.scope,branchHead:targetHead,documentId:`policy-${targetHead}`};
+ for(let i=0;i<stage.mapping.length;i++) {
+  const row=stage.mapping[i], claim=claims[i], recipeId=i===0?null:claim.recipeId;
+  const expected=recipeId===null?target.documentId:await recipeDocumentId(target,pin,provider,recipeId);
+  if(row.recipeId!==recipeId || row.sourceDocumentId!==claim.documentId || row.targetDocumentId!==expected) throw Error('INVALID_STAGED_PROOF');
+ }
+ return structuredClone({targetHead,item,signed,parent:verified.selected,stage,current:verified.record});
+}
+
+const sameBytes=(a,b)=>a.length===b.length && a.every((byte,i)=>byte===b[i]);
