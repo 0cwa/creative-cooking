@@ -1,3 +1,4 @@
+import {withOpenedAdultRemovalRelease} from '../compromise/open-adult-removal.mjs';
 import {releaseAdultRemoval} from '../compromise/release-adult-removal.mjs';
 import {authorAdultRemovalSuccessor,verifyAdultRemovalSuccessor} from '../compromise/adult-removal-successor.mjs';
 import {test} from 'node:test';
@@ -11,7 +12,7 @@ import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
-import {checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin,verifyAuthority} from '../authority/chain.mjs';
+import {authorityBytes,snapshotId,checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin,verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {approveHouseholdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
 import {householdCompromise} from './household-compromise.mjs';
@@ -502,6 +503,46 @@ test('adult removal complete-set proposal binds its signed head and projected do
    await assert.rejects(()=>releaseAdultRemoval({...releaseOptions,storage}));
    assert.deepEqual(a.rows(),releaseRows);
   }
+  const localBefore=b.rows();
+  await b.keys().useIdentity(wrapperIdentity(b.deviceId),async wrappingSecret=>{
+   const opener={storage:b.storage,scope,pin,provider:b.provider,sodium,LoroDoc,release:released,recipientDeviceId:b.deviceId,wrappingSecret,
+    signSelection:bytes=>b.provider.sign(b.signingKey,bytes),confirmedHead:confirmed.eventHash,confirmedGrantHash:confirmed.grantHash,expectedRevision:record.revision};
+   let selection;
+   await withOpenedAdultRemovalRelease(opener,async opened=>{
+    selection=structuredClone(opened.selection);
+    assert.equal(opened.record.acceptedParent,confirmed.eventHash);
+    assert.equal(opened.selection.deviceId,b.deviceId);
+    for(const [i,d] of retained.value.documents.entries())await a.keys().use(d.localKey.record.operationId,d.localKey.record.identity,key=>assert.deepEqual(key,opened.keys[i]));
+   });
+   await withOpenedAdultRemovalRelease({...opener,localSelection:selection,signSelection:undefined},opened=>assert.deepEqual(opened.selection,selection));
+   const localRecord=(await b.storage.readPairingAuthority(scope)).value;
+   const different=JSON.parse(new TextDecoder().decode(localRecord.authorityState));
+   const extra={from:different.activeHead,to:different.activeHead,deviceId:b.deviceId,index:different.selections.length};
+   extra.signature=sodium.to_hex(await b.provider.sign(b.signingKey,domain('select-head',{root:pin,householdId:scope.id,...extra})));
+   different.selections.push(extra);
+   const differentRecord={...localRecord,revision:localRecord.revision+1,authorizationSnapshot:await snapshotId(b.provider,different),authorityState:authorityBytes(different)};
+   const alternateStorage={readPairingAuthority:async()=>({ok:true,value:structuredClone(differentRecord)})};
+   await withOpenedAdultRemovalRelease({...opener,storage:alternateStorage,expectedRevision:differentRecord.revision},opened=>{
+    const next=JSON.parse(new TextDecoder().decode(opened.record.authorityState));
+    assert.deepEqual(next.selections.slice(0,-1),different.selections);
+    assert.equal(opened.selection.index,different.selections.length);
+   });
+
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,pin:'wrong'},()=>{}));
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,recipientDeviceId:'c'},()=>{}));
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,confirmedHead:'wrong'},()=>{}));
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,confirmedGrantHash:'wrong'},()=>{}));
+   let reads=0; const racingStorage={readPairingAuthority:async()=>({ok:true,value:++reads===1?localRecord:differentRecord})};
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,storage:racingStorage},()=>{throw Error('unexpected callback')}),/STALE_AUTHORITY/);
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,expectedRevision:record.revision+1},()=>{}));
+   const changed=structuredClone(released), state=JSON.parse(new TextDecoder().decode(changed.publisherRecord.authorityState));
+   state.selections.at(-1).signature='0'.repeat(128); changed.publisherRecord.authorityState=authorityBytes(state);
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,release:changed},()=>{}));
+   const badParent=structuredClone(released);badParent.proposal.manifest.parentHead='wrong';
+   await assert.rejects(()=>withOpenedAdultRemovalRelease({...opener,release:badParent},()=>{}));
+  });
+  assert.deepEqual(b.rows(),localBefore);
+  assert.deepEqual(a.rows(),releaseRows);
   const storedFile=retained.value.files[0];
   assert.deepEqual(publishedProof.fileCommitments,[{recipientDeviceId:b.deviceId,fileHash:sodium.to_hex(sodium.crypto_generichash(32,storedFile.bytes))}]);
   await b.keys().useIdentity(wrapperIdentity(b.deviceId),wrappingSecret=>
