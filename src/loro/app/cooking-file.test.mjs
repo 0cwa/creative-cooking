@@ -43,7 +43,7 @@ import {householdReceiverIds} from './household-transfer.mjs';
 import {householdLocalTrust} from './household-local-trust.mjs';
 import {executeAction} from './action.mjs';
 import {bindHouseholdContent} from './household-content.mjs';
-import {prepareWorkspacePolicyDocumentKeys,openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
+import {activateStagedPolicyDocumentSet,prepareWorkspacePolicyDocumentKeys,openWorkspaceHouseholdRuntime,resolveOriginalHousehold} from './workspace-household-runtime.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planRecipeRestore,readRecipeHistory} from '../domain/recipe-history.mjs';
@@ -124,7 +124,7 @@ async function household(t,{onDisk=false}={}) {
     const cooking = cookingFiles({runtime,service});
     const trust = householdLocalTrust({runtime,withCurrent:use => use(0)});
     return {
-      deviceId,storage,runtime,trust,cooking,service,root,provider,connection,signingTestKey:signing[index],
+      deviceId,storage,runtime,trust,cooking,service,root,provider,connection,signingTestKey:signing[index],dataKey,
       faultAt: boundary => {fault=boundary;},
       rows:() => db.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),
       replaceRow:(key,value)=>db.prepare('UPDATE loro_records SET value=? WHERE key=?').run(value,key),
@@ -202,7 +202,14 @@ test('retained policy activation authenticates signed history and local keys',as
  const {doc}=await recipe.document();
  const commands=planRecipeAction({doc,before:null,after,actionId:'retained-recipe',author:a.deviceId,at:'2026-01-01T00:00:00Z'});
  await executeAction(recipe,{reserve:async()=>2},'retained-recipe',commands,a.service);
- const full=await observePolicyDocumentSet(a.runtime), options={storage:a.storage,scope,pin:a.root.head,provider:a.provider,LoroDoc,signed:full.signed,retained:full.sources.map(x=>({documentId:x.runtime.scope.documentId,revision:x.revision,bytes:x.bytes??new Uint8Array()}))};
+ const identity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:a.root.epochId};
+ const sourceKey=await keys.preparePairedDataKey('fixture-source',identity,a.dataKey);
+ const {installLocalKey}=await import('../storage/local-keys.ts');
+ await openSQLiteTransaction(a.connection)(true,tx=>installLocalKey(tx,sourceKey.record,sourceKey.catalog));
+ const signingKeys=Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='fixture-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)});
+ const signing={publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'fixture-signing'};
+ const sourceRuntime=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:await resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
+ const full=await observePolicyDocumentSet(sourceRuntime), options={storage:a.storage,scope,pin:a.root.head,provider:a.provider,LoroDoc,signed:full.signed,retained:full.sources.map(x=>({documentId:x.runtime.scope.documentId,revision:x.revision,bytes:x.bytes??new Uint8Array()}))};
  const subject=await policyDocumentSetSubject(options), manifest=full.signed.body.observation.manifest;
  const parent=(await verifyPolicyDocumentSet(options)).selected;
  const event={version:6,kind:'changePolicy',authorDeviceId:a.deviceId,householdId:scope.id,parentHead:parent.head,epochId:parent.epochId,generation:parent.generation,subject,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',policyHash:parent.policyHash,proposalId:'retained-policy',frozenAdultRoster:parent.roster,nextPolicy:parent.policy};
@@ -210,9 +217,9 @@ test('retained policy activation authenticates signed history and local keys',as
  const sign=async(kind,value)=>sodium.to_hex(await a.provider.sign(author.signingKeyRef,domain(kind,value)));
  const vote={version:1,householdId:scope.id,eventHash:targetHead,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,adultId:author.adultId,deviceId:a.deviceId};
  const item={event,authorSignature:await sign('event-signature',event),approvals:[{...vote,signature:await sign('approval-signature',vote)}]};
- const staged=await stageVerifiedPolicyDocumentSet({runtime:a.runtime,item,signed:full.signed});
+ const staged=await stageVerifiedPolicyDocumentSet({runtime:sourceRuntime,item,signed:full.signed});
  const {capturePolicySourceEvidence}=await import('./capture-policy-source-evidence.mjs');
- const capture=()=>capturePolicySourceEvidence({runtime:a.runtime,targetHead,service:a.service,sodium});
+ const capture=()=>capturePolicySourceEvidence({runtime:sourceRuntime,targetHead,service:a.service,sodium});
  const evidenceCapture=await capture();
  assert.deepEqual(evidenceCapture.body.rows.map(x=>x.targetDocumentId),staged.mapping.map(x=>x.targetDocumentId));
  assert.ok(evidenceCapture.body.rows.every(x=>x.sources.length && x.sources.every(y=>y.incomplete)));
@@ -223,22 +230,21 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>capturePolicySourceEvidence({runtime:Object.assign(Object.create(a.runtime),{storage:tampered}),targetHead,service:a.service,sodium}));
  const racing=Object.assign(Object.create(a.storage),{checkSelectedHouseholdSources:async()=>({ok:false,error:{code:'STALE_SOURCE'}})});
  await assert.rejects(()=>capturePolicySourceEvidence({runtime:Object.assign(Object.create(a.runtime),{storage:racing}),targetHead,service:a.service,sodium}));
- const prepared=await preparePolicyDocumentKeys({runtime:a.runtime,targetHead,keys,withSourceDocumentKey:async(_route,use)=>use(new Uint8Array(32).fill(7))});
- const expected=must(await a.storage.readPairingAuthority(scope)), state=JSON.parse(new TextDecoder().decode(expected.authorityState));
- const selection={from:parent.head,to:targetHead,deviceId:a.deviceId,index:state.selections.length};
- selection.signature=await sign('select-head',{root:a.root.head,householdId:scope.id,...selection});
- const nextState={...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:targetHead};
- const next={...expected,revision:expected.revision+1,acceptedParent:targetHead,authorizationSnapshot:await snapshotId(a.provider,nextState),authorityState:authorityBytes(nextState)};
- assert.deepEqual(Object.keys(full.guard.expectedAuthority.record).sort(),['acceptedParent','authorizationSnapshot','revision']);
- const {buildPolicyProvenanceReceipt}=await import('./build-policy-provenance-receipt.mjs');
- const receiptArgs={runtime:a.runtime,targetHead,service:a.service,sodium,guard:full.guard,next};
- const beforeReceipt=a.rows(), wrongGuard=structuredClone(full.guard); wrongGuard.root.revision++;
- await assert.rejects(()=>buildPolicyProvenanceReceipt({...receiptArgs,guard:wrongGuard}),/STALE_SOURCE/);
- assert.deepEqual(a.rows(),beforeReceipt);
- const provenance=await buildPolicyProvenanceReceipt(receiptArgs);
+ const expected=must(await a.storage.readPairingAuthority(scope));
+ const confirm={runtime:sourceRuntime,expectedSourceHead:expected.acceptedParent,expectedSourceRevision:expected.revision,targetHead,service:a.service,sodium,keys:signingKeys};
+ const beforeConfirmation=a.rows();
+ await assert.rejects(()=>activateStagedPolicyDocumentSet({...confirm,expectedSourceRevision:expected.revision+1}),/STALE_SOURCE/);
+ await assert.rejects(()=>activateStagedPolicyDocumentSet({...confirm,targetHead:'wrong'}));
+ assert.deepEqual(a.rows(),beforeConfirmation);
+ const activated=await activateStagedPolicyDocumentSet(confirm);
+ const nextState=JSON.parse(new TextDecoder().decode(activated.record.authorityState));
+ const receipt=must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead)).receipt;
+ const provenance=receipt.provenance;
+ const prepared=receipt.targets.map(target=>({record:{identity:target.identity}}));
  assert.equal(await a.provider.verify(author.signingKeyRef,provenance.statement,Uint8Array.from(provenance.signature.match(/../g),x=>parseInt(x,16))),true);
- must(await a.storage.commitPolicyDocumentSetSelection({guard:full.guard,targetHead,proof:must(await a.storage.readStagedPolicyDocumentSet(scope.id,targetHead)).proof,mapping:staged.mapping,expected,next,deviceId:a.deviceId,prepared,provenance}));
- assert.deepEqual(must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead)).receipt.provenance,provenance);
+ const afterActivation=a.rows();
+ await assert.rejects(()=>activateStagedPolicyDocumentSet(confirm),/STALE_SOURCE/);
+ assert.deepEqual(a.rows(),afterActivation);
  const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
  assert.equal(verified.documents.length,2); assert.deepEqual(verified.provenance,evidenceCapture.body.rows); assert.deepEqual(a.rows(),before);
@@ -252,7 +258,7 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>readActivatedPolicySource({...args,documentId:childRow.targetDocumentId,effectId:'missing'}),/SOURCE_PROVENANCE_REQUIRED/);
  await assert.rejects(()=>readActivatedPolicySource({...args,scope:{...scope,id:'wrong'},documentId:childRow.targetDocumentId,effectId:inherited.effectId}));
 
- const {resolveActivatedPolicyAuthority,resolveRuntimeAuthority,policyId}=await import('../authority/chain.mjs');
+ const {resolveActivatedPolicyAuthority}=await import('../authority/chain.mjs');
  const resolve=overrides=>resolveActivatedPolicyAuthority({...args,authorDevice:a.deviceId,...overrides});
  const runtime=await resolve({});
  assert.equal(runtime.scope.branchHead,targetHead);
@@ -261,9 +267,6 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.deepEqual(runtime.members.map(({recipeId,documentId})=>({recipeId,documentId})),staged.mapping.map(({recipeId,targetDocumentId})=>({recipeId,documentId:targetDocumentId})));
  assert.ok(runtime.members.every(member=>member.operationId&&member.identity));
  assert.equal(runtime.selectionIndex,nextState.selections.length);
- const {openWorkspaceHouseholdRuntime}=await import('./workspace-household-runtime.mjs');
- const signingKeys={use:(op,identity,fn)=>op==='fixture-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)};
- const signing={publicKey:author.signingKeyRef,operationId:'fixture-signing'};
  const mounted=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys,signing:{publicKey:author.signingKeyRef},LoroDoc,decodeImportBlobMeta});
  assert.ok((await mounted.document()).revision!==null);
  const mountedRecipe=await mounted.forRecipe('retained-recipe');

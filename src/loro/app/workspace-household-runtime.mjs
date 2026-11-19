@@ -1,4 +1,7 @@
-import {resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority,authorityBytes,snapshotId} from '../authority/chain.mjs';
+import {domain} from '../authority/validator.mjs';
+import {observeSelectedSourceSet} from '../projection/selected-sources.mjs';
+import {buildPolicyProvenanceReceipt} from './build-policy-provenance-receipt.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {installedDocumentSetContent} from '../pairing/household-document-set.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -11,6 +14,7 @@ import {readRecipeCatalog} from './selected-recipe-catalog.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 
 const policyReaders=new WeakMap();
+const policyMounts=new WeakMap();
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 
 /** Prepare wrapped keys for a staged policy successor; does not activate it. */
@@ -18,6 +22,37 @@ export async function prepareWorkspacePolicyDocumentKeys(runtime,targetHead,keys
  const reader=policyReaders.get(runtime);
  if(!reader)throw Error('INVALID_SOURCE_READER');
  return preparePolicyDocumentKeys({runtime,targetHead,keys,withSourceDocumentKey:reader});
+}
+
+/** Activate one explicitly confirmed staged successor from a mounted source.
+ * A completed activation is not replayed: a retry fails once the source changes. */
+export async function activateStagedPolicyDocumentSet({runtime,expectedSourceHead,expectedSourceRevision,targetHead,service,sodium,keys}) {
+ const mount=policyMounts.get(runtime);
+ if(!mount || mount.activated || mount.paired || keys!==mount.keys)throw Error('INVALID_SOURCE_READER');
+ if(typeof expectedSourceHead!=='string' || !expectedSourceHead || !Number.isSafeInteger(expectedSourceRevision) || expectedSourceRevision<0 || typeof targetHead!=='string' || !targetHead)throw Error('INVALID_CONFIRMATION');
+ const current=await runtime.storage.readPairingAuthority({kind:'household',id:runtime.scope.scopeId});
+ if(!current.ok)throw Error(current.error.code);
+ if(!current.value || current.value.acceptedParent!==expectedSourceHead || current.value.revision!==expectedSourceRevision)throw Error('STALE_SOURCE');
+ const verified=await readVerifiedPolicyDocumentSet({runtime,targetHead});
+ const expected=verified.current;
+ if(expected.acceptedParent!==expectedSourceHead || expected.revision!==expectedSourceRevision || runtime.scope.branchHead!==expectedSourceHead)throw Error('STALE_SOURCE');
+ const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(expected.authorityState));
+ if(state.events.some(item=>item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice')))throw Error('UNSUPPORTED_SOURCE');
+ const signer=verified.parent.devices.find(d=>d.active && d.deviceId===runtime.scope.authorDevice);
+ if(!signer || mount.signing.publicKey!==signer.signingKeyRef)throw Error('INVALID_SIGNER');
+ const captured=await observeSelectedSourceSet(runtime,{verifyCheckpointHistory:true});
+ const prepared=await prepareWorkspacePolicyDocumentKeys(runtime,targetHead,keys);
+ const selection={from:expectedSourceHead,to:targetHead,deviceId:runtime.scope.authorDevice,index:state.selections.length};
+ const statement=domain('select-head',{root:runtime.authority.rootPin,householdId:runtime.scope.scopeId,...selection});
+ const signature=await localProvider(sodium,keys,{signing:mount.signing,content:{}}).sign(signer.signingKeyRef,statement);
+ if(!(signature instanceof Uint8Array) || signature.length!==64 || !await runtime.authority.provider.verify(signer.signingKeyRef,statement,signature))throw Error('INVALID_SIGNER');
+ selection.signature=Array.from(signature,x=>x.toString(16).padStart(2,'0')).join('');
+ const nextState=structuredClone(state); nextState.events.push(verified.item); nextState.selections.push(selection); nextState.activeHead=targetHead;
+ const next={...expected,revision:expected.revision+1,acceptedParent:targetHead,authorizationSnapshot:await snapshotId(runtime.authority.provider,nextState),authorityState:authorityBytes(nextState)};
+ const provenance=await buildPolicyProvenanceReceipt({runtime,targetHead,service,sodium,guard:captured.guard,next});
+ const result=await runtime.storage.commitPolicyDocumentSetSelection({guard:captured.guard,targetHead,proof:verified.stage.proof,mapping:verified.stage.mapping,expected,next,deviceId:runtime.scope.authorDevice,prepared,provenance});
+ if(!result.ok)throw Error(result.error.code);
+ return {targetHead,record:next};
 }
 
 // The original workspace has its own initialized sequence allocator. Joined
@@ -99,6 +134,7 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  if(installation||activatedPolicy)await runtime.authorize();
  const originalScope=structuredClone(scope), authority=runtime.authority;
  const useContent=deliveryContent??content;
+ policyMounts.set(runtime,{keys,signing:structuredClone(signing),activated:!!activatedPolicy,paired:!!paired});
  policyReaders.set(runtime,async (route,fn)=>{
   const check=()=>{
    if(runtime.authority!==authority || runtime.storage!==storage || authority.rootPin!==pin || authority.provider!==provider ||
