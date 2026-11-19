@@ -55,6 +55,20 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
   sourceSeeds=new Map(installed.documents.map((document,i)=>[document.documentId,{recipeId:entries[i].recipeId??null,
    seed:{snapshot:document.seed.snapshot,seed:{seedId:document.seed.seedId,identities:document.seed.identities}}}]));
  }
+ // A legacy recipient retains its original signed admission snapshot outside
+ // the v5 document-set format. Only the admission at the authenticated source
+ // head may supply that seed; an unrelated historical receipt is insufficient.
+ if(!admission && storage.householdRecipient?.findByEvent){
+  const found=await storage.householdRecipient.findByEvent(scope.id,receipt.expected.acceptedParent);
+  if(!found.ok)throw Error('INVALID_AUTHORITY');
+  if(found.value){
+   const original=found.value, checked=await storage.householdRecipient.check(original);
+   if(!checked.ok || checked.value!==true || original.scopeId!==scope.id ||
+      original.receiptBody?.recipientDevice!==deviceId || original.nextAuthority.acceptedParent!==receipt.expected.acceptedParent ||
+      original.documentId!==manifest.root.documentId)throw Error('INVALID_AUTHORITY');
+   sourceSeeds.set(original.documentId,{recipeId:null,seed:{snapshot:original.snapshot,seed:original.seed}});
+  }
+ }
  if(!Array.isArray(documents) || !Array.isArray(receipt.targets) || documents.length!==staged.mapping.length || receipt.targets.length!==staged.mapping.length) throw Error('INVALID_ACTIVATION');
  for(let i=0;i<documents.length;i++) {
   const row=staged.mapping[i],doc=documents[i],slot=await policyTargetKeySlot({scope:route,pin,provider,targetHead,row});

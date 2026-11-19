@@ -1186,3 +1186,107 @@ async function ownDeviceScenario(prepareOnly=false,publishPrepared=false) {
 test('own-device prepared set publishes all recipients', {timeout:40_000}, () => ownDeviceScenario(true,true));
 test('own-device set preparation binds the exact source', {timeout:40_000}, () => ownDeviceScenario(true));
 test('own-device household release and install roll back, reopen and preserve distinct-adult votes', {timeout:40_000}, () => ownDeviceScenario());
+
+test('joined legacy admission reopens activated policy with its existing counter', {timeout:120_000}, async()=>{
+ const organizerName='native-activated-joined-sponsor', recipientName='native-activated-joined-recipient';
+ let organizer,recipient,captured;
+ const openRecipient=create=>openNativeWorkspaceWith({...args(recipientName,create),openDirect:async input=>{captured=input;return null}});
+ try {
+  organizer=await openNativeWorkspaceWith(args(organizerName,true));
+  recipient=await openRecipient(true);
+  await acceptPolicy(organizer);
+  await addPantry(organizer,'joined-leek');
+  const sponsor=organizer.householdPairing, joining=recipient.householdPairing, scope=scopeOf(organizer);
+  const delegation=await sponsor.prepareDelegation({explicit:true});
+  const {item,eventHash}=await sponsor.prepareInvite({recipient:joining.identity,explicit:true});
+  await sponsor.acceptDelegation({agreement:{...delegation.agreement,acceptances:[delegation.acceptance]},explicit:true});
+  const {grant,manifest,seed,policyBundle}=await sponsor.prepareGrant({item,explicit:true});
+  assert.equal(manifest.version,4);
+  const ceremony=await sponsor.prepareCeremony({item,grant,manifest,seed,explicit:true});
+  const parent=await sponsor.exportParent();
+  await joining.acceptParent({bundle:parent,confirmedRootPin:parent.rootPin,confirmedSelectedHead:parent.selectedHead,explicit:true});
+  const verified=await joining.verifyOffer({offer:{scope,item,grant,ceremony},confirmedHash:ceremony.oob.hash});
+  const initiator=sponsor.session({...ceremony,role:'initiator',confirmedHash:ceremony.oob.hash});
+  const responder=joining.session({...verified,role:'responder',confirmedHash:ceremony.oob.hash});
+  const [oa,ob]=await Promise.all([initiator.initialize(),responder.initialize()]);
+  const [ra,rb]=await Promise.all([initiator.respond(ob,0),responder.respond(oa,0)]);
+  const [aa,ab]=await Promise.all([initiator.acknowledge(rb,1),responder.acknowledge(ra,1)]);
+  await Promise.all([initiator.finish(ab,2),responder.finish(aa,2)]);
+  const selection={from:item.event.parentHead,to:eventHash,deviceId:organizer.deviceId,index:parent.state.selections.length};
+  selection.signature=sodium.to_hex(await organizer.disclosureProvider.sign(sponsor.identity.signingKey,domain('select-head',{root:parent.rootPin,householdId:scope.id,...selection})));
+  const published=await sponsor.transfer.publish({item,grant,manifest,seed,policyBundle,ceremonies:[{transcript:ceremony.transcript,guard:ceremony.guard,oob:ceremony.oob,context:ceremony.context,messages:(await initiator.evidence()).messages}],existingCeremonies:[],selection});
+  const bytes=await sponsor.transfer.seal({operationId:published.operationId,recipientDevice:recipient.deviceId});
+  await joining.transfer.install({scope,bytes});
+  await joining.selection.select(scope);
+  recipient.close();recipient=await openRecipient(false);
+  await addPantry(recipient,'joined-mint');
+  const recipe={id:'joined-soup',title:'Joined soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
+  const {runtime:capturedRuntime,provider}=captured,storage=capturedRuntime.storage,pin=parent.rootPin;
+  const master=openMaster(recipientName),keys=storage.localKeys(master,sodium);await keys.unlock();
+  const bootstrapDb=new DatabaseSync(join(dir,`${recipientName}.sqlite`));
+  const bootstrapRow=bootstrapDb.prepare('SELECT data FROM loro_bootstrap WHERE id=1').get();bootstrapDb.close();
+  const reservation=JSON.parse(new TextDecoder().decode(await master.unwrap('workspace-master',bootstrapRow.data,new TextEncoder().encode('creative-cooking/native-bootstrap/v1'))));
+  const signing={operationId:'device-signing',identity:{version:1,scope:{kind:'personal',id:reservation.personal},deviceId:reservation.device,purpose:'device-signing',epochId:reservation.personalEpoch},publicKey:joining.identity.signingKey};
+  const {resolveRuntimeAuthority}=await import('../authority/chain.mjs');
+  const resolved=await resolveRuntimeAuthority(storage,scope,pin,provider,recipient.deviceId);
+  const runtime=await openWorkspaceHouseholdRuntime({storage,resolved,pin,provider,sodium,keys,signing,LoroDoc,decodeImportBlobMeta});
+  const counterName=houseCounterName(recipientName,scope,recipient.deviceId);
+  const counterConnection=openDatabase(counterName);
+  const {openNativeSequences}=await import('./sequences.mjs');
+  const sequences=openNativeSequences(counterConnection,[scope.id],false);
+  const {bindHouseholdContent}=await import('../app/household-content.mjs');
+  const content=bindHouseholdContent({runtime,sequences,disclosure:recipient.disclosure,originalRecipeDocuments:true});
+  try {await content.createRecipe('joined-recipe',recipe);} finally {counterConnection.close();}
+  const before=await content.readCooking();
+  const full=await observePolicyDocumentSet(runtime);
+  const proof={storage,scope,pin,provider,LoroDoc,signed:full.signed,retained:full.sources.map(x=>({documentId:x.runtime.scope.documentId,revision:x.revision,bytes:x.bytes??new Uint8Array()}))};
+  const subject=await policyDocumentSetSubject(proof),source=(await verifyPolicyDocumentSet(proof)).selected;
+  const event={version:6,kind:'changePolicy',authorDeviceId:recipient.deviceId,householdId:scope.id,parentHead:source.head,epochId:source.epochId,generation:source.generation,subject,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',policyHash:source.policyHash,proposalId:'joined-policy',frozenAdultRoster:source.roster,nextPolicy:source.policy};
+  const targetHead=sodium.to_hex(await provider.hash(domain('event',event)));
+  const signers=[organizer,recipient];
+  const approvals=[];
+  for(const member of signers){
+   const device=source.devices.find(d=>d.deviceId===member.deviceId);
+   const vote={version:1,householdId:scope.id,eventHash:targetHead,parentHead:source.head,policyHash:source.policyHash,generation:source.generation,epochId:source.epochId,adultId:device.adultId,deviceId:member.deviceId};
+   approvals.push({...vote,signature:sodium.to_hex(await member.disclosureProvider.sign(device.signingKeyRef,domain('approval-signature',vote)))});
+  }
+  const author=source.devices.find(d=>d.deviceId===recipient.deviceId);
+  const signed={event,authorSignature:sodium.to_hex(await provider.sign(author.signingKeyRef,domain('event-signature',event))),approvals};
+  await stageVerifiedPolicyDocumentSet({runtime,item:signed,signed:full.signed});
+  const expected=(await storage.readPairingAuthority(scope)).value;
+  await activateStagedPolicyDocumentSet({runtime,expectedSourceHead:expected.acceptedParent,expectedSourceRevision:expected.revision,targetHead,service:recipient.disclosure,sodium,keys});
+  const counterPath=join(dir,`${houseCounterName(recipientName,scope,recipient.deviceId)}.sqlite`);
+  recipient.close();recipient=undefined;
+  const counter=new DatabaseSync(counterPath), prior=counter.prepare('SELECT value FROM loro_sequence_counters WHERE scope=?').get(scope.id).value;counter.close();
+  recipient=await openRecipient(false);
+  assert.equal(recipient.readOnly,true);
+  assert.deepEqual(await recipient.householdContent.readCooking(),before);
+  assert.equal((await recipient.householdContent.readRecipe('joined-soup')).doc.getMap('recipe:joined-soup').get('title'),'Joined soup');
+  assert.throws(()=>recipient.householdContent.execute('no',[]),/READ_ONLY_WORKSPACE/);
+  recipient.close();recipient=undefined;
+  const counterCheck=openDatabase(houseCounterName(recipientName,scope,author.deviceId));
+  try {const sequences=openNativeSequences(counterCheck,[scope.id],false);assert.equal(await sequences.reserve(scope.id,'after-activation'),prior+1);}
+  finally {counterCheck.close();}
+  // The independently stored original parent cannot be replaced after activation.
+  const {openSQLiteTransaction}=await import('../storage/sqlite.ts');
+  const pinDb=openDatabase(`${recipientName}-pairing`),pinTx=openSQLiteTransaction(pinDb);
+  const pinSlot=JSON.stringify(['pin',scope.id]),pinAad=new TextEncoder().encode(`creative-cooking/household-pin/v1/${scope.id}`);
+  const savedPin=await pinTx(false,tx=>tx.get(pinSlot));
+  const pinValue=JSON.parse(new TextDecoder().decode(await master.unwrap('workspace-master',savedPin,pinAad)));
+  assert.equal(pinValue.head,parent.selectedHead);
+  const wrong=await master.wrap('workspace-master',new TextEncoder().encode(JSON.stringify({...pinValue,head:'0'.repeat(64)})),pinAad);
+  await pinTx(true,tx=>tx.put(pinSlot,wrong));pinDb.close();
+  await assert.rejects(openRecipient(false),/INVALID_ADMISSION/);
+  const restoreDb=openDatabase(`${recipientName}-pairing`),restoreTx=openSQLiteTransaction(restoreDb);
+  await restoreTx(true,tx=>tx.put(pinSlot,savedPin));restoreDb.close();
+  const mainDb=openDatabase(recipientName),mainTx=openSQLiteTransaction(mainDb);
+  const activationSlot=JSON.stringify(['native-household-activation',scope.id]);
+  const savedActivation=await mainTx(false,tx=>tx.get(activationSlot));
+  await mainTx(true,tx=>tx.put(activationSlot,{...savedActivation,stage:'pending'}));mainDb.close();
+  await assert.rejects(openRecipient(false),/ENROLLMENT_CONFLICT|MISSING_ENROLLMENT/);
+  const restoreMain=openDatabase(recipientName),restoreMainTx=openSQLiteTransaction(restoreMain);
+  await restoreMainTx(true,tx=>tx.put(activationSlot,savedActivation));restoreMain.close();
+  rmSync(counterPath);
+  await assert.rejects(openRecipient(false),/MISSING_SEQUENCES/);
+ } finally {organizer?.close();recipient?.close();removeWorkspace(organizerName);removeWorkspace(recipientName);}
+});
