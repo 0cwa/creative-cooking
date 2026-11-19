@@ -926,6 +926,10 @@ async function ownDeviceScenario(prepareOnly=false,publishPrepared=false) {
     assert.equal(replay.replayed,true);
     assert.deepEqual(replay.file,published.file);
     assert.deepEqual(replay.establishedRecipients,published.establishedRecipients);
+    await assert.rejects(initiator.recoverPreparedSet('wrong'),/OOB_REQUIRED/);
+    assert.deepEqual(await initiator.recoverPreparedSet(proposal.code),replay);
+    sponsor.close();sponsor=await open(sponsorName);
+    assert.deepEqual(await sponsor.householdPairing.ownDevice.recoverPreparedSet(proposal.code),replay);
     const recipientFile=published.establishedRecipients[0].ciphertext;
     const installed=await established.installEstablished(recipientFile,proof);
     assert.equal(installed.head,published.head);

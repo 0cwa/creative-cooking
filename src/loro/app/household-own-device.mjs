@@ -355,6 +355,21 @@ export function householdOwnDevice({
    return {...result,replayed:false};
   });
  }
+ // Recover only a release bound to this completed newcomer session. The retained
+ // receipt verifies every recipient ciphertext and its address on reopen.
+ async function recoverPreparedSet(code){
+  return withSession('initiator',async({proposal,record,oob,session})=>{
+   if(code!==oob.hash||!belongs(proposal))throw Error('OOB_REQUIRED');
+   const {messages}=await session.evidence();
+   const saved=await read('set-preparation:'+JSON.stringify([scope.id,pin,proposal.transcript.sessionId]));
+   if(!saved||!same(saved.proposal,proposal)||!same(saved.messages,messages))throw Error('INVALID_PROOF');
+   const retained=await retainedSponsor(proposal);
+   if(!retained)return null;
+   const checked=await verifyOwnDeviceSuccessor({sodium:s,provider,pin,parentRecord:record,next:saved.next,proposal:{hash:oob.hash,guard:proposal.guard},eventVersion:5});
+   if(!same(retained.item,checked.item)||!same(checked.proof.messages,messages))throw Error('INVALID_PROOF');
+   return {file:retained.file,establishedRecipients:retained.establishedRecipients,head:retained.head,replayed:true};
+  });
+ }
  async function publish(code){
   return withSession('initiator',async({proposal,record,oob,secrets,session})=>{
    const {bundle,transcript,guard,adultId,peerId}=proposal;
@@ -566,5 +581,5 @@ export function householdOwnDevice({
    policy:selected.policy,devices:selected.devices,events:ancestry.reverse()};
  }
  return {deviceId,fingerprint:fingerprint(own),rootPin:pin,request,propose,inspect:async incoming=>(await inspectProposal(parse(incoming),'responder')).view,
-  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publishPreparedSet,publish,install,installEstablished,acceptExisting,history};
+  confirm,accept,resume,prepareSet,prepareEstablishedOffer,verifyEstablishedOffer,publishPreparedSet,recoverPreparedSet,publish,install,installEstablished,acceptExisting,history};
 }

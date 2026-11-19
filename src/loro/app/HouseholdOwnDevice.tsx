@@ -7,6 +7,7 @@ import {PublicMessageFile} from './PublicMessageFile';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import {MAX_HOUSEHOLD_OWN_DEVICE_MESSAGE} from './household-own-device.mjs';
 import {HouseholdOwnDeviceEstablished} from './HouseholdOwnDeviceEstablished';
+import {HouseholdOwnDeviceSponsor} from './HouseholdOwnDeviceSponsor';
 import {MAX_PERSONAL_PAIRING_FILE} from '../pairing/personal-copy.mjs';
 
 type Role='initiator'|'responder';
@@ -19,7 +20,7 @@ type History={head:string;roster:string[];threshold:number;policy:{kind:string};
 
 export function HouseholdOwnDevice(){
  const workspace=useContext(LoroWorkspaceValue),app=useAppState(),pairing=workspace?.householdPairing,service=pairing?.ownDevice;
- const [open,setOpen]=useState(false),[role,setRole]=useState<Role|null>(null);
+ const [open,setOpen]=useState(false),[role,setRole]=useState<Role|null>(null),[sponsorLocked,setSponsorLocked]=useState(false),[sponsorDraft,setSponsorDraft]=useState(false);
  const [busy,setBusy]=useState(false),[notice,setNotice]=useState(''),working=useRef(false);
  const [history,setHistory]=useState<History|null>(null),[request,setRequest]=useState(''),[input,setInput]=useState('');
  const [proposal,setProposal]=useState<Proposal|null>(null),[progress,setProgress]=useState<Progress|null>(null);
@@ -49,7 +50,7 @@ export function HouseholdOwnDevice(){
   {button('Copy '+name.toLowerCase(),async()=>setNotice(await copyText(value)?'Message copied.':'Could not copy the message.'))}
  </>;
  const start=async(next:Role,renew=false)=>{
-  setRole(next);setProposal(null);setProgress(null);setInput('');setPeer('');setRoot('');setHead('');setCode('');setProof('');setFile(null);
+  setSponsorDraft(false);setRole(next);setProposal(null);setProgress(null);setInput('');setPeer('');setRoot('');setHead('');setCode('');setProof('');setFile(null);
   if(next==='responder'){
    setRequest(await service.request(renew));
    if(renew)setInstalled(null);
@@ -77,7 +78,7 @@ export function HouseholdOwnDevice(){
   }catch(error){finish();throw error}
  };
  return <View style={{gap:8}}>
-  {button(open?'Close household device pairing':'Pair my household devices',async()=>setOpen(!open))}
+  {button(open?'Close household device pairing':'Pair my household devices',async()=>setOpen(!open),sponsorLocked)}
   {open?<View style={{gap:8}}>
    <Text accessibilityRole="header">Your household devices</Text>
    <HouseholdOwnDeviceEstablished/>
@@ -92,12 +93,12 @@ export function HouseholdOwnDevice(){
     {history.devices.map(device=><Text key={device.deviceId} selectable>{device.deviceId} · {device.adultId} · {device.active?'Authorized':'Retired'}</Text>)}
     {history.events.map(event=><Text key={event.action+event.deviceId} selectable>{event.action} {event.deviceId} by {event.sponsor} for {event.adultId}</Text>)}
    </View>:null}
-   {button('Sponsor my other household device',()=>start('initiator'))}
-   {button('Receive my household access',()=>start('responder'))}
+   {button('Sponsor my other household device',()=>start('initiator'),sponsorLocked)}
+   {button('Receive my household access',()=>start('responder'),sponsorLocked)}
    {role==='responder'?button('Create a fresh household pairing request',()=>start('responder',true)):null}
    {role==='initiator'&&proposal&&!published?button('Prepare another household pairing proposal',async()=>{
-    setProposal(null);setProgress(null);setInput('');setProof('');
-   }):null}
+    setSponsorDraft(false);setProposal(null);setProgress(null);setInput('');setProof('');
+   },sponsorLocked):null}
    {role&&!progress?<>
     {role==='responder'&&request?output('My household pairing request',request):null}
     {!proposal?<>
@@ -125,8 +126,8 @@ export function HouseholdOwnDevice(){
     {output('My household pairing proof',progress.text)}
     {field('Incoming household pairing proof',proof,setProof,true)}
     <PublicMessageFile label="household pairing proof" onRead={setProof} limit={16*1024} run={run} disabled={busy}/>
-    {button('Accept household pairing proof',async()=>{setProgress(await service.accept(role,proof));setProof('')},!proof)}
-    {progress.complete&&role==='initiator'?button('Save encrypted household pairing file',save):null}
+    {button('Accept household pairing proof',async()=>{setProgress(await service.accept(role,proof));setProof('')},!proof||sponsorDraft||sponsorLocked)}
+    {progress.complete&&role==='initiator'&&proposal?<><HouseholdOwnDeviceSponsor key={proposal.code} code={proposal.code} newcomerId={proposal.peerDevice} onLocked={setSponsorLocked} onDraft={setSponsorDraft}/>{button('Save encrypted household pairing file',save,sponsorDraft||sponsorLocked)}</>:null}
     {progress.complete&&role==='responder'?<>
      {button('Choose encrypted household pairing file',async()=>{
       const bytes=await chooseExchangeFile({accept:['application/octet-stream','.cchouse'],minBytes:113,maxBytes:MAX_PERSONAL_PAIRING_FILE});
