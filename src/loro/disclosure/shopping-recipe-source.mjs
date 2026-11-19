@@ -9,7 +9,7 @@ const authorityIdentity=expected=>[expected.scope.kind,expected.scope.id,expecte
   expected.record.acceptedParent,expected.record.authorizationSnapshot];
 
 /** A signed shopping claim can resolve only its selected recipe child. */
-export function createShoppingRecipeSourceVerifier({runtime,service,context,local=false}) {
+export function createShoppingRecipeSourceVerifier({runtime,service,context,local=false,includeDependencies=false}) {
   const catalogs=new Map();
   return async (command,expectedAuthority=context.resolved.expectedAuthority)=>{
     const {recipeSource:claim,recipeId}=command.data;
@@ -84,6 +84,13 @@ export function createShoppingRecipeSourceVerifier({runtime,service,context,loca
       ...(seed ? {} : {creationObjectId:child.creationObjectId}),
       effects:[...sources].map(([effectId,signed])=>signed.seedId
         ? {effectId,seedId:signed.seedId} : {effectId,objectId:signed.objectId})};
-    return {source,receipt,sources:new Map(source.effectIds.map(id=>[id,sources.get(id)]))};
+    const governingSources=new Map(source.effectIds.map(id=>[id,sources.get(id)]));
+    const result={source,receipt,sources:governingSources};
+    if(includeDependencies){
+      const ids=new Set([...source.effectIds,...[...governingSources.values()].flatMap(proof=>proof.sourceDependencies)]);
+      result.dependencies=new Map();
+      for(const id of ids)result.dependencies.set(id,await verify(id));
+    }
+    return result;
   };
 }

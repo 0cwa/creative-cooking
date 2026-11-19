@@ -19,5 +19,5 @@ export async function authenticateEvidence(runtime,kind,a,o) {
  const vectors=runtime.decodeImportBlobMeta(update,true);
  const startCounter=vectors.partialStartVersionVector.toJSON().get(meta.peer)??0;
  const endCounter=vectors.partialEndVersionVector.toJSON().get(meta.peer);
- return {sourceId:o.sourceId,objectId:o.objectId,authorDevice:h.authorDevice,sourceDocumentId:h.documentId,sourceGeneration:h.documentGeneration,sourceHead:h.branchHead,command,update,meta,startCounter,endCounter};
+ return {sourceId:o.sourceId,objectId:o.objectId,authorDevice:h.authorDevice,sourceDocumentId:h.documentId,sourceGeneration:h.documentGeneration,sourceHead:h.branchHead,command,update,meta,startCounter,endCounter,disclosurePolicyHashes:h.disclosurePolicyHashes,disclosureIncomplete:h.disclosureIncomplete};
 }

@@ -48,3 +48,11 @@ test('verified seed dependencies require unique identities and the same document
  plan=new Map(selectedRetentionGraph(collision,['seed','lookalike'],'suspect',undefined,seeds).map(row=>[row.effectId,row]));
  assert.equal(plan.get('seed').reason,'AMBIGUOUS_ID');assert.equal(plan.get('lookalike').reason,'HELD_DEPENDENCY');
 });
+
+test('a shopping copy can depend on a seed only in the pinned recipe document',()=>{
+ const seeds=[{documentId:'child',identities:[{effectId:'seed',commandId:'seed-command'}]}];
+ const copy=entry('copy',['seed'],{source:{documentId:'child',effectIds:['seed']}});
+ copy.evidence.command.data.recipeId='recipe';
+ assert.equal(selectedRetentionGraph([copy],['copy'],'suspect',new Map([['recipe','child']]),seeds)[0].status,'retained');
+ assert.equal(selectedRetentionGraph([copy],['copy'],'suspect',new Map([['recipe','sibling']]),seeds)[0].reason,'AMBIGUOUS_SOURCE');
+});

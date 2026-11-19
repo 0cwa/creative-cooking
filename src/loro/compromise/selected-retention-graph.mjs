@@ -4,7 +4,10 @@ export function selectedRetentionGraph(evidence,selected,suspectDevice,recipeDoc
  for(const doc of seedDocuments)for(const identity of doc.identities){
   for(const [map,id] of [[seedEffects,identity.effectId],[seedCommands,identity.commandId]]){const list=map.get(id)??[];list.push({documentId:doc.documentId,identity});map.set(id,list);}
  }
- const seedFor=(id,documentId)=>seedEffects.get(id)?.length===1&&seedEffects.get(id)[0].documentId===documentId&&!byEffect.has(id)&&seedCommands.get(seedEffects.get(id)[0].identity.commandId)?.length===1&&!byCommand.has(seedEffects.get(id)[0].identity.commandId);
+ const seedFor=(id,row)=>{
+  const documentId=row.source?.effectIds.includes(id)?row.source.documentId:row.documentId;
+  return seedEffects.get(id)?.length===1&&seedEffects.get(id)[0].documentId===documentId&&!byEffect.has(id)&&seedCommands.get(seedEffects.get(id)[0].identity.commandId)?.length===1&&!byCommand.has(seedEffects.get(id)[0].identity.commandId);
+ };
 
  const rows=evidence.map(({documentId,recipeId,evidence:e})=>({documentId,recipeId,objectId:e.objectId,
   effectId:e.command.effectId,commandId:e.command.commandId,authorDevice:e.authorDevice,
@@ -25,7 +28,7 @@ export function selectedRetentionGraph(evidence,selected,suspectDevice,recipeDoc
  }
  function propagate(){let changed=false;for(const row of rows){if(row.status)continue;
   const deps=row.dependencyEffectIds;
-  if(deps.some(id=>!byEffect.has(id)&&!seedFor(id,row.documentId))){row.status='held';row.reason='MISSING_DEPENDENCY';changed=true;continue;}
+  if(deps.some(id=>!byEffect.has(id)&&!seedFor(id,row))){row.status='held';row.reason='MISSING_DEPENDENCY';changed=true;continue;}
   if(deps.some(id=>byEffect.has(id)&&(byEffect.get(id).length!==1||byEffect.get(id)[0].status==='held'))){row.status='held';row.reason='HELD_DEPENDENCY';changed=true;continue;}
   if(deps.some(id=>byEffect.has(id)&&byEffect.get(id)[0].status==='excluded')){row.status='held';row.reason='EXCLUDED_DEPENDENCY';changed=true;}
  }return changed;}
@@ -33,7 +36,7 @@ export function selectedRetentionGraph(evidence,selected,suspectDevice,recipeDoc
  // Kahn ordering is deterministic even when the caller provides a different selection order.
  const readyOrder=(a,b)=>a.effectId<b.effectId?-1:a.effectId>b.effectId?1:a.objectId<b.objectId?-1:a.objectId>b.objectId?1:0;
  let order=0;
- while(true){const ready=rows.filter(row=>!row.status&&row.dependencyEffectIds.every(id=>seedFor(id,row.documentId)||byEffect.get(id)?.[0].status==='retained')).sort(readyOrder);if(!ready.length)break;
+ while(true){const ready=rows.filter(row=>!row.status&&row.dependencyEffectIds.every(id=>seedFor(id,row)||byEffect.get(id)?.[0].status==='retained')).sort(readyOrder);if(!ready.length)break;
   for(const row of ready){row.status='retained';row.reason='SELECTED';row.order=order++;}
  }
  // Every remaining row reaches a cycle. Identify actual cycle members separately.

@@ -5,10 +5,13 @@ import {REVIEW_LIMITS} from './review.mjs';
 
 const id=x=>typeof x==='string'&&x.length>0&&new TextEncoder().encode(x).length<=256;
 const sameBytes=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+export function normalizeSelectedEffectIds(selectedEffectIds) {
+ if(!Array.isArray(selectedEffectIds)||selectedEffectIds.length>REVIEW_LIMITS.objects||Array.from({length:selectedEffectIds.length},(_,i)=>Object.hasOwn(selectedEffectIds,i)).some(x=>!x)||!selectedEffectIds.every(id)||new Set(selectedEffectIds).size!==selectedEffectIds.length)throw Error('INVALID_SELECTION');
+ return [...selectedEffectIds].sort();
+}
 /** Select only from a verified frozen batch. This plan is not a checkpoint or a history. */
 export async function planSelectedRetention(runtime,{reportHash,selectedEffectIds}) {
- if(!Array.isArray(selectedEffectIds)||selectedEffectIds.length>REVIEW_LIMITS.objects||Array.from({length:selectedEffectIds.length},(_,i)=>Object.hasOwn(selectedEffectIds,i)).some(x=>!x)||!selectedEffectIds.every(id)||new Set(selectedEffectIds).size!==selectedEffectIds.length)throw Error('INVALID_SELECTION');
- const selection=[...selectedEffectIds].sort(),service=selectedOperationReportService(runtime);
+ const selection=normalizeSelectedEffectIds(selectedEffectIds),service=selectedOperationReportService(runtime);
  const opened=await service.reopen(reportHash);
  const recipeDocuments=new Map(opened.report.payload.observation.manifest.children.map(child=>[child.recipeId,child.documentId]));
  const rows=selectedRetentionGraph(opened.evidence,selection,opened.report.payload.suspectDevice,recipeDocuments);

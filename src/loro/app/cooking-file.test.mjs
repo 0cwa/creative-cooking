@@ -201,8 +201,11 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const beforeRecipe={id:'retention-recipe',title:'Soup',portions:2,ingredients:[{id:'carrot',name:'Carrot',amount:'1 cup',needsShopping:true}],steps:[],stepIds:[],createdAt:at,updatedAt:at};
  const creation=planRecipeAction({doc:(await child.document()).doc,before:null,after:beforeRecipe,actionId:'retention-create',author:a.deviceId,at});
  await save(child,'retention-create',creation);
+ const intermediateRecipe={...beforeRecipe,ingredients:[{...beforeRecipe.ingredients[0],amount:'3 cups'}]};
+ const intermediate=planRecipeAction({doc:(await child.document()).doc,before:beforeRecipe,after:intermediateRecipe,actionId:'retention-intermediate',author:a.deviceId,at});
+ await save(child,'retention-intermediate',intermediate);
  const changedRecipe={...beforeRecipe,ingredients:[{...beforeRecipe.ingredients[0],amount:'2 cups'}]};
- const field=planRecipeAction({doc:(await child.document()).doc,before:beforeRecipe,after:changedRecipe,actionId:'retention-field',author:a.deviceId,at});
+ const field=planRecipeAction({doc:(await child.document()).doc,before:intermediateRecipe,after:changedRecipe,actionId:'retention-field',author:a.deviceId,at});
  await save(child,'retention-field',field);
  const selected=await openSelectedRecipeCatalog(a.runtime),before=projectCooking(selected.parent.doc);
  const list={id:'retention-list',name:'Market',currentCycleId:'retention-cycle',createdAt:at,updatedAt:at};
@@ -218,7 +221,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const signingKeys=Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='retention-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)});
  const runtime=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:await resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
  const candidates=[];
- for(const [action,documentId] of [['retention-create',child.scope.documentId],['retention-field',child.scope.documentId],['retention-copy',runtime.scope.documentId],['retention-pantry',runtime.scope.documentId]]){
+ for(const [action,documentId] of [['retention-create',child.scope.documentId],['retention-intermediate',child.scope.documentId],['retention-field',child.scope.documentId],['retention-copy',runtime.scope.documentId],['retention-pantry',runtime.scope.documentId]]){
   const operation=must(await a.storage.getLocalOperation(scope.id,action));for(const {object} of operation.commit.outbound)candidates.push({sourceId:'outbound',documentId,objectId:object.id,bytes:object.bytes});
  }
  const copy=shopping.find(command=>command.data.itemId===copied.id),prerequisite=field.find(command=>command.data.field==='amount');
@@ -228,7 +231,10 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const {planSelectedRetention}=await import('../compromise/selected-retention.mjs');
  const report=await buildSelectedOperationReport(runtime,{candidates,suspectDevice:'device-1',boundary:{documentId:child.scope.documentId,objectId:candidates[0].objectId}});
  const {reportHash}=await selectedOperationReportService(runtime).freeze({report:report.report,candidates});
- const all=report.evidence.map(row=>row.evidence.command.effectId),selectedIds=all.filter(id=>id!==prerequisite.effectId),beforeRows=a.rows();
+ const earlier=intermediate.find(command=>command.data.field==='amount');
+ assert.ok(prerequisite.dependencyEffectIds.includes(earlier.effectId));
+ assert.ok(!copy.data.recipeSource.effectIds.includes(earlier.effectId));
+ const all=report.evidence.map(row=>row.evidence.command.effectId),selectedIds=all.filter(id=>id!==prerequisite.effectId&&id!==earlier.effectId),beforeRows=a.rows();
  const {resolveSelectedReportStart}=await import('../compromise/selected-report-start.mjs');
  const start=await resolveSelectedReportStart(runtime,reportHash);
  assert.deepEqual(start.documents.map(({recipeId,snapshot,seedId,identities})=>[recipeId,snapshot.length,seedId,identities]),[
@@ -256,6 +262,14 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.equal(rootDoc.getMap('shopping-item:retention-item').get('value'),undefined);
  assert.equal(draft.rows.find(r=>r.effectId===prerequisite.effectId).status,'excluded');
  assert.equal(draft.rows.find(r=>r.effectId===copy.effectId).status,'held');
+ const withoutEarlier=await reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:all.filter(id=>id!==earlier.effectId)});
+ assert.equal(withoutEarlier.rows.find(r=>r.effectId===copy.effectId).reason,'HELD_DEPENDENCY');
+ const completeSelection=await reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:all});
+ const copiedRoot=new LoroDoc();
+ copiedRoot.import(completeSelection.documents.find(d=>d.recipeId===null).snapshot);
+ assert.equal(completeSelection.rows.find(r=>r.effectId===copy.effectId).status,'retained');
+ assert.equal(copiedRoot.getMap('shopping-item-fields:retention-item').get('displayQuantity'),'2 cups');
+ assert.equal(copiedRoot.getMap('shopping-item-fields:retention-item').get('ingredientId'),'carrot');
  assert.deepEqual(a.rows(),beforeRows);
  const originalCheck=a.storage.checkSelectedHouseholdSources.bind(a.storage);
  a.storage.checkSelectedHouseholdSources=async()=>({ok:false,error:{code:'CONFLICT'}});
@@ -2150,6 +2164,20 @@ test('selected recipe shopping copies and current-only admission survive durable
   const opened=await sponsor.runtime.codec.openContent(copy.bytes,auth.signingKeyRefs);
   assert.equal(opened.header.disclosureIncomplete,true);
   assert.deepEqual(opened.header.disclosurePolicyHashes,[accepted.policyHash]);
+  const {buildSelectedOperationReport}=await import('../compromise/selected-report.mjs');
+  const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
+  const {reconstructSelectedRetention}=await import('../compromise/selected-reconstruction.mjs');
+  const candidates=objects.map(object=>({sourceId:'outbound',documentId:sponsor.runtime.scope.documentId,objectId:object.id,bytes:object.bytes}));
+  const report=await buildSelectedOperationReport(sponsor.runtime,{candidates,
+   suspectDevice:newcomer.runtime.scope.authorDevice,boundary:{documentId:candidates[0].documentId,objectId:copy.id}});
+  const {reportHash}=await selectedOperationReportService(sponsor.runtime).freeze({report:report.report,candidates});
+  const beforeDraft=a.rows();
+  const draft=await reconstructSelectedRetention(sponsor.runtime,{reportHash,selectedEffectIds:[command.effectId]});
+  assert.equal(draft.rows.find(row=>row.effectId===command.effectId).status,'retained');
+  const rootDraft=new LoroDoc();rootDraft.import(draft.documents[0].snapshot);
+  assert.equal(rootDraft.getMap('shopping-item-fields:admitted-copy').get('displayQuantity'),ingredient.amount);
+  assert.ok(draft.documents.find(row=>row.recipeId===recipeId).identities.some(row=>row.incomplete&&row.policyHashes.includes(accepted.policyHash)));
+  assert.deepEqual(a.rows(),beforeDraft);
   await assert.rejects(()=>newcomer.files.verify(copy.bytes,copy.id,a.deviceId),/UNSUPPORTED_VERSION/);
   assert.ok(!(await sponsor.files.directBatch(newcomer.runtime.scope.authorDevice,256,new Map()))
    .objects.some(row=>row.objectId===copy.id));
