@@ -55,7 +55,7 @@ import {apply} from '../domain/registry.mjs';
 import {openSelectedRecipeCatalog,projectSelectedRecipes} from './selected-recipe-catalog.mjs';
 import {observeSelectedSourceSet,selectedSourceHash,verifySelectedSourceSet} from '../projection/selected-sources.mjs';
 import {exportHouseholdParent} from './household-parent.mjs';
-import {prepareCurrentDocumentSet,requirePublicRecipeHistory,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
+import {prepareAdultRemovalProjection,prepareCurrentDocumentSet,requirePublicRecipeHistory,verifyCurrentDocumentSet,verifyCurrentDocumentSetSource} from '../projection/current-document-set.mjs';
 import {householdDocumentSetRelease,publishHouseholdDocumentSet,readInstalledHouseholdDocumentSet,installedDocumentSetContent} from '../pairing/household-document-set.mjs';
 import {encodeHouseholdDocumentSetFile,installHouseholdFile,sealHouseholdFile} from '../pairing/household-file.mjs';
 import {durableSession,householdSessionContextBytes} from '../pairing/durable-session.mjs';
@@ -1202,8 +1202,17 @@ test('selected recipe shopping copies and current-only admission survive durable
  const beforeInsert=(await observeSelectedSourceSet(a.runtime)).guard;
  const omittedRecipeId='omitted-catalog-recipe',omittedIngredientId='omitted-catalog-ingredient';
  const inserted=await a.runtime.forRecipe(omittedRecipeId);
- await edit(a,inserted,'source-set-catalog-race',{...recipe(omittedRecipeId,'Third carrot'),
-  ingredients:[{id:omittedIngredientId,name:'Third carrot',amount:'1 cup'}]});
+ let insertedDuringProjection=false;
+ await assert.rejects(()=>prepareAdultRemovalProjection({runtime:a.runtime,service:a.service,
+  destination:{parentHead:a.root.head,documentId:'catalog-race-target',epochId:'catalog-race-epoch',generation:2},
+  allocateSeed:async()=>{
+   if(!insertedDuringProjection){
+    insertedDuringProjection=true;
+    await edit(a,inserted,'source-set-catalog-race',{...recipe(omittedRecipeId,'Third carrot'),
+     ingredients:[{id:omittedIngredientId,name:'Third carrot',amount:'1 cup'}]});
+   }
+   return {seedId:'11111111-1111-4111-8111-000000000001',peerId:'901'};
+  }}),/CONFLICT|SOURCE_CHANGED/);
  assert.equal((await checkGuard(beforeInsert)).error.code,'CONFLICT');
  const afterInsert=await observeSelectedSourceSet(a.runtime);
  assert.equal(afterInsert.signed.manifest.catalog.revision,3);
@@ -1275,8 +1284,23 @@ test('selected recipe shopping copies and current-only admission survive durable
   }
   return seedAllocations.get(documentId);
  };
+ let raced=false;
+ await assert.rejects(()=>prepareAdultRemovalProjection({runtime:a.runtime,service:a.service,
+  destination:{parentHead:a.root.head,documentId:'race-target',epochId:'race-epoch',generation:2},
+  allocateSeed:async documentId=>{
+   if(!raced){raced=true;await edit(a,sibling,'projection-child-race',{id:'sibling',title:'Race title'});}
+   return allocateSeed(documentId);
+  }}),/CONFLICT|SOURCE_CHANGED/);
+ await edit(a,sibling,'projection-child-restore',{id:'sibling',title:'New sibling title'});
  const prepare=()=>prepareCurrentDocumentSet({runtime:a.runtime,service:a.service,item:admissionItem,allocateSeed});
  const prepared=await prepare();
+ const destination={parentHead:a.root.head,documentId:'removal-cooking',epochId:'removal-epoch',generation:2};
+ const adult=await prepareAdultRemovalProjection({runtime:a.runtime,service:a.service,destination,allocateSeed});
+ assert.deepEqual(adult.entries.map(entry=>entry.recipeId),[null,recipeId,'sibling']);
+ assert.deepEqual(adult.documents,prepared.documents.map(({seed,policyBundle})=>({seed,policyBundle})));
+ assert.deepEqual(adult.removed,prepared.manifest.catalog.removed);
+ await assert.rejects(()=>prepareAdultRemovalProjection({runtime:a.runtime,service:a.service,
+  destination:{...destination,epochId:a.root.epochId},allocateSeed}),/INVALID_DOCUMENT_SET/);
  const grantFor=async manifest=>{
   const unsigned={version:1,householdId:scope.id,parentHead:a.root.head,admissionEventHash:eventHash,
    sourcePolicyHashes:[a.root.policyHash],delegationHash,recipientAdult:'newcomer',recipientDevices:['newcomer-device'],

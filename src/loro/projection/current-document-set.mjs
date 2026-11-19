@@ -100,24 +100,10 @@ async function digestManifest(provider,manifest) {
   return selectedSourceHash(provider,'projection-manifest',manifest);
 }
 
-/** Prepare a grant candidate from the exact selected source. The caller must
- * retain allocation IDs for retries and collect the existing admission quorum. */
-export async function prepareCurrentDocumentSet({runtime,service,item,allocateSeed}) {
-  item=structuredClone(item);
-  const {provider,rootPin:pin}=runtime.authority;
-  const {sources,signed,guard}=await observeSelectedSourceSet(runtime);
-  const scope=guard.expectedAuthority.scope;
-  const {selected:parent,state,record,nodes}=await verifySelectedSourceSet({storage:runtime.storage,scope,pin,provider,signed});
-  const eventHash=await admissionEvent(parent,item,provider);
-  const subject=newRoot(parent,item.event,nodes);
-  const target=documentScope(parent,subject.documentId,eventHash,subject.newEpochId,subject.newGeneration);
-  const {manifest:source}=signed;
-  const manifest={version,rootPin:pin,householdId:parent.householdId,parentHead:parent.head,
-    authorizationSnapshot:record.authorizationSnapshot,admissionEventHash:eventHash,
-    newDocumentId:target.documentId,newEpochId:target.epochId,newGeneration:target.documentGeneration,
-    sourceSetHash:await selectedSourceHash(provider,'selected-household-source-set-v1',source),
-    catalog:{sourceRevision:source.catalog.revision,sourceHash:source.catalog.hash,targetRevision:0,removed:[]},entries:[]};
-  const documents=[];
+// Project only captured, authenticated documents. Target recipe IDs depend on the
+// eventual authority event and are deliberately not derived here.
+async function projectCapturedSet({runtime,service,provider,sources,source,allocateSeed}) {
+  const entries=[],documents=[],removed=[];
   const omittedRecipeIds=new Set();
   const childRecipeIngredients=new Map();
   // Bind omitted children to the source without disclosing their recipe IDs.
@@ -126,7 +112,7 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
     const recipe=captured.doc.getMap(`recipe:${encodeURIComponent(recipeId)}`);
     if(recipe.get('removed')===true||recipe.get('removedAt')){
       omittedRecipeIds.add(recipeId);
-      manifest.catalog.removed.push(await selectedSourceHash(provider,'removed-recipe-source-v1',source.children[index]));
+      removed.push(await selectedSourceHash(provider,'removed-recipe-source-v1',source.children[index]));
       continue;
     }
     const ingredients=new Set();
@@ -152,19 +138,70 @@ export async function prepareCurrentDocumentSet({runtime,service,item,allocateSe
       ...(recipeId===null?{omittedRecipeIds,childRecipeIngredients}:{})});
     projectedBytes+=seed.snapshot.length;
     if (projectedBytes>MAX_SELECTED_SET_BYTES) throw Error('TOO_LARGE');
-    const documentId=recipeId===null ? target.documentId : await recipeDocumentId(target,pin,provider,recipeId);
-    manifest.entries.push({recipeId,sourceDocumentId:captured.runtime.scope.documentId,sourceRevision:captured.revision,
-      sourceHash:index===0?source.root.checkpointHash:source.children[index-1].checkpointHash,documentId,seedId,peerId,
+    entries.push({recipeId,sourceDocumentId:captured.runtime.scope.documentId,sourceRevision:captured.revision,
+      sourceHash:index===0?source.root.checkpointHash:source.children[index-1].checkpointHash,seedId,peerId,
       snapshotHash:await selectedSourceHash(provider,'projection-snapshot',hex(seed.snapshot)),policyBundleHash:bundleHash});
-    documents.push({documentId,seed,policyBundle:bundle});
+    documents.push({seed,policyBundle:bundle});
   }
-  manifest.catalog.targetRevision=documents.length-1;
-  manifest.catalog.removed.sort();
+  removed.sort();
+  return {entries,documents,removed};
+}
+
+/** Prepare a grant candidate from the exact selected source. The caller must
+ * retain allocation IDs for retries and collect the existing admission quorum. */
+export async function prepareCurrentDocumentSet({runtime,service,item,allocateSeed}) {
+  item=structuredClone(item);
+  const {provider,rootPin:pin}=runtime.authority;
+  const {sources,signed,guard}=await observeSelectedSourceSet(runtime);
+  const scope=guard.expectedAuthority.scope;
+  const {selected:parent,state,record,nodes}=await verifySelectedSourceSet({storage:runtime.storage,scope,pin,provider,signed});
+  const eventHash=await admissionEvent(parent,item,provider);
+  const subject=newRoot(parent,item.event,nodes);
+  const target=documentScope(parent,subject.documentId,eventHash,subject.newEpochId,subject.newGeneration);
+  const {manifest:source}=signed;
+  const manifest={version,rootPin:pin,householdId:parent.householdId,parentHead:parent.head,
+    authorizationSnapshot:record.authorizationSnapshot,admissionEventHash:eventHash,
+    newDocumentId:target.documentId,newEpochId:target.epochId,newGeneration:target.documentGeneration,
+    sourceSetHash:await selectedSourceHash(provider,'selected-household-source-set-v1',source),
+    catalog:{sourceRevision:source.catalog.revision,sourceHash:source.catalog.hash,targetRevision:0,removed:[]},entries:[]};
+  const projected=await projectCapturedSet({runtime,service,provider,sources,source,allocateSeed});
+  manifest.catalog.targetRevision=projected.documents.length-1;
+  manifest.catalog.removed=projected.removed;
+  const documents=[];
+  for (const [index,entry] of projected.entries.entries()) {
+    const documentId=entry.recipeId===null ? target.documentId : await recipeDocumentId(target,pin,provider,entry.recipeId);
+    const {seedId,peerId,snapshotHash,policyBundleHash,...sourceEntry}=entry;
+    manifest.entries.push({...sourceEntry,documentId,seedId,peerId,snapshotHash,policyBundleHash});
+    documents.push({documentId,...projected.documents[index]});
+  }
   await checkCurrentDocumentSetManifest({pin,parent,item,eventHash,manifest,provider});
   await verifyDocuments({manifest,documents,provider,pin,state,LoroDoc:runtime.LoroDoc});
   const unchanged=await runtime.storage.checkSelectedHouseholdSources(guard);
   if (!unchanged.ok) throw Error(unchanged.error.code);
   return {manifest,manifestHash:await digestManifest(provider,manifest),documents,source:guard};
+}
+
+/** Capture current cooking values for adult removal only. This is unsigned
+ * preparation, not an authorization, publication, or suspect-device recovery.
+ * The caller must recheck source before use and derive child IDs after signing. */
+export async function prepareAdultRemovalProjection({runtime,service,destination,allocateSeed}) {
+  destination=structuredClone(destination);
+  const {provider,rootPin:pin}=runtime.authority;
+  const {sources,signed,guard}=await observeSelectedSourceSet(runtime);
+  const {selected:parent,nodes}=await verifySelectedSourceSet({storage:runtime.storage,
+    scope:guard.expectedAuthority.scope,pin,provider,signed});
+  if (!exact(destination,['parentHead','documentId','epochId','generation']) ||
+    destination.parentHead!==parent.head || !validId(destination.documentId) ||
+    !validId(destination.epochId) || !validRevision(destination.generation) ||
+    destination.generation<=parent.generation || isRecipeDocumentId(destination.documentId) ||
+    isPolicyDocumentId(destination.documentId) || [...nodes.values()].some(node=>
+      node.epochId===destination.epochId || node.runtime.documentId===destination.documentId)) {
+    throw Error('INVALID_DOCUMENT_SET');
+  }
+  const projected=await projectCapturedSet({runtime,service,provider,sources,source:signed.manifest,allocateSeed});
+  const unchanged=await runtime.storage.checkSelectedHouseholdSources(guard);
+  if (!unchanged.ok) throw Error(unchanged.error.code);
+  return {destination:structuredClone(destination),source:guard,sourceManifest:signed.manifest,...projected};
 }
 
 function checkSeedIdentities(seed,state,allEffects,allCommands) {
