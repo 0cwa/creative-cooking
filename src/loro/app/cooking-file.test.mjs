@@ -1807,6 +1807,10 @@ test('selected recipe shopping copies and current-only admission survive durable
   await withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
    parentRecord:localParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
    localSelection:replaySelection,withKeys:result=>assert.deepEqual(result.localNext,localNext)});
+  const badSelection=structuredClone(replaySelection);badSelection.index++;
+  await assert.rejects(withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord:localParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   localSelection:badSelection,withKeys:()=>assert.fail('unexpected callback')}));
   const badLocal=structuredClone(localParent);badLocal.acceptedParent='changed';
   await assert.rejects(withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
    parentRecord:badLocal,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,

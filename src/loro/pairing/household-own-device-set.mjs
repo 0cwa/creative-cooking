@@ -414,8 +414,8 @@ export async function installEstablishedOwnDeviceSet({storage,runtime,provider,s
    throw Error('INVALID_AUTHORITY');
   }
   try {
-   return await withOpenedEstablishedOwnDeviceTransition({storage,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret:secret,
-    withKeys:async({checked,next,keys:opened})=>commitVerifiedEstablishedOwnDeviceSet({storage,runtime,provider,sodium,pin,parentRecord,evidence,file,signer,keys,deviceId,checked,next,opened})});
+   return await withOpenedEstablishedOwnDeviceTransition({storage,provider,sodium,LoroDoc,pin,parentRecord,evidence,file,wrappingSecret:secret,signingSecret:signer,
+    withKeys:async({checked,localNext,keys:opened})=>commitVerifiedEstablishedOwnDeviceSet({storage,runtime,provider,sodium,pin,parentRecord,evidence,file,signer,keys,deviceId,checked,next:localNext,opened})});
   } catch(error) {
    if(!['CONFLICT','LOCKED','LOCAL_EDITS_CONFLICT','INVALID_AUTHORITY','STALE_AUTHORITY'].includes(error.message))throw error;
    prior=await readPrior();
@@ -430,8 +430,6 @@ export async function reopenOwnDeviceSet({storage,scope,operationId,pin,provider
  scope=structuredClone(scope);
  const saved=must(await storage.readHouseholdOwnDeviceSetRetained(scope,operationId));
  if(!saved)throw Error('INVALID_AUTHORITY');
- const checked=await verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord:saved.expected,next:saved.next,eventVersion:5});
- const evidence={...checked.proof,hash:checked.context.transcriptHash};
  const fileHash=pairingDigest(sodium,saved.file);
  const parentView={readPairingAuthority:async requested=>({ok:true,value:sameOwnDevice(sodium,requested,scope)?saved.expected:null})};
  const options={storage:parentView,provider,sodium,LoroDoc,pin,parentRecord:saved.expected};
@@ -457,18 +455,21 @@ export async function reopenOwnDeviceSet({storage,scope,operationId,pin,provider
  }
  if(saved.recipient?.kind==='established'){
   const {deviceId,signature,evidence:localEvidence,transcriptHash}=saved.recipient;
-  if(!localEvidence||operationId!==checked.context.releaseId||saved.guardId!==localEvidence.guard?.guardId||
-     saved.copyHash!==checked.context.manifestHash||saved.recipient.fileHash!==fileHash||
+  if(!localEvidence||saved.guardId!==localEvidence.guard?.guardId||
+     saved.recipient.fileHash!==fileHash||
      transcriptHash!==localEvidence.oob?.hash||deviceId!==localEvidence.transcript?.responder?.deviceId)throw Error('INVALID_PROOF');
   const body=establishedReceiptBody({scope,pin,operationId,guardId:saved.guardId,evidence:localEvidence,fileHash,
    parent:saved.expected,child:saved.next,deviceId,copyHash:saved.copyHash});
   if(!sodium.crypto_sign_verify_detached(sodium.from_hex(signature),domain('household-own-device-established-receipt-v1',body),localEvidence.transcript.responder.signingPublicKey))throw Error('INVALID_PROOF');
-  return withOpenedEstablishedOwnDeviceTransition({...options,evidence:localEvidence,file:saved.file,wrappingSecret,
-   withKeys:({checked:opened,next,keys:packetKeys})=>{
-    if(!sameOwnDevice(sodium,next,saved.next))throw Error('INVALID_PROOF');
+  const localState=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(saved.next.authorityState));
+  return withOpenedEstablishedOwnDeviceTransition({...options,evidence:localEvidence,file:saved.file,wrappingSecret,localSelection:localState.selections.at(-1),
+   withKeys:({checked:opened,localNext,keys:packetKeys})=>{
+    if(operationId!==opened.context.releaseId||saved.copyHash!==opened.context.manifestHash||!sameOwnDevice(sodium,localNext,saved.next))throw Error('INVALID_PROOF');
     return verifyDocuments(opened,deviceId,(key,index)=>sameOwnDevice(sodium,key,packetKeys[index].key));
    }});
  }
+ const checked=await verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord:saved.expected,next:saved.next,eventVersion:5});
+ const evidence={...checked.proof,hash:checked.context.transcriptHash};
  if(operationId!==checked.context.releaseId||saved.guardId!==checked.proof.guard.guardId||
     saved.copyHash!==checked.context.manifestHash)throw Error('INVALID_PROOF');
  if(saved.sponsor){
