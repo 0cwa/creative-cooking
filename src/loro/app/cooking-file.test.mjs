@@ -474,7 +474,23 @@ test('retained policy activation authenticates signed history and local keys',as
  signingKeys.useIdentity=async()=>{throw Error('MISSING_SOURCE_KEY')};
  try {await assert.rejects(()=>returnActivatedPolicyDocumentSet(returnArgs),/MISSING_SOURCE_KEY/);} finally {signingKeys.useIdentity=originalUseIdentity;}
  assert.deepEqual(a.rows(),beforeReturn);
- const result=await returnActivatedPolicyDocumentSet(returnArgs);
+ const commitReturn=a.storage.commitPolicyDocumentSetReturn.bind(a.storage);
+ let returnWrites=0,result;
+ a.storage.commitPolicyDocumentSetReturn=async input=>{
+  returnWrites++;
+  const committed=await commitReturn(input);
+  assert.equal(committed.ok,true);
+  throw Error('return response lost');
+ };
+ try {
+  result=await returnActivatedPolicyDocumentSet(returnArgs);
+  const committedRows=a.rows();
+  assert.deepEqual(await returnActivatedPolicyDocumentSet(returnArgs),result);
+  await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedSourceHead:'wrong'}));
+  await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedTargetRevision:activated.record.revision+1}),/STALE_TARGET/);
+  assert.equal(returnWrites,1);
+  assert.deepEqual(a.rows(),committedRows);
+ } finally {a.storage.commitPolicyDocumentSetReturn=commitReturn;}
  assert.equal(result.sourceHead,expected.acceptedParent);
  const returnedState=JSON.parse(new TextDecoder().decode(result.record.authorityState));
  assert.equal(returnedState.selections.at(-1).to,expected.acceptedParent);

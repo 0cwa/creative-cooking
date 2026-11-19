@@ -6,9 +6,10 @@ const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(cano
 const same=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
 
 /** Verify candidate metadata only; this neither selects nor commits authority. */
-export async function verifyPolicyReturnCandidate({candidate,...args}) {
+export async function verifyPolicyReturnCandidate({candidate,expectedActivation=undefined,...args}) {
  candidate=structuredClone(candidate);
  const evidence=await readHistoricalPolicyActivationEvidence(args);
+ if(expectedActivation && !same(evidence.next,expectedActivation)) throw Error('STALE_TARGET');
  let state,parentState;
  try {
   state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(evidence.next.authorityState));

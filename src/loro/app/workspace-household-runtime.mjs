@@ -124,7 +124,23 @@ export async function returnActivatedPolicyDocumentSet({runtime,expectedSourceHe
  const scope=mount.expected.scope, deviceId=mount.scope.authorDevice;
  if(!matchesDisclosureService(service,{storage:mount.storage,scope,rootPin:mount.pin,provider:mount.provider,deviceId}))throw Error('INVALID_AUTHORITY');
  const args={storage:mount.storage,LoroDoc:mount.LoroDoc,pin:mount.pin,provider:mount.provider,scope,deviceId,targetHead:expectedTargetHead,keys,sodium:mount.sodium};
- const {activation,pointers}=await readPolicyReturnPreflight({...args,expectedTargetHead,expectedTargetRevision});
+ if(mount.record?.revision!==expectedTargetRevision)throw Error('STALE_TARGET');
+ const recover=async (next=undefined)=>{
+  try {
+   const current=await mount.storage.readPairingAuthority(scope);
+   if(!current.ok || current.value?.acceptedParent!==expectedSourceHead ||
+     current.value.revision!==expectedTargetRevision+1 || (next && !same(current.value,next)))return null;
+   const {source,candidate}=await verifyPolicyReturnCandidate({...args,candidate:current.value,expectedActivation:mount.record});
+   await keys.useIdentity({version:1,scope,deviceId,purpose:'data',epochId:source.epochId},()=>{});
+   const again=await mount.storage.readPairingAuthority(scope);
+   if(!again.ok || !same(again.value,candidate))return null;
+   return {sourceHead:source.head,record:candidate};
+  } catch {return null;}
+ };
+ let preflight;
+ try {preflight=await readPolicyReturnPreflight({...args,expectedTargetHead,expectedTargetRevision});}
+ catch(error){const recovered=await recover();if(recovered)return recovered;throw error;}
+ const {activation,pointers}=preflight;
  if(!mount.record || !same(mount.record,activation.record))throw Error('STALE_TARGET');
  if(activation.sourceHead!==expectedSourceHead)throw Error('STALE_SOURCE');
  const state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(activation.expected.authorityState));
@@ -158,8 +174,10 @@ export async function returnActivatedPolicyDocumentSet({runtime,expectedSourceHe
  const nextState={...activation.state,selections:[...activation.state.selections,selection],activeHead:expectedSourceHead};
  const next={...activation.record,revision:activation.record.revision+1,acceptedParent:expectedSourceHead,authorizationSnapshot:await snapshotId(mount.provider,nextState),authorityState:authorityBytes(nextState)};
  await verifyPolicyReturnCandidate({...args,candidate:next});
- const result=await mount.storage.commitPolicyDocumentSetReturn({receipt:activation.receipt,staged:activation.staged,next,sourceDocuments,targetDocuments:activation.targetDocuments,...pointers});
- if(!result.ok)throw Error(result.error.code);
+ try {
+  const result=await mount.storage.commitPolicyDocumentSetReturn({receipt:activation.receipt,staged:activation.staged,next,sourceDocuments,targetDocuments:activation.targetDocuments,...pointers});
+  if(!result.ok)throw Error(result.error.code);
+ } catch(error){const recovered=await recover(next);if(recovered)return recovered;throw error;}
  return {sourceHead:expectedSourceHead,record:next};
 }
 
