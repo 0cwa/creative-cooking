@@ -408,7 +408,7 @@ test('retained policy activation authenticates signed history and local keys',as
  await altered(x=>{const bad=new LoroDoc();bad.setPeerId('999');bad.getMap('tamper').set('x',1);x.documents[1].bytes=bad.export({mode:'snapshot'});x.documents[1].revision=1});
  const edited=structuredClone(evidence), later=new LoroDoc();later.import(edited.documents[1].bytes);later.setPeerId('999');later.getMap('later-edit').set('x',1);edited.documents[1].bytes=later.export({mode:'snapshot'});edited.documents[1].revision=1;
  const laterStorage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:edited})});
- assert.equal((await readVerifiedActivatedPolicyDocumentSet({...args,storage:laterStorage})).documents[1].revision,1);
+ await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage:laterStorage}));
  await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,pin:'wrong'}));
  await assert.rejects(()=>readHistoricalPolicyActivationEvidence({...args,pin:'wrong'}));
  let authorityReads=0;const racingStorage=Object.assign(Object.create(a.storage),{readPairingAuthority:async sc=>{const result=await a.storage.readPairingAuthority(sc);if(++authorityReads===2)result.value.revision++;return result;}});
@@ -442,8 +442,23 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>commitActivatedRecipeField({runtime:editRecipe,service:a.service,input}),/SOURCE_PROVENANCE_REQUIRED|CONFLICT/);
  const reopened=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
  assert.equal((await (await reopened.forRecipe('retained-recipe')).document()).doc.getMap('recipe:retained-recipe').get('title'),'Edited soup');
+ const objectKey=JSON.stringify(['object',scope.id,envelope.object.id]);
+ const objectRow=a.rows().find(row=>row.key===objectKey);
+ a.connection.executeSync('DELETE FROM loro_records WHERE key=?',[objectKey]);
+ try {await assert.rejects(()=>editRecipe.document());await assert.rejects(()=>resolve({}));} finally {a.connection.executeSync('INSERT INTO loro_records (key,value) VALUES (?,?)',[objectRow.key,objectRow.value]);}
+ const corruptObject=JSON.parse(objectRow.value);corruptObject.bytes.__storageBytes[0]^=1;
+ a.replaceRow(objectKey,JSON.stringify(corruptObject));
+ try {await assert.rejects(()=>editRecipe.document());} finally {a.replaceRow(objectKey,objectRow.value);}
+ const targetKey=JSON.stringify(['document',scope.id,childRow.targetDocumentId]);
+ const targetRow=a.rows().find(row=>row.key===targetKey), targetRecord=JSON.parse(targetRow.value);
+ const unsigned=new LoroDoc();unsigned.import(Uint8Array.from(targetRecord.bytes.__storageBytes));unsigned.setPeerId('999');unsigned.getMap('tamper').set('x',1);
+ targetRecord.bytes={__storageBytes:[...unsigned.export({mode:'snapshot'})]};
+ a.replaceRow(targetKey,JSON.stringify(targetRecord));
+ try {await assert.rejects(()=>editRecipe.document());await assert.rejects(()=>resolve({}));} finally {a.replaceRow(targetKey,targetRow.value);}
  const {returnActivatedPolicyDocumentSet}=await import('./workspace-household-runtime.mjs');
  const returnArgs={runtime:editMount,expectedSourceHead:expected.acceptedParent,expectedTargetHead:targetHead,expectedTargetRevision:activated.record.revision,service:a.service,keys:signingKeys};
+ a.replaceRow(targetKey,JSON.stringify(targetRecord));
+ try {await assert.rejects(()=>returnActivatedPolicyDocumentSet(returnArgs));} finally {a.replaceRow(targetKey,targetRow.value);}
  const beforeReturn=a.rows();
  await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedSourceHead:'wrong'}),/STALE_SOURCE/);
  await assert.rejects(()=>returnActivatedPolicyDocumentSet({...returnArgs,expectedTargetHead:'wrong'}));

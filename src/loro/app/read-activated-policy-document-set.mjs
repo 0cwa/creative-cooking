@@ -137,6 +137,11 @@ async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,devi
   }
   provenance=body.rows;
  }
+ let histories;
+ if(selected) {
+  const {verifyActivatedHistory}=await import('./verify-activated-history.mjs');
+  histories=await verifyActivatedHistory({storage,LoroDoc,provider,keys,sodium,scope,deviceId,targetHead,receipt,staged,documents,parent:proof.parent,item:proof.item,provenance});
+ }
  if(selected) {
   const again=await storage.readPairingAuthority(scope);
   if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
@@ -144,7 +149,7 @@ async function verifyActivationEvidence({storage,LoroDoc,pin,provider,scope,devi
  return structuredClone({targetHead,sourceHead:staged.sourceHead,expected:receipt.expected,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
   ...(detached?{receipt,staged,targetDocuments:documents}:{}),
   mapping:staged.mapping.map(({recipeId,sourceDocumentId})=>({recipeId,sourceDocumentId})),sourceClaims:[manifest.root,...manifest.children],
-  provenance,verifiedProvenance:receipt.provenance??null,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
+  provenance,histories,verifiedProvenance:receipt.provenance??null,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
    if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');
    return {recipeId:row.recipeId,documentId,revision,...receipt.targets[i],policySeed:source?.seed??null};})});
 }
