@@ -257,6 +257,45 @@ test('mounted admission rule stages a signed recipe set',async t=>{
   a.storage.checkSelectedHouseholdSources=async guard=>++calls===2?{ok:false,error:{code:'CONFLICT'}}:check(guard);
   try {await assert.rejects(()=>verifySelectedEvidence(runtime,batch),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=check;}
 
+  const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
+  const service=selectedOperationReportService(runtime),beforeFreeze=a.rows();
+  const frozen=await service.freeze({report:plan.report,candidates:batch});
+  assert.equal(frozen.replayed,false);
+  const afterFreeze=a.rows(),beforeKeys=new Set(beforeFreeze.map(row=>row.key));
+  assert.deepEqual(afterFreeze.filter(row=>!beforeKeys.has(row.key)).map(row=>JSON.parse(row.key)[0]).sort(),['compromise-selected-originals-v2','compromise-selected-report-v2']);
+  assert.deepEqual(afterFreeze.filter(row=>beforeKeys.has(row.key)),beforeFreeze);
+  a.reopen();
+  assert.deepEqual((await service.reopen(frozen.reportHash)).evidence.map(row=>row.recipeId),[null,'rule-recipe']);
+  const persisted=a.rows();
+  assert.deepEqual(await service.freeze({report:plan.report,candidates:batch}),{reportHash:frozen.reportHash,replayed:true});
+  assert.deepEqual(a.rows(),persisted);
+  const originalKey=JSON.stringify(['compromise-selected-originals-v2',scope.id,frozen.reportHash]);
+  const originalRow=a.rows().find(row=>row.key===originalKey),corruptOriginal=JSON.parse(originalRow.value);
+  corruptOriginal.objects[0].bytes.__storageBytes[0]^=1;
+  a.replaceRow(originalKey,JSON.stringify(corruptOriginal));
+  await assert.rejects(()=>service.reopen(frozen.reportHash),/EVIDENCE_MISMATCH/);
+  await assert.rejects(()=>service.freeze({report:plan.report,candidates:batch}),/CONFLICT/);
+  a.replaceRow(originalKey,originalRow.value);
+  const recordKey=JSON.stringify(['compromise-selected-report-v2',scope.id,frozen.reportHash]);
+  const recordRow=a.rows().find(row=>row.key===recordKey),corruptRecord=JSON.parse(recordRow.value);corruptRecord.version=1;
+  a.replaceRow(recordKey,JSON.stringify(corruptRecord));
+  await assert.rejects(()=>service.reopen(frozen.reportHash),/CORRUPT/);
+  a.replaceRow(recordKey,recordRow.value);
+  const otherPlan=await buildSelectedOperationReport(runtime,{candidates:batch,suspectDevice:'device-1',boundary:{documentId:batch[0].documentId,objectId:batch[0].objectId}});
+  const beforeFault=a.rows();a.faultAt('selected-report-originals');
+  try {await assert.rejects(()=>service.freeze({report:otherPlan.report,candidates:batch}),/IO/);} finally {a.faultAt(null);}
+  assert.deepEqual(a.rows(),beforeFault);
+  const originalFreeze=a.storage.freezeSelectedOperationReport.bind(a.storage);
+  a.storage.freezeSelectedOperationReport=async input=>{
+   const doc=(await other.document()).doc,prior=projectCooking(doc).recipes.find(row=>row.id==='rule-sibling');
+   const commands=planRecipeAction({doc,before:prior,after:{...prior,title:'Raced soup'},actionId:'rule-race',author:a.deviceId,at:after.createdAt});
+   await executeAction(other,{reserve:async()=>4},'rule-race',commands,a.service);
+   return originalFreeze(input);
+  };
+  try {await assert.rejects(()=>service.freeze({report:otherPlan.report,candidates:batch}),/CONFLICT/);} finally {a.storage.freezeSelectedOperationReport=originalFreeze;}
+  assert.equal(a.rows().filter(row=>JSON.parse(row.key)[0]==='compromise-selected-report-v2').length,1);
+  await assert.rejects(()=>service.reopen(frozen.reportHash),/STALE_SOURCE/);
+
  }
  const pairing={name:'fixture',sodium,storage:a.storage,provider:a.provider,store:fixtureSessionStore(a.connection),scope,pin:a.root.head,deviceId:a.deviceId,adultId:'adult',runtime,service:a.service,keys:signingKeys,signing,wrapping:{},LoroDoc};
  const api=householdPairing({...pairing,selectedHousehold:false}).admissionRule;

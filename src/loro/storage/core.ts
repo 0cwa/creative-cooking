@@ -250,12 +250,17 @@ const validStagedPolicyDocumentSet = (v:unknown): v is StagedPolicyDocumentSet =
 };
 const policySetTargetBudget=(set:StagedPolicyDocumentSet)=>MAX_SELECTED_SET_BYTES-
   set.mapping.reduce((size,row)=>size+row.baseline.length,set.proof.length);
+// These records contain only a signed report and its caller-supplied originals.
+const validSelectedReportRecord=(v:any,hash:string) => fields(v,['version','reportHash','reportBytes']) && v.version===2 && v.reportHash===hash && v.reportBytes instanceof Uint8Array && v.reportBytes.length>0 && v.reportBytes.length<=REVIEW_LIMITS.objectBytes;
+const validSelectedOriginals=(v:any,hash:string) => fields(v,['version','reportHash','objects']) && v.version===2 && v.reportHash===hash && denseArray(v.objects,(o:any)=>fields(o,['sourceId','documentId','objectId','bytes']) && [o.sourceId,o.documentId,o.objectId].every(validId) && o.bytes instanceof Uint8Array && o.bytes.length>0 && o.bytes.length<=REVIEW_LIMITS.objectBytes) && v.objects.length>0 && v.objects.length<=REVIEW_LIMITS.objects && new Set(v.objects.map((o:any)=>o.objectId)).size===v.objects.length && v.objects.reduce((sum:number,o:any)=>sum+o.bytes.length,0)<=REVIEW_LIMITS.bytes;
 const MAX_BRANCH_LOCAL_OPERATIONS=256;
 const validateRecord = (k: string, v: any) => {
   if (v === undefined) return;
   const parts=JSON.parse(k),namespace=parts[0];
   let valid = false;
   switch (namespace) {
+    case 'compromise-selected-report-v2': valid=parts.length===3 && validId(parts[1]) && hexOf(parts[2],64) && validSelectedReportRecord(v,parts[2]); break;
+    case 'compromise-selected-originals-v2': valid=parts.length===3 && validId(parts[1]) && hexOf(parts[2],64) && validSelectedOriginals(v,parts[2]); break;
     case 'compromise-review': valid=object(v) && v.version===1 && typeof v.reviewId==='string'; break;
     case 'compromise-frozen-original': valid=fields(v,['checkpoint','objects']) && v.checkpoint instanceof Uint8Array && denseArray(v.objects,entry=>entry instanceof Uint8Array); break;
     case 'compromise-quarantine': valid=typeof v==='boolean'; break;
@@ -1764,6 +1769,35 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         return {ok:true as const,value:undefined};
       });
     }catch(e){return fail(mapError(e))}
+  }
+  /** Retain preverified evidence only after checking the selected sources inside the write transaction. */
+  async freezeSelectedOperationReport(input:{scopeId:string;reportHash:string;reportBytes:Uint8Array;objects:{sourceId:string;documentId:string;objectId:string;bytes:Uint8Array}[];guard:SelectedHouseholdSources}) {
+    input=snapshot(input);
+    const {scopeId,reportHash,reportBytes,objects,guard}=input;
+    const record={version:2,reportHash,reportBytes},originals={version:2,reportHash,objects};
+    if(!validId(scopeId)||!hexOf(reportHash,64)||!validSelectedReportRecord(record,reportHash)||!validSelectedOriginals(originals,reportHash)||reportBytes.length+objects.reduce((sum,o)=>sum+o.bytes.length,0)>REVIEW_LIMITS.bytes||!guard?.expectedAuthority?.scope||guard.expectedAuthority.scope.id!==scopeId||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||!denseArray(guard.entries,e=>object(e)&&validId(e.recipeId))||guard.entries.length+(guard.members?.length??0)>MAX_SELECTED_CHILDREN||guard.catalogRevision!==guard.entries.length||guard.members!==undefined&&!denseArray(guard.members,m=>object(m)&&validId(m.recipeId)&&validId(m.documentId)&&revision(m.revision)&&m.bytes instanceof Uint8Array))return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      await this.requireSelectedHouseholdSources(tx,guard);
+      const reportKey=key('compromise-selected-report-v2',scopeId,reportHash),originalKey=key('compromise-selected-originals-v2',scopeId,reportHash);
+      const old=await tx.get(reportKey),oldOriginals=await tx.get(originalKey);
+      if(old!==undefined||oldOriginals!==undefined){if(!old||!oldOriginals||!sameRecord(old,record)||!sameRecord(oldOriginals,originals))conflict();return {ok:true as const,value:{replayed:true}};}
+      const prefix=key('compromise-selected-report-v2',scopeId).slice(0,-1)+',';
+      if((await tx.keys()).filter(k=>k.startsWith(prefix)).length>=16)throw new StorageFailure('CAPACITY');
+      await tx.put(originalKey,originals);this.fault?.('selected-report-originals');
+      await tx.put(reportKey,record);this.fault?.('selected-report-record');
+      return {ok:true as const,value:{replayed:false}};
+    });}catch(e){return fail(mapError(e));}
+  }
+  /** Read both halves together; authentication of the report and originals is the caller's responsibility. */
+  async readSelectedOperationReport(scopeId:string,reportHash:string) {
+    if(!validId(scopeId)||!hexOf(reportHash,64))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const record=await tx.get(key('compromise-selected-report-v2',scopeId,reportHash));
+      const originals=await tx.get(key('compromise-selected-originals-v2',scopeId,reportHash));
+      if(record===undefined&&originals===undefined)return {ok:true as const,value:null};
+      if(!validSelectedReportRecord(record,reportHash)||!validSelectedOriginals(originals,reportHash)||record.reportBytes.length+originals.objects.reduce((sum:number,o:any)=>sum+o.bytes.length,0)>REVIEW_LIMITS.bytes)return corrupt();
+      return {ok:true as const,value:snapshot({record,objects:originals.objects})};
+    });}catch(e){return fail(mapError(e));}
   }
   private storedShoppingRecipeLink(command:LocalCommit['commands'][number]) {
     if(command.kind!=='shopping-item-create')return null;
