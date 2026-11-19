@@ -25,6 +25,7 @@ import {commitCookingBatchWithPolicy} from '../disclosure/cooking.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {prepareAdultRemovalDocumentSet,verifyAdultRemovalDocumentSet} from '../projection/current-document-set.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
+import {verifyAdultRemovalGrant} from '../compromise/adult-removal-grant.mjs';
 
 await sodium.ready;
 const scope={id:'rotation-home',kind:'household'};
@@ -330,7 +331,7 @@ const houseState=async(participant,pin)=>{
 };
 
 test('adult removal complete-set proposal binds its signed head and projected documents',async()=>{
- await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],root,pin)=>{
+ await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma',tablet:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],root,pin)=>{
   const recipe=await a.runtime.forRecipe('soup');
   recipe.disclosure=a.runtime.disclosure;
   await apply(recipe,1,'recipe-create','soup-create',{recipe:{id:'soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:a.deviceId,at});
@@ -355,6 +356,41 @@ test('adult removal complete-set proposal binds its signed head and projected do
   await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,manifest:swapped}),/INVALID_DOCUMENT_SET/);
   const altered=structuredClone(options.documents); altered[1].seed.snapshot[0]^=1;
   await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,documents:altered}),/INVALID_DOCUMENT_SET/);
+  const subject=options.item.event.subject;
+  assert.deepEqual(subject.devices.map(device=>device.deviceId),['a','b']);
+  const grant={version:3,householdId:root.householdId,parentHead:root.head,eventHash:prepared.eventHash,
+   newEpochId:subject.newEpochId,newGeneration:subject.newGeneration,documentId:subject.documentId,
+   manifestHash:prepared.manifestHash,recipients:['a','b'],packageRefs:['package-a','package-b'],
+   contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only',signatures:[]};
+  const publicOptions={pin,parent:options.parent,nodes,state,provider:a.provider,item:structuredClone(options.item),
+   manifest:prepared.manifest,grant,recipientBindings:draft.proposal.recipientBindings};
+  assert.equal((await verifyAdultRemovalGrant({...publicOptions,requireQuorum:false})).complete,false);
+  await assert.rejects(()=>verifyAdultRemovalGrant(publicOptions),/QUORUM_REQUIRED/);
+  const body=Object.fromEntries(Object.entries(grant).filter(([key])=>key!=='signatures'));
+  for(const participant of [a,b]){
+   const voter={adultId:participant.adultId,deviceId:participant.deviceId};
+   const approval={version:1,householdId:root.householdId,eventHash:prepared.eventHash,parentHead:root.head,
+    policyHash:root.policyHash,generation:root.generation,epochId:root.epochId,...voter};
+   const sign=async(purpose,value)=>sodium.to_hex(await participant.provider.sign(participant.signingKey,domain(purpose,value)));
+   publicOptions.item.approvals.push({...approval,signature:await sign('approval-signature',approval)});
+   grant.signatures.push({...voter,signature:await sign('adult-removal-set-grant-vote-v3',{grant:body,...voter})});
+  }
+  assert.equal((await verifyAdultRemovalGrant(publicOptions)).complete,true);
+  const badManifest=structuredClone(prepared.manifest); badManifest.entries[1].snapshotHash='0'.repeat(64);
+  await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,manifest:badManifest}),/INVALID_GRANT/);
+  const badRecipients=structuredClone(grant); badRecipients.recipients=['a','tablet'];
+  await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,grant:badRecipients}),/INVALID_GRANT/);
+  const badBinding=structuredClone(publicOptions.recipientBindings); badBinding[1].wrappingKey='0'.repeat(64);
+  await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,recipientBindings:badBinding}),/INVALID_RECIPIENT/);
+  const badVote=structuredClone(grant); badVote.signatures[1].signature=badVote.signatures[0].signature;
+  await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,grant:badVote}),/INVALID_GRANT/);
+  const badPackages=structuredClone(grant); badPackages.packageRefs[1]=badPackages.packageRefs[0];
+  await assert.rejects(()=>verifyAdultRemovalGrant({...publicOptions,grant:badPackages}),/INVALID_GRANT/);
+  const incomplete={...publicOptions,item:structuredClone(publicOptions.item),grant:structuredClone(grant)};
+  incomplete.item.approvals.pop(); incomplete.grant.signatures.pop();
+  assert.equal((await verifyAdultRemovalGrant({...incomplete,requireQuorum:false})).approvals,1);
+  incomplete.grant.signatures[0].signature='0'.repeat(128);
+  await assert.rejects(()=>verifyAdultRemovalGrant({...incomplete,requireQuorum:false}),/INVALID_GRANT/);
  });
 });
 

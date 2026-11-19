@@ -212,16 +212,23 @@ export async function prepareAdultRemovalProjection({runtime,service,destination
 
 // This is proposal verification only. The parent and ancestry must be verified
 // independently by the caller; the result grants no publication authority.
-export async function verifyAdultRemovalDocumentSet({pin,parent,nodes,state,provider,item,manifest,documents,LoroDoc}) {
-  ({parent,nodes,state,item,manifest,documents}=structuredClone({parent,nodes,state,item,manifest,documents}));
+export async function verifyAdultRemovalDocumentSetManifest({pin,parent,nodes,state,provider,item,manifest}) {
+  ({parent,nodes,state,item,manifest}=structuredClone({parent,nodes,state,item,manifest}));
   if (!exact(item,['event','authorSignature','approvals']) || item.event?.version!==2 || item.event.kind!=='removeAdult') throw Error('INVALID_REMOVAL');
   const checked=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
   if (!['QUORUM_REQUIRED','ROTATION_DISTRIBUTION_REQUIRED'].includes(checked.reason)) throw Error(checked.reason ?? 'INVALID_REMOVAL');
   if (state.activeHead!==parent.head || manifest?.authorizationSnapshot!==await selectedSourceHash(provider,'authority-state',state)) throw Error('INVALID_DOCUMENT_SET');
   newRoot(parent,item.event,nodes);
   await checkOrderedDocumentSetManifest({pin,parent,item,eventHash:checked.eventHash,manifest,provider,format:6,hashField:'removalEventHash'});
+  return {eventHash:checked.eventHash,manifestHash:await digestManifest(provider,manifest),
+    approvals:checked.approvals,required:checked.required,complete:checked.reason==='ROTATION_DISTRIBUTION_REQUIRED'};
+}
+
+export async function verifyAdultRemovalDocumentSet({pin,parent,nodes,state,provider,item,manifest,documents,LoroDoc}) {
+  ({parent,nodes,state,item,manifest,documents}=structuredClone({parent,nodes,state,item,manifest,documents}));
+  const checked=await verifyAdultRemovalDocumentSetManifest({pin,parent,nodes,state,provider,item,manifest});
   await verifyDocuments({manifest,documents,provider,pin,state,LoroDoc});
-  return {eventHash:checked.eventHash,manifestHash:await digestManifest(provider,manifest)};
+  return checked;
 }
 
 /** Prepare a public complete-set proposal from authenticated current sources. */
