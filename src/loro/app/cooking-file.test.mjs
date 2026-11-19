@@ -1,3 +1,4 @@
+import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {stageVerifiedPolicyDocumentSet,readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject,matchPolicyDocumentSetEvent} from '../authority/policy-document-set.mjs';
 import {householdPairing} from './household-pairing.mjs';
@@ -729,6 +730,58 @@ test('selected recipe shopping copies and current-only admission survive durable
  assert.equal(savedStage.ok,true); assert.deepEqual(savedStage.value.mapping,staged.mapping);
  const readStage=()=>readVerifiedPolicyDocumentSet({runtime:a.runtime,targetHead:eventHash});
  assert.equal((await readStage()).targetHead,eventHash);
+ // Real, distinct source keys exercise the injected trust boundary. The reader
+ // authenticates the entire route and never substitutes the root for a child.
+ const localKeys=a.storage.localKeys(sponsorMaster,sodium), slots=new Map(), material=new Map();
+ for(const [index,row] of staged.mapping.entries()) {
+  const identity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:`stage-source-${index}`};
+  const operationId=`stage-source-operation-${index}`;
+  await localKeys.generate(operationId,identity);
+  await localKeys.use(operationId,identity,key=>material.set(row.sourceDocumentId,new Uint8Array(key)));
+  slots.set(row.sourceDocumentId,{operationId,identity});
+ }
+ const routeReader=async(route,fn)=>{
+  assert.equal(route.scopeId,scope.id); assert.equal(route.rootPin,a.root.head);
+  assert.equal(route.sourceHead,parent.head); assert.equal(route.targetHead,eventHash);
+  assert.equal(route.epochId,parent.epochId); assert.equal(route.generation,parent.generation);
+  assert.equal(route.deviceId,a.deviceId);
+  const row=staged.mapping.find(entry=>entry.sourceDocumentId===route.sourceDocumentId);
+  if(!row || row.targetDocumentId!==route.targetDocumentId)throw Error('INVALID_SOURCE_ROUTE');
+  const slot=slots.get(route.sourceDocumentId);
+  if(!slot)throw Error('SOURCE_KEY_MISSING');
+  return localKeys.use(slot.operationId,slot.identity,fn);
+ };
+ const prepare=(runtime=a.runtime,reader=routeReader,head=eventHash)=>preparePolicyDocumentKeys({runtime,targetHead:head,keys:localKeys,withSourceDocumentKey:reader});
+ const beforeKeys=a.rows(), preparedKeys=await prepare();
+ assert.deepEqual(a.rows(),beforeKeys);
+ assert.equal(preparedKeys.length,staged.mapping.length);
+ for(const [index,prepared] of preparedKeys.entries()) {
+  const row=staged.mapping[index], record=prepared.record, identity=record.identity;
+  assert.equal(prepared.targetDocumentId,row.targetDocumentId);
+  const aad=new TextEncoder().encode(JSON.stringify(['creative-cooking/local-key/v1',identity.scope.kind,identity.scope.id,identity.deviceId,identity.purpose,identity.epochId]));
+  const opened=await sponsorMaster.unwrap(record.masterId,record.wrapped,aad);
+  assert.deepEqual(opened,material.get(row.sourceDocumentId));
+  for(const [source,key] of material)if(source!==row.sourceDocumentId)assert.notDeepEqual(opened,key);
+  assert.equal(Buffer.from(JSON.stringify(prepared)).includes(Buffer.from(opened)),false);
+  assert.equal(Buffer.from(prepared.record.wrapped).includes(Buffer.from(opened)),false);
+  opened.fill(0);
+ }
+ const missing=staged.mapping[1].sourceDocumentId, savedSlot=slots.get(missing); slots.delete(missing);
+ await assert.rejects(()=>prepare(),/SOURCE_KEY_MISSING/); slots.set(missing,savedSlot);
+ await assert.rejects(()=>prepare(a.runtime,routeReader,'0'.repeat(64)),/STAGE_NOT_FOUND/);
+ const savedScope=structuredClone(a.runtime.scope);
+ for(const change of [{scopeId:'wrong'},{branchHead:'wrong'},{epochId:'wrong'},{documentGeneration:999},{documentId:'wrong'},{authorDevice:'wrong'}]) {
+  Object.assign(a.runtime.scope,change);
+  await assert.rejects(()=>prepare());
+  a.runtime.scope=structuredClone(savedScope);
+ }
+ const wrongRoute=async(route,fn)=>routeReader({...route,targetDocumentId:'wrong'},fn);
+ await assert.rejects(()=>prepare(a.runtime,wrongRoute),/INVALID_SOURCE_ROUTE/);
+ const changedDuringRead=async(route,fn)=>{await routeReader(route,fn);a.runtime.scope.epochId='wrong';};
+ await assert.rejects(()=>prepare(a.runtime,changedDuringRead));
+ a.runtime.scope=structuredClone(savedScope);
+ assert.deepEqual(a.rows(),beforeKeys);
+ for(const key of material.values())key.fill(0);
  for(const mutate of [s=>{s.proof=new Uint8Array([...s.proof,32])},s=>{s.mapping[1].targetDocumentId='substitute'},s=>{s.mapping[1].baseline[0]^=1},s=>{s.sourceHead='wrong'}]) {
   const fake=structuredClone(savedStage.value); mutate(fake);
   const storage=Object.assign(Object.create(a.storage),{readStagedPolicyDocumentSet:async()=>({ok:true,value:fake})});
