@@ -1797,6 +1797,16 @@ test('selected recipe shopping copies and current-only admission survive durable
   rmSync(join(pairedDir,`${pairedName}-${pairedEnrollmentId}.sqlite`));
   await assert.rejects(pairedJoin.selection.openSelected(),/MISSING_SEQUENCES/);
   await assert.rejects(pairedJoin.finalizeJoinedSequences(pairedEnrollment),/MISSING_SEQUENCES/);
+  const enrollmentSlot=JSON.stringify(['native-household-enrollment',scope.id]);
+  const savedEnrollment=pairedDb.prepare('SELECT value FROM loro_records WHERE key=?').get(enrollmentSlot).value;
+  pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(
+   JSON.stringify({...JSON.parse(savedEnrollment),stage:'pending'}),enrollmentSlot);
+  await assert.rejects(pairedJoin.finalizeJoinedSequences(pairedEnrollment),/MISSING_SEQUENCES/);
+  const missingCounter=openPairedDatabase(`${pairedName}-${pairedEnrollmentId}`);
+  try{
+   assert.deepEqual(missingCounter.executeSync("SELECT name FROM sqlite_master WHERE type='table'").rows,[]);
+  }finally{missingCounter.close()}
+  pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(savedEnrollment,enrollmentSlot);
   const reopenOptions={storage:pairedStorage,scope,operationId:evidence.transcript.sessionId,pin:fileOptions.pin,
    provider:fileOptions.provider,sodium,LoroDoc,keys:pairedKeys,wrappingSecret:nextWrap.privateKey};
   const reopenedSet=await reopenOwnDeviceSet(reopenOptions);

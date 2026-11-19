@@ -11,6 +11,7 @@ const selectionKey = '["native-household-selection"]';
 const markerKey = '["native-household-selection-required"]';
 const revisionKey = '["native-household-selection-revision"]';
 const enrollmentKey = id => JSON.stringify(['native-household-enrollment', id]);
+const activationKey = id => JSON.stringify(['native-household-activation', id]);
 const pinKey = id => JSON.stringify(['pin', id]);
 const pinAad = id => enc.encode(`creative-cooking/household-pin/v1/${id}`);
 const validPin = value => value && Object.keys(value).sort().join(',') === 'head,pin,scope,version' &&
@@ -112,7 +113,8 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         if (!found.ok) throw Error('INVALID_ADMISSION');
         const admission=()=>joinedHouseholdAuthority({storage,scope,pin,pins,provider,sodium,deviceId,operationId,confirmedParent,legacy:found.value,paired});
         const key = enrollmentKey(scope.id);
-        const enrollment = await workspaceRun(false, tx => tx.get(key));
+        const [enrollment, activation] = await workspaceRun(false, async tx =>
+          [await tx.get(key), await tx.get(activationKey(scope.id))]);
         const identity = {version:1, scopeId:scope.id, pin, deviceId, operationId};
         function checkEnrollment(record) {
           if (record !== undefined && (!record || !['pending', 'active'].includes(record.stage) ||
@@ -120,10 +122,12 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
             !Object.entries(identity).every(([field, value]) => record[field] === value))) throw Error('ENROLLMENT_CONFLICT');
         }
         checkEnrollment(enrollment);
+        if (activation !== undefined && (!activation || Object.keys(activation).length !== Object.keys(identity).length ||
+          !Object.entries(identity).every(([field, value]) => activation[field] === value))) throw Error('ENROLLMENT_CONFLICT');
         const legacy = enrollment?.stage === 'active' ? undefined :
           await run(false, tx => tx.get(JSON.stringify(['enrollment', scope.id])));
         checkEnrollment(legacy);
-        const alreadyActive = enrollment?.stage === 'active' || legacy?.stage === 'active';
+        const alreadyActive = activation !== undefined || enrollment?.stage === 'active' || legacy?.stage === 'active';
         if (mode === 'prepare') {
           if (found.value || await admission()) return null;
           if (alreadyActive) throw Error('MISSING_ADMISSION');
@@ -135,13 +139,16 @@ export function openNativeHouseholdPersistence({name, openDatabase, workspaceRun
         const verified=await admission();
         if (!verified) throw Error('MISSING_ADMISSION');
         if (mode === 'open' && (enrollment??legacy)?.stage === 'pending') throw Error('INCOMPLETE_ENROLLMENT');
-        if(verified.installedSet&&!enrollment&&!legacy)throw Error('MISSING_ENROLLMENT');
+        if((verified.installedSet || activation !== undefined)&&!enrollment&&!legacy)throw Error('MISSING_ENROLLMENT');
         const counters = openDatabase(`${name}-${operationId}`);
         try {
           const initialize = mode === 'finalize' && enrollment?.stage === 'pending' && !alreadyActive;
           const sequences = openNativeSequences(counters, [scope.id], initialize);
-          if (enrollment?.stage !== 'active') {
-            await workspaceRun(true, tx => tx.put(key, {...identity, stage:'active'}));
+          if (enrollment?.stage !== 'active' || activation === undefined) {
+            await workspaceRun(true, async tx => {
+              await tx.put(key, {...identity, stage:'active'});
+              await tx.put(activationKey(scope.id), identity);
+            });
           }
           return {...verified, sequences:{reserve:sequences.reserve, close:() => counters.close()}};
         } catch (error) {
