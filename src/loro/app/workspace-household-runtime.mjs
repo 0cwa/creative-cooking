@@ -18,12 +18,11 @@ import {readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {readVerifiedActivatedPolicyDocumentSet,readPolicyReturnActivationEvidence} from './read-activated-policy-document-set.mjs';
 import {readRecipeCatalog} from './selected-recipe-catalog.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
+import {unsupportedPolicySource} from '../authority/policy-document-set.mjs';
 
 const policyReaders=new WeakMap();
 const policyMounts=new WeakMap();
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-// Activation must only accept histories that the return verifier can reopen.
-const unsupportedPolicySource=state=>state.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice'));
 
 /** Bind the narrowly scoped policy branch operations to the selected workspace. */
 export async function bindPolicyBranches({runtime,keys,service,sodium,withCurrent,eligible,activated}) {

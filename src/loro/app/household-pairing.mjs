@@ -34,6 +34,7 @@ export function householdPairing({
   const authority = {storage, scope, pin, provider};
   const member = {...authority, adultId, deviceId};
   const cooking = {...member, runtime, service};
+  const ruleSource = {...member, runtime, selectedHousehold};
   const preparation = {...member, store, sodium, randomUUID};
   const identity = {version:1, adultId, deviceId, signingKey, wrappingKey:wrappingPublicKey};
   const withSecrets = fn => keys.use(signing.operationId, signing.identity, signingSecret =>
@@ -60,10 +61,10 @@ export function householdPairing({
     })])),
     admissionRule: {
       status: active(() => householdAdmissionRule(member)),
-      propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation, runtime})),
-      review: active(item => reviewHouseholdAdmissionRule({...member, runtime, item})),
-      approve: active(input => approveHouseholdAdmissionRule({...input, ...member, runtime})),
-      retain: legacy(input => retainHouseholdAdmissionRule({...input, ...member, runtime})),
+      propose: active(input => proposeHouseholdAdmissionRule({...input, ...preparation, ...ruleSource})),
+      review: active(item => reviewHouseholdAdmissionRule({...ruleSource, item})),
+      approve: active(input => approveHouseholdAdmissionRule({...input, ...ruleSource})),
+      retain: legacy(input => retainHouseholdAdmissionRule({...input, ...ruleSource})),
       checkout: legacy(async input => {
         await runtime.authorize();
         return checkoutPolicyHead({...input, ...member, LoroDoc});

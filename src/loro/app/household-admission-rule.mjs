@@ -1,7 +1,7 @@
 import {observeSuccessorWithOutcome, policyCheckoutCandidates, readAuthority, verifyAuthority} from '../authority/chain.mjs';
 import {admissionThreshold, domain, validPolicyBaseline, validateSuccessor} from '../authority/validator.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
-import {observePolicyDocumentSet, matchPolicyDocumentSetEvent, policyDocumentSetSubject} from '../authority/policy-document-set.mjs';
+import {observePolicyDocumentSet, matchPolicyDocumentSetEvent, policyDocumentSetSubject, unsupportedPolicySource} from '../authority/policy-document-set.mjs';
 import {stageVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {requireAdmissionPolicy} from './admission-rule.mjs';
 
@@ -37,14 +37,14 @@ export async function proposeHouseholdAdmissionRule(args) {
   const {provider, store, runtime, expectedHead, explicit, randomUUID} = args;
   const requested = structuredClone(args.policy);
   if (explicit !== true) throw Error('CONFIRMATION_REQUIRED');
-  const {parent, device, legacyPolicyHeads} = await context(args);
+  const {parent, device, legacyPolicyHeads, state} = await context(args);
   if (expectedHead !== parent.head || runtime.scope.branchHead !== expectedHead) throw Error('CONFLICT');
   if (legacyPolicyHeads.has(parent.head)) throw Error('CHECKOUT_REQUIRED');
   const policy = requireAdmissionPolicy(requested, parent.roster.length);
   if (policy.kind === parent.policy.kind && policy.fixedCount === parent.policy.fixedCount) throw Error('Choose a different admission rule.');
   const captured = runtime.storage && runtime.authority && !runtime.authority.installedSet ? await observePolicyDocumentSet(runtime) : null;
   const evidence = captured?.signed.body.observation.manifest.children.length ? captured.signed : null;
-  if (evidence && (runtime.authority.activatedPolicy || runtime.authority.returnedPolicy)) throw Error('UNSUPPORTED_VERSION');
+  if (evidence) requireReturnableProposalSource(args, state);
   const {doc} = await runtime.document();
   const subject = evidence ? await policyDocumentSetSubject(setOptions(args, captured, evidence)) : await policyBaseline(doc, provider);
   if (!validPolicyBaseline(evidence ? subject.baseline : subject)) throw Error('This cooking starting point exceeds the supported frontier size.');
@@ -73,14 +73,20 @@ function setOptions(args, captured, signed) {
     retained:captured.sources.map(source=>({documentId:source.runtime.scope.documentId,revision:source.revision,bytes:source.bytes??new Uint8Array()}))};
 }
 
+function requireReturnableProposalSource({runtime,selectedHousehold}, state) {
+  if (!runtime || selectedHousehold || runtime.authority?.installedSet ||
+    runtime.authority?.activatedPolicy || runtime.authority?.returnedPolicy || unsupportedPolicySource(state))
+    throw Error('UNSUPPORTED_VERSION');
+}
+
 async function verifyRuleProposal(args, allowHistoricalParent) {
   const item = structuredClone(args.item);
-  const {parent: activeParent, nodes} = await context(args);
+  const {parent: activeParent, nodes, state} = await context(args);
   if (item?.event?.kind !== 'changePolicy' || Object.keys(item).sort().join(',') !== (item.event.version === 6 ? 'approvals,authorSignature,documentSet,event' : 'approvals,authorSignature,event')) throw Error('INVALID_INPUT');
   const parent = allowHistoricalParent ? nodes.get(item.event.parentHead) : activeParent;
   if (!parent || item.event.parentHead !== parent.head) throw Error('The proposal uses a different household head.');
   if (item.event.version === 6) {
-    if (!args.runtime || args.runtime.authority?.installedSet || args.runtime.authority?.activatedPolicy || args.runtime.authority?.returnedPolicy) throw Error('UNSUPPORTED_VERSION');
+    requireReturnableProposalSource(args, state);
     const captured = await observePolicyDocumentSet(args.runtime);
     if (JSON.stringify(captured.signed.body.observation.manifest) !== JSON.stringify(item.documentSet?.body?.observation?.manifest)) throw Error('STALE_SOURCE');
     await matchPolicyDocumentSetEvent(setOptions(args,captured,item.documentSet),item.event);

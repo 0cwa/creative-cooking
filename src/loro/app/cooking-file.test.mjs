@@ -207,10 +207,16 @@ test('mounted admission rule stages a signed recipe set',async t=>{
  const signingKeys=Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='rule-signing'?fn(a.signingTestKey.privateKey):keys.use(op,identity,fn)});
  const signing={publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'rule-signing'};
  const runtime=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:await resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
- const api=householdPairing({name:'fixture',sodium,storage:a.storage,provider:a.provider,store:fixtureSessionStore(a.connection),scope,pin:a.root.head,deviceId:a.deviceId,adultId:'adult',runtime,service:a.service,keys:signingKeys,signing,wrapping:{},LoroDoc}).admissionRule;
- const item=await api.propose({policy:{kind:'unanimous',fixedCount:null},expectedHead:a.root.head,explicit:true});
+ const pairing={name:'fixture',sodium,storage:a.storage,provider:a.provider,store:fixtureSessionStore(a.connection),scope,pin:a.root.head,deviceId:a.deviceId,adultId:'adult',runtime,service:a.service,keys:signingKeys,signing,wrapping:{},LoroDoc};
+ const api=householdPairing({...pairing,selectedHousehold:false}).admissionRule;
+ const joinedRules=householdPairing({...pairing,selectedHousehold:true}).admissionRule;
+ const proposal={policy:{kind:'unanimous',fixedCount:null},expectedHead:a.root.head,explicit:true};
+ await assert.rejects(()=>joinedRules.propose(proposal),/UNSUPPORTED_VERSION/);
+ const item=await api.propose(proposal);
  assert.equal(item.event.version,6); assert.equal(item.event.subject.documentCount,2);
  const review=await api.review(item), approved=await api.approve({item,confirmedEventHash:review.eventHash,explicit:true});
+ await assert.rejects(()=>joinedRules.review(item),/UNSUPPORTED_VERSION/);
+ await assert.rejects(()=>joinedRules.retain({item:approved.item,confirmedEventHash:review.eventHash,explicit:true}),/UNSUPPORTED_VERSION/);
  assert.deepEqual(approved.item.documentSet,item.documentSet);
  const altered=structuredClone(approved.item); altered.documentSet.body.observation.manifest.children[0].revision++;
  await assert.rejects(()=>api.retain({item:altered,confirmedEventHash:review.eventHash,explicit:true}));

@@ -7,6 +7,10 @@ const exact=(value,fields)=>value && typeof value==='object' && !Array.isArray(v
   Object.keys(value).length===fields.length && fields.every(field=>Object.hasOwn(value,field));
 const hex=bytes=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 
+// The bounded checkout can return only to ordinary source histories.
+export const unsupportedPolicySource=state=>state.events.some(item=>item.admission ||
+  item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice'));
+
 /** Capture a signed baseline bound to the independently signed catalog and pin.
  * The caller must still use guard in the atomic publication transaction. */
 export async function observePolicyDocumentSet(runtime) {
