@@ -266,6 +266,16 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.ok((await mounted.document()).revision!==null);
  const mountedRecipe=await mounted.forRecipe('retained-recipe');
  assert.equal((await mountedRecipe.document()).doc.getMap('recipe:retained-recipe').get('title'),'Soup');
+ const {activatedPolicyEditContext}=await import('./activated-policy-source.mjs');
+ const editContext=await activatedPolicyEditContext(mountedRecipe,a.service);
+ const editVerify=createSourceVerifier({runtime:mountedRecipe,service:a.service,localEditContext:editContext,allowIncomplete:true});
+ assert.deepEqual(await editVerify(inherited.effectId),{policies:inherited.policyHashes,incomplete:true});
+ assert.ok((await editVerify(inherited.effectId)).policies.includes(accepted.policyHash));
+ await assert.rejects(()=>editVerify(rootRow.sources[0].effectId),/SOURCE_PROVENANCE_REQUIRED/);
+ await assert.rejects(()=>editVerify('missing'),/SOURCE_PROVENANCE_REQUIRED/);
+ assert.throws(()=>createSourceVerifier({runtime:mountedRecipe,service:a.service,localEditContext:editContext}),/INCOMPLETE_PROVENANCE/);
+ await assert.rejects(()=>createSourceVerifier({runtime:mounted,service:a.service,localEditContext:editContext,allowIncomplete:true})(inherited.effectId),/INVALID_AUTHORITY/);
+
  await assert.rejects(()=>mounted.forRecipe('wrong-child'),/INVALID_RECIPE_DOCUMENT/);
  await assert.rejects(()=>mounted.execute({}),/SOURCE_PROVENANCE_REQUIRED/);
  await assert.rejects(()=>mounted.importItem({}),/SOURCE_PROVENANCE_REQUIRED/);

@@ -1,13 +1,15 @@
+import {activatedPolicyEditSource} from '../app/activated-policy-source.mjs';
 import {validate as validateCommand,validateOperations,checkPreconditions} from '../domain/registry.mjs';
 import {policyBaseline,policyBranchAncestors,verifyPolicyBaseline} from '../authority/policy-baseline.mjs';
 const must=r=>{if(!r.ok)throw Error(typeof r.error==='string'?r.error:r.error.code);return r.value};
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
 /** Reverify retained signed envelopes and recursively reconstruct source policy ancestry. */
-export function createSourceVerifier({runtime,service,context,allowIncomplete=false,allowOwnDeviceBaseline=false,selectedDocument=null,selectedSeedEffects=null}) {
+export function createSourceVerifier({runtime,service,context,allowIncomplete=false,allowOwnDeviceBaseline=false,selectedDocument=null,selectedSeedEffects=null,localEditContext=null}) {
+ if(localEditContext && !allowIncomplete)throw Error('INCOMPLETE_PROVENANCE');
  const verified=new Map(),visiting=new Set(),baselines=new Map();let replayChecked=null,verifyShoppingRecipeSource=null;
  const scope=runtime.scope;
- const ancestors=context.verified?.nodes ? policyBranchAncestors(context.verified,scope.branchHead) : [];
+ const ancestors=context?.verified?.nodes ? policyBranchAncestors(context.verified,scope.branchHead) : [];
  async function authenticateSeed(effect) {
    if(ancestors.length<2)return false;
    const {doc}=await runtime.document();
@@ -16,6 +18,7 @@ export function createSourceVerifier({runtime,service,context,allowIncomplete=fa
  async function authenticateUnknown(effect){if(!allowIncomplete)throw Error('SOURCE_PROVENANCE_REQUIRED');if(!replayChecked){const {doc,storedBytes}=await runtime.document(),{replayAuthenticated}=await import('../domain/replay.mjs'),result=await replayAuthenticated({runtime,checkpoint:storedBytes??new Uint8Array()}),visible=d=>Object.fromEntries(Object.entries(d.toJSON()).filter(([,v])=>v&&typeof v==='object'&&Object.keys(v).length));if(result.held.length||!equal(canonical(visible(result.doc)),canonical(visible(doc))))throw Error('INSUFFICIENT_EVIDENCE');replayChecked=result}const {doc}=await runtime.document();if(!doc.getMap('domain-effects').get(effect))throw Error('SOURCE_PROVENANCE_REQUIRED');const policies=new Set(),command=replayChecked.applied.find(x=>x.command.effectId===effect)?.command;if(command)for(const dependency of command.dependencyEffectIds){const parent=await verifySource(dependency);for(const policy of parent.policies)policies.add(policy)}return {policies:[...policies].sort(),incomplete:true};}
 
  async function verifySource(effect) {
+   if(localEditContext)return activatedPolicyEditSource(localEditContext,runtime,service,effect);
    if(verified.has(effect))return verified.get(effect);if(visiting.has(effect)||visiting.size+verified.size>=256)throw Error('SOURCE_PROVENANCE_REQUIRED');visiting.add(effect);
    const copied=!selectedDocument&&runtime.storage.readOwnDeviceCookingSource&&must(await runtime.storage.readOwnDeviceCookingSource(context.resolved.expectedAuthority,scope.documentId,effect));
    if(copied&&allowOwnDeviceBaseline&&allowIncomplete){
