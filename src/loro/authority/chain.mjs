@@ -389,6 +389,29 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
  return resolveRuntimeAuthorityInternal(storage,scope,pin,provider,authorDevice,null);
 }
 
+/** Explicit read-only authority from a fully verified retained adult-removal receipt. */
+export async function resolveAdultRemovalRuntimeAuthority({storage,scope,pin,provider,authorDevice,operationId,role,sodium,LoroDoc,keys,withWrapping}) {
+ scope=copy(scope);
+ if(scope?.kind!=='household'||!['sponsor','recipient'].includes(role))throw Error('INVALID_AUTHORITY_CONFIG');
+ const {resolveAdultRemovalReceipt}=await import('../compromise/resolve-adult-removal.mjs');
+ const options={storage,scope,pin,provider,deviceId:authorDevice,operationId,role,sodium,LoroDoc,keys};
+ let opened;
+ if(role==='recipient'){
+  if(typeof withWrapping!=='function')throw Error('INVALID_AUTHORITY_CONFIG');
+  let called=false;
+  await withWrapping(async wrappingSecret=>{if(called)throw Error('INVALID_AUTHORITY_CONFIG');called=true;opened=await resolveAdultRemovalReceipt({...options,wrappingSecret});});
+  if(!called||!opened)throw Error('INVALID_AUTHORITY');
+ }else opened=await resolveAdultRemovalReceipt(options);
+ if(!opened)throw Error('INVALID_AUTHORITY');
+ const {record,child,members}=opened;
+ let state;try{state=JSON.parse(dec.decode(record.authorityState));}catch{throw Error('INVALID_AUTHORITY');}
+ const selection=state.selections?.at(-1);
+ if(!selection || selection.index!==state.selections.length-1 || selection.to!==state.activeHead || state.activeHead!==record.acceptedParent || child.head!==state.activeHead || !members.length || members[0].recipeId!==null || members[0].documentId!==child.runtime.documentId || members.some(m=>m.keySlot.identity.deviceId!==authorDevice || !same(m.keySlot.identity.scope,scope)) || !same(record,await read(storage,scope)))throw Error('INVALID_AUTHORITY');
+ const resolved=runtimeAuthority(scope,record,state,child,authorDevice);
+ if(!same(record,await read(storage,scope)))throw Error('STALE_AUTHORITY');
+ return {...resolved,members};
+}
+
 /** Explicitly resolve one authenticated return to an ordinary original source. */
 export async function resolveReturnedPolicyAuthority({storage,scope,pin,provider,authorDevice,LoroDoc,targetHead,keys,sodium}) {
  scope=copy(scope);

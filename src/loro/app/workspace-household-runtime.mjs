@@ -1,4 +1,4 @@
-import {resolveReturnedPolicyAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority,authorityBytes,snapshotId} from '../authority/chain.mjs';
+import {resolveAdultRemovalRuntimeAuthority,resolveReturnedPolicyAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority,authorityBytes,snapshotId} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {verifyAuthority} from '../authority/chain.mjs';
 import {selectedSourceHash} from '../projection/selected-sources.mjs';
@@ -23,6 +23,7 @@ import {unsupportedPolicySource} from '../authority/policy-document-set.mjs';
 const policyReaders=new WeakMap();
 const policyMounts=new WeakMap();
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+const sameRemoval=(a,b)=>{const x=authorityBytes(a),y=authorityBytes(b);return x.length===y.length&&x.every((v,i)=>v===y[i])};
 
 /** Bind the narrowly scoped policy branch operations to the selected workspace. */
 export async function bindPolicyBranches({runtime,keys,service,sodium,withCurrent,eligible,activated}) {
@@ -240,9 +241,15 @@ export async function resolveOriginalHousehold({storage,scope,pin,provider,devic
  }
 }
 
-export async function openWorkspaceHouseholdRuntime({storage,resolved,installedSet,returnedPolicy=/** @type {any} */(undefined),activatedPolicy=/** @type {any} */(undefined),pin,provider,sodium,keys,signing,
+export async function openWorkspaceHouseholdRuntime({storage,resolved,installedSet,returnedPolicy=/** @type {any} */(undefined),activatedPolicy=/** @type {any} */(undefined),adultRemoval=/** @type {any} */(undefined),pin,provider,sodium,keys,signing,
  wrapping=/** @type {any} */(undefined),LoroDoc,decodeImportBlobMeta}) {
  resolved=structuredClone(resolved);
+ if(adultRemoval && (installedSet||returnedPolicy||activatedPolicy))throw Error('INVALID_AUTHORITY_CONFIG');
+ const removalOptions=adultRemoval?{operationId:adultRemoval.operationId,role:adultRemoval.role,sodium,keys,withWrapping:adultRemoval.withWrapping}:null;
+ if(removalOptions){
+  const verified=await resolveAdultRemovalRuntimeAuthority({storage,scope:{kind:'household',id:resolved.scope.scopeId},pin,provider,authorDevice:resolved.scope.authorDevice,LoroDoc,...removalOptions});
+  if(!sameRemoval(verified,resolved))throw Error('INVALID_AUTHORITY');
+ }
  if(returnedPolicy && (installedSet || activatedPolicy))throw Error('INVALID_AUTHORITY_CONFIG');
  if(activatedPolicy && (installedSet || activatedPolicy.targetHead!==resolved.scope.branchHead))throw Error('INVALID_AUTHORITY_CONFIG');
  if(activatedPolicy){
@@ -258,7 +265,13 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  const paired=installation?.paired;
  const members=new Map((paired?resolved.pairedDocuments:[]).map(document=>[document.documentId,document]));
  const policyMembers=new Map((activatedPolicy?resolved.members:[]).map(member=>[member.documentId,member]));
- const content=returnedPolicy ? async (epochId,fn,header)=>{
+ const removalMembers=new Map((adultRemoval?resolved.members:[]).map(member=>[member.documentId,member]));
+ const content=adultRemoval ? async (epochId,fn,header)=>{
+    const member=removalMembers.get(header?.documentId);
+    if(!member||epochId!==scope.epochId||header.epochId!==scope.epochId||header.scopeId!==scope.scopeId||header.branchHead!==scope.branchHead||header.documentGeneration!==scope.documentGeneration||!scope.acceptedAuthors.includes(header.authorDevice)||member.keySlot.identity.deviceId!==scope.authorDevice)throw Error('INVALID_AUTHORITY');
+    const verify=async()=>{const current=await resolveAdultRemovalRuntimeAuthority({storage,scope:householdScope,pin,provider,authorDevice:scope.authorDevice,LoroDoc,...removalOptions});if(!sameRemoval(current,resolved))throw Error('STALE_AUTHORITY')};
+    await verify();const result=await keys.use(member.keySlot.operationId,member.keySlot.identity,fn);await verify();return result;
+   } : returnedPolicy ? async (epochId,fn,header)=>{
     if(!resolved.members.some(member=>member.documentId===header?.documentId) || epochId!==scope.epochId || header.epochId!==scope.epochId || header.scopeId!==scope.scopeId || header.branchHead!==scope.branchHead || header.documentGeneration!==scope.documentGeneration || !scope.acceptedAuthors.includes(header.authorDevice))throw Error('INVALID_AUTHORITY');
     const verify=async()=>{const current=await resolveReturnedPolicyAuthority({storage,scope:householdScope,pin,provider,authorDevice:scope.authorDevice,LoroDoc,targetHead:returnedPolicy.targetHead,keys,sodium});if(!same(current,resolved))throw Error('STALE_AUTHORITY')};
     await verify();
@@ -293,16 +306,18 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  const codec=deliveries?.codec??candidateCodec(localProvider(sodium,keys,{signing,content}));
  const runtime=new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:scope.epochId,
   authority:{kind:'household',rootPin:pin,provider,selectionIndex:resolved.selectionIndex,
+   ...(adultRemoval?{adultRemoval:{options:removalOptions,resolved:structuredClone(resolved)}}:{}),
    ...(returnedPolicy?{returnedPolicy:{targetHead:returnedPolicy.targetHead,keys,sodium,resolved:structuredClone(resolved)}}:{}),
    ...(activatedPolicy?{activatedPolicy:{targetHead:activatedPolicy.targetHead,keys,resolved:structuredClone(resolved)}}:{}),
    ...(installation?{installedSet:{...installation,recipeCatalog:deliveries?.recipeCatalog},recipeDelivery:deliveries}:{})}});
- if(installation||activatedPolicy||returnedPolicy)await runtime.authorize();
+ if(installation||activatedPolicy||returnedPolicy||adultRemoval)await runtime.authorize();
  const originalScope=structuredClone(scope), authority=runtime.authority;
  const useContent=deliveryContent??content;
  const mountedRecord=await storage.readPairingAuthority(householdScope);
  const record=mountedRecord.ok && mountedRecord.value && mountedRecord.value.revision===resolved.expectedAuthority?.record.revision && mountedRecord.value.acceptedParent===resolved.expectedAuthority?.record.acceptedParent && mountedRecord.value.authorizationSnapshot===resolved.expectedAuthority?.record.authorizationSnapshot ? structuredClone(mountedRecord.value) : null;
- policyMounts.set(runtime,{record,keys,signing:structuredClone(signing),activated:!!(activatedPolicy||returnedPolicy),paired:!!paired,storage,authority,scope:originalScope,expected:structuredClone(resolved.expectedAuthority),pin,provider,LoroDoc,sodium});
+ policyMounts.set(runtime,{record,keys,signing:structuredClone(signing),activated:!!(activatedPolicy||returnedPolicy||adultRemoval),paired:!!paired,storage,authority,scope:originalScope,expected:structuredClone(resolved.expectedAuthority),pin,provider,LoroDoc,sodium});
  policyReaders.set(runtime,async (route,fn)=>{
+  if(adultRemoval)throw Error('SOURCE_PROVENANCE_REQUIRED');
   const check=()=>{
    if(runtime.authority!==authority || runtime.storage!==storage || authority.rootPin!==pin || authority.provider!==provider ||
       !same(runtime.scope,originalScope) || runtime.keyRef!==scope.epochId ||

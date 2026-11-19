@@ -1,3 +1,4 @@
+import {openWorkspaceHouseholdRuntime} from './workspace-household-runtime.mjs';
 import {resolveAdultRemovalReceipt} from '../compromise/resolve-adult-removal.mjs';
 import {reopenAdultRemovalRecipient} from '../compromise/reopen-adult-removal.mjs';
 import {installAdultRemovalRelease} from '../compromise/install-adult-removal.mjs';
@@ -16,7 +17,7 @@ import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
 import {OfflineRuntime} from '../engine/runtime.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
-import {authorityBytes,snapshotId,checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin,verifyAuthority} from '../authority/chain.mjs';
+import {resolveAdultRemovalRuntimeAuthority,authorityBytes,snapshotId,checkoutPolicyHead, initializeAuthority,policyId,readAuthority,resolveRuntimeAuthority,rootPin,verifyAuthority} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {approveHouseholdAdmissionRule, proposeHouseholdAdmissionRule, retainHouseholdAdmissionRule, reviewHouseholdAdmissionRule} from './household-admission-rule.mjs';
 import {householdCompromise} from './household-compromise.mjs';
@@ -636,6 +637,38 @@ test('adult removal complete-set proposal binds its signed head and projected do
    }
    assert.equal(signs,0);
   });
+  for(const [participant,role] of [[a,'sponsor'],[b,'recipient']]){
+   const withWrapping=fn=>participant.keys().useIdentity(wrapperIdentity(participant.deviceId),fn);
+   const options={storage:participant.storage,scope,pin,provider:participant.provider,authorDevice:participant.deviceId,operationId:publication.operationId,role,sodium,LoroDoc,keys:participant.keys(),withWrapping};
+   const resolved=await resolveAdultRemovalRuntimeAuthority(options);
+   assert.deepEqual(await resolveAdultRemovalRuntimeAuthority(options),resolved);
+   const mount=await openWorkspaceHouseholdRuntime({storage:participant.storage,resolved,adultRemoval:{operationId:publication.operationId,role,withWrapping},pin,provider:participant.provider,sodium,keys:participant.keys(),signing:{operationId:'signing',identity:signerIdentity(participant.deviceId),publicKey:participant.signingKey},LoroDoc,decodeImportBlobMeta});
+   const rows=participant.rows();
+   const rootDoc=await mount.document();assert.deepEqual(rootDoc.storedBytes,prepared.documents[0].seed.snapshot);
+   const recipe=await mount.forRecipe('soup');assert.deepEqual((await recipe.document()).storedBytes,prepared.documents[1].seed.snapshot);
+   await assert.rejects(()=>mount.forRecipe('missing'));
+   await assert.rejects(()=>mount.forRecipe('soup',{codec:null,prepareKey:()=>{}}));
+   await assert.rejects(()=>mount.prepare({}));await assert.rejects(()=>mount.execute({}));await assert.rejects(()=>mount.executeBatch({}));
+   await assert.rejects(()=>mount.importItem({}));await assert.rejects(()=>mount.recoverInbox());
+   await assert.rejects(()=>resolveRuntimeAuthority(participant.storage,scope,pin,participant.provider,participant.deviceId));
+   await assert.rejects(()=>resolveAdultRemovalRuntimeAuthority({...options,scope:{...scope,id:'wrong'}}));
+   const header={version:1,suiteId:resolved.scope.suiteId,scopeId:scope.id,documentId:recipe.scope.documentId,documentGeneration:resolved.scope.documentGeneration,branchHead:resolved.scope.branchHead,policyHashes:resolved.scope.policyHashes,epochId:resolved.scope.epochId,authorDevice:participant.deviceId,deviceSequence:0,predecessorRefs:[],semanticEffectIds:['test'],payloadKind:'loro-update-v1'};
+   const encrypted=await mount.codec.sealContent(header,new Uint8Array([42]),resolved.scope.epochId,participant.signingKey);
+   assert.deepEqual((await mount.codec.openContent(encrypted.bytes,resolved.signingKeyRefs)).value,new Uint8Array([42]));
+   const packet=JSON.parse(new TextDecoder().decode(encrypted.bytes)),cipher=sodium.from_hex(packet.encrypted);
+   const aad=new TextEncoder().encode(JSON.stringify(['creative-cooking/k2-candidate/v1','content/header',packet.header]));
+   const recipeSlot=resolved.members.find(member=>member.recipeId==='soup').keySlot,rootSlot=resolved.members[0].keySlot;
+   await participant.keys().use(recipeSlot.operationId,recipeSlot.identity,key=>assert.deepEqual(sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null,cipher.slice(24),aad,cipher.slice(0,24),key),new Uint8Array([42])));
+   await participant.keys().use(rootSlot.operationId,rootSlot.identity,key=>assert.throws(()=>sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null,cipher.slice(24),aad,cipher.slice(0,24),key)));
+
+   for(const changed of [{documentId:'wrong'},{scopeId:'wrong'},{branchHead:'wrong'},{epochId:'wrong'}])await assert.rejects(()=>mount.codec.sealContent({...header,...changed},new Uint8Array([42]),resolved.scope.epochId,participant.signingKey));
+   const originalIndex=mount.authority.selectionIndex;mount.authority.selectionIndex++;
+   await assert.rejects(()=>mount.document());mount.authority.selectionIndex=originalIndex;
+   const originalRead=participant.storage.reopenBranchDocument.bind(participant.storage);
+   participant.storage.reopenBranchDocument=async (...args)=>{const result=await originalRead(...args);if(result.ok&&result.value){result.value.bytes[0]^=1;}return result;};
+   try{await assert.rejects(()=>mount.document());}finally{participant.storage.reopenBranchDocument=originalRead;}
+   assert.deepEqual(participant.rows(),rows);
+  }
   const installedRows=new Map(b.rows().map(row=>[row.key,row.value]));
   for(const row of beforeInstall)if(row.key!==JSON.stringify(['pairing-authority','household',scope.id]))assert.equal(installedRows.get(row.key),row.value);
   const localNext=(await b.storage.readPairingAuthority(scope)).value;
