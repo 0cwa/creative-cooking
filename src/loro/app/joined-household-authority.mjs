@@ -1,4 +1,4 @@
-import {resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {readInstalledHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
@@ -7,9 +7,46 @@ import {domain} from '../authority/validator.mjs';
 
 const decoder=new TextDecoder('utf-8',{fatal:true});
 
+// The authenticated selected chain must retain the original admission on the
+// actual event ancestry, not just somewhere in the selection log.
+export async function verifyJoinedOrigin({chain,expectedParent,ancestryHead=expectedParent,savedPin,storage,scope,pin,provider,sodium,deviceId,legacy}) {
+ if(!savedPin||savedPin.pin!==pin||savedPin.scope?.kind!=='household'||savedPin.scope.id!==scope.id)throw Error('INVALID_ADMISSION');
+ const selections=chain.selections, selectedHeads=[pin,...selections.map(selection=>selection.to)];
+ const parentIndex=selectedHeads.lastIndexOf(expectedParent), pinIndex=selectedHeads.indexOf(savedPin.head);
+ if(pinIndex<0||parentIndex<pinIndex)throw Error('INVALID_ADMISSION');
+ let originHead;
+ if(legacy){
+  const checked=await storage.householdRecipient.check(legacy);
+  if(!checked.ok||checked.value!==true||legacy.scopeId!==scope.id||
+     legacy.receiptBody?.recipientDevice!==deviceId||legacy.expectedAuthority.acceptedParent!==savedPin.head)throw Error('INVALID_ADMISSION');
+  originHead=legacy.nextAuthority.acceptedParent;
+ }else{
+  const origin=chain.events.find(item=>item.admission?.manifest?.version===5&&
+   item.event.parentHead===savedPin.head&&item.admission.grant.recipientDevices.includes(deviceId)&&
+   selections.some(selection=>selection.from===savedPin.head&&selection.to===item.admission.grant.admissionEventHash));
+  if(!origin)throw Error('INVALID_ADMISSION');
+  const first=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId:origin.admission.operationId});
+  originHead=origin.admission.grant.admissionEventHash;
+  if(first.mode!=='recipient'||first.selection.from!==savedPin.head||first.selection.to!==originHead||
+     first.item.admission.grant.admissionEventHash!==originHead||
+     first.publication.localKey.record.identity.deviceId!==deviceId)throw Error('INVALID_ADMISSION');
+ }
+ const originIndex=selectedHeads.indexOf(originHead,pinIndex+1);
+ if(originIndex!==pinIndex+1||originIndex>parentIndex)throw Error('INVALID_ADMISSION');
+ const parents=new Map();
+ for(const item of chain.events){
+  const hash=await provider.hash(domain('event',item.event));
+  parents.set(Array.from(hash,b=>b.toString(16).padStart(2,'0')).join(''),item.event.parentHead);
+ }
+ let head=ancestryHead;
+ const ancestors=new Set();
+ while(head&&!ancestors.has(head)){ancestors.add(head);head=parents.get(head)}
+ if(!ancestors.has(expectedParent)||!ancestors.has(originHead)||!ancestors.has(savedPin.head))throw Error('INVALID_ADMISSION');
+}
+
 /** Discover the local receipt from pinned selected authority. A public parent
  * alone does not authorize creating or exposing a sequence counter. */
-export async function joinedHouseholdAuthority({storage,scope,pin,provider,deviceId,sodium,operationId,confirmedParent,legacy,pins,paired=undefined}) {
+export async function joinedHouseholdAuthority({storage,scope,pin,provider,deviceId,sodium,operationId,confirmedParent,legacy,pins,paired=undefined,allowActivatedPolicy=false}) {
  scope=structuredClone(scope);
  legacy=structuredClone(legacy);
  const raw=await storage.readPairingAuthority(scope);
@@ -17,6 +54,24 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
  let state;
  try { state=raw.value&&JSON.parse(decoder.decode(raw.value.authorityState)); }
  catch { throw Error('INVALID_ADMISSION'); }
+ // This opt-in is reserved for the future allocator/bootstrap integration.
+ // The untrusted head locates a receipt; the resolver authenticates it and
+ // requires its next record to equal the current authority.
+ if(allowActivatedPolicy && raw.value){
+  const targetHead=raw.value.acceptedParent;
+  const retained=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead);
+  if(!retained.ok)throw Error('INVALID_ADMISSION');
+  if(retained.value){
+   if(!paired?.keys||!paired.LoroDoc||operationId!==householdReceiverIds(sodium,scope,deviceId).operationId)throw Error('INVALID_ADMISSION');
+   const resolved=await resolveActivatedPolicyAuthority({storage,scope,pin,provider,authorDevice:deviceId,LoroDoc:paired.LoroDoc,targetHead,keys:paired.keys});
+   const {readVerifiedActivatedPolicyDocumentSet}=await import('./read-activated-policy-document-set.mjs');
+   const verified=await readVerifiedActivatedPolicyDocumentSet({storage,scope,pin,provider,deviceId,LoroDoc:paired.LoroDoc,targetHead,keys:paired.keys,sodium});
+   const savedPin=(await pins?.list())?.find(value=>value?.scope?.kind==='household'&&value.scope.id===scope.id);
+   if(confirmedParent!==undefined&&confirmedParent!==savedPin?.head)throw Error('INVALID_ADMISSION');
+   await verifyJoinedOrigin({chain:verified.state,expectedParent:verified.expected.acceptedParent,savedPin,storage,scope,pin,provider,sodium,deviceId,legacy});
+   return {resolved,installedSet:null,activatedPolicy:{targetHead}};
+  }
+ }
  const pairedOperation=await selectedOwnDeviceSet(raw.value,state,provider);
  if(pairedOperation){
   if(!paired||operationId!==householdReceiverIds(sodium,scope,deviceId).operationId)throw Error('INVALID_ADMISSION');
@@ -30,46 +85,12 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
   const resolved=await resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice:deviceId,sodium,
    LoroDoc:paired.LoroDoc,...installedSet});
   if(receipt.value.recipient.kind==='established'){
-   // The paired receipt authenticates the adopted child and its immediate
-   // parent. The independent pin still belongs to the original admission.
-   const {state:chain}=resolved.pairedAuthority;
-   const selections=chain.selections;
-   const selectedHeads=[pin,...selections.map(selection=>selection.to)];
-   const parentIndex=selectedHeads.lastIndexOf(receipt.value.expected.acceptedParent);
-   const childIndex=selectedHeads.lastIndexOf(resolved.head ?? chain.activeHead);
-   const pinIndex=selectedHeads.indexOf(savedPin.head);
-   if(pinIndex<0||parentIndex<pinIndex||childIndex!==parentIndex+1||
-      selectedHeads[childIndex]!==chain.activeHead)throw Error('INVALID_ADMISSION');
-   let originHead;
-   if(legacy){
-    const checked=await storage.householdRecipient.check(legacy);
-    if(!checked.ok||checked.value!==true||legacy.scopeId!==scope.id||
-       legacy.receiptBody?.recipientDevice!==deviceId||legacy.expectedAuthority.acceptedParent!==savedPin.head)
-     throw Error('INVALID_ADMISSION');
-    originHead=legacy.nextAuthority.acceptedParent;
-   }else{
-    const origin=chain.events.find(item=>item.admission?.manifest?.version===5&&
-      item.event.parentHead===savedPin.head&&item.admission.grant.recipientDevices.includes(deviceId)&&
-      selections.some(selection=>selection.from===savedPin.head&&selection.to===item.admission.grant.admissionEventHash));
-    if(!origin)throw Error('INVALID_ADMISSION');
-    const first=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId:origin.admission.operationId});
-    originHead=origin.admission.grant.admissionEventHash;
-    if(first.mode!=='recipient'||first.selection.from!==savedPin.head||first.selection.to!==originHead||
-       first.item.admission.grant.admissionEventHash!==originHead||
-       first.publication.localKey.record.identity.deviceId!==deviceId)throw Error('INVALID_ADMISSION');
-   }
-   const originIndex=selectedHeads.indexOf(originHead,pinIndex+1);
-   if(originIndex!==pinIndex+1||originIndex>parentIndex)throw Error('INVALID_ADMISSION');
-   // Selection can move to a sibling; require actual event ancestry as well.
-   const parents=new Map();
-   for(const item of chain.events){
-    const hash=await provider.hash(domain('event',item.event));
-    parents.set(Array.from(hash,b=>b.toString(16).padStart(2,'0')).join(''),item.event.parentHead);
-   }
-   let head=chain.activeHead;
-   const ancestors=new Set();
-   while(head&&!ancestors.has(head)){ancestors.add(head);head=parents.get(head)}
-   if(!ancestors.has(originHead)||!ancestors.has(savedPin.head)||!ancestors.has(receipt.value.expected.acceptedParent))throw Error('INVALID_ADMISSION');
+   const chain=resolved.pairedAuthority.state;
+   const heads=[pin,...chain.selections.map(selection=>selection.to)];
+   const parentIndex=heads.lastIndexOf(receipt.value.expected.acceptedParent);
+   const childIndex=heads.lastIndexOf(resolved.head ?? chain.activeHead);
+   if(childIndex!==parentIndex+1||heads[childIndex]!==chain.activeHead)throw Error('INVALID_ADMISSION');
+   await verifyJoinedOrigin({chain,expectedParent:receipt.value.expected.acceptedParent,ancestryHead:chain.activeHead,savedPin,storage,scope,pin,provider,sodium,deviceId,legacy});
   }
   return {resolved,installedSet};
  }

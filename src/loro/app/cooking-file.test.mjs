@@ -252,6 +252,13 @@ test('retained policy activation authenticates signed history and local keys',as
  await assert.rejects(()=>activateStagedPolicyDocumentSet({...confirm,targetHead:'wrong'}),/STALE_SOURCE/);
  assert.deepEqual(a.rows(),afterActivation);
  const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
+ // A valid activation by the original device is not a joined admission.
+ const {joinedHouseholdAuthority}=await import('./joined-household-authority.mjs');
+ const joinedArgs={storage:a.storage,scope,pin:a.root.head,provider:a.provider,deviceId:a.deviceId,sodium,
+  operationId:householdReceiverIds(sodium,scope,a.deviceId).operationId,confirmedParent:a.root.head,
+  pins:{list:async()=>[{scope,pin:a.root.head,head:a.root.head}]},paired:{keys,LoroDoc},allowActivatedPolicy:true};
+ await assert.rejects(()=>joinedHouseholdAuthority(joinedArgs),/INVALID_ADMISSION/);
+ await assert.rejects(()=>joinedHouseholdAuthority({...joinedArgs,operationId:'wrong'}),/INVALID_ADMISSION/);
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
  assert.equal(verified.documents.length,2); assert.deepEqual(verified.provenance,evidenceCapture.body.rows); assert.deepEqual(a.rows(),before);
  const {readActivatedPolicySource}=await import('./activated-policy-source.mjs');
@@ -1444,6 +1451,17 @@ test('selected recipe shopping copies and current-only admission survive durable
  const wrongScope=await wrongSender.sealContent({...header,scopeId:'wrong'},payload,header.epochId);
  await assert.rejects(()=>receiver.openContent(wrongScope.bytes),/INVALID_AUTHORITY/);
 
+ // Exercise the shared origin verifier with the genuine installed v5 receipt.
+ const {verifyJoinedOrigin}=await import('./joined-household-authority.mjs');
+ await readAuthority(freshStorage,scope,a.root.head,a.provider);
+ const originChain=JSON.parse(new TextDecoder().decode(must(await freshStorage.readPairingAuthority(scope)).authorityState));
+ const originArgs={chain:originChain,expectedParent:eventHash,savedPin:{scope,pin:a.root.head,head:record.acceptedParent},
+  storage:freshStorage,scope,pin:a.root.head,provider:a.provider,sodium,deviceId:newcomerContext.recipientDeviceId};
+ await verifyJoinedOrigin(originArgs);
+ await assert.rejects(()=>verifyJoinedOrigin({...originArgs,savedPin:{...originArgs.savedPin,head:'wrong'}}),/INVALID_ADMISSION/);
+ const unrelatedOrigin=structuredClone(originChain);
+ unrelatedOrigin.events.find(item=>item.admission?.grant?.admissionEventHash===eventHash).event.parentHead='unrelated';
+ await assert.rejects(()=>verifyJoinedOrigin({...originArgs,chain:unrelatedOrigin}),/INVALID_ADMISSION/);
  const installedAuthority=await readAuthority(freshStorage,scope,a.root.head,a.provider);
  assert.equal(installedAuthority.activeHead,eventHash);
  const installedRecord=must(await freshStorage.readPairingAuthority(scope));
