@@ -242,6 +242,16 @@ test('retained policy activation authenticates signed history and local keys',as
  const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
  assert.equal(verified.documents.length,2); assert.deepEqual(verified.provenance,evidenceCapture.body.rows); assert.deepEqual(a.rows(),before);
+ const {readActivatedPolicySource}=await import('./activated-policy-source.mjs');
+ const childRow=verified.provenance.find(row=>row.recipeId==='retained-recipe');
+ const rootRow=verified.provenance.find(row=>row.recipeId===null);
+ const inherited=childRow.sources.find(source=>source.policyHashes.includes(accepted.policyHash));
+ assert.deepEqual(await readActivatedPolicySource({...args,documentId:childRow.targetDocumentId,effectId:inherited.effectId}),inherited);
+ assert.equal(inherited.incomplete,true);
+ await assert.rejects(()=>readActivatedPolicySource({...args,documentId:rootRow.targetDocumentId,effectId:inherited.effectId}),/SOURCE_PROVENANCE_REQUIRED/);
+ await assert.rejects(()=>readActivatedPolicySource({...args,documentId:childRow.targetDocumentId,effectId:'missing'}),/SOURCE_PROVENANCE_REQUIRED/);
+ await assert.rejects(()=>readActivatedPolicySource({...args,scope:{...scope,id:'wrong'},documentId:childRow.targetDocumentId,effectId:inherited.effectId}));
+
  const {resolveActivatedPolicyAuthority,resolveRuntimeAuthority,policyId}=await import('../authority/chain.mjs');
  const resolve=overrides=>resolveActivatedPolicyAuthority({...args,authorDevice:a.deviceId,...overrides});
  const runtime=await resolve({});
@@ -274,6 +284,7 @@ test('retained policy activation authenticates signed history and local keys',as
 
  await assert.rejects(()=>resolve({authorDevice:'unauthorized'}));
  await assert.rejects(()=>resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),/UNSUPPORTED_VERSION/);
+ await assert.rejects(()=>a.service.authority(),/UNSUPPORTED_VERSION/);
 
  const evidence=must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead));
  const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));await assert.rejects(()=>resolve({storage}));};
@@ -282,6 +293,7 @@ test('retained policy activation authenticates signed history and local keys',as
  const legacy=structuredClone(evidence);delete legacy.receipt.provenance;
  const legacyStorage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:legacy})});
  assert.equal((await readVerifiedActivatedPolicyDocumentSet({...args,storage:legacyStorage})).provenance,null);
+ await assert.rejects(()=>readActivatedPolicySource({...args,storage:legacyStorage,documentId:childRow.targetDocumentId,effectId:inherited.effectId}),/SOURCE_PROVENANCE_REQUIRED/);
  await altered(x=>{x.receipt.next.authorityState[0]^=1});
  await altered(async x=>{const n=JSON.parse(new TextDecoder().decode(x.receipt.next.authorityState));n.selections.at(-1).signature='0'.repeat(128);x.receipt.next.authorityState=authorityBytes(n);x.receipt.next.authorizationSnapshot=await snapshotId(a.provider,n)});
  await altered(x=>{x.receipt.targets[1].identity.epochId='wrong'});
