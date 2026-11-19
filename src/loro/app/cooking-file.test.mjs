@@ -1643,7 +1643,8 @@ test('selected recipe shopping copies and current-only admission survive durable
    const identity={version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:`own-device-set-test-${index}`};
    const localKey=await sponsorCatalog.preparePairedDataKey(`own-device-set-key-${index}`,identity,testKeys.get(document.documentId));
    preparedDocuments.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,
-    documentId:document.targetDocumentId,bytes:document.copy.snapshot,sources:document.copy.sources,localKey});
+    documentId:document.targetDocumentId,bytes:document.copy.snapshot,identities:document.identities,
+    sources:document.copy.sources,localKey});
   }
   const publication={operationId:'own-device-set-transaction',guardId:'own-device-set-guard',expected:parentRecord,
    next:copyTransition.next,guard:capturedCopy.guard,copyHash:capturedCopy.copyHash,file:pairingFile,documents:preparedDocuments};
@@ -1697,7 +1698,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   const pairedOptions={...fileOptions,storage:pairedStorage,parentRecord:pairedParent,
    keys:pairedKeys,deviceId:peer.transcript.responder.deviceId,wrappingSecret:nextWrap.privateKey,signingSecret:nextRecipient.privateKey};
   const pairedBefore=pairedRows();
-  pairedFault=signedCopy.documents.length*4+5;
+  pairedFault=signedCopy.documents.reduce((count,document)=>count+4+2*document.identities.length,5);
   await assert.rejects(installOwnDeviceSetFile({...pairedOptions,file:pairingFile}),/IO/);
   assert.equal(pairedFault,0);
   pairedDb.close();pairedDb=new DatabaseSync(pairedPath);
@@ -1827,6 +1828,39 @@ test('selected recipe shopping copies and current-only admission survive durable
   alteredSponsorReceipt.sponsor.keyHashes[0]='0'.repeat(64);
   publishDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(JSON.stringify(alteredSponsorReceipt),sponsorReceiptSlot);
   await assert.rejects(reopenOwnDeviceSet(sponsorReopenOptions),/INVALID_PROOF/);
+  publishDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(sponsorReceiptRow.value,sponsorReceiptSlot);
+  pairedDb.prepare('UPDATE loro_records SET value=? WHERE key=?').run(receiptValue,receiptSlot);
+  const openPaired=async (storage,deviceId,keys,signingSecret,useWrapping)=>{
+   const installedSet={operationId:evidence.transcript.sessionId,paired:{keys,useWrapping}};
+   const resolved=await resolveInstalledSetAuthority({...fileOptions,storage,scope,authorDevice:deviceId,
+    ...installedSet});
+   return openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin:a.root.head,provider:a.provider,sodium,
+    keys:enable(keys,signingSecret),signing:{operationId:'test-signing',publicKey:sodium.to_hex(signingSecret.subarray(32))},
+    LoroDoc,decodeImportBlobMeta});
+  };
+  const pairedSponsorKeys=publishStorage.localKeys(sponsorMaster,sodium);
+  await assert.rejects(()=>resolveRuntimeAuthority(pairedStorage,scope,a.root.head,a.provider,pairedOptions.deviceId),
+   /UNSUPPORTED_VERSION/);
+  await assert.rejects(()=>openPaired(pairedStorage,pairedOptions.deviceId,pairedKeys,nextRecipient.privateKey,
+   async()=>reopenedSet),/INVALID_AUTHORITY_CONFIG/);
+  const pairedSponsor=await openPaired(publishStorage,a.deviceId,pairedSponsorKeys,sponsorKeys.signingSecret);
+  const pairedRecipient=await openPaired(pairedStorage,pairedOptions.deviceId,pairedKeys,nextRecipient.privateKey,
+   use=>use(nextWrap.privateKey));
+  await assert.rejects(pairedSponsor.forRecipe('missing-paired-recipe'),/INVALID_RECIPE_DOCUMENT/);
+  const copiedSponsorRecipe=await pairedSponsor.forRecipe(recipeId);
+  const copiedRecipientRecipe=await pairedRecipient.forRecipe(recipeId);
+  const copiedRecipe=(await copiedSponsorRecipe.document()).doc;
+  const beforePairedEdit=projectCooking(copiedRecipe).recipes[0];
+  assert.equal(projectCooking((await copiedRecipientRecipe.document()).doc).recipes[0].title,beforePairedEdit.title);
+  const actionId='paired-set-edit',title='Edited after paired workspace reopen';
+  const [command]=planRecipeAction({doc:copiedRecipe,before:beforePairedEdit,after:{...beforePairedEdit,title},
+   actionId,author:a.deviceId,at});
+  await copiedSponsorRecipe.execute({operationId:actionId,command,deviceSequence:sequence++});
+  const object=must(await publishStorage.getLocalOperation(scope.id,actionId)).commit.outbound[0].object;
+  must(await pairedStorage.stageInbox({scopeId:scope.id,object,source:'paired-edit',expectedCursor:null,cursor:object.id}));
+  await copiedRecipientRecipe.importItem({itemId:object.id,bytes:object.bytes});
+  assert.equal(projectCooking((await copiedRecipientRecipe.document()).doc).recipes[0].title,title);
+  assert.equal(projectCooking((await copiedSponsorRecipe.document()).doc).recipes[0].title,title);
   assert.deepEqual(a.rows(),beforePublish);
   const raceDoc=await sponsor.householdContent.readRecipe(added.id);
   const raceCommands=planRecipeAction({doc:raceDoc.doc,before:edited,after:{...edited,title:'Revision race'},

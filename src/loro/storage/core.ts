@@ -94,6 +94,7 @@ type OwnDeviceSetPublication = {
   operationId:string; guardId:string; expected:PairingAuthorityRecord; next:PairingAuthorityRecord;
   copyHash:string; file:Uint8Array;
   documents:{recipeId:string|null; sourceDocumentId:string; documentId:string; bytes:Uint8Array;
+    identities:{commandId:string;effectId:string}[];
     sources:{effectId:string;policyHashes:string[]}[]; localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
 } & ({guard:SelectedHouseholdSources;recipient?:never;sponsor?:{deviceId:string;set:unknown;keyHashes:string[];signature:string}} |
      {guard?:never;sponsor?:never;recipient:{deviceId:string;fileHash:string;signature:string}});
@@ -781,12 +782,17 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       !denseArray(documents,d=>object(d)&&(d.recipeId===null||validId(d.recipeId))&&validId(d.sourceDocumentId)&&validId(d.documentId)&&
         d.bytes instanceof Uint8Array&&d.bytes.length>0&&d.bytes.length<=MAX_SELECTED_SOURCE_BYTES&&
         denseArray(d.sources,row=>fields(row,['effectId','policyHashes'])&&validId(row.effectId)&&denseArray(row.policyHashes,validId))&&
+        denseArray(d.identities,row=>fields(row,['effectId','commandId'])&&validId(row.effectId)&&validId(row.commandId))&&
+        d.identities.length===d.sources.length&&d.identities.every((row,i)=>row.effectId===d.sources[i].effectId)&&
         validLocalRecord(d.localKey?.record)&&validMasterCatalog(d.localKey?.catalog)&&
         sameRecord(d.localKey.record.identity.scope,expected.scope)&&d.localKey.record.identity.purpose==='data'&&
         (!recipient||d.localKey.record.identity.deviceId===recipient.deviceId))||
       documents.length<1||documents.length>MAX_SELECTED_CHILDREN+1||
       documents.reduce((n,d)=>n+d.bytes.length,0)>MAX_SELECTED_SET_BYTES)return fail('MALFORMED');
-    if(documents[0].recipeId!==null||documents.slice(1).some(d=>d.recipeId===null||!isRecipeDocumentId(d.documentId))||
+    const identities=documents.flatMap(d=>d.identities);
+    if(new Set(identities.map(row=>row.commandId)).size!==identities.length||
+      new Set(identities.map(row=>row.effectId)).size!==identities.length||
+      documents[0].recipeId!==null||documents.slice(1).some(d=>d.recipeId===null||!isRecipeDocumentId(d.documentId))||
       new Set(documents.map(d=>d.recipeId)).size!==documents.length||
       new Set(documents.map(d=>d.documentId)).size!==documents.length||
       documents.some(d=>d.documentId===d.sourceDocumentId)||
@@ -812,6 +818,9 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const current=await tx.get(authority),saved=await tx.get(op);
       const mapping=documents.map(({recipeId,sourceDocumentId,documentId})=>({recipeId,sourceDocumentId,documentId}));
       const retained={version:1,next,guardId,copyHash,file,mapping,...(recipient?{expected,recipient}:sponsor?{expected,sponsor}:{})};
+      const reservations=documents.flatMap(d=>d.identities.flatMap(row=>[
+        key('projection-seed-command',scope,d.documentId,row.commandId),key('projection-seed-effect',scope,d.documentId,row.effectId)
+      ]));
       if(saved&&recipient){
         if(!sameRecord(current,next)||await tx.get(guardSlot)!==op||!sameBytes(saved.file,file)||
           !sameRecord({...saved,file:null},{...retained,file:null}))return conflict();
@@ -823,11 +832,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
             !sameRecord(await tx.get(key('household-own-device-sources',scope,d.documentId)),d.sources)||
             !sameRecord(await findLocalKey(tx,d.localKey.record.operationId,d.localKey.record.identity),d.localKey.record))return corrupt();
         }
+        for(const slot of reservations)if(await tx.get(slot)!==operationId)return corrupt();
         return {ok:true as const,value:{replayed:true}};
       }
       if(!sameRecord(current,expected))conflict();
       if(guard)await this.requireSelectedHouseholdSources(tx,guard);
-      for(const slot of [op,guardSlot])if(await tx.get(slot)!==undefined)conflict();
+      for(const slot of [op,guardSlot,...reservations])if(await tx.get(slot)!==undefined)conflict();
       for(const d of documents)for(const slot of [key('document-owner',scope,d.documentId),key('document',scope,d.documentId),key('household-own-device-parent',scope,d.documentId),key('household-own-device-sources',scope,d.documentId)])if(await tx.get(slot)!==undefined)conflict();
       const write=async(slot:string,value:unknown)=>{await tx.put(slot,value);this.fault?.('household-own-device-set')};
       for(const d of documents){
@@ -837,6 +847,7 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
         await write(key('household-own-device-parent',scope,d.documentId),{head:expected.acceptedParent,documentId:d.sourceDocumentId});
         await write(key('household-own-device-sources',scope,d.documentId),d.sources);
       }
+      for(const slot of reservations)await write(slot,operationId);
       await write(op,retained);
       await write(guardSlot,op);
       const active=(await tx.get(key('disclosure-active',scope)))??null;
@@ -1138,9 +1149,10 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const entry = id && await tx.get(key('recipe-catalog',scope,head,id));
       if (entry && entry.documentId !== command.documentId) conflict();
     }
-    const origin=await this.projectionOrigin(tx,scope,command.documentId);
-    if(await tx.get(key('projection-seed-command',scope,origin.documentId,command.commandId))!==undefined||
-      await tx.get(key('projection-seed-effect',scope,origin.documentId,command.effectId))!==undefined) conflict();
+    for(const branch of await this.projectionLineage(tx,scope,command.documentId)){
+      if(await tx.get(key('projection-seed-command',scope,branch.documentId,command.commandId))!==undefined||
+        await tx.get(key('projection-seed-effect',scope,branch.documentId,command.effectId))!==undefined) conflict();
+    }
   }
   private storedRecipeId(command:LocalCommit['commands'][number]) {
     try {
@@ -1404,8 +1416,11 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const prior=new Set<string>();
     for(const command of commands) {
       for(const dep of command.dependencyEffectIds) if(!prior.has(dep) && !linked.get(command.effectId)?.has(dep) && await tx.get(key('effect',scopeId,dep))===undefined) {
-        const origin=await this.projectionOrigin(tx,scopeId,command.documentId);
-        if(await tx.get(key('projection-seed-effect',scopeId,origin.documentId,dep))===undefined) conflict();
+        let found=false;
+        for(const branch of await this.projectionLineage(tx,scopeId,command.documentId)){
+          if(await tx.get(key('projection-seed-effect',scopeId,branch.documentId,dep))!==undefined){found=true;break;}
+        }
+        if(!found)conflict();
       }
       prior.add(command.effectId);
     }

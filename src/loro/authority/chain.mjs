@@ -371,6 +371,10 @@ async function resolveRuntimeAuthorityInternal(storage,scope,pin,provider,author
  if(selectedSet && (!installed || !matchesInstalledSetAuthority(record,state,installed.publication.nextAuthority) ||
    !same(selectedSet,installed.item) || installed.selection.to!==state.activeHead)) throw Error('UNSUPPORTED_VERSION');
  if(installed && !selectedSet) throw Error('INVALID_AUTHORITY');
+ return runtimeAuthority(scope,record,state,selected,authorDevice);
+}
+
+function runtimeAuthority(scope,record,state,selected,authorDevice) {
  const acceptedAuthors=selected.devices.filter(d=>d.active).map(d=>d.deviceId).sort();
  if(!acceptedAuthors.includes(authorDevice))throw Error('UNAUTHORIZED_DEVICE');
  const runtimeScope={scopeId:scope.id,documentId:selected.runtime.documentId,documentGeneration:selected.generation,branchHead:state.activeHead,authorizationSnapshot:record.authorizationSnapshot,policyHashes:[selected.policyHash],epochId:selected.epochId,authorDevice,acceptedAuthors,authorPeers:copy(selected.runtime.authorPeers),acceptedRecipients:copy(selected.runtime.acceptedRecipients),suiteId:'candidate-ed25519-xchacha20-sealedbox-v1'};
@@ -384,8 +388,32 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
 }
 
 /** Resolve only after verifying the locally installed, selected document set. */
-export async function resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice,sodium,operationId,LoroDoc}) {
+export async function resolveInstalledSetAuthority({storage,scope,pin,provider,authorDevice,sodium,operationId,LoroDoc,
+ paired=/** @type {{keys:any;useWrapping?:(use:(secret:Uint8Array)=>Promise<any>)=>Promise<any>}|undefined} */(undefined)}) {
  scope=copy(scope);
+ if(paired){
+  const {reopenOwnDeviceSet}=await import('../pairing/household-own-device-set.mjs');
+  const options={storage,scope,pin,provider,sodium,operationId,LoroDoc,keys:paired.keys};
+  let opening;
+  const reopen=wrappingSecret=>{
+   if(opening)throw Error('INVALID_AUTHORITY_CONFIG');
+   opening=reopenOwnDeviceSet({...options,wrappingSecret});
+   return opening;
+  };
+  if(paired.useWrapping)await paired.useWrapping(reopen);
+  else await reopen(undefined);
+  if(!opening)throw Error('INVALID_AUTHORITY_CONFIG');
+  const opened=await opening;
+  if(opened.documents.some(document=>document.identity.deviceId!==authorDevice))throw Error('UNAUTHORIZED_DEVICE');
+  const {record}=opened;
+  const state=JSON.parse(dec.decode(record.authorityState));
+  const verified=await verifyAuthority(state,pin,provider,{pendingOwnDeviceSet:opened.head});
+  if(state.activeHead!==opened.head||!same(record,await read(storage,scope)))throw Error('STALE_AUTHORITY');
+  const selected=verified.nodes.get(opened.head);
+  return {...runtimeAuthority(scope,record,state,selected,authorDevice),
+   members:opened.documents.map(({recipeId,documentId})=>({recipeId,documentId})),
+   pairedDocuments:opened.documents,wrappingKeyRefs:{}};
+ }
  const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
  const installed=await readInstalledHouseholdDocumentSet({storage,scope,pin,provider,sodium,operationId,LoroDoc});
  if(installed.publication.localKey.record.identity.deviceId!==authorDevice) throw Error('UNAUTHORIZED_DEVICE');
@@ -401,6 +429,7 @@ export async function resolveInstalledSetAuthority({storage,scope,pin,provider,a
  }
  return {...resolved,wrappingKeyRefs:Object.fromEntries(wrapping),
   deliveryAuthorizationSnapshot:installed.publisherAuthorizationSnapshot,
+  pairedDocuments:undefined,
   members:manifest.entries.map(({recipeId,documentId})=>({recipeId:recipeId??null,documentId}))};
 }
 

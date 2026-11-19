@@ -189,7 +189,8 @@ export async function publishOwnDeviceSet({storage,provider,sodium,LoroDoc,pin,p
   const documentId=document.targetDocumentId;
   const {keyOperationId,identity}=await targetKeyIdentity(provider,parentRecord.scope,pin,checked,documentId,deviceId);
   const localKey=await useSourceKey({documentId:document.documentId,recipeId:document.recipeId},key=>{if(hex(sodium.crypto_generichash(32,key))!==keyHashes.get(document.documentId))throw Error('INVALID_KEY');return keys.preparePairedDataKey(keyOperationId,identity,key)});
-  documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,documentId,bytes:document.copy.snapshot,sources:document.copy.sources,localKey});
+  documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,documentId,bytes:document.copy.snapshot,
+   identities:document.identities,sources:document.copy.sources,localKey});
  }
  const orderedHashes=checked.documents.map(document=>keyHashes.get(document.documentId));
  const receipt=sponsorReceipt(parentRecord.scope,pin,checked,pairingDigest(sodium,file),orderedHashes);
@@ -266,7 +267,7 @@ export async function installOwnDeviceSetFile({storage,provider,sodium,LoroDoc,p
      const {keyOperationId,identity}=await targetKeyIdentity(provider,scope,pin,checked,documentId,deviceId);
      const localKey=await keys.preparePairedDataKey(keyOperationId,identity,key);
      documents.push({recipeId:document.recipeId,sourceDocumentId:document.documentId,
-      documentId,bytes:document.copy.snapshot,sources:document.copy.sources,localKey});
+      documentId,bytes:document.copy.snapshot,identities:document.identities,sources:document.copy.sources,localKey});
     }
     const {replayed}=must(await storage.commitHouseholdOwnDeviceSet({operationId,guardId:checked.proof.guard.guardId,
      expected:parentRecord,next,copyHash:checked.context.manifestHash,file,documents,recipient:{deviceId,fileHash,signature}}));
@@ -314,10 +315,12 @@ export async function reopenOwnDeviceSet({storage,scope,operationId,pin,provider
     await verifyRetainedPolicyBaseline(LoroDoc,retained.document,doc.baseline,provider);
     const {keyOperationId,identity}=await targetKeyIdentity(provider,scope,pin,opened,documentId,deviceId);
     await keys.use(keyOperationId,identity,key=>{if(!verifyKey(key,index))throw Error('INVALID_KEY')});
-    identities.push({recipeId:doc.recipeId,documentId,keyOperationId,identity});
+    const {seed,seedSnapshot}=doc.copy;
+    identities.push({recipeId:doc.recipeId,documentId,keyOperationId,identity,
+     seed:seedSnapshot===null?null:{seed,snapshot:seedSnapshot}});
    }
    if(!sameOwnDevice(sodium,must(await storage.readPairingAuthority(scope)),saved.next))throw Error('STALE_AUTHORITY');
-   return structuredClone({head:opened.head,item:opened.item,selection:opened.selection,documents:identities});
+   return structuredClone({head:opened.head,item:opened.item,selection:opened.selection,documents:identities,record:saved.next});
  }
  if(saved.sponsor){
   const {deviceId,set,keyHashes,signature}=saved.sponsor;

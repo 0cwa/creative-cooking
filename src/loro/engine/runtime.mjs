@@ -68,7 +68,7 @@ export class OfflineRuntime {
       const resolver=kind==='personal' ? resolvePersonalAuthority : resolveRuntimeAuthority;
       const resolved=installedSet
         ? await resolveInstalledSetAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,
-          operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:this.LoroDoc})
+          operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:this.LoroDoc,paired:installedSet.paired})
         : await resolver(this.storage,scope,pin,provider,s.authorDevice);
       if (this.authority.selectionIndex!==undefined && resolved.selectionIndex!==this.authority.selectionIndex) throw new Error('INVALID_AUTHORITY');
       const expected={...resolved.scope,authorizationSnapshot:s.authorizationSnapshot};
@@ -76,7 +76,8 @@ export class OfflineRuntime {
       if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
       const auth={expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs,
-        sourceDocumentId:resolved.scope.documentId,...(resolved.members?{members:resolved.members,wrappingKeyRefs:resolved.wrappingKeyRefs}:{})};
+        sourceDocumentId:resolved.scope.documentId,...(resolved.members?{members:resolved.members,wrappingKeyRefs:resolved.wrappingKeyRefs}:{}),
+        ...(resolved.pairedDocuments?{pairedSeed:resolved.pairedDocuments.find(document=>document.documentId===s.documentId)?.seed??null}:{})};
       if(resolved.members&&!this.recipeCreation)await this.requireRecipeMember(auth,this.#recipeId,s.documentId);
       return auth;
     }
@@ -111,11 +112,11 @@ export class OfflineRuntime {
     };
   }
   async document() {
-    const expectedAuthority=await this.authorize();
+    const {expectedAuthority,pairedSeed}=await this.authorization();
     const stored=required(await this.storage.reopenBranchDocument(expectedAuthority,this.scope.documentId));
     const doc=new this.LoroDoc(); if (stored) doc.import(stored.bytes);
     const markers=doc.getMap('domain-effects').toJSON(),seeded=Object.entries(markers).filter(([,m])=>m?.version===3);
-    const seed=typeof this.storage.readProjectionSeed==='function'?required(await this.storage.readProjectionSeed(expectedAuthority,this.scope.documentId)):null;if(seeded.length&&!seed)throw Error('UNVERIFIED_SEED');if(seed){const originalSeed=new this.LoroDoc();originalSeed.import(seed.snapshot);let retained;try{retained=doc.forkAt(originalSeed.frontiers())}catch{throw Error('UNVERIFIED_SEED')}if(!same(retained.exportJsonUpdates(undefined,undefined,false),originalSeed.exportJsonUpdates(undefined,undefined,false)))throw Error('UNVERIFIED_SEED');const expected=new Map(seed.seed.identities.map(x=>[x.effectId,x.commandId]));if(seeded.length!==expected.size||seeded.some(([id,m])=>m.seedId!==seed.seed.seedId||m.effectId!==id||m.commandId!==expected.get(id)||Object.keys(m).sort().join(',')!=='commandId,effectId,seedId,version'))throw Error('UNVERIFIED_SEED')}
+    const seed=pairedSeed!==undefined?pairedSeed:typeof this.storage.readProjectionSeed==='function'?required(await this.storage.readProjectionSeed(expectedAuthority,this.scope.documentId)):null;if(seeded.length&&!seed)throw Error('UNVERIFIED_SEED');if(seed){const originalSeed=new this.LoroDoc();originalSeed.import(seed.snapshot);let retained;try{retained=doc.forkAt(originalSeed.frontiers())}catch{throw Error('UNVERIFIED_SEED')}if(!same(retained.exportJsonUpdates(undefined,undefined,false),originalSeed.exportJsonUpdates(undefined,undefined,false)))throw Error('UNVERIFIED_SEED');const expected=new Map(seed.seed.identities.map(x=>[x.effectId,x.commandId]));if(seeded.length!==expected.size||seeded.some(([id,m])=>m.seedId!==seed.seed.seedId||m.effectId!==id||m.commandId!==expected.get(id)||Object.keys(m).sort().join(',')!=='commandId,effectId,seedId,version'))throw Error('UNVERIFIED_SEED')}
     return {doc,revision:stored?.revision ?? null,storedBytes:stored?.bytes ?? null};
   }
   async read() { const {doc}=await this.document(); return {recipe:doc.getMap('recipe').toJSON(), purchases:doc.getMap('purchases').toJSON()}; }

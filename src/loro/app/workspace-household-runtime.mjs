@@ -29,13 +29,24 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  resolved=structuredClone(resolved);
  const {scope}=resolved,householdScope={kind:'household',id:scope.scopeId};
  const installation=installedSet?{...installedSet,sodium,LoroDoc}:null;
- const content=installation
+ const paired=installation?.paired;
+ const members=new Map((paired?resolved.pairedDocuments:[]).map(document=>[document.documentId,document]));
+ const content=paired
+  ? (epochId,fn,header)=>{
+    const member=members.get(header?.documentId);
+    if(!member||epochId!==scope.epochId||header.epochId!==scope.epochId||
+       header.scopeId!==scope.scopeId||header.branchHead!==scope.branchHead||
+       header.documentGeneration!==scope.documentGeneration||member.identity.deviceId!==scope.authorDevice)
+     throw Error('INVALID_AUTHORITY');
+    return paired.keys.use(member.keyOperationId,member.identity,fn);
+   }
+  : installation
   ? await installedDocumentSetContent({storage,scope:householdScope,pin,provider,...installation},keys)
   : (epochId,fn)=>keys.useIdentity({version:1,scope:householdScope,deviceId:scope.authorDevice,purpose:'data',epochId},fn);
  if(installation){
   for(const {documentId} of resolved.members)await content(scope.epochId,()=>{}, {...scope,documentId});
  }
- const deliveries=installation&&wrapping?installedRecipeDelivery({sodium,keys,signing,wrapping,provider,pin,resolved,baselineContent:content}):null;
+ const deliveries=installation&&!paired&&wrapping?installedRecipeDelivery({sodium,keys,signing,wrapping,provider,pin,resolved,baselineContent:content}):null;
  const codec=deliveries?.codec??candidateCodec(localProvider(sodium,keys,{signing,content}));
  const runtime=new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:scope.epochId,
   authority:{kind:'household',rootPin:pin,provider,selectionIndex:resolved.selectionIndex,
