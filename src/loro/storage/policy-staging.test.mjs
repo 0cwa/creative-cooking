@@ -1,12 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {webcrypto} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {openSQLiteStorage} from './sqlite.ts';
 
 test('policy set staging is atomic, checks selected members and rejects occupied slots', async()=>{
  const db=new DatabaseSync(':memory:');
  const conn={executeSync(sql,args=[]){const q=db.prepare(sql);return {rows:sql.startsWith('SELECT')?q.all(...args):(q.run(...args),[])}}};
- let fail=false; const store=openSQLiteStorage(conn,point=>{if(fail&&point==='policy-set-target')throw Error('injected')});
+ let fail=false, keyFail=false; const store=openSQLiteStorage(conn,point=>{if(fail&&point==='policy-set-target'||keyFail&&point==='policy-set-key')throw Error('injected')});
+ const masterKey=await webcrypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+ const master={async provision(){},async wrap(_id,p,a){const iv=webcrypto.getRandomValues(new Uint8Array(12));return new Uint8Array([...iv,...new Uint8Array(await webcrypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:a},masterKey,p))]);},async unwrap(_id,p,a){return new Uint8Array(await webcrypto.subtle.decrypt({name:'AES-GCM',iv:p.slice(0,12),additionalData:a},masterKey,p.slice(12)));}};
+ const local=store.localKeys(master,{}); await local.provision('master');
  const bytes=(...v)=>new Uint8Array(v), scope={kind:'household',id:'h'};
  const record={scope,revision:0,acceptedParent:'old',authorizationSnapshot:'snap',authorityState:bytes(1)};
  assert.equal((await store.compareAndSwapPairingAuthority({expectedRevision:null,record})).ok,true);
@@ -30,6 +34,30 @@ test('policy set staging is atomic, checks selected members and rejects occupied
  assert.deepEqual((await store.readPairingAuthority(scope)).value,record);
  assert.deepEqual((await store.reopenDocument('h','root')).value,{documentId:'root',bytes:bytes(1),revision:0});
  assert.deepEqual((await store.reopenDocument('h',child)).value,{documentId:child,bytes:bytes(2),revision:0});
+ const prepared=[];
+ for(const [i,row] of input.mapping.entries()){
+  const identity={version:1,scope,deviceId:'device',purpose:'data',epochId:`epoch-${i}`};
+  prepared.push({targetDocumentId:row.targetDocumentId,...await local.preparePairedDataKey(`op-${i}`,identity,new Uint8Array(32).fill(i+1))});
+ }
+ const next={...record,revision:1,acceptedParent:'new',authorityState:bytes(8)};
+ const selection={...input,expected:record,next,deviceId:'device',prepared};
+ const stagedRows=rows(); keyFail=true;
+ assert.equal((await store.commitPolicyDocumentSetSelection(selection)).ok,false); keyFail=false;
+ assert.deepEqual(rows(),stagedRows);
+ put(['document','h',child],{bytes:bytes(5),revision:0}); const stale=rows();
+ assert.equal((await store.commitPolicyDocumentSetSelection(selection)).ok,false); assert.deepEqual(rows(),stale);
+ put(['document','h',child],{bytes:bytes(2),revision:0});
+ assert.equal((await store.commitPolicyDocumentSetSelection({...selection,proof:bytes(10)})).ok,false);
+ assert.equal((await store.commitPolicyDocumentSetSelection(selection)).ok,true);
+ assert.deepEqual((await store.readPairingAuthority(scope)).value,next);
+ assert.deepEqual((await store.reopenDocument('h','root')).value,{documentId:'root',bytes:bytes(1),revision:0});
+ assert.deepEqual((await store.reopenDocument('h',child)).value,{documentId:child,bytes:bytes(2),revision:0});
+ const after=rows(), beforeMap=new Map(stagedRows.map(r=>[r.key,r.value])), afterMap=new Map(after.map(r=>[r.key,r.value]));
+ const changedKeys=[...new Set([...beforeMap.keys(),...afterMap.keys()])].filter(k=>beforeMap.get(k)!==afterMap.get(k)).sort();
+ const expectedKeys=[['pairing-authority','household','h'],['policy-set-activation','h','new'],['policy-disclosure-head','h','old'],['disclosure-active','h'],...prepared.flatMap(p=>[['local-key','household','h','device','data',p.record.identity.epochId],['local-key-operation',p.record.operationId]])].map(JSON.stringify).sort();
+ assert.deepEqual(changedKeys,expectedKeys);
+ const receipt=JSON.parse(afterMap.get(JSON.stringify(['policy-set-activation','h','new'])));
+ assert.deepEqual(receipt.targets,prepared.map(p=>({targetDocumentId:p.targetDocumentId,operationId:p.record.operationId,identity:p.record.identity})));
  put(['document','h','target-child'],{bytes:bytes(7),revision:0});
  assert.equal((await store.readStagedPolicyDocumentSet('h','new')).error.code,'CORRUPT');
  db.close();

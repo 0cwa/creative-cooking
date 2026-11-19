@@ -2,7 +2,7 @@ import {hasSelectedRecipeChildren} from './selected-recipe-children.ts';
 import {readLocalQuarantine, REVIEW_LIMITS} from '../compromise/review.mjs';
 import {readContinuityHead} from './continuity-head.ts';
 import type {LocalKeyRecord,ReadyMasterCatalog} from './local-keys.ts';
-import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog} from './local-keys.ts';
+import {findLocalKey,installLocalKey,validLocalRecord,validMasterCatalog,validLocalIdentity} from './local-keys.ts';
 import { pairingReleaseKey, validatePairingAuthority, validPairingScope } from '../contracts/pairing.ts';
 import type { ProjectionPublication, ProjectionAtomicStorage, ProjectionDocumentSet } from '../contracts/projection.ts';
 import {MAX_SELECTED_CHILDREN, MAX_SELECTED_SET_BYTES, MAX_SELECTED_SOURCE_BYTES} from '../contracts/runtime-storage.ts';
@@ -56,6 +56,9 @@ type PolicyCheckout = {
 export type PolicyDocumentSetMapping = {recipeId:string|null;sourceDocumentId:string;targetDocumentId:string;baseline:Uint8Array};
 export type StagedPolicyDocumentSet = {version:1;sourceHead:string;targetHead:string;proof:Uint8Array;mapping:PolicyDocumentSetMapping[]};
 export type StagePolicyDocumentSetInput = {guard:SelectedHouseholdSources;targetHead:string;proof:Uint8Array;mapping:PolicyDocumentSetMapping[]};
+type PolicySetSelection = StagePolicyDocumentSetInput & {expected:PairingAuthorityRecord;next:PairingAuthorityRecord;deviceId:string;prepared:{targetDocumentId:string;record:LocalKeyRecord;catalog:ReadyMasterCatalog}[]};
+type PolicySetReceipt = {version:1;expected:PairingAuthorityRecord;next:PairingAuthorityRecord;targets:{targetDocumentId:string;operationId:string;identity:LocalKeyRecord['identity']}[]};
+const validPolicySetReceipt = (v:any):v is PolicySetReceipt => fields(v,['version','expected','next','targets']) && v.version===1 && validatePairingAuthority(v.expected).ok && validatePairingAuthority(v.next).ok && v.expected.scope.kind==='household' && sameRecord(v.expected.scope,v.next.scope) && v.next.revision===v.expected.revision+1 && v.expected.acceptedParent!==v.next.acceptedParent && denseArray(v.targets,(x:any)=>fields(x,['targetDocumentId','operationId','identity']) && validId(x.targetDocumentId) && validId(x.operationId) && validLocalIdentity(x.identity) && x.identity.purpose==='data' && sameRecord(x.identity.scope,v.expected.scope)) && v.targets.length>0 && v.targets.length<=MAX_SELECTED_CHILDREN+1 && new Set(v.targets.map((x:any)=>x.targetDocumentId)).size===v.targets.length && new Set(v.targets.map((x:any)=>x.operationId)).size===v.targets.length && new Set(v.targets.map((x:any)=>x.identity.epochId)).size===v.targets.length && v.targets.every((x:any)=>x.identity.deviceId===v.targets[0].identity.deviceId);
 export type TransactionRunner = <T>(write: boolean, body: (tx: Tx) => Promise<T>) => Promise<T>;
 const key = (...parts: string[]) => JSON.stringify(parts);
 const conflict = (): never => { throw new StorageFailure('CONFLICT'); };
@@ -167,6 +170,7 @@ const validateRecord = (k: string, v: any) => {
     case 'compromise-quarantine': valid=typeof v==='boolean'; break;
     case 'disclosure-pending': valid=fields(v,['reason','objectId']) && v.reason==='POLICY_GOVERNANCE_UNPROVEN' && typeof v.objectId==='string' && !!v.objectId; break;
     case 'disclosure-active': case 'policy-disclosure-head': valid=v===null || typeof v==='string' && !!v; break;
+    case 'policy-set-activation': valid=parts.length===3 && validId(parts[1]) && validPolicySetReceipt(v) && v.expected.scope.id===parts[1] && v.next.acceptedParent===parts[2]; break;
     case 'policy-staged-set': valid=validStagedPolicyDocumentSet(v) && parts.length===3 && v.targetHead===parts[2]; break;
     case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
@@ -619,14 +623,57 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     try{return await this.run(false,async tx=>{
       const record:StagedPolicyDocumentSet|undefined=await tx.get(key('policy-staged-set',scope,targetHead));
       if(!record)return {ok:true as const,value:null};
-      for(const row of record.mapping){
-        const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
-        const doc=await tx.get(key('document',scope,row.targetDocumentId));
-        const parent=await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId));
-        if(owner!==targetHead || !doc || doc.revision!==0 || !sameBytes(doc.bytes,row.baseline) ||
-          !sameRecord(parent,{head:record.sourceHead,documentId:row.sourceDocumentId}))return corrupt();
-      }
+      await this.requireStagedPolicyTargets(tx,scope,record);
       return {ok:true as const,value:snapshot(record)};
+    });}catch(e){return fail(mapError(e));}
+  }
+  private async requireStagedPolicyTargets(tx:Tx,scope:string,record:StagedPolicyDocumentSet) {
+    for(const row of record.mapping){
+      const owner=await tx.get(key('document-owner',scope,row.targetDocumentId));
+      const doc=await tx.get(key('document',scope,row.targetDocumentId));
+      const parent=await tx.get(key('policy-checkout-parent',scope,row.targetDocumentId));
+      if(owner!==record.targetHead || !doc || doc.revision!==0 || !sameBytes(doc.bytes,row.baseline) ||
+        !sameRecord(parent,{head:record.sourceHead,documentId:row.sourceDocumentId})) return corrupt();
+    }
+  }
+  /** Internal preverified selection: authentication and key preparation are the caller's responsibility. */
+  async commitPolicyDocumentSetSelection(input:PolicySetSelection) {
+    input=snapshot(input);
+    const {guard,targetHead,proof,mapping,expected,next,deviceId,prepared}=input;
+    const staged:StagedPolicyDocumentSet={version:1,sourceHead:expected?.acceptedParent,targetHead,proof,mapping};
+    if(!validatePairingAuthority(expected).ok || !validatePairingAuthority(next).ok || expected.scope.kind!=='household' ||
+      !sameRecord(expected.scope,next.scope) || next.revision!==expected.revision+1 || next.acceptedParent!==targetHead ||
+      !validId(deviceId) || !validStagedPolicyDocumentSet(staged) || !guard || !sameRecord(guard.expectedAuthority?.record,expected) ||
+      !sameRecord(guard.expectedAuthority?.scope,expected.scope) || guard.binding?.branchHead!==staged.sourceHead ||
+      !this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority) ||
+      !denseArray(guard.entries,entry=>object(entry)&&validId(entry.recipeId)&&validId(entry.documentId)) ||
+      guard.members!==undefined&&!denseArray(guard.members,member=>object(member)&&validId(member.recipeId)&&validId(member.documentId)&&revision(member.revision)&&member.bytes instanceof Uint8Array) ||
+      guard.entries.length+(guard.members?.length??0)>MAX_SELECTED_CHILDREN || guard.catalogRevision!==guard.entries.length ||
+      !denseArray(prepared,(p:any)=>fields(p,['targetDocumentId','record','catalog']) && validLocalRecord(p.record) &&
+        validMasterCatalog(p.catalog) && p.record.masterId===p.catalog.id && p.record.identity.purpose==='data' &&
+        sameRecord(p.record.identity.scope,expected.scope) && p.record.identity.deviceId===deviceId) || prepared.length!==mapping.length ||
+      prepared.some((p,i)=>p.targetDocumentId!==mapping[i].targetDocumentId) ||
+      new Set(prepared.map(p=>p.record.operationId)).size!==prepared.length ||
+      new Set(prepared.map(p=>p.record.identity.epochId)).size!==prepared.length) return fail('MALFORMED');
+    const sources=[{recipeId:null,documentId:guard.binding.sourceDocumentId}, ...[...guard.entries,...(guard.members??[])].sort((a,b)=>a.recipeId<b.recipeId?-1:a.recipeId>b.recipeId?1:0)];
+    if(sources.length!==mapping.length || sources.some((r,i)=>r.recipeId!==mapping[i].recipeId || r.documentId!==mapping[i].sourceDocumentId)) return fail('MALFORMED');
+    const receipt:PolicySetReceipt={version:1,expected,next,targets:prepared.map(p=>({targetDocumentId:p.targetDocumentId,operationId:p.record.operationId,identity:p.record.identity}))};
+    if(!validPolicySetReceipt(receipt))return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      await this.requireSelectedHouseholdSources(tx,guard);
+      const scope=expected.scope.id;
+      if(!sameRecord(await tx.get(key('policy-staged-set',scope,targetHead)),staged))conflict();
+      await this.requireStagedPolicyTargets(tx,scope,staged);
+      if(await tx.get(key('policy-set-activation',scope,targetHead))!==undefined)conflict();
+      for(const p of prepared){if((await installLocalKey(tx,p.record,p.catalog)).replayed)conflict();this.fault?.('policy-set-key');}
+      await tx.put(key('policy-set-activation',scope,targetHead),receipt);
+      const active=(await tx.get(key('disclosure-active',scope)))??null;
+      await tx.put(key('policy-disclosure-head',scope,staged.sourceHead),active);
+      let target=await tx.get(key('policy-disclosure-head',scope,targetHead));
+      if(target===undefined)target=active;
+      await tx.put(key('disclosure-active',scope),target);
+      await tx.put(key('pairing-authority','household',scope),next);
+      return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}
   }
   private async checkProjection(tx:Tx,p:ProjectionPublication,inputKey:string) {
