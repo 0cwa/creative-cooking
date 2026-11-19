@@ -1791,6 +1791,26 @@ test('selected recipe shopping copies and current-only admission survive durable
   const establishedIndex=establishedRecipients.findIndex(row=>row.deviceId===b.deviceId);
   const establishedFile=published.establishedRecipients[establishedIndex].ciphertext;
   const establishedProof=establishedEvidence[establishedIndex];
+  const localParent=must(await b.storage.readPairingAuthority(scope));
+  assert.equal(localParent.acceptedParent,parentRecord.acceptedParent);
+  assert.notEqual(localParent.authorizationSnapshot,parentRecord.authorizationSnapshot);
+  const localBefore=JSON.parse(dec.decode(localParent.authorityState));
+  let localNext;
+  await withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord:localParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   signingSecret:b.signingTestKey.privateKey,withKeys:result=>{localNext=result.localNext;}});
+  const localAfter=JSON.parse(dec.decode(localNext.authorityState));
+  assert.deepEqual(localAfter.selections.slice(0,-1),localBefore.selections);
+  assert.equal(localAfter.selections.at(-1).index,localBefore.selections.length);
+  assert.equal(localAfter.selections.at(-1).deviceId,b.deviceId);
+  const replaySelection=localAfter.selections.at(-1);
+  await withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord:localParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   localSelection:replaySelection,withKeys:result=>assert.deepEqual(result.localNext,localNext)});
+  const badLocal=structuredClone(localParent);badLocal.acceptedParent='changed';
+  await assert.rejects(withOpenedEstablishedOwnDeviceTransition({storage:a.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord:badLocal,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   signingSecret:b.signingTestKey.privateKey,withKeys:()=>assert.fail('unexpected callback')}));
   let preparedCount=0;
   const guardedKeys={preparePairedDataKey:(...args)=>{preparedCount++;return proofKeys.preparePairedDataKey(...args)}};
   let proofKeyHashes=[];
