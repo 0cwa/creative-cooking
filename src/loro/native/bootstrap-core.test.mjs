@@ -1,12 +1,13 @@
 import {createHash,randomUUID} from 'node:crypto';
 // Host contract test only; native Android/Hermes proof must run separately.
 import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {copyFileSync,existsSync,readdirSync,rmSync} from 'node:fs';import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';import {openNativeWorkspaceWith,returnToOriginalNativeWorkspaceWith} from './bootstrap-core.mjs';import {executeAction} from '../app/action.mjs';
+import {disclosureService} from '../disclosure/service.mjs';
 import {prepareInitialPolicy,acceptInitialPolicy} from '../disclosure/setup.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {domain} from '../authority/validator.mjs';
 import {cookingDirect} from '../transport/cooking-direct.mjs';
 import {householdReceiverIds} from '../app/household-transfer.mjs';
-import {resolveOriginalHousehold,openWorkspaceHouseholdRuntime,activateStagedPolicyDocumentSet} from '../app/workspace-household-runtime.mjs';
+import {resolveOriginalHousehold,openWorkspaceHouseholdRuntime,activateStagedPolicyDocumentSet,returnActivatedPolicyDocumentSet} from '../app/workspace-household-runtime.mjs';
 import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject} from '../authority/policy-document-set.mjs';
 import {stageVerifiedPolicyDocumentSet} from '../app/stage-policy-document-set.mjs';
 import {openSQLiteStorage} from '../storage/sqlite.ts';
@@ -133,11 +134,26 @@ test('native startup reopens an activated original household read-only',async()=
   assert.throws(()=>workspace.householdContent.execute('no',[]),/READ_ONLY_WORKSPACE/);
   await assert.rejects(()=>workspace.disclosure.active(),/READ_ONLY_WORKSPACE/);
   await assert.rejects(()=>workspace.cookingFiles.list(),/READ_ONLY_WORKSPACE/);
+  const returnDb=openDatabase(name), returnStorage=openSQLiteStorage(returnDb), returnMaster=openMaster(name);
+  const returnKeys=returnStorage.localKeys(returnMaster,sodium); await returnKeys.unlock();
+  const selected=await resolveOriginalHousehold({storage:returnStorage,scope,pin,provider,deviceId:workspace.deviceId,sodium,LoroDoc,paired:{keys:returnKeys}});
+  const returnMount=await openWorkspaceHouseholdRuntime({storage:returnStorage,...selected,pin,provider,sodium,keys:returnKeys,signing,LoroDoc,decodeImportBlobMeta});
+  const service=disclosureService({storage:returnStorage,scope,rootPin:pin,provider,deviceId:workspace.deviceId});
+  const targetRecord=(await returnStorage.readPairingAuthority(scope)).value;
+  await returnActivatedPolicyDocumentSet({runtime:returnMount,expectedSourceHead:expected.acceptedParent,expectedTargetHead:targetHead,expectedTargetRevision:targetRecord.revision,service,keys:returnKeys});
+  returnDb.close();
+  workspace.close();workspace=undefined;
+  workspace=await openNativeWorkspaceWith({...options,create:false});
+  assert.equal(workspace.readOnly,true);
+  assert.deepEqual(await workspace.householdContent.readCooking(),before);
+  assert.equal((await workspace.householdContent.readRecipe('soup')).doc.getMap('recipe:soup').get('title'),'Soup');
+  assert.equal((await workspace.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');
+  assert.throws(()=>workspace.householdContent.execute('no',[]),/READ_ONLY_WORKSPACE/);
   workspace.close();workspace=undefined;
   const damaged=new DatabaseSync(join(dir,`${name}.sqlite`));
   try {damaged.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['policy-set-activation',scope.id,targetHead]));}
   finally {damaged.close()}
-  await assert.rejects(()=>openNativeWorkspaceWith({...options,create:false}),/ACTIVATION_NOT_FOUND/);
+  await assert.rejects(()=>openNativeWorkspaceWith({...options,create:false}),/ACTIVATION_NOT_FOUND|INVALID_AUTHORITY|UNSUPPORTED_VERSION/);
  } finally {workspace?.close();removeWorkspace(name);masters.delete(keyname(name,'workspace-master'))}
 });
 

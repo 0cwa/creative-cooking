@@ -1,5 +1,5 @@
 import {assertCommandScope} from '../domain/personal-codec.mjs';
-import {resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {resolveReturnedPolicyAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {resolvePersonalAuthority} from '../authority/personal.mjs';
 import * as registry from '../domain/registry.mjs';
 import {commandRecipeId,recipeCatalogBinding,recipeDocumentId} from '../domain/recipe-document.mjs';
@@ -38,7 +38,7 @@ export class OfflineRuntime {
   get recipeId() { return this.#recipeId; }
   async forRecipe(recipeId, creation = /** @type {{codec:any;prepareKey:()=>Promise<any>}|null} */(null)) {
     if (this.#recipeId !== null || !this.authority || (this.authority.kind ?? 'household') !== 'household') throw Error('INVALID_RECIPE_DOCUMENT');
-    if(creation&&this.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(creation&&(this.authority?.activatedPolicy||this.authority?.returnedPolicy))throw Error('SOURCE_PROVENANCE_REQUIRED');
     const auth=await this.authorization(),{members}=auth;
     const documentId=await recipeDocumentId(this.scope,this.authority.rootPin,this.authority.provider,recipeId);
     if(creation&&(!members||!this.authority.installedSet?.recipeCatalog||
@@ -67,13 +67,14 @@ export class OfflineRuntime {
       const scope={kind,id:s.scopeId},{rootPin:pin,provider,installedSet}=this.authority;
       if(installedSet&&kind!=='household')throw Error('INVALID_AUTHORITY_CONFIG');
       const resolver=kind==='personal' ? resolvePersonalAuthority : resolveRuntimeAuthority;
-      const activated=this.authority.activatedPolicy;
+      const activated=this.authority.activatedPolicy, returned=this.authority.returnedPolicy;
+      if(returned&&(activated||installedSet||kind!=='household'))throw Error('INVALID_AUTHORITY_CONFIG');
       if(activated&&(installedSet||kind!=='household'))throw Error('INVALID_AUTHORITY_CONFIG');
-      const resolved=activated ? await resolveActivatedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:activated.targetHead,keys:activated.keys}) : installedSet
+      const resolved=returned ? await resolveReturnedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:returned.targetHead,keys:returned.keys,sodium:returned.sodium}) : activated ? await resolveActivatedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:activated.targetHead,keys:activated.keys}) : installedSet
         ? await resolveInstalledSetAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,
           operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:this.LoroDoc,paired:installedSet.paired})
         : await resolver(this.storage,scope,pin,provider,s.authorDevice);
-      if(activated&&!same(resolved,activated.resolved))throw Error('STALE_AUTHORITY');
+      if((activated||returned)&&!same(resolved,(activated||returned).resolved))throw Error('STALE_AUTHORITY');
       if (this.authority.selectionIndex!==undefined && resolved.selectionIndex!==this.authority.selectionIndex) throw new Error('INVALID_AUTHORITY');
       const expected={...resolved.scope,authorizationSnapshot:s.authorizationSnapshot};
       if (this.#recipeId !== null) expected.documentId=await recipeDocumentId(resolved.scope,this.authority.rootPin,this.authority.provider,this.#recipeId);
@@ -133,7 +134,7 @@ export class OfflineRuntime {
     return this.#prepareOnDocument(input,null,undefined,true);
   }
   async #prepareOnDocument({operationId, command, deviceSequence}, staged, verifyRecipeSource, activatedEdit=false) {
-    if(this.authority?.activatedPolicy&&!activatedEdit)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.authority?.returnedPolicy || (this.authority?.activatedPolicy&&!activatedEdit))throw Error('SOURCE_PROVENANCE_REQUIRED');
     command=structuredClone(command);
     command=checkCommand(command);
     this.assertRecipeCommand(command);
@@ -166,7 +167,7 @@ export class OfflineRuntime {
   }
   /** Atomically commit ordered commands against one authority-bound document. */
   async executeBatch({operationId,items},verifyRecipeSource=undefined) {
-    if(this.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.authority?.activatedPolicy||this.authority?.returnedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
     if(typeof operationId!=='string'||!operationId||!Array.isArray(items)||!items.length) throw Error('MALFORMED');
     items=structuredClone(items);
     await this.authorize();
@@ -210,7 +211,7 @@ export class OfflineRuntime {
     return {peer:[...ends.keys()][0],frontiers:meta.startFrontiers,predecessors:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort()};
   }
   async importItem(item) {
-    if(this.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.authority?.activatedPolicy||this.authority?.returnedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
     if(this.recipeCreation)throw Error('UNSUPPORTED_VERSION');
     item=structuredClone(item);
     if(!(item?.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');

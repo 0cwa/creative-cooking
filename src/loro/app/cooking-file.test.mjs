@@ -438,6 +438,17 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.equal(resolvedReturn.scope.documentId,staged.mapping[0].sourceDocumentId);
  assert.deepEqual(resolvedReturn.members,staged.mapping.map(row=>({recipeId:row.recipeId,documentId:row.sourceDocumentId})));
  assert.equal(resolvedReturn.selectionIndex,returnedState.selections.length);
+ const discovered=await resolveOriginalHousehold({storage:a.storage,scope,pin:a.root.head,provider:a.provider,deviceId:a.deviceId,LoroDoc,sodium,paired:{keys:signingKeys}});
+ assert.deepEqual(discovered.returnedPolicy,{targetHead});
+ const returnedMount=await openWorkspaceHouseholdRuntime({storage:a.storage,...discovered,pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing,LoroDoc,decodeImportBlobMeta});
+ const originalDoc=await returnedMount.document();
+ assert.ok(originalDoc.doc);
+ const originalRecipe=await returnedMount.forRecipe('retained-recipe');
+ assert.ok((await originalRecipe.document()).doc);
+ await assert.rejects(()=>returnedMount.importItem({}),/SOURCE_PROVENANCE_REQUIRED/);
+ await assert.rejects(()=>returnedMount.executeBatch({}),/SOURCE_PROVENANCE_REQUIRED/);
+ await assert.rejects(()=>returnedMount.forRecipe('other'),/INVALID_RECIPE_DOCUMENT/);
+
  await assert.rejects(()=>resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId));
  await assert.rejects(()=>mounted.authorize());
  await assert.rejects(()=>editMount.authorize());
