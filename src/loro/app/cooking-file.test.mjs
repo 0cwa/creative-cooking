@@ -2,6 +2,8 @@ import {publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reop
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
 import {ownDeviceSignal} from '../authority/own-device.mjs';
+import {ownDeviceRecipientSignal,verifyOwnDeviceRecipients} from '../pairing/household-own-device-recipients.mjs';
+import {withOpenedEstablishedOwnDeviceFile} from '../pairing/household-own-device-established-file.mjs';
 import {householdCompromise} from './household-compromise.mjs';
 import {CompromiseReviews,REVIEW_LIMITS} from '../compromise/review.mjs';
 import {decodeReportFile,encodeReportFile,REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
@@ -939,7 +941,7 @@ test('selected recipe shopping copies and current-only admission survive durable
  function completedPair(context,action,signingPublicKey,wrappingPublicKey,use,recipientKeys,signal,
    authority=record,sessionId=`set-${action}`){
   const transcript={version:1,sessionId,action,scope,purpose:'data',acceptedParent:authority.acceptedParent,
-   authorizationSnapshot:authority.authorizationSnapshot,signaling:[signal(context)],
+   authorizationSnapshot:authority.authorizationSnapshot,signaling:[signal(context)].flat(),
    initiator:{role:'initiator',deviceId:a.deviceId,signingPublicKey:a.signingTestKey.publicKey,
     wrappingPublicKey:sponsorWrap.publicKey,nonce:sodium.randombytes_buf(32)},
    responder:{role:'responder',deviceId:context.recipientDeviceId,signingPublicKey,
@@ -1644,6 +1646,23 @@ test('selected recipe shopping copies and current-only admission survive durable
    assert.equal(document.targetDocumentId,await recipeDocumentId(targetScope,a.root.head,a.provider,document.recipeId));
    assert.notEqual(document.targetDocumentId,document.documentId);
   }
+  const verifiedParent=(await verifyOwnDeviceSuccessor({sodium,provider:a.provider,pin:a.root.head,parentRecord,next:copyTransition.next,eventVersion:5})).parent;
+  const establishedIds=verifiedParent.runtime.acceptedRecipients.filter(id=>id!==a.deviceId).sort();
+  assert.deepEqual(establishedIds,[b.deviceId,newcomerContext.recipientDeviceId].sort());
+  const establishedMaterials=new Map([
+   [b.deviceId,{sign:b.signingTestKey.publicKey,wrap:existingWrap.publicKey,secret:existingWrap.privateKey,keys:existingKeys,session:existingSession}],
+   [newcomerContext.recipientDeviceId,{sign:newcomerSign.publicKey,wrap:newcomerWrap.publicKey,secret:newcomerWrap.privateKey,keys:newcomerKeys,session:newcomerSession}],
+  ]);
+  const establishedEvidence=establishedIds.map((recipientDeviceId,index)=>{
+   const material=establishedMaterials.get(recipientDeviceId);
+   const context={version:1,householdId:scope.id,parentHead:verifiedParent.head,admissionEventHash:signedCopy.head,
+    newEpochId:eventV5.epochId,sponsorDeviceId:a.deviceId,recipientDeviceId,recipientWrappingKey:sodium.to_hex(material.wrap)};
+   return completedPair(context,'pairOwnDevice',material.sign,material.wrap,material.session,material.keys,
+    c=>[existingRecipientContextBytes(c),ownDeviceRecipientSignal(signedCopy.head,eventV5.subject.copyHash,eventV5.epochId)],
+    parentRecord,`own-device-established-${index}`);
+  });
+  const establishedRecipients=await verifyOwnDeviceRecipients({sodium,provider:a.provider,successor:signedCopy,parent:verifiedParent,
+   authorizationSnapshot:parentRecord.authorizationSnapshot,evidence:establishedEvidence});
   const evidence={...peer,hash:peer.oob.hash};
   const fileOptions={storage:a.storage,parentRecord,pin:a.root.head,provider:a.provider,sodium,LoroDoc,evidence};
   assert.ok(signedCopy.documents.length>=3);
@@ -1728,15 +1747,21 @@ test('selected recipe shopping copies and current-only admission survive durable
   // Restore the cloned fixture for the separate legacy publisher scenario.
   publishDb.prepare('DELETE FROM loro_records').run();
   for(const row of beforePublish)put.run(row.key,row.value);
-  const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,
+  const noEvidenceRows=publishDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+  await assert.rejects(()=>publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,
+   signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId}),/INVALID_PROOF/);
+  assert.deepEqual(publishDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),noEvidenceRows);
+  const published=await publishOwnDeviceSet({...fileOptions,storage:publishStorage,next:copyTransition.next,captured:capturedCopy,establishedEvidence,
    signingSecret:sponsorKeys.signingSecret,keys:publishStorage.localKeys(sponsorMaster,sodium),deviceId:a.deviceId});
   assert.equal(published.head,signedCopy.head);
   const pairingFile=published.file;
   assert.ok(pairingFile.length>112);
   const sourceKeyHash=await sponsorCatalog.useIdentity({version:1,scope,deviceId:a.deviceId,purpose:'data',epochId:parent.epochId},
    key=>pairingDigest(sodium,key));
+  let newcomerHashes;
   await withOpenedOwnDeviceSetFile({...fileOptions,file:pairingFile,wrappingSecret:nextWrap.privateKey,withKeys:({keys})=>{
    const hashes=keys.map(({key})=>pairingDigest(sodium,key));
+   newcomerHashes=hashes;
    assert.equal(new Set(hashes).size,signedCopy.documents.length);
    assert.ok(!hashes.includes(sourceKeyHash));
   }});
@@ -1935,6 +1960,28 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(selectedSponsor.resolved.scope.branchHead,signedCopy.head);
   assert.equal(selectedSponsor.installedSet.operationId,evidence.transcript.sessionId);
   assert.deepEqual(reopenedSponsor.file,published.file);
+  assert.deepEqual(published.establishedRecipients.map(entry=>entry.recipientDeviceId),establishedIds);
+  const retainedSponsor=must(await publishStorage.readHouseholdOwnDeviceSetRetained(scope,evidence.transcript.sessionId));
+  assert.deepEqual(published.establishedRecipients,retainedSponsor.sponsor.establishedRecipients.entries);
+  const sponsorHashes=[];
+  for(const document of reopenedSponsor.documents)await sponsorReopenOptions.keys.use(document.keyOperationId,document.identity,
+   key=>sponsorHashes.push(pairingDigest(sodium,key)));
+  assert.deepEqual(sponsorHashes,newcomerHashes);
+  for(const [index,recipient] of establishedRecipients.entries()){
+   const material=establishedMaterials.get(recipient.deviceId);
+   await withOpenedEstablishedOwnDeviceFile({sodium,provider:a.provider,checked:signedCopy,recipient,evidence:establishedEvidence[index],
+    file:published.establishedRecipients[index].ciphertext,wrappingSecret:material.secret,withKeys:keys=>{
+     assert.deepEqual(keys.map(({documentId})=>documentId),signedCopy.documents.map(document=>document.targetDocumentId));
+     assert.deepEqual(keys.map(({key})=>pairingDigest(sodium,key)),sponsorHashes);
+    }});
+  }
+  for(const mutate of [saved=>{saved.sponsor.establishedRecipients.entries[0].ciphertext[0]^=1},
+   saved=>{delete saved.sponsor.establishedRecipients},saved=>{saved.sponsor.establishedRecipients.entries[0].ceremonyGuardId+='x'}]){
+   const changed=structuredClone(retainedSponsor);mutate(changed);
+   const storage={...publishStorage,readHouseholdOwnDeviceSetRetained:async()=>({ok:true,value:changed})};
+   await assert.rejects(reopenOwnDeviceSet({...sponsorReopenOptions,storage}));
+  }
+  assert.deepEqual(reopenedSponsor.establishedRecipients,published.establishedRecipients);
   assert.deepEqual(reopenedSponsor.documents.map(({documentId,identity})=>[documentId,identity.deviceId]),
    signedCopy.documents.map(doc=>[doc.targetDocumentId,a.deviceId]));
   assert.deepEqual(sponsorRows(),publishedRows);
@@ -2006,7 +2053,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal((await a.storage.checkSelectedHouseholdSources(observedInstalled.guard)).error.code,'CONFLICT');
   assert.equal((await a.storage.checkSelectedHouseholdSources(capturedCopy.guard)).error.code,'CONFLICT');
   const beforeStalePublish=a.rows();
-  await assert.rejects(()=>publishOwnDeviceSet({...fileOptions,next:copyTransition.next,captured:capturedCopy,
+  await assert.rejects(()=>publishOwnDeviceSet({...fileOptions,next:copyTransition.next,captured:capturedCopy,establishedEvidence,
    signingSecret:sponsorKeys.signingSecret,keys:sponsorCatalog,deviceId:a.deviceId}),/CONFLICT/);
   assert.deepEqual(a.rows(),beforeStalePublish);
   a.provider.verify=previousVerify;

@@ -119,7 +119,7 @@ export async function verifyOwnDeviceSuccessor({sodium,provider,pin,parentRecord
  const oob=verifyOwnDeviceEvent(sodium,pin,parent,item.event,proof,verified.wrappingByHead.get(parent.head).get(item.event.authorDeviceId));
  if(proposal&&(oob.hash!==proposal.hash||proof.guard.guardId!==proposal.guard.guardId))throw Error('INVALID_OWN_DEVICE');
  const context=ownDevicePacketContext(item,oob,head);
- return {state,item,proof,context,head,selection};
+ return {state,item,proof,context,head,selection,parent};
 }
 
 export function ownDeviceReceiptBody(sodium,p,context) {
