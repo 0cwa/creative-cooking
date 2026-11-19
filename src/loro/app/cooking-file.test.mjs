@@ -1,3 +1,4 @@
+import {policyBaseline} from '../authority/policy-baseline.mjs';
 import {installEstablishedOwnDeviceSet,commitVerifiedEstablishedOwnDeviceSet,publishOwnDeviceSet,captureOwnDeviceCopySet,installOwnDeviceSetFile,reopenOwnDeviceSet,sealOwnDeviceSetFile,verifyOwnDeviceCopySet,verifyOwnDeviceSetSuccessor,withOpenedOwnDeviceSetFile} from '../pairing/household-own-device-set.mjs';
 import {openDeviceCopy,pairingDigest,sealDeviceCopy} from '../pairing/personal-copy.mjs';
 import {verifyOwnDeviceSuccessor} from '../pairing/household-own-device.mjs';
@@ -1390,7 +1391,8 @@ test('selected recipe shopping copies and current-only admission survive durable
   data:{itemId:'shared-after-join',name:'Chickpeas',preference:3,at,author:newcomer.runtime.scope.authorDevice}};
  await newcomer.householdContent.execute(rootAction,[pantry]);
  const pantryObjectId=must(await freshStorage.getLocalOperation(scope.id,rootAction)).commit.outbound[0].object.id;
- await sponsor.files.receive(await newcomer.files.download(pantryObjectId));
+ const pantryBytes=await newcomer.files.download(pantryObjectId);
+ await sponsor.files.receive(pantryBytes);
  assert.equal((await newcomer.files.receive(recipeBytes)).replayed,true);
 
  newcomerSelection.sequences.close();
@@ -1404,6 +1406,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.ok(cooking.pantry.some(item=>item.name==='Chickpeas'));
  }
 
+ let admittedShoppingObjects;
  await t.test('admitted shopping claims preserve signed seed ancestry and transact against both documents',async()=>{
   const before=await sponsor.householdContent.readCooking();
   const sourceRecipe=before.recipes.find(row=>row.id===recipeId);
@@ -1421,6 +1424,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   const command=attempt.commands.find(c=>c.kind==='shopping-item-create');
   const applied=must(await a.storage.getLocalOperation(scope.id,attempt.actionId));
   const objects=applied.commit.outbound.map(row=>row.object);
+  admittedShoppingObjects=objects;
   const [copy]=objects;
   const auth=await sponsor.runtime.authorization();
   const opened=await sponsor.runtime.codec.openContent(copy.bytes,auth.signingKeyRefs);
@@ -2284,6 +2288,9 @@ test('selected recipe shopping copies and current-only admission survive durable
    operationId,authorDevice:b.deviceId}),installedSet:{operationId}},
    enable(existingCatalog,b.signingTestKey.privateKey,existingWrap.privateKey),sodium.to_hex(b.signingTestKey.publicKey),wrapping);
   let existing=await openExisting();
+  await existing.files.receive(recipeBytes);
+  await existing.files.receive(pantryBytes);
+  for(const object of admittedShoppingObjects)await existing.files.receive(object.bytes);
   const beforeImport=b.rows();
   for(const fault of ['recipe-key','recipe-catalog','import-documents','import']){
    b.faultAt(fault);
@@ -2314,6 +2321,56 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(await inspectKey(existingCatalog,keySlotFor(b.rows(),beforeImport)),newKey);
   assert.equal(distinctKeys.has(newKey),false);
   assert.equal((await existing.files.receive(bytes)).replayed,true);
+  // The recipient now has the actual prior installed set and has imported both
+  // source objects present when the sponsor captured the new copy.
+  a.provider.verify=(ref,data,signature)=>ref===sodium.to_hex(newcomerSign.publicKey)
+   ?sodium.crypto_sign_verify_detached(signature,data,newcomerSign.publicKey):previousVerify(ref,data,signature);
+  const existingParent=must(await b.storage.readPairingAuthority(scope));
+  assert.deepEqual(existingParent,localParent);
+  assert.notEqual(existingParent.authorizationSnapshot,parentRecord.authorizationSnapshot);
+  const existingSources=await observeSelectedSourceSet(existing.runtime,{verifyCheckpointHistory:true});
+  assert.equal(existingSources.sources.length,signedCopy.documents.length);
+  for(const [index,source] of existingSources.sources.entries()){
+   const expected=signedCopy.documents[index];
+   assert.equal(source.runtime.recipeId,expected.recipeId);
+   assert.deepEqual(await policyBaseline(source.doc,a.provider),expected.baseline,`source history ${expected.recipeId ?? 'root'}`);
+  }
+  const priorSelections=JSON.parse(dec.decode(existingParent.authorityState)).selections;
+  let expectedLocalNext,existingKeyHashes;
+  await withOpenedEstablishedOwnDeviceTransition({storage:b.storage,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord:existingParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   signingSecret:b.signingTestKey.privateKey,withKeys:result=>{
+    expectedLocalNext=result.localNext;existingKeyHashes=result.keys.map(({key})=>pairingDigest(sodium,key));
+   }});
+  const existingInstall={storage:b.storage,runtime:existing.runtime,provider:a.provider,sodium,LoroDoc,pin:a.root.head,
+   parentRecord:existingParent,evidence:establishedProof,file:establishedFile,wrappingSecret:existingWrap.privateKey,
+   signingSecret:b.signingTestKey.privateKey,keys:existingCatalog,deviceId:b.deviceId};
+  assert.deepEqual(await installEstablishedOwnDeviceSet(existingInstall),{scope,head:signedCopy.head,replayed:false});
+  const existingSaved=must(await b.storage.readHouseholdOwnDeviceSetRetained(scope,eventV5.proposalId));
+  assert.deepEqual(existingSaved.expected,existingParent);
+  assert.deepEqual(existingSaved.next,expectedLocalNext);
+  const installedSelections=JSON.parse(dec.decode(existingSaved.next.authorityState)).selections;
+  assert.deepEqual(installedSelections.slice(0,-1),priorSelections);
+  assert.equal(installedSelections.at(-1).deviceId,b.deviceId);
+  const existingReopen=await reopenOwnDeviceSet({storage:b.storage,scope,operationId:eventV5.proposalId,pin:a.root.head,
+   provider:a.provider,sodium,LoroDoc,keys:existingCatalog,wrappingSecret:existingWrap.privateKey});
+  assert.equal(existingReopen.documents.length,signedCopy.documents.length);
+  for(const [index,document] of existingReopen.documents.entries()){
+   assert.deepEqual(existingSaved.documents[index].document.bytes,signedCopy.documents[index].copy.snapshot);
+   await existingCatalog.use(document.keyOperationId,document.identity,key=>assert.equal(pairingDigest(sodium,key),existingKeyHashes[index]));
+  }
+  const newSet={operationId:eventV5.proposalId,paired:{keys:existingCatalog,useWrapping:use=>use(existingWrap.privateKey)}};
+  const resolvedNew=await resolveInstalledSetAuthority({...fileOptions,storage:b.storage,scope,authorDevice:b.deviceId,...newSet});
+  const existingNew=await openPeer(b.storage,{resolved:resolvedNew,installedSet:newSet},
+   enable(existingCatalog,b.signingTestKey.privateKey,existingWrap.privateKey),sodium.to_hex(b.signingTestKey.publicKey),wrapping);
+  const target=await existingNew.householdContent.readRecipe(added.id);
+  const beforeTarget=projectCooking(target.doc).recipes[0];
+  const targetCommands=planRecipeAction({doc:target.doc,before:beforeTarget,after:{...beforeTarget,title:'Local retry edit'},
+   actionId:'existing-local-retry-edit',author:b.deviceId,at});
+  await existingNew.householdContent.execute('existing-local-retry-edit',targetCommands,added.id);
+  const beforeExistingRetry=b.rows();
+  assert.deepEqual(await installEstablishedOwnDeviceSet(existingInstall),{scope,head:signedCopy.head,replayed:true});
+  assert.deepEqual(b.rows(),beforeExistingRetry);
   a.provider.verify=(ref,data,signature)=>ref===sodium.to_hex(newcomerSign.publicKey)
    ?sodium.crypto_sign_verify_detached(signature,data,newcomerSign.publicKey):previousVerify(ref,data,signature);
   const inherited=await sponsor.householdContent.readRecipe(recipeId);

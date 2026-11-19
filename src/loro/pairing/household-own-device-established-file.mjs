@@ -128,7 +128,12 @@ export async function withOpenedEstablishedOwnDeviceTransition({sodium,provider,
   const nextState={...sponsorState,events:[...sponsorState.events,item],selections:[...sponsorState.selections,selection],activeHead:head};
   const next={scope:sponsor.scope,revision:sponsor.revision+1,acceptedParent:head,authorityState:authorityBytes(nextState),authorizationSnapshot:await snapshotId(provider,nextState)};
   const {verifyOwnDeviceSetSuccessor}=await import('./household-own-device-set.mjs');
-  const checked=await verifyOwnDeviceSetSuccessor({...options,sodium,provider,pin,parentRecord:sponsor,next,set});
+  // The signed source observation names the publisher's snapshot. Its parent is
+  // authenticated by the file and successor; the independently retained local
+  // parent is checked against that transition before any keys are returned.
+  const publisherView={readPairingAuthority:async scope=>({ok:true,value:
+   sameOwnDevice(sodium,scope,sponsor.scope)?sponsor:null})};
+  const checked=await verifyOwnDeviceSetSuccessor({...options,storage:publisherView,sodium,provider,pin,parentRecord:sponsor,next,set});
   let localNext=next;
   if(!sameOwnDevice(sodium,parentRecord,sponsor)){
    localNext=await verifyOwnDeviceLocalTransition({sodium,provider,pin,localParent:parentRecord,publisherParent:sponsor,
