@@ -35,3 +35,16 @@ test('cycles and their dependents are held and cross-document source routes are 
  assert.equal(plan.get('object-y').reason,'AMBIGUOUS_SOURCE');
  assert.equal(plan.get('object-x').status,'retained');
 });
+
+test('verified seed dependencies require unique identities and the same document route',()=>{
+ const seeds=[{documentId:'child',identities:[{effectId:'seed',commandId:'seed-command'}]}];
+ const evidence=[entry('ok',['seed'],{documentId:'child'}),entry('wrong',['seed']),entry('missing',['absent'],{documentId:'child'}),entry('collision',[],{commandId:'seed-command',documentId:'child'}),entry('dependent',['collision'],{documentId:'child'})];
+ let plan=new Map(selectedRetentionGraph(evidence,evidence.map(x=>x.evidence.command.effectId),'suspect',undefined,seeds).map(row=>[row.effectId,row]));
+ assert.equal(plan.get('collision').reason,'AMBIGUOUS_ID');assert.equal(plan.get('dependent').reason,'HELD_DEPENDENCY');
+ assert.equal(plan.get('ok').reason,'MISSING_DEPENDENCY');assert.equal(plan.get('wrong').reason,'MISSING_DEPENDENCY');assert.equal(plan.get('missing').reason,'MISSING_DEPENDENCY');
+ plan=new Map(selectedRetentionGraph(evidence.slice(0,3),['ok','wrong','missing'],'suspect',undefined,seeds).map(row=>[row.effectId,row]));
+ assert.equal(plan.get('ok').status,'retained');assert.equal(plan.get('wrong').reason,'MISSING_DEPENDENCY');
+ const collision=[entry('seed',[],{documentId:'child'}),entry('lookalike',['seed'],{documentId:'child'})];
+ plan=new Map(selectedRetentionGraph(collision,['seed','lookalike'],'suspect',undefined,seeds).map(row=>[row.effectId,row]));
+ assert.equal(plan.get('seed').reason,'AMBIGUOUS_ID');assert.equal(plan.get('lookalike').reason,'HELD_DEPENDENCY');
+});

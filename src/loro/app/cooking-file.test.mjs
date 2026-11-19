@@ -1002,9 +1002,12 @@ test('selected recipe shopping copies and current-only admission survive durable
  };
  const shopping=async(runtime)=>projectCooking((await runtime.document()).doc).shopping;
  const initial=await edit(a,ar,'selected-create',recipe(recipeId,'Carrot'));
+ const seededPantry={version:1,kind:'pantry-create',commandId:'seeded-pantry',effectId:'seeded-pantry',dependencyEffectIds:[],data:{itemId:'seeded-pantry',name:'Seeded beans',preference:3,author:a.deviceId,at}};
+ await save(a,a.runtime,'seeded-pantry',[seededPantry]);
  const siblings=await edit(a,sibling,'sibling-create',recipe('sibling','Spare carrot'));
  const legacy=await edit(a,a.runtime,'legacy-recipe',recipe('legacy','Onion'));
  await send(a,b,'sibling-create');
+ await send(a,b,'seeded-pantry');
  await send(a,b,'legacy-recipe');
 
  const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
@@ -2281,7 +2284,8 @@ test('selected recipe shopping copies and current-only admission survive durable
   const {buildSelectedOperationReport}=await import('../compromise/selected-report.mjs');
   const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
   const {resolveSelectedReportStart}=await import('../compromise/selected-report-start.mjs');
-  const candidates=[{sourceId:'outbound',documentId:newDocumentId,objectId:creation.id,bytes}];
+  const candidates=[{sourceId:'outbound',documentId:newDocumentId,objectId:creation.id,bytes},
+   {sourceId:'outbound',documentId:recipeRuntime.scope.documentId,objectId:recipeObjectId,bytes:recipeBytes}];
   const report=await buildSelectedOperationReport(sponsor.runtime,{candidates,
    suspectDevice:sponsor.runtime.scope.acceptedAuthors.find(id=>id!==a.deviceId),
    boundary:{documentId:newDocumentId,objectId:creation.id}});
@@ -2296,6 +2300,19 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.deepEqual(start.documents.find(row=>row.recipeId===added.id),{
    recipeId:added.id,documentId:newDocumentId,snapshot:new Uint8Array(),seedId:null,identities:[],policies:[],
   });
+  const {reconstructSelectedRetention}=await import('../compromise/selected-reconstruction.mjs');
+  const seedEdit=recipeCommands[0];
+  assert.ok(seedEdit.dependencyEffectIds.some(id=>seededRecipe.identities.some(identity=>identity.effectId===id)));
+  const draft=await reconstructSelectedRetention(sponsor.runtime,{reportHash,selectedEffectIds:[seedEdit.effectId]});
+  assert.equal(draft.rows.find(row=>row.effectId===seedEdit.effectId).status,'retained');
+  const rootDraft=draft.documents.find(row=>row.recipeId===null),recipeDraft=draft.documents.find(row=>row.recipeId===recipeId);
+  const rebuiltRoot=new LoroDoc(),rebuiltRecipe=new LoroDoc();rebuiltRoot.import(rootDraft.snapshot);rebuiltRecipe.import(recipeDraft.snapshot);
+  assert.equal(rebuiltRecipe.getMap('recipe:'+encodeURIComponent(recipeId)).get('title'),'Edited on the sponsor');
+  assert.equal(rebuiltRecipe.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify([recipeId,ingredientId]))).get('amount'),'4 cups');
+  assert.equal(rebuiltRoot.getMap('pantry:seeded-pantry').get('name'),'Seeded beans');
+  assert.deepEqual(rebuiltRoot.toJSON(),(()=>{const doc=new LoroDoc();doc.import(seededRoot.snapshot);return doc.toJSON()})());
+  assert.deepEqual(recipeDraft.identities,seededRecipe.identities);assert.deepEqual(recipeDraft.policies,seededRecipe.policies);
+  assert.ok(recipeDraft.identities.some(row=>row.incomplete&&row.policyHashes.includes(accepted.policyHash)));
   assert.deepEqual(a.rows(),beforeStart);
   const originalPublication=a.storage.getProjectionPublication.bind(a.storage);
   a.storage.getProjectionPublication=async(...args)=>{
@@ -2307,7 +2324,7 @@ test('selected recipe shopping copies and current-only admission survive durable
    }
    return result;
   };
-  try {await assert.rejects(()=>resolveSelectedReportStart(sponsor.runtime,reportHash));}
+  try {await assert.rejects(()=>resolveSelectedReportStart(sponsor.runtime,reportHash));await assert.rejects(()=>reconstructSelectedRetention(sponsor.runtime,{reportHash,selectedEffectIds:[seedEdit.effectId]}));}
   finally {a.storage.getProjectionPublication=originalPublication;}
   assert.deepEqual(a.rows(),beforeStart);
 
