@@ -400,14 +400,15 @@ export async function resolveReturnedPolicyAuthority({storage,scope,pin,provider
  const parent=JSON.parse(dec.decode(evidence.expected.authorityState));
  if(parent.events.some(item=>item.admission || item.event?.version===6 || (item.event?.version===5 && item.event?.kind==='pairOwnDevice')))throw Error('UNSUPPORTED_SOURCE');
  const {source}=await verifyPolicyReturnCandidate({...args,candidate:record});
- const mapping=evidence.mapping;
+ const mapping=evidence.mapping, claims=evidence.sourceClaims;
+ if(!Array.isArray(claims) || claims.length!==mapping.length || claims.some((claim,i)=>claim.documentId!==mapping[i].sourceDocumentId || (i>0 && claim.recipeId!==mapping[i].recipeId)))throw Error('INVALID_SOURCE');
  if(!mapping.length || mapping[0].recipeId!==null || mapping[0].sourceDocumentId!==source.runtime.documentId ||
    mapping.slice(1).some(row=>typeof row.recipeId!=='string' || !row.recipeId || typeof row.sourceDocumentId!=='string' || !row.sourceDocumentId) ||
    new Set(mapping.map(row=>row.sourceDocumentId)).size!==mapping.length || new Set(mapping.slice(1).map(row=>row.recipeId)).size!==mapping.length-1)throw Error('INVALID_SOURCE');
  await keys.useIdentity({version:1,scope,deviceId:authorDevice,purpose:'data',epochId:source.epochId},()=>{});
  if(!same(record,await read(storage,scope)))throw Error('STALE_AUTHORITY');
  const state=JSON.parse(dec.decode(record.authorityState));
- return {...runtimeAuthority(scope,record,state,source,authorDevice),members:mapping.map(row=>({recipeId:row.recipeId,documentId:row.sourceDocumentId}))};
+ return {...runtimeAuthority(scope,record,state,source,authorDevice),members:mapping.map(row=>({recipeId:row.recipeId,documentId:row.sourceDocumentId})),sourceClaims:claims};
 }
 
 /** Resolve only after verifying the locally installed, selected document set. */

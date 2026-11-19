@@ -81,7 +81,7 @@ export class OfflineRuntime {
       if (!same(expected,s)) throw new Error('INVALID_AUTHORITY');
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
       const auth={expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs,
-        sourceDocumentId:resolved.scope.documentId,...(resolved.members?{members:resolved.members,wrappingKeyRefs:resolved.wrappingKeyRefs}:{}),
+        sourceDocumentId:resolved.scope.documentId,...(returned?{sourceClaims:resolved.sourceClaims}:{}),...(resolved.members?{members:resolved.members,wrappingKeyRefs:resolved.wrappingKeyRefs}:{}),
         ...(activated?{pairedSeed:resolved.members.find(document=>document.documentId===s.documentId)?.policySeed??null}:
           resolved.pairedDocuments?{pairedSeed:resolved.pairedDocuments.find(document=>document.documentId===s.documentId)?.seed??null}:{})};
       if(resolved.members&&!this.recipeCreation)await this.requireRecipeMember(auth,this.#recipeId,s.documentId);
@@ -118,8 +118,14 @@ export class OfflineRuntime {
     };
   }
   async document() {
-    const {expectedAuthority,pairedSeed}=await this.authorization();
+    const {expectedAuthority,pairedSeed,sourceClaims}=await this.authorization();
     const stored=required(await this.storage.reopenBranchDocument(expectedAuthority,this.scope.documentId));
+    if(sourceClaims){
+      const claim=sourceClaims.find(row=>row.documentId===this.scope.documentId);
+      if(!claim || (stored?.revision ?? null)!==claim.revision)throw Error('INVALID_SOURCE');
+      if(stored){const {selectedSourceHash}=await import('../projection/selected-sources.mjs');const hex=Array.from(stored.bytes,x=>x.toString(16).padStart(2,'0')).join('');if(await selectedSourceHash(this.authority.provider,'projection-source-snapshot',hex)!==claim.checkpointHash)throw Error('INVALID_SOURCE');}
+      else if(claim.checkpointHash!==null)throw Error('INVALID_SOURCE');
+    }
     const doc=new this.LoroDoc(); if (stored) doc.import(stored.bytes);
     const markers=doc.getMap('domain-effects').toJSON(),seeded=Object.entries(markers).filter(([,m])=>m?.version===3);
     const seed=pairedSeed!==undefined?pairedSeed:typeof this.storage.readProjectionSeed==='function'?required(await this.storage.readProjectionSeed(expectedAuthority,this.scope.documentId)):null;if(seeded.length&&!seed)throw Error('UNVERIFIED_SEED');if(seed){const originalSeed=new this.LoroDoc();originalSeed.import(seed.snapshot);let retained;try{retained=doc.forkAt(originalSeed.frontiers())}catch{throw Error('UNVERIFIED_SEED')}if(!same(retained.exportJsonUpdates(undefined,undefined,false),originalSeed.exportJsonUpdates(undefined,undefined,false)))throw Error('UNVERIFIED_SEED');const expected=new Map(seed.seed.identities.map(x=>[x.effectId,x.commandId]));if(seeded.length!==expected.size||seeded.some(([id,m])=>m.seedId!==seed.seed.seedId||m.effectId!==id||m.commandId!==expected.get(id)||Object.keys(m).sort().join(',')!=='commandId,effectId,seedId,version'))throw Error('UNVERIFIED_SEED')}

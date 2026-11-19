@@ -482,6 +482,12 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.ok(originalDoc.doc);
  const originalRecipe=await returnedMount.forRecipe('retained-recipe');
  assert.ok((await originalRecipe.document()).doc);
+ const replacementDoc=new LoroDoc(); replacementDoc.getMap('recipe:retained-recipe').set('title','Forged');
+ const childSourceRow=afterReturn.find(row=>row.key===JSON.stringify(['document',scope.id,staged.mapping[1].sourceDocumentId]));
+ const replacementRecord=JSON.parse(childSourceRow.value); replacementRecord.bytes={__storageBytes:[...replacementDoc.export({mode:'snapshot'})]};
+ a.replaceRow(childSourceRow.key,JSON.stringify(replacementRecord));
+ try {await assert.rejects(()=>originalRecipe.document(),/INVALID_SOURCE/);} finally {a.replaceRow(childSourceRow.key,childSourceRow.value);}
+ assert.ok((await originalRecipe.document()).doc);
  await assert.rejects(()=>returnedMount.importItem({}),/SOURCE_PROVENANCE_REQUIRED/);
  await assert.rejects(()=>returnedMount.executeBatch({}),/SOURCE_PROVENANCE_REQUIRED/);
  await assert.rejects(()=>returnedMount.forRecipe('other'),/INVALID_RECIPE_DOCUMENT/);
