@@ -1,4 +1,4 @@
-import {resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {installedDocumentSetContent} from '../pairing/household-document-set.mjs';
 import {candidateCodec} from '../crypto/candidate.mjs';
@@ -53,19 +53,33 @@ export async function resolveOriginalHousehold({storage,scope,pin,provider,devic
  }
 }
 
-export async function openWorkspaceHouseholdRuntime({storage,resolved,installedSet,pin,provider,sodium,keys,signing,
+export async function openWorkspaceHouseholdRuntime({storage,resolved,installedSet,activatedPolicy=/** @type {any} */(undefined),pin,provider,sodium,keys,signing,
  wrapping=/** @type {any} */(undefined),LoroDoc,decodeImportBlobMeta}) {
  resolved=structuredClone(resolved);
+ if(activatedPolicy && (installedSet || activatedPolicy.targetHead!==resolved.scope.branchHead))throw Error('INVALID_AUTHORITY_CONFIG');
+ if(activatedPolicy){
+  const verified=await resolveActivatedPolicyAuthority({storage,scope:{kind:'household',id:resolved.scope.scopeId},pin,provider,authorDevice:resolved.scope.authorDevice,LoroDoc,targetHead:activatedPolicy.targetHead,keys});
+  if(!same(verified,resolved))throw Error('INVALID_AUTHORITY');
+ }
  const {scope}=resolved,householdScope={kind:'household',id:scope.scopeId};
  const installation=installedSet?{...installedSet,sodium,LoroDoc}:null;
  const paired=installation?.paired;
  const members=new Map((paired?resolved.pairedDocuments:[]).map(document=>[document.documentId,document]));
- const content=paired
+ const policyMembers=new Map((activatedPolicy?resolved.members:[]).map(member=>[member.documentId,member]));
+ const content=activatedPolicy ? async (epochId,fn,header)=>{
+    const member=policyMembers.get(header?.documentId);
+    if(!member||epochId!==scope.epochId||header.epochId!==scope.epochId||header.scopeId!==scope.scopeId||header.branchHead!==scope.branchHead||header.documentGeneration!==scope.documentGeneration||!scope.acceptedAuthors.includes(header.authorDevice)||member.identity.deviceId!==scope.authorDevice)throw Error('INVALID_AUTHORITY');
+    const verify=async()=>{const current=await resolveActivatedPolicyAuthority({storage,scope:householdScope,pin,provider,authorDevice:scope.authorDevice,LoroDoc,targetHead:activatedPolicy.targetHead,keys});if(!same(current,resolved))throw Error('STALE_AUTHORITY')};
+    await verify();
+    const result=await keys.use(member.operationId,member.identity,fn);
+    await verify();
+    return result;
+   } : paired
   ? (epochId,fn,header)=>{
     const member=members.get(header?.documentId);
     if(!member||epochId!==scope.epochId||header.epochId!==scope.epochId||
        header.scopeId!==scope.scopeId||header.branchHead!==scope.branchHead||
-       header.documentGeneration!==scope.documentGeneration||member.identity.deviceId!==scope.authorDevice)
+       header.documentGeneration!==scope.documentGeneration||!scope.acceptedAuthors.includes(header.authorDevice)||member.identity.deviceId!==scope.authorDevice)
      throw Error('INVALID_AUTHORITY');
     return paired.keys.use(member.keyOperationId,member.identity,fn);
    }
@@ -80,8 +94,9 @@ export async function openWorkspaceHouseholdRuntime({storage,resolved,installedS
  const codec=deliveries?.codec??candidateCodec(localProvider(sodium,keys,{signing,content}));
  const runtime=new OfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:scope.epochId,
   authority:{kind:'household',rootPin:pin,provider,selectionIndex:resolved.selectionIndex,
+   ...(activatedPolicy?{activatedPolicy:{targetHead:activatedPolicy.targetHead,keys,resolved:structuredClone(resolved)}}:{}),
    ...(installation?{installedSet:{...installation,recipeCatalog:deliveries?.recipeCatalog},recipeDelivery:deliveries}:{})}});
- if(installation)await runtime.authorize();
+ if(installation||activatedPolicy)await runtime.authorize();
  const originalScope=structuredClone(scope), authority=runtime.authority;
  const useContent=deliveryContent??content;
  policyReaders.set(runtime,async (route,fn)=>{

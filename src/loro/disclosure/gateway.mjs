@@ -13,6 +13,7 @@ function endpointIdentity(value) {let u;try{u=new URL(value)}catch{throw Error('
 export function disclosureGateway({runtime,service,provider,fetch:fetcher=fetch,randomId}) {
  if(typeof randomId!=='function')throw Error('MALFORMED');
  async function prepare(selection) {
+  if(runtime.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
   selection=structuredClone(selection);
   if(!selection||Object.keys(selection).sort().join(',')!=='endpoint,itemIds,model,purpose,recipient'||!Array.isArray(selection.itemIds)||!selection.itemIds.length||selection.itemIds.length>64||!selection.itemIds.every(valid)||new Set(selection.itemIds).size!==selection.itemIds.length||!selection.itemIds.every((x,i)=>!i||selection.itemIds[i-1]<x)||![selection.model,selection.purpose,selection.recipient].every(valid)||selection.purpose!=='cooking')throw Error('MALFORMED');
   const endpoint=endpointIdentity(selection.endpoint);if(selection.recipient!==endpoint)throw Error('RECIPIENT_ENDPOINT_MISMATCH');const {context,record}=await service.active(),{doc,revision}=await runtime.document();if(revision===null||runtime.scope.branchHead!==context.current.activeHead)throw Error('SOURCE_UNAVAILABLE');

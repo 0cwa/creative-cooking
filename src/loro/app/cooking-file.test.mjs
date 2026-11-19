@@ -231,6 +231,27 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.deepEqual(runtime.members.map(({recipeId,documentId})=>({recipeId,documentId})),staged.mapping.map(({recipeId,targetDocumentId})=>({recipeId,documentId:targetDocumentId})));
  assert.ok(runtime.members.every(member=>member.operationId&&member.identity));
  assert.equal(runtime.selectionIndex,nextState.selections.length);
+ const {openWorkspaceHouseholdRuntime}=await import('./workspace-household-runtime.mjs');
+ const mounted=await openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead},pin:a.root.head,provider:a.provider,sodium,keys,signing:{publicKey:author.signingKeyRef},LoroDoc,decodeImportBlobMeta});
+ assert.ok((await mounted.document()).revision!==null);
+ const mountedRecipe=await mounted.forRecipe('retained-recipe');
+ assert.equal((await mountedRecipe.document()).doc.getMap('recipe:retained-recipe').get('title'),'Soup');
+ await assert.rejects(()=>mounted.forRecipe('wrong-child'),/INVALID_RECIPE_DOCUMENT/);
+ await assert.rejects(()=>mounted.execute({}),/SOURCE_PROVENANCE_REQUIRED/);
+ await assert.rejects(()=>mounted.importItem({}),/SOURCE_PROVENANCE_REQUIRED/);
+ const header={version:1,suiteId:runtime.scope.suiteId,scopeId:runtime.scope.scopeId,documentId:mountedRecipe.scope.documentId,documentGeneration:runtime.scope.documentGeneration,branchHead:targetHead,policyHashes:runtime.scope.policyHashes,epochId:runtime.scope.epochId,authorDevice:a.deviceId,deviceSequence:1,predecessorRefs:[],semanticEffectIds:['probe'],payloadKind:'loro-update-v1'};
+ const calls=[], originalUse=keys.use.bind(keys); keys.use=async (operation,identity,fn)=>{calls.push({operation,identity});return originalUse(operation,identity,fn)};
+ try {
+  await assert.rejects(()=>mounted.codec.sealContent(header,new Uint8Array([1]),runtime.scope.epochId,author.signingKeyRef));
+  assert.equal(calls.at(-2).operation,runtime.members.find(x=>x.recipeId==='retained-recipe').operationId);
+  calls.length=0;
+  await assert.rejects(()=>mounted.codec.sealContent({...header,documentId:'wrong'},new Uint8Array([1]),runtime.scope.epochId,author.signingKeyRef),/INVALID_AUTHORITY/);
+  assert.equal(calls.length,0);
+ } finally {keys.use=originalUse;}
+
+ await assert.rejects(()=>a.runtime.authorize());
+ await assert.rejects(()=>openWorkspaceHouseholdRuntime({storage:a.storage,resolved:runtime,activatedPolicy:{targetHead:'wrong'},pin:a.root.head,provider:a.provider,sodium,keys,signing:{publicKey:author.signingKeyRef},LoroDoc,decodeImportBlobMeta}));
+
  await assert.rejects(()=>resolve({authorDevice:'unauthorized'}));
  await assert.rejects(()=>resolveRuntimeAuthority(a.storage,scope,a.root.head,a.provider,a.deviceId),/UNSUPPORTED_VERSION/);
 
@@ -251,6 +272,7 @@ test('retained policy activation authenticates signed history and local keys',as
  const saved=a.rows().find(row=>row.key===key); a.connection.executeSync('DELETE FROM loro_records WHERE key=?',[key]);
  await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet(args));
  await assert.rejects(()=>resolve({}));
+ await assert.rejects(()=>mounted.authorize());
  a.connection.executeSync('INSERT INTO loro_records (key,value) VALUES (?,?)',[saved.key,saved.value]);
  assert.deepEqual(a.rows(),before);
 });

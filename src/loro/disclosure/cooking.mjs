@@ -15,6 +15,7 @@ export async function recoverCookingBatchWithPolicy({runtime,service,operationId
  return {outcome:previous.outcome,replayed:true};
 }
 export async function commitCookingWithPolicy({runtime,service,input}) {
+ if(runtime.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
  input=structuredClone(input);if(!cookingKinds.has(input?.command?.kind))throw Error('INVALID_AUTHORITY');const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId:input.operationId,items:[{command:input.command,deviceSequence:input.deviceSequence}]});if(previous)return previous;const {context,record,expectedActiveHash}=await writeContext(runtime,service);
  if(runtime.scope.scopeId!==context.resolved.scope.scopeId||runtime.scope.branchHead!==context.resolved.scope.branchHead)throw Error('INVALID_AUTHORITY');
  const verifyRecipeSource=createShoppingRecipeSourceVerifier({runtime,service,context,local:true});
@@ -45,6 +46,7 @@ export function decodeCookingPayload({value,header}){
 }
 /** Authenticate, validate and import a v2 source-policy envelope atomically. */
 export async function importCookingWithPolicy({runtime,service,item,recipeCatalogVersion=null}) {
+ if(runtime.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
  item=structuredClone(item);if(!item||typeof item.itemId!=='string'||!(item.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
  const registry=await import('../domain/registry.mjs');
  const readSaved=async()=>must(await runtime.storage.getDisclosureImport(runtime.scope.scopeId,item.itemId));
@@ -96,6 +98,7 @@ export async function importCookingWithPolicy({runtime,service,item,recipeCatalo
 /** Ordered actions in one document retain every command's signed source policy
  * ancestry while the final document and all outbound objects commit together. */
 export async function commitCookingBatchWithPolicy({runtime,service,operationId,items}) {
+ if(runtime.authority?.activatedPolicy)throw Error('SOURCE_PROVENANCE_REQUIRED');
  const {OfflineRuntime}=await import('../engine/runtime.mjs'),registry=await import('../domain/registry.mjs');items=structuredClone(items);
  if(!Array.isArray(items)||!items.length||items.some(i=>!cookingKinds.has(i?.command?.kind)))throw Error('INVALID_AUTHORITY');
  const previous=await recoverCookingBatchWithPolicy({runtime,service,operationId,items});if(previous)return previous;const {context,record,expectedActiveHash}=await writeContext(runtime,service);
