@@ -81,7 +81,8 @@ export class OfflineRuntime {
       if (!resolved.signingKeyRefs || !s.acceptedAuthors.every(a=>Object.hasOwn(resolved.signingKeyRefs,a) && typeof resolved.signingKeyRefs[a]==='string' && resolved.signingKeyRefs[a])) throw new Error('INVALID_AUTHORITY');
       const auth={expectedAuthority:resolved.expectedAuthority,signingKeyRefs:resolved.signingKeyRefs,
         sourceDocumentId:resolved.scope.documentId,...(resolved.members?{members:resolved.members,wrappingKeyRefs:resolved.wrappingKeyRefs}:{}),
-        ...(resolved.pairedDocuments?{pairedSeed:resolved.pairedDocuments.find(document=>document.documentId===s.documentId)?.seed??null}:{})};
+        ...(activated?{pairedSeed:resolved.members.find(document=>document.documentId===s.documentId)?.policySeed??null}:
+          resolved.pairedDocuments?{pairedSeed:resolved.pairedDocuments.find(document=>document.documentId===s.documentId)?.seed??null}:{})};
       if(resolved.members&&!this.recipeCreation)await this.requireRecipeMember(auth,this.#recipeId,s.documentId);
       return auth;
     }

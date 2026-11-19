@@ -1874,6 +1874,63 @@ test('selected recipe shopping copies and current-only admission survive durable
    sponsor.runtime.scope=structuredClone(originalPolicyScope);
   }
   assert.deepEqual(a.rows(),beforePreparation);
+  { // Policy activation carries only verified admission seeds.
+   const db=new DatabaseSync(':memory:');
+   const connection={executeSync(sql,params=[]){const stmt=db.prepare(sql);return {rows:sql.trimStart().toUpperCase().startsWith('SELECT')?stmt.all(...params):(stmt.run(...params),[])};}};
+   const storage=openSQLiteStorage(connection);
+   try{
+    for(const row of a.connection.executeSync('SELECT key,value FROM loro_records').rows)
+     connection.executeSync('INSERT INTO loro_records(key,value) VALUES (?,?)',[row.key,row.value]);
+    const sourceRows=a.rows();
+    const expected=must(await storage.readPairingAuthority(scope)), state=JSON.parse(new TextDecoder().decode(expected.authorityState));
+    const selection={from:policyParent.head,to:policyHash,deviceId:a.deviceId,index:state.selections.length};
+    selection.signature=await signAdmission('select-head',{root:a.root.head,householdId:scope.id,...selection});
+    const item={event:policyEvent,authorSignature:await signAdmission('event-signature',policyEvent),approvals:policyApprovals};
+    const nextState={...state,events:[...state.events,item],selections:[...state.selections,selection],activeHead:policyHash};
+    const next={...expected,revision:expected.revision+1,acceptedParent:policyHash,authorizationSnapshot:await snapshotId(a.provider,nextState),authorityState:authorityBytes(nextState)};
+    const stage=must(await storage.readStagedPolicyDocumentSet(scope.id,policyHash));
+    must(await storage.commitPolicyDocumentSetSelection({guard:policyCapture.guard,targetHead:policyHash,proof:stage.proof,mapping:stage.mapping,expected,next,deviceId:a.deviceId,prepared}));
+    const keys=storage.localKeys(sponsorMaster,sodium);
+    const {resolveActivatedPolicyAuthority}=await import('../authority/chain.mjs');
+    const resolved=await resolveActivatedPolicyAuthority({storage,scope,pin:a.root.head,provider:a.provider,authorDevice:a.deviceId,LoroDoc,targetHead:policyHash,keys});
+    const runtime=new OfflineRuntime({storage,codec:sponsor.runtime.codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:'data',authority:{rootPin:a.root.head,provider:a.provider,activatedPolicy:{targetHead:policyHash,keys,resolved}}});
+    assert.ok(resolved.members.find(x=>x.recipeId===null).policySeed);
+    assert.ok(resolved.members.find(x=>x.recipeId===recipeId).policySeed);
+    assert.equal(resolved.members.find(x=>x.recipeId===added.id).policySeed,null);
+    for(const mutate of [publication=>{publication.documents[0].bytes[0]^=1},
+      publication=>{publication.documentSet.seeds[0].seed.identities=[]},
+      publication=>{publication.localKey.record.identity.deviceId='wrong'}]){
+     const view=Object.create(storage), get=storage.getProjectionPublication.bind(storage);
+     view.getProjectionPublication=async(...args)=>{const result=await get(...args);if(result.ok&&result.value){result.value=structuredClone(result.value);mutate(result.value)}return result};
+     await assert.rejects(()=>resolveActivatedPolicyAuthority({storage:view,scope,pin:a.root.head,provider:a.provider,authorDevice:a.deviceId,LoroDoc,targetHead:policyHash,keys}));
+    }
+    await runtime.document();
+    await (await runtime.forRecipe(recipeId)).document();
+    await (await runtime.forRecipe(added.id)).document();
+    const rootMember=resolved.members.find(x=>x.recipeId===null), childMember=resolved.members.find(x=>x.recipeId===recipeId);
+    const rootStored=must(await storage.reopenBranchDocument(resolved.expectedAuthority,rootMember.documentId));
+    const checkTarget=async bytes=>{
+     const view=Object.create(storage), reopen=storage.reopenBranchDocument.bind(storage);
+     view.reopenBranchDocument=async(authority,id)=>id===rootMember.documentId?{ok:true,value:{...rootStored,bytes}}:reopen(authority,id);
+     const probe=new OfflineRuntime({storage:view,codec:sponsor.runtime.codec,LoroDoc,decodeImportBlobMeta,scope:resolved.scope,keyRef:'data',authority:{rootPin:a.root.head,provider:a.provider,activatedPolicy:{targetHead:policyHash,keys,resolved}}});
+     await assert.rejects(()=>probe.document(),/UNVERIFIED_SEED/);
+    };
+    await checkTarget(childMember.policySeed.snapshot);
+    const changed=new LoroDoc();changed.import(rootStored.bytes);changed.setPeerId('999998');
+    const marker=Object.keys(changed.getMap('domain-effects').toJSON()).find(id=>changed.getMap('domain-effects').get(id)?.version===3);
+    assert.ok(marker);
+    changed.getMap('domain-effects').delete(marker);
+    await checkTarget(changed.export({mode:'snapshot'}));
+    const transaction=openSQLiteTransaction(connection), target=resolved.members.find(x=>x.recipeId===added.id).documentId;
+    const slot=JSON.stringify(['document',scope.id,target]);
+    const saved=await transaction(false,tx=>tx.get(slot));
+    const forged=new LoroDoc();forged.import(saved.bytes);forged.setPeerId('999999');
+    forged.getMap('domain-effects').set('forged',{version:3,seedId:'forged',effectId:'forged',commandId:'forged'});
+    await transaction(true,tx=>tx.put(slot,{revision:saved.revision+1,bytes:forged.export({mode:'snapshot'})}));
+    await assert.rejects(async()=>{await (await runtime.forRecipe(added.id)).document()},/UNVERIFIED_SEED/);
+    assert.deepEqual(a.rows(),sourceRows);
+   }finally{db.close()}
+  }
   const copyOptions={runtime:sponsor.runtime,service:sponsor.service,sodium,peerId:'31337',seedId:'copy-set-test'};
   const capturedCopy=await captureOwnDeviceCopySet(copyOptions);
   const forgottenHistory=observedInstalled.guard.members[0];

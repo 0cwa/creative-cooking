@@ -439,7 +439,7 @@ export async function resolveInstalledSetAuthority({storage,scope,pin,provider,a
 export async function resolveActivatedPolicyAuthority({storage,scope,pin,provider,authorDevice,LoroDoc,targetHead,keys}) {
  scope=copy(scope);
  const {readVerifiedActivatedPolicyDocumentSet}=await import('../app/read-activated-policy-document-set.mjs');
- const opened=await readVerifiedActivatedPolicyDocumentSet({storage,scope,pin,provider,deviceId:authorDevice,LoroDoc,targetHead,keys});
+ const opened=await readVerifiedActivatedPolicyDocumentSet({storage,scope,pin,provider,deviceId:authorDevice,LoroDoc,targetHead,keys,sodium});
  const {record,state,parent,item,selection,documents}=opened;
  if(state.activeHead!==targetHead || selection.index!==state.selections.length-1 || selection.to!==targetHead ||
     item.event.version!==6 || item.event.kind!=='changePolicy' || item.event.parentHead!==parent.head ||
@@ -448,7 +448,7 @@ export async function resolveActivatedPolicyAuthority({storage,scope,pin,provide
  selected.runtime.documentId=`policy-${targetHead}`;
  const resolved=runtimeAuthority(scope,record,state,selected,authorDevice);
  if(!same(record,await read(storage,scope)))throw Error('STALE_AUTHORITY');
- return {...resolved,members:documents.map(({recipeId,documentId,operationId,identity})=>({recipeId,documentId,operationId,identity}))};
+ return {...resolved,members:documents.map(({recipeId,documentId,operationId,identity,policySeed})=>({recipeId,documentId,operationId,identity,policySeed}))};
 }
 
 /** Persist explicit acceptance at the currently selected frozen parent. */

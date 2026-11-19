@@ -1,14 +1,15 @@
-import {authorityBytes,snapshotId} from '../authority/chain.mjs';
+import {authorityBytes,matchesInstalledSetAuthority,snapshotId} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {verifyRetainedPolicyBaseline} from '../authority/policy-baseline.mjs';
 import {verifyStagedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {policyTargetKeySlot} from './prepare-policy-document-keys.mjs';
+import defaultSodium from 'libsodium-wrappers';
 
 const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
 const same=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
 
 /** Authenticate a retained activation. The caller supplies an independent pin and local device. */
-export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys}) {
+export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pin,provider,scope,deviceId,targetHead,keys,sodium=defaultSodium}) {
  scope=structuredClone(scope);
  if(scope?.kind!=='household' || typeof deviceId!=='string') throw Error('INVALID_AUTHORITY');
  const loaded=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead);
@@ -36,6 +37,21 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
    selection.index!==parent.selections.length || !signer || typeof selection.signature!=='string' || !/^[a-f0-9]{128}$/.test(selection.signature)) throw Error('INVALID_SELECTION');
  const {signature,...body}=selection;
  if(!await provider.verify(signer.signingKeyRef,domain('select-head',{root:pin,householdId:scope.id,...body}),Uint8Array.from(signature.match(/../g),x=>parseInt(x,16)))) throw Error('INVALID_SELECTION');
+ // Only the admission selected at the authenticated source head can supply
+ // inherited seeds. Its receipt verifies the original snapshots independently.
+ const admission=parent.events.find(event=>event.admission?.manifest?.version===5 &&
+  event.admission.grant?.admissionEventHash===receipt.expected.acceptedParent);
+ let sourceSeeds=new Map();
+ if(admission){
+  const {readInstalledHouseholdDocumentSet}=await import('../pairing/household-document-set.mjs');
+  const installed=await readInstalledHouseholdDocumentSet({storage,LoroDoc,pin,scope,provider,operationId:admission.admission.operationId,sodium});
+  if(!matchesInstalledSetAuthority(receipt.expected,parent,installed.publication.nextAuthority) ||
+   !same(admission,installed.item) || installed.selection.to!==receipt.expected.acceptedParent ||
+   installed.publication.localKey.record.identity.deviceId!==deviceId) throw Error('INVALID_AUTHORITY');
+  const entries=installed.item.admission.manifest.entries;
+  sourceSeeds=new Map(installed.documents.map((document,i)=>[document.documentId,{recipeId:entries[i].recipeId??null,
+   seed:{snapshot:document.seed.snapshot,seed:{seedId:document.seed.seedId,identities:document.seed.identities}}}]));
+ }
  if(!Array.isArray(documents) || !Array.isArray(receipt.targets) || documents.length!==staged.mapping.length || receipt.targets.length!==staged.mapping.length) throw Error('INVALID_ACTIVATION');
  for(let i=0;i<documents.length;i++) {
   const row=staged.mapping[i],doc=documents[i],slot=await policyTargetKeySlot({scope:route,pin,provider,targetHead,row});
@@ -46,5 +62,7 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
  const again=await storage.readPairingAuthority(scope);
  if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
  return structuredClone({targetHead,sourceHead:staged.sourceHead,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
-  documents:documents.map(({documentId,revision},i)=>({recipeId:staged.mapping[i].recipeId,documentId,revision,...receipt.targets[i]}))});
+  documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
+   if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');
+   return {recipeId:row.recipeId,documentId,revision,...receipt.targets[i],policySeed:source?.seed??null};})});
 }
