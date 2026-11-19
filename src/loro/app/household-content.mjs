@@ -8,9 +8,10 @@ import {openSelectedRecipeCatalog,openShoppingRecipeCatalog,projectSelectedRecip
 export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,disclosure,originalRecipeDocuments=false,shoppingRecipeCopies=false}) {
  async function recipeRuntime(recipeId){
   if(recipeId===undefined)return runtime;
-  if(runtime.authority?.installedSet){
+  if(runtime.authority?.installedSet || runtime.authority?.activatedPolicy){
    const {members}=await runtime.authorization();
    if(members.some(member=>member.recipeId===recipeId))return runtime.forRecipe(recipeId);
+   if(runtime.authority.activatedPolicy)throw Error('INVALID_RECIPE_DOCUMENT');
    if(runtime.authority.recipeDelivery){
     const {children}=await openSelectedRecipeCatalog(runtime,recipeId);
     if(children.has(recipeId))return runtime.forRecipe(recipeId);
@@ -31,7 +32,7 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
    }
    const {doc}=await runtime.document();
    const cooking=projectCooking(doc);
-   if(!runtime.authority?.installedSet)return {...cooking,separateRecipeIds:[]};
+   if(!runtime.authority?.installedSet && !runtime.authority?.activatedPolicy)return {...cooking,separateRecipeIds:[]};
    const {members}=await runtime.authorization();
    const separateRecipeIds=[];
    for(const {recipeId} of members){
@@ -56,6 +57,7 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
    return {...await target.document(),scope:target.scope};
   }),
   execute:(actionId,commands,recipeId=undefined)=>{
+   if(runtime.authority?.activatedPolicy)throw Error('READ_ONLY_WORKSPACE');
    const input=structuredClone(commands);
    return withCurrent(async()=>{
     const target=await recipeRuntime(recipeId);
@@ -94,6 +96,7 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
    }
   })}:{}),
   createRecipe:(actionId,recipe,beforeNewCommit=/** @type {(() => void)|undefined} */(undefined))=>{
+   if(runtime.authority?.activatedPolicy)throw Error('READ_ONLY_WORKSPACE');
    const after=structuredClone(recipe);
    return withCurrent(async()=>{
     // The engine checks the stored document and root revision at publication.

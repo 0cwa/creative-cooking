@@ -6,6 +6,10 @@ import {projectCooking} from '../domain/app-projection.mjs';
 import {domain} from '../authority/validator.mjs';
 import {cookingDirect} from '../transport/cooking-direct.mjs';
 import {householdReceiverIds} from '../app/household-transfer.mjs';
+import {resolveOriginalHousehold,openWorkspaceHouseholdRuntime,activateStagedPolicyDocumentSet} from '../app/workspace-household-runtime.mjs';
+import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject} from '../authority/policy-document-set.mjs';
+import {stageVerifiedPolicyDocumentSet} from '../app/stage-policy-document-set.mjs';
+import {openSQLiteStorage} from '../storage/sqlite.ts';
 await sodium.ready;const dir=process.env.NATIVE_PROOF_DIR;if(!dir)throw Error('NATIVE_PROOF_DIR required');
 const masters=new Map();const keyname=(n,id)=>`${n}/${id}`;
 function openMaster(n){return {exists:async id=>masters.has(keyname(n,id)),ensure:async id=>{const k=keyname(n,id);if(!masters.has(k))masters.set(k,sodium.randombytes_buf(32))},provision:async id=>{const k=keyname(n,id);if(masters.has(k))throw Error('LOCKED');masters.set(k,sodium.randombytes_buf(32))},wrap:async(id,p,a)=>{const k=masters.get(keyname(n,id));if(!k)throw Error('LOCKED');const nonce=sodium.randombytes_buf(24);return new Uint8Array([...nonce,...sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(p,a,null,nonce,k)])},unwrap:async(id,p,a)=>{const k=masters.get(keyname(n,id));if(!k)throw Error('LOCKED');return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null,p.slice(24),a,p.slice(0,24),k)},close(){}}}
@@ -79,6 +83,63 @@ async function addPantry(workspace, id) {
  }]);
 }
 const pantry = async workspace => projectCooking((await workspace.household.document()).doc).pantry.map(item => item.name).sort();
+
+test('native startup reopens an activated original household read-only',async()=>{
+ const name='native-activated-original'; let workspace, captured;
+ const options={...args(name,true),openDirect:async input=>{captured=input;return null}};
+ try {
+  workspace=await openNativeWorkspaceWith(options);
+  await acceptPolicy(workspace);
+  await addPantry(workspace,'leek');
+  const recipe={id:'soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
+  await workspace.householdContent.createRecipe('create-soup',recipe);
+  await executeAction(workspace.personal,workspace.sequences,'personal-one',[{version:1,kind:'personal-preference-put',commandId:'personal-one',effectId:'personal-one',dependencyEffectIds:[],data:{key:'systemPrompt',value:'Stockholm'}}]);
+  const before=await workspace.householdContent.readCooking(), parentBundle=await workspace.householdPairing.exportParent();
+  const db=new DatabaseSync(join(dir,`${name}.sqlite`));
+  const master=openMaster(name), row=db.prepare('SELECT data FROM loro_bootstrap WHERE id=1').get();
+  const reservation=JSON.parse(new TextDecoder().decode(await master.unwrap('workspace-master',row.data,new TextEncoder().encode('creative-cooking/native-bootstrap/v1'))));
+  db.close();
+  const {runtime,provider}=captured,storage=runtime.storage,scope=scopeOf(workspace),pin=parentBundle.rootPin;
+  const originalRoot=await storage.reopenDocument(scope.id,runtime.scope.documentId);
+  const personalScope=workspace.personal.scope;
+  const originalPersonal=await storage.reopenDocument(personalScope.scopeId,personalScope.documentId);
+  const keys=storage.localKeys(master,sodium);await keys.unlock();
+  const signing={operationId:'device-signing',identity:{version:1,scope:{kind:'personal',id:reservation.personal},deviceId:reservation.device,purpose:'device-signing',epochId:reservation.personalEpoch},publicKey:workspace.householdPairing.identity.signingKey};
+  const original=await resolveOriginalHousehold({storage,scope,pin,provider,deviceId:workspace.deviceId,sodium,LoroDoc,paired:{keys}});
+  const source=await openWorkspaceHouseholdRuntime({storage,resolved:original.resolved,pin,provider,sodium,keys,signing,LoroDoc,decodeImportBlobMeta});
+  const full=await observePolicyDocumentSet(source);
+  const proof={storage,scope,pin,provider,LoroDoc,signed:full.signed,retained:full.sources.map(x=>({documentId:x.runtime.scope.documentId,revision:x.revision,bytes:x.bytes??new Uint8Array()}))};
+  const subject=await policyDocumentSetSubject(proof),parent=(await verifyPolicyDocumentSet(proof)).selected;
+  const event={version:6,kind:'changePolicy',authorDeviceId:workspace.deviceId,householdId:scope.id,parentHead:parent.head,epochId:parent.epochId,generation:parent.generation,subject,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',policyHash:parent.policyHash,proposalId:'native-policy',frozenAdultRoster:parent.roster,nextPolicy:parent.policy};
+  const targetHead=sodium.to_hex(await provider.hash(domain('event',event))),author=parent.devices.find(d=>d.deviceId===workspace.deviceId);
+  const sign=async(kind,value)=>sodium.to_hex(await provider.sign(author.signingKeyRef,domain(kind,value)));
+  const vote={version:1,householdId:scope.id,eventHash:targetHead,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,adultId:author.adultId,deviceId:workspace.deviceId};
+  const item={event,authorSignature:await sign('event-signature',event),approvals:[{...vote,signature:await sign('approval-signature',vote)}]};
+  await stageVerifiedPolicyDocumentSet({runtime:source,item,signed:full.signed});
+  const expected=(await storage.readPairingAuthority(scope)).value;
+  await activateStagedPolicyDocumentSet({runtime:source,expectedSourceHead:expected.acceptedParent,expectedSourceRevision:expected.revision,targetHead,service:workspace.disclosure,sodium,keys});
+  workspace.close();workspace=undefined;
+  workspace=await openNativeWorkspaceWith({...options,create:false});
+  assert.equal(workspace.readOnly,true);
+  assert.deepEqual(await workspace.householdContent.readCooking(),before);
+  assert.equal((await workspace.householdContent.readRecipe('soup')).doc.getMap('recipe:soup').get('title'),'Soup');
+  assert.equal((await workspace.personal.document()).doc.getMap('personal-preferences').get('systemPrompt'),'Stockholm');
+  const checkDb=openDatabase(name),checkStorage=openSQLiteStorage(checkDb);
+  try {
+   assert.deepEqual(await checkStorage.reopenDocument(scope.id,runtime.scope.documentId),originalRoot);
+   assert.deepEqual(await checkStorage.reopenDocument(personalScope.scopeId,personalScope.documentId),originalPersonal);
+  } finally {checkDb.close()}
+  await assert.rejects(()=>workspace.householdContent.readRecipe('unknown'),/INVALID_RECIPE_DOCUMENT/);
+  assert.throws(()=>workspace.householdContent.execute('no',[]),/READ_ONLY_WORKSPACE/);
+  await assert.rejects(()=>workspace.disclosure.active(),/READ_ONLY_WORKSPACE/);
+  await assert.rejects(()=>workspace.cookingFiles.list(),/READ_ONLY_WORKSPACE/);
+  workspace.close();workspace=undefined;
+  const damaged=new DatabaseSync(join(dir,`${name}.sqlite`));
+  try {damaged.prepare('DELETE FROM loro_records WHERE key=?').run(JSON.stringify(['policy-set-activation',scope.id,targetHead]));}
+  finally {damaged.close()}
+  await assert.rejects(()=>openNativeWorkspaceWith({...options,create:false}),/ACTIVATION_NOT_FOUND/);
+ } finally {workspace?.close();removeWorkspace(name);masters.delete(keyname(name,'workspace-master'))}
+});
 
 function directPair() {
  const channels = [new EventTarget(), new EventTarget()];

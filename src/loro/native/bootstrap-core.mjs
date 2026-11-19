@@ -12,6 +12,7 @@ import {localProvider} from '../app/local-provider.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
 import {householdPairing as bindHouseholdPairing} from '../app/household-pairing.mjs';
 import {bootstrapDisclosurePolicy} from '../app/bootstrap-policy.mjs';
+import {readOnlyPairing,unavailableInReadOnly} from '../app/read-only-services.mjs';
 import {subscribeActions} from '../app/action.mjs';
 import {cookingFiles} from '../app/cooking-file.mjs';
 import {openNativeHouseholdPersistence,returnToOriginalHousehold} from './household-persistence.mjs';
@@ -104,7 +105,8 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   joinedSequences=selected?.sequences;
   const activeScope=selected?.scope??{kind:'household',id:r.house},activePin=selected?.pin??root.head;
   const {resolved:house,installedSet}=selected??originalHouse;
-  const household=await openWorkspaceHouseholdRuntime({storage,resolved:house,installedSet,pin:activePin,provider,
+  const activatedPolicy=selected?undefined:originalHouse.activatedPolicy;
+  const household=await openWorkspaceHouseholdRuntime({storage,resolved:house,installedSet,activatedPolicy,pin:activePin,provider,
    sodium,keys,signing:{...signing,publicKey:signingRef},wrapping,LoroDoc,decodeImportBlobMeta});
   const disclosure=disclosureService({storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
    installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
@@ -112,7 +114,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const withCurrent=use=>selection.withCurrent(selectedId,use);
   const active=fn=>(...args)=>withCurrent(()=>fn(...args));
   const activeMethods=methods=>Object.fromEntries(Object.entries(methods).map(([name,fn])=>[name,active(fn)]));
-  const policyStatus=await withCurrent(()=>bootstrapDisclosurePolicy(storage,activeScope.id,disclosure));
+  const policyStatus=activatedPolicy?{needsSetup:false,needsRenewal:false}:await withCurrent(()=>bootstrapDisclosurePolicy(storage,activeScope.id,disclosure));
   const selectionControls={available:selection.available,select:selection.select,clear:selection.clear};
   const householdPairing=bindHouseholdPairing({
    name,sodium,storage,master,provider,store,scope:activeScope,pin:activePin,deviceId:r.device,adultId:house.adultId,
@@ -120,13 +122,13 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    wrappingPublicKey:sodium.to_hex(wrappingPublicKey),selection:selectionControls,selectedHousehold:!!selected,LoroDoc,
    prepareJoinedSequences,finalizeJoinedSequences,randomUUID,withCurrent,sha256
   });
-  const originalRecipeDocuments=!selected&&!installedSet;
+  const originalRecipeDocuments=!selected&&!installedSet&&!activatedPolicy;
   const shoppingRecipeCopies=!!installedSet||originalRecipeDocuments;
   const cooking=cookingFiles({runtime:household,service:disclosure,
    recipeCatalogVersion:installedSet||originalRecipeDocuments?1:null,allowRecipeSources:shoppingRecipeCopies});
   let direct;
   try {
-   direct=await openDirect?.({
+   direct=activatedPolicy?undefined:await openDirect?.({
     runtime:household,provider,cooking,assertSelected:()=>selection.assertCurrent(selectedId),
     withSelected:withCurrent
    });
@@ -140,11 +142,11 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    signing,wrapping,signingKey:signingRef,wrappingKey:sodium.to_hex(wrappingPublicKey),deviceId:r.device,
    original:originalPersonal,selected:selectedPersonal,selection:personalSelection.value,LoroDoc,randomUUID});
   const householdContent=bindHouseholdContent({runtime:household,withCurrent,sequences:joinedSequences??sequences,disclosure,originalRecipeDocuments,shoppingRecipeCopies});
-  const installedRecipeIds=installedSet?house.members.flatMap(member=>member.recipeId===null?[]:[member.recipeId]):undefined;
+  const installedRecipeIds=installedSet||activatedPolicy?house.members.flatMap(member=>member.recipeId===null?[]:[member.recipeId]):undefined;
   return {
    personalRotation:rotatePersonal,personalPairing:pairPersonal,
-   householdCompromise:householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)}),
-   householdLocalTrust:householdLocalTrust({runtime:household,withCurrent}),
+   householdCompromise:(activatedPolicy?unavailableInReadOnly: x=>x)(householdCompromise({runtime:household,withCurrent,sha256,randomUUID,randomBytes:size=>sodium.randombytes_buf(size)})),
+   householdLocalTrust:(activatedPolicy?unavailableInReadOnly: x=>x)(householdLocalTrust({runtime:household,withCurrent})),
    authorizeHousehold:active(()=>household.authorize()),
    household:{
     scope:structuredClone(household.scope),
@@ -152,9 +154,9 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
     listOutboundObjects:active(()=>storage.listOutboundObjects(activeScope.id)),
     subscribe:listener=>subscribeActions(household,listener)
    },
-   personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing,cookingFiles:activeMethods(cooking),direct,
+   personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing:activatedPolicy?readOnlyPairing(householdPairing):householdPairing,cookingFiles:activeMethods(activatedPolicy?unavailableInReadOnly(cooking):cooking),direct,
    householdContent,installedRecipeIds,executeHouseholdAction:householdContent.execute,
-   disclosure:activeMethods(disclosure),disclosureProvider:activeMethods(provider),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
+   disclosure:activeMethods(activatedPolicy?unavailableInReadOnly(disclosure):disclosure),disclosureProvider:activeMethods(provider),readOnly:!!activatedPolicy,needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
    sequences:{reserve:(scopeId,operationId)=>{
