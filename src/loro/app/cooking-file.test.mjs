@@ -1,3 +1,4 @@
+import {stageVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {observePolicyDocumentSet,verifyPolicyDocumentSet,policyDocumentSetSubject,matchPolicyDocumentSetEvent} from '../authority/policy-document-set.mjs';
 import {householdPairing} from './household-pairing.mjs';
 import {policyBaseline} from '../authority/policy-baseline.mjs';
@@ -705,6 +706,30 @@ test('selected recipe shopping copies and current-only admission survive durable
  assert.equal(subject.documentCount,3);
  assert.deepEqual(subject.baseline,full.signed.body.documents[0].baseline);
  await matchPolicyDocumentSetEvent(setOptions,policyEvent);
+ {
+ const parent=(await verifyFull()).selected;
+ const event={...policyEvent,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',policyHash:parent.policyHash,
+  proposalId:'policy-stage-test',frozenAdultRoster:parent.roster,nextPolicy:parent.policy};
+ const author=parent.devices.find(device=>device.deviceId===a.deviceId);
+ const eventHash=sodium.to_hex(await a.provider.hash(domain('event',event)));
+ const approvalBody={version:1,householdId:parent.householdId,eventHash,parentHead:parent.head,policyHash:parent.policyHash,
+  generation:parent.generation,epochId:parent.epochId,adultId:author.adultId,deviceId:a.deviceId};
+ const signPolicy=async (purpose,value)=>sodium.to_hex(await a.provider.sign(author.signingKeyRef,domain(purpose,value)));
+ const policyItem={event,authorSignature:await signPolicy('event-signature',event),approvals:[{...approvalBody,signature:await signPolicy('approval-signature',approvalBody)}]};
+ await assert.rejects(()=>stageVerifiedPolicyDocumentSet({runtime:a.runtime,item:{...policyItem,approvals:[]},signed:full.signed}),/QUORUM_REQUIRED/);
+ const altered=structuredClone(full.signed); altered.signature='0'.repeat(128);
+ await assert.rejects(()=>stageVerifiedPolicyDocumentSet({runtime:a.runtime,item:policyItem,signed:altered}),/INVALID_POLICY_DOCUMENT_SIGNATURE/);
+ const stalePolicy=structuredClone(full.signed); stalePolicy.body.observation.manifest.catalog.hash='0'.repeat(64);
+ await assert.rejects(()=>stageVerifiedPolicyDocumentSet({runtime:a.runtime,item:policyItem,signed:stalePolicy}),/STALE_SOURCE/);
+ const staged=await stageVerifiedPolicyDocumentSet({runtime:a.runtime,item:policyItem,signed:full.signed});
+ assert.equal(staged.targetHead,eventHash);
+ assert.deepEqual(staged.mapping.map(row=>row.recipeId),full.sources.map(source=>source.runtime.recipeId??null));
+ assert.equal(staged.mapping[0].targetDocumentId,`policy-${eventHash}`);
+ const savedStage=await a.storage.readStagedPolicyDocumentSet(scope.id,eventHash);
+ assert.equal(savedStage.ok,true); assert.deepEqual(savedStage.value.mapping,staged.mapping);
+ assert.equal((await verifyFull()).selected.head,parent.head);
+ }
+
  for(const change of [{version:3},{kind:'pairOwnDevice'},{authorDeviceId:'wrong'},{householdId:'wrong'},
   {parentHead:'wrong'},{epochId:'wrong'},{generation:setManifest.generation+1},
   {subject:{...subject,setHash:'0'.repeat(64)}},{subject:{...subject,documentCount:1}},
