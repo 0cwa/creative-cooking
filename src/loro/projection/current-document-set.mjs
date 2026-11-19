@@ -44,12 +44,16 @@ async function admissionEvent(parent,item,provider) {
 /** Structural association for authority replay. An install must additionally
  * authenticate the document bytes, provenance, ceremony and key packages. */
 export async function checkCurrentDocumentSetManifest({pin,parent,item,eventHash,manifest,provider}) {
+  return checkOrderedDocumentSetManifest({pin,parent,item,eventHash,manifest,provider,format:version,hashField:'admissionEventHash'});
+}
+
+async function checkOrderedDocumentSetManifest({pin,parent,item,eventHash,manifest,provider,format,hashField}) {
   const subject=item.event.subject;
-  if (!exact(manifest,['version','rootPin','householdId','parentHead','authorizationSnapshot','admissionEventHash',
+  if (!exact(manifest,['version','rootPin','householdId','parentHead','authorizationSnapshot',hashField,
     'newDocumentId','newEpochId','newGeneration','sourceSetHash','catalog','entries']) ||
-    manifest.version!==version || manifest.rootPin!==pin || manifest.householdId!==parent.householdId ||
+    manifest.version!==format || manifest.rootPin!==pin || manifest.householdId!==parent.householdId ||
     manifest.parentHead!==parent.head || !validDigest(manifest.authorizationSnapshot) ||
-    manifest.admissionEventHash!==eventHash || manifest.newDocumentId!==subject.documentId ||
+    manifest[hashField]!==eventHash || manifest.newDocumentId!==subject.documentId ||
     manifest.newEpochId!==subject.newEpochId || manifest.newGeneration!==subject.newGeneration ||
     !validDigest(manifest.sourceSetHash) || !exact(manifest.catalog,['sourceRevision','sourceHash','targetRevision','removed']) ||
     !validRevision(manifest.catalog.sourceRevision) || !validDigest(manifest.catalog.sourceHash) ||
@@ -66,12 +70,14 @@ export async function checkCurrentDocumentSetManifest({pin,parent,item,eventHash
   const target=documentScope(parent,subject.documentId,eventHash,subject.newEpochId,subject.newGeneration);
   const usedPeers=new Set([...Object.values(parent.runtime.authorPeers),...subject.devices.map(device=>device.peerId)]);
   const usedSeeds=new Set();
+  const usedDocuments=new Set();
   for (const [index,entry] of manifest.entries.entries()) {
     if (!exact(entry,['recipeId','sourceDocumentId','sourceRevision','sourceHash','documentId','snapshotHash','policyBundleHash','seedId','peerId']) ||
       !validDigest(entry.snapshotHash) || !validSeedId(entry.seedId) || !validPeerId(entry.peerId) ||
-      usedSeeds.has(entry.seedId) || usedPeers.has(entry.peerId)) throw Error('INVALID_DOCUMENT_SET');
+      usedSeeds.has(entry.seedId) || usedPeers.has(entry.peerId) || usedDocuments.has(entry.documentId)) throw Error('INVALID_DOCUMENT_SET');
     usedSeeds.add(entry.seedId);
     usedPeers.add(entry.peerId);
+    usedDocuments.add(entry.documentId);
     if (index===0) {
       if (entry.recipeId!==null || entry.sourceDocumentId!==parent.runtime.documentId || entry.documentId!==target.documentId ||
         !(entry.sourceRevision===null && entry.sourceHash===null && entry.policyBundleHash===null ||
@@ -202,6 +208,56 @@ export async function prepareAdultRemovalProjection({runtime,service,destination
   const unchanged=await runtime.storage.checkSelectedHouseholdSources(guard);
   if (!unchanged.ok) throw Error(unchanged.error.code);
   return {destination:structuredClone(destination),source:guard,sourceManifest:signed.manifest,...projected};
+}
+
+// This is proposal verification only. The parent and ancestry must be verified
+// independently by the caller; the result grants no publication authority.
+export async function verifyAdultRemovalDocumentSet({pin,parent,nodes,state,provider,item,manifest,documents,LoroDoc}) {
+  ({parent,nodes,state,item,manifest,documents}=structuredClone({parent,nodes,state,item,manifest,documents}));
+  if (!exact(item,['event','authorSignature','approvals']) || item.event?.version!==2 || item.event.kind!=='removeAdult') throw Error('INVALID_REMOVAL');
+  const checked=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
+  if (!['QUORUM_REQUIRED','ROTATION_DISTRIBUTION_REQUIRED'].includes(checked.reason)) throw Error(checked.reason ?? 'INVALID_REMOVAL');
+  if (state.activeHead!==parent.head || manifest?.authorizationSnapshot!==await selectedSourceHash(provider,'authority-state',state)) throw Error('INVALID_DOCUMENT_SET');
+  newRoot(parent,item.event,nodes);
+  await checkOrderedDocumentSetManifest({pin,parent,item,eventHash:checked.eventHash,manifest,provider,format:6,hashField:'removalEventHash'});
+  await verifyDocuments({manifest,documents,provider,pin,state,LoroDoc});
+  return {eventHash:checked.eventHash,manifestHash:await digestManifest(provider,manifest)};
+}
+
+/** Prepare a public complete-set proposal from authenticated current sources. */
+export async function prepareAdultRemovalDocumentSet({runtime,service,item,allocateSeed}) {
+  item=structuredClone(item);
+  const {provider,rootPin:pin}=runtime.authority;
+  const subject=item?.event?.subject;
+  const destination={parentHead:item?.event?.parentHead,documentId:subject?.documentId,
+    epochId:subject?.newEpochId,generation:subject?.newGeneration};
+  const captured=await prepareAdultRemovalProjection({runtime,service,destination,allocateSeed});
+  const {record,state,nodes}=await verifyPublicParent(runtime.storage,captured.source.expectedAuthority.scope,pin,provider);
+  const parent=nodes.get(state.activeHead);
+  if (!parent || parent.head!==destination.parentHead || record.authorizationSnapshot!==captured.sourceManifest.authorizationSnapshot) throw Error('SOURCE_CHANGED');
+  if (!exact(item,['event','authorSignature','approvals']) || item.event?.version!==2 || item.event.kind!=='removeAdult') throw Error('INVALID_REMOVAL');
+  const checked=await validateSuccessor(parent,item.event,item.authorSignature,item.approvals,provider);
+  if (!['QUORUM_REQUIRED','ROTATION_DISTRIBUTION_REQUIRED'].includes(checked.reason)) throw Error(checked.reason ?? 'INVALID_REMOVAL');
+  newRoot(parent,item.event,nodes);
+  const target=documentScope(parent,subject.documentId,checked.eventHash,subject.newEpochId,subject.newGeneration);
+  const source=captured.sourceManifest;
+  const manifest={version:6,rootPin:pin,householdId:parent.householdId,parentHead:parent.head,
+    authorizationSnapshot:record.authorizationSnapshot,removalEventHash:checked.eventHash,
+    newDocumentId:target.documentId,newEpochId:target.epochId,newGeneration:target.documentGeneration,
+    sourceSetHash:await selectedSourceHash(provider,'selected-household-source-set-v1',source),
+    catalog:{sourceRevision:source.catalog.revision,sourceHash:source.catalog.hash,
+      targetRevision:captured.documents.length-1,removed:captured.removed},entries:[]};
+  const documents=[];
+  for (const [index,entry] of captured.entries.entries()) {
+    const documentId=entry.recipeId===null?target.documentId:await recipeDocumentId(target,pin,provider,entry.recipeId);
+    const {seedId,peerId,snapshotHash,policyBundleHash,...sourceEntry}=entry;
+    manifest.entries.push({...sourceEntry,documentId,seedId,peerId,snapshotHash,policyBundleHash});
+    documents.push({documentId,...captured.documents[index]});
+  }
+  const result=await verifyAdultRemovalDocumentSet({pin,parent,nodes,state,provider,item,manifest,documents,LoroDoc:runtime.LoroDoc});
+  const unchanged=await runtime.storage.checkSelectedHouseholdSources(captured.source);
+  if (!unchanged.ok) throw Error(unchanged.error.code);
+  return {manifest,documents,source:captured.source,...result};
 }
 
 function checkSeedIdentities(seed,state,allEffects,allCommands) {

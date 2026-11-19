@@ -23,6 +23,8 @@ import {projectCooking} from '../domain/app-projection.mjs';
 import {localProvider} from './local-provider.mjs';
 import {commitCookingBatchWithPolicy} from '../disclosure/cooking.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
+import {prepareAdultRemovalDocumentSet,verifyAdultRemovalDocumentSet} from '../projection/current-document-set.mjs';
+import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 
 await sodium.ready;
 const scope={id:'rotation-home',kind:'household'};
@@ -326,6 +328,35 @@ const houseState=async(participant,pin)=>{
  const current=await readAuthority(participant.storage,scope,pin,participant.provider);
  return (await verifyAuthority(current.state,pin,participant.provider)).nodes.get(current.activeHead);
 };
+
+test('adult removal complete-set proposal binds its signed head and projected documents',async()=>{
+ await withRotationFixture({owners:{a:'alpha',b:'beta',c:'gamma'},policy:{kind:'fixed',fixedCount:2}},async([a,b],root,pin)=>{
+  const recipe=await a.runtime.forRecipe('soup');
+  recipe.disclosure=a.runtime.disclosure;
+  await apply(recipe,1,'recipe-create','soup-create',{recipe:{id:'soup',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:a.deviceId,at});
+  const draft=await a.service.prepare({targetAdultId:'gamma',bindings:[await b.service.binding()],explicit:true});
+  let allocation=0;
+  const prepared=await prepareAdultRemovalDocumentSet({runtime:a.runtime,service:a.runtime.disclosure,item:draft.proposal.item,
+   allocateSeed:()=>({seedId:`11111111-1111-4111-8111-${String(++allocation).padStart(12,'0')}`,peerId:String(900+allocation)})});
+  assert.deepEqual(prepared.manifest.entries.map(entry=>entry.recipeId),[null,'soup']);
+  const {state,nodes}=await verifyPublicParent(a.storage,scope,pin,a.provider);
+  const options={pin,parent:nodes.get(state.activeHead),nodes,state,provider:a.provider,item:draft.proposal.item,
+   manifest:prepared.manifest,documents:prepared.documents,LoroDoc};
+  assert.equal((await verifyAdultRemovalDocumentSet(options)).eventHash,prepared.eventHash);
+  const badHead=structuredClone(options.manifest); badHead.removalEventHash='0'.repeat(64);
+  await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,manifest:badHead}),/INVALID_DOCUMENT_SET/);
+  const badEvent=structuredClone(options.item); badEvent.event.proposalId='different-proposal';
+  await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,item:badEvent}),/INVALID_PROOF/);
+  const oldFormat=structuredClone(options.manifest); oldFormat.version=5;
+  await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,manifest:oldFormat}),/INVALID_DOCUMENT_SET/);
+  const missing=structuredClone(options.manifest); missing.entries.pop();
+  await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,manifest:missing}),/INVALID_DOCUMENT_SET/);
+  const swapped=structuredClone(options.manifest); swapped.entries.reverse();
+  await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,manifest:swapped}),/INVALID_DOCUMENT_SET/);
+  const altered=structuredClone(options.documents); altered[1].seed.snapshot[0]^=1;
+  await assert.rejects(()=>verifyAdultRemovalDocumentSet({...options,documents:altered}),/INVALID_DOCUMENT_SET/);
+ });
+});
 
 test('SQLite adult removal excludes all target devices and atomically rotates the approved live cooking',async()=>{
  await withRotationFixture({
