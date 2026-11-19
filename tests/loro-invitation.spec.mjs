@@ -538,8 +538,7 @@ async function routedRevocation({a,b,c,existingId,thirdId,thirdAdult,scope,publi
  const committedRows=await rows(a);
  expect(committedRows[authoritySlot].acceptedParent).toBe(parsed.grant.eventHash);
  await button(a,'Exchange encrypted cooking files').click();
- await uploadFile(a,'Choose encrypted cooking update',late);
- await expect(a.getByText(/^Update not applied: A workspace switch is already in progress/)).toBeVisible();
+ await expect(button(a,'Choose encrypted cooking update')).toBeDisabled();
  expect(await rows(a)).toEqual(committedRows);
  await button(a,'Refresh selected household branch').click();
  await expect(button(a,'Reopen rotated household')).toBeVisible();
