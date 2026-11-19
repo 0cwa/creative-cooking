@@ -241,7 +241,7 @@ test('retained policy activation authenticates signed history and local keys',as
  assert.deepEqual(must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead)).receipt.provenance,provenance);
  const args={storage:a.storage,LoroDoc,pin:a.root.head,provider:a.provider,scope,deviceId:a.deviceId,targetHead,keys};
  const before=a.rows(), verified=await readVerifiedActivatedPolicyDocumentSet(args);
- assert.equal(verified.documents.length,2); assert.deepEqual(a.rows(),before);
+ assert.equal(verified.documents.length,2); assert.deepEqual(verified.provenance,evidenceCapture.body.rows); assert.deepEqual(a.rows(),before);
  const {resolveActivatedPolicyAuthority,resolveRuntimeAuthority,policyId}=await import('../authority/chain.mjs');
  const resolve=overrides=>resolveActivatedPolicyAuthority({...args,authorDevice:a.deviceId,...overrides});
  const runtime=await resolve({});
@@ -277,6 +277,11 @@ test('retained policy activation authenticates signed history and local keys',as
 
  const evidence=must(await a.storage.readActivatedPolicyDocumentSet(scope.id,targetHead));
  const altered=async mutate=>{const copy=structuredClone(evidence);await mutate(copy);const storage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:copy}),readPairingAuthority:async()=>({ok:true,value:copy.receipt.next})});await assert.rejects(()=>readVerifiedActivatedPolicyDocumentSet({...args,storage}));await assert.rejects(()=>resolve({storage}));};
+ await altered(x=>{x.receipt.provenance.signature='0'.repeat(128)});
+ await altered(async x=>{const body=JSON.parse(new TextDecoder().decode(x.receipt.provenance.statement))[2];body.rows[0].sources.pop();body.rows[0].identities.pop();x.receipt.provenance.statement=domain('policy-provenance-receipt-v1',body);x.receipt.provenance.signature=await sign('policy-provenance-receipt-v1',body)});
+ const legacy=structuredClone(evidence);delete legacy.receipt.provenance;
+ const legacyStorage=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:legacy})});
+ assert.equal((await readVerifiedActivatedPolicyDocumentSet({...args,storage:legacyStorage})).provenance,null);
  await altered(x=>{x.receipt.next.authorityState[0]^=1});
  await altered(async x=>{const n=JSON.parse(new TextDecoder().decode(x.receipt.next.authorityState));n.selections.at(-1).signature='0'.repeat(128);x.receipt.next.authorityState=authorityBytes(n);x.receipt.next.authorizationSnapshot=await snapshotId(a.provider,n)});
  await altered(x=>{x.receipt.targets[1].identity.epochId='wrong'});

@@ -3,6 +3,9 @@ import {domain} from '../authority/validator.mjs';
 import {verifyRetainedPolicyBaseline} from '../authority/policy-baseline.mjs';
 import {verifyStagedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {policyTargetKeySlot} from './prepare-policy-document-keys.mjs';
+import {selectedSourceHash} from '../projection/selected-sources.mjs';
+import {inspectOwnDeviceSnapshot,verifyOwnDeviceDocumentCopy,exact} from '../pairing/household-own-device.mjs';
+import {MAX_SELECTED_SET_BYTES} from '../contracts/runtime-storage.ts';
 import defaultSodium from 'libsodium-wrappers';
 
 const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
@@ -59,10 +62,51 @@ export async function readVerifiedActivatedPolicyDocumentSet({storage,LoroDoc,pi
   await verifyRetainedPolicyBaseline(LoroDoc,doc,proof.signed.body.documents[i].baseline,provider);
   await keys.use(slot.operationId,slot.identity,()=>{});
  }
+ let provenance=null;
+ if(receipt.provenance!==undefined && receipt.provenance!==null) {
+  const attestation=receipt.provenance, bytes=attestation?.statement;
+  if(!exact(attestation,['statement','signature']) || !(bytes instanceof Uint8Array) || !bytes.length || bytes.length>MAX_SELECTED_SET_BYTES ||
+    typeof attestation.signature!=='string' || !/^[a-f0-9]{128}$/.test(attestation.signature)) throw Error('INVALID_PROVENANCE');
+  let envelope;
+  try {envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));} catch {throw Error('INVALID_PROVENANCE');}
+  const body=envelope?.[2];
+  if(!Array.isArray(envelope) || envelope.length!==3 || !exact(body,['version','scope','pin','deviceId','sourceHead','targetHead','sourceSnapshot','nextSnapshot','guardHash','stageProofHash','rows']) ||
+    !same(bytes,domain('policy-provenance-receipt-v1',body)) || body.version!==1 || !same(body.scope,scope) || body.pin!==pin || body.deviceId!==deviceId ||
+    body.sourceHead!==receipt.expected.acceptedParent || body.targetHead!==targetHead || body.sourceSnapshot!==receipt.expected.authorizationSnapshot ||
+    body.nextSnapshot!==receipt.next.authorizationSnapshot || !/^[a-f0-9]{64}$/.test(body.guardHash) ||
+    body.stageProofHash!==await selectedSourceHash(provider,'policy-provenance-stage-proof-v1',staged.proof) ||
+    !Array.isArray(body.rows) || body.rows.length!==staged.mapping.length ||
+    !await provider.verify(signer.signingKeyRef,bytes,Uint8Array.from(attestation.signature.match(/../g),x=>parseInt(x,16)))) throw Error('INVALID_PROVENANCE');
+  const effects=new Set(), commands=new Set();
+  for(const [i,row] of body.rows.entries()) {
+   const mapping=staged.mapping[i], inherited=sourceSeeds.get(mapping.sourceDocumentId);
+   if(!exact(row,['recipeId','sourceDocumentId','targetDocumentId','baseline','identities','sources','policies']) ||
+     row.recipeId!==mapping.recipeId || row.sourceDocumentId!==mapping.sourceDocumentId || row.targetDocumentId!==mapping.targetDocumentId ||
+     !same(row.baseline,proof.signed.body.documents[i].baseline) || (inherited && inherited.recipeId!==mapping.recipeId) ||
+     !Array.isArray(row.sources) || row.sources.some(source=>!exact(source,['effectId','policyHashes','incomplete']) || source.incomplete!==true)) throw Error('INVALID_PROVENANCE');
+   const seed=inherited?.seed.seed??{seedId:'empty',identities:[]}, seedSnapshot=inherited?.seed.snapshot??null;
+   const snapshot=mapping.baseline;
+   const {identities}=inspectOwnDeviceSnapshot({LoroDoc,snapshot,seed,seedSnapshot});
+   const checked=await verifyOwnDeviceDocumentCopy({sodium,provider,LoroDoc,copy:{snapshot,seed,seedSnapshot,
+    sources:row.sources.map(({incomplete,...source})=>source),policies:row.policies},pin,parentState:parent,authorDevice:deviceId,householdId:scope.id,baseline:row.baseline});
+   const records=new Map(row.policies.map(record=>[record.policyHash,record]));
+   const reachable=new Set();
+   for(const source of row.sources) for(const hash of source.policyHashes) for(let current=hash;current && !reachable.has(current);) {
+    const record=records.get(current); if(!record) throw Error('INVALID_PROVENANCE');
+    reachable.add(current); current=record.policy.predecessor;
+   }
+   if(reachable.size!==records.size || !same(identities,row.identities) || !same(checked,identities)) throw Error('INVALID_PROVENANCE');
+   for(const identity of identities) {
+    if(effects.has(identity.effectId)||commands.has(identity.commandId)) throw Error('INVALID_PROVENANCE');
+    effects.add(identity.effectId); commands.add(identity.commandId);
+   }
+  }
+  provenance=body.rows;
+ }
  const again=await storage.readPairingAuthority(scope);
  if(!again.ok || !same(again.value,receipt.next)) throw Error('STALE_SOURCE');
  return structuredClone({targetHead,sourceHead:staged.sourceHead,record:receipt.next,state:next,parent:proof.parent,item:proof.item,selection,
-  documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
+  provenance,documents:documents.map(({documentId,revision},i)=>{const row=staged.mapping[i],source=sourceSeeds.get(row.sourceDocumentId);
    if(source && source.recipeId!==row.recipeId)throw Error('INVALID_AUTHORITY');
    return {recipeId:row.recipeId,documentId,revision,...receipt.targets[i],policySeed:source?.seed??null};})});
 }
