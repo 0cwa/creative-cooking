@@ -89,6 +89,23 @@ export async function resolveOriginalHousehold({storage,scope,pin,provider,devic
   let state;
   try{state=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw.value.authorityState));}
   catch{throw error;}
+  // The record and its events only locate a candidate; the retained activation
+  // verifier authenticates the selection and all document keys independently.
+  const targetHead=raw.value.acceptedParent;
+  const retained=await storage.readActivatedPolicyDocumentSet(scope.id,targetHead);
+  if(!retained.ok)throw Error(retained.error.code);
+  let selectedV6=false;
+  for(const item of state.events??[]){
+   if(item.event?.version!==6 || item.event?.kind!=='changePolicy')continue;
+   const hash=await provider.hash(domain('event',item.event));
+   if(hash instanceof Uint8Array && Array.from(hash,x=>x.toString(16).padStart(2,'0')).join('')===targetHead)selectedV6=true;
+  }
+  if(retained.value || selectedV6){
+   if(!paired?.keys)throw Error('INVALID_AUTHORITY');
+   const activatedPolicy={targetHead};
+   const resolved=await resolveActivatedPolicyAuthority({storage,scope,pin,provider,authorDevice:deviceId,LoroDoc,targetHead,keys:paired.keys});
+   return {resolved,installedSet:null,activatedPolicy};
+  }
   const pairedOperation=await selectedOwnDeviceSet(raw.value,state,provider);
   if(pairedOperation){
    if(!paired)throw error;

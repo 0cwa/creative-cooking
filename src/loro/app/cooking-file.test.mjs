@@ -267,6 +267,12 @@ test('retained policy activation authenticates signed history and local keys',as
  const {resolveActivatedPolicyAuthority}=await import('../authority/chain.mjs');
  const resolve=overrides=>resolveActivatedPolicyAuthority({...args,authorDevice:a.deviceId,...overrides});
  const runtime=await resolve({});
+ const reopenedOriginal=await resolveOriginalHousehold({storage:a.storage,scope,pin:a.root.head,provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys}});
+ assert.deepEqual(reopenedOriginal.resolved,runtime);
+ assert.deepEqual(reopenedOriginal.activatedPolicy,{targetHead});
+ await assert.rejects(()=>resolveOriginalHousehold({storage:a.storage,scope,pin:a.root.head,provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc}));
+ const missingReceipt=Object.assign(Object.create(a.storage),{readActivatedPolicyDocumentSet:async()=>({ok:true,value:null})});
+ await assert.rejects(()=>resolveOriginalHousehold({storage:missingReceipt,scope,pin:a.root.head,provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys}}));
  assert.equal(runtime.scope.branchHead,targetHead);
  assert.equal(runtime.scope.documentId,`policy-${targetHead}`);
  assert.deepEqual(runtime.scope.policyHashes,[await policyId(a.provider,event.nextPolicy)]);
