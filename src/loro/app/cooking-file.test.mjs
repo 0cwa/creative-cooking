@@ -344,6 +344,14 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const {verifyDraftRotationGrant}=await import('../compromise/draft-rotation-grant.mjs');
  const verifyArgs={provider:a.provider,pin:a.root.head,parent:rotationParent,nodes:rotationNodes,state:rotationState,item,grant,manifest:candidate.manifest,recipientBindings};
  assert.equal((await verifyDraftRotationGrant(verifyArgs)).complete,true);
+ const {authorDraftRotationSuccessor,verifyDraftRotationSuccessor}=await import('../compromise/draft-rotation-successor.mjs');
+ const successorOptions={...verifyArgs,record:rotationRecord,documents:candidate.documents,LoroDoc,deviceId:a.deviceId,signingKey:survivor.signingKeyRef};
+ const successor=await authorDraftRotationSuccessor(successorOptions);
+ assert.deepEqual(successor.child.roster,rotationParent.roster);
+ assert.deepEqual(successor.child.devices.filter(d=>!d.active).map(d=>d.deviceId),rotationParent.devices.filter(d=>!d.active||d.deviceId===b.deviceId).map(d=>d.deviceId));
+ assert.equal(successor.record.acceptedParent,eventHash);
+ await assert.rejects(()=>verifyDraftRotationSuccessor({...successorOptions,candidate:{...successor,child:{...successor.child,roster:[]}}}),/INVALID_SUCCESSOR/);
+
  const {sealDraftRotationFile,withOpenedDraftRotationFile}=await import('../pairing/draft-rotation-file.mjs');
  const codec={...verifyArgs,sodium,LoroDoc,documents:candidate.documents,recipientId:c.deviceId};
  const dataKeys=[sodium.randombytes_buf(32),sodium.randombytes_buf(32)];
