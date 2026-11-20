@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
-import { Alert, Animated, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, Modal, PanResponder, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import type { ChatConversation } from '@/domain/types';
 
 function metaText(conversation: ChatConversation): string {

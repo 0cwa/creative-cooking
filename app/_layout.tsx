@@ -16,6 +16,7 @@ import { InstallAppPrompt } from '@/components/InstallAppPrompt';
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
 import { requestPersistentStorageOnce } from '@/storage/persistence';
+import { useAppTheme } from '@/theme/theme';
 
 function StorageFailureAlert() {
   const { storageError, storageMode } = useAppState();
@@ -107,6 +108,30 @@ function readPendingWebChoice(mode: string) {
     record.version !== 1 || typeof record.name !== 'string' ||
     !/^cooking-[a-f0-9-]{36}$/.test(record.name) || !validAdmissionPolicy(record.policy,1)) throw Error('Invalid pending workspace');
   return {name:record.name as string,policy:initialAdmissionPolicy(record.policy)};
+}
+
+function AppShell() {
+  const theme = useAppTheme();
+
+  return (
+    <>
+      <BootTasks />
+      <StorageFailureAlert />
+      <StatusBar style={theme.scheme === 'dark' ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: theme.colors.background }
+        }}
+      >
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="settings" />
+        <Stack.Screen name="shopping" />
+      </Stack>
+      <InstallAppPrompt />
+      <FirstOpenLoadingAnimation />
+    </>
+  );
 }
 
 export default function RootLayout() {
@@ -226,16 +251,7 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AppStateProvider key={choice} localWorkspace={workspace}>
-        <BootTasks />
-        <StorageFailureAlert />
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="settings" />
-          <Stack.Screen name="shopping" />
-        </Stack>
-        <InstallAppPrompt />
-        <FirstOpenLoadingAnimation />
+        <AppShell />
       </AppStateProvider>
     </SafeAreaProvider>
   );

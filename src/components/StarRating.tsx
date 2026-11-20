@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import type { IngredientPreference } from '@/domain/types';
 
 export function StarRating({ value, onChange }: { value: IngredientPreference; onChange(value: IngredientPreference): void }) {

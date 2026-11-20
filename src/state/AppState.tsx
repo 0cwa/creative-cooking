@@ -20,7 +20,7 @@ import {
   type NewShoppingList
 } from '@/domain/shopping';
 import { preserveRecipeStepIds } from '@/domain/recipeEditing';
-import { isDictationEngine, isProviderId } from '@/domain/types';
+import { isDictationEngine, isProviderId, isThemePreference } from '@/domain/types';
 import type {
   AppSettings,
   ChatMessage,
@@ -58,6 +58,9 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
   const dictationEngine = isDictationEngine(saved.settings?.dictationEngine)
     ? saved.settings.dictationEngine
     : DEFAULT_STATE.settings.dictationEngine;
+  const theme = isThemePreference(saved.settings?.theme)
+    ? saved.settings.theme
+    : DEFAULT_STATE.settings.theme;
   const chatMessages = Array.isArray(saved.chatMessages) ? saved.chatMessages : [];
   const chatHistory = Array.isArray(saved.chatHistory) ? saved.chatHistory : [];
   const activeConversationId = typeof saved.activeConversationId === 'string'
@@ -81,6 +84,7 @@ function mergeState(saved: Partial<PersistedState> | null): PersistedState {
       providerId,
       model,
       dictationEngine,
+      theme,
       systemPrompt: migrateLegacySystemPrompt(saved.settings?.systemPrompt)
     }
   };

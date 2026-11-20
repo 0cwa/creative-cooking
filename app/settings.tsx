@@ -20,12 +20,14 @@ import { PersonalAuthority } from '@/loro/app/PersonalAuthority';
 import { RecoveryReminder } from '@/loro/app/RecoveryReminder';
 import { LoroWorkspaceStatus } from '@/loro/app/WorkspaceStatus';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Share, Switch, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
+import { useAppTheme } from '@/theme/theme';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/components/Screen';
 import { DEFAULT_SYSTEM_PROMPT } from '@/domain/defaults';
-import type { DictationEngine, ProviderId } from '@/domain/types';
+import { THEME_PREFERENCES, type DictationEngine, type ProviderId } from '@/domain/types';
 import { beginOpenRouterOAuth } from '@/llm/openrouter/oauth';
 import { createOpenRouterShareLink } from '@/llm/openrouter/share';
 import { CLOUD_PROVIDER_IDS, modelCapabilities, providerMetadata } from '@/llm/registry';
@@ -71,6 +73,7 @@ function supportLabel(value: boolean | 'unknown'): string {
 }
 
 export default function SettingsScreen() {
+  useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ focus?: string }>();
   const app = useAppState();
@@ -414,7 +417,7 @@ export default function SettingsScreen() {
       <ScrollView ref={settingsScrollRef} contentContainerStyle={styles.content}>
         <Section title="Allergies" subtitle="These are hard constraints and are sent with meal requests.">
           <View style={styles.inline}>
-            <TextInput accessibilityLabel="Add allergies" value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor="#94a3b8" style={styles.input} />
+            <TextInput accessibilityLabel="Add allergies" value={allergyInput} onChangeText={setAllergyInput} onSubmitEditing={addAllergies} placeholder="e.g. peanuts, shellfish" placeholderTextColor={themeColor('#94a3b8')} style={styles.input} />
             <Pressable accessibilityRole="button" accessibilityLabel="Add allergies" onPress={addAllergies} style={styles.smallButton}><Text style={styles.smallButtonText}>Add</Text></Pressable>
           </View>
           <View style={styles.tags}>
@@ -435,8 +438,40 @@ export default function SettingsScreen() {
             <Switch accessibilityLabel="Send local time and time zone" value={app.settings.sendLocalTime} onValueChange={(sendLocalTime) => app.updateSettings({ sendLocalTime })} />
           </View>
           <Text style={styles.label}>City</Text>
-          <TextInput accessibilityLabel="City" value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor="#94a3b8" style={styles.input} />
+          <TextInput accessibilityLabel="City" value={app.settings.city} onChangeText={(city) => app.updateSettings({ city })} placeholder="e.g. Stockholm" placeholderTextColor={themeColor('#94a3b8')} style={styles.input} />
           <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
+        </Section>
+
+        <Section title="Appearance" subtitle="Choose how Creative Cooking looks. System follows your device and updates automatically.">
+          <View style={styles.providerGrid}>
+            {THEME_PREFERENCES.map((theme) => {
+              const label = theme === 'system' ? 'System' : theme === 'light' ? 'Light' : 'Dark';
+              const accessibilityLabel = theme === 'system'
+                ? 'Follow system theme'
+                : theme === 'light'
+                  ? 'Use light theme'
+                  : 'Use dark theme';
+              return (
+                <Pressable
+                  key={theme}
+                  accessibilityRole="radio"
+                  accessibilityLabel={accessibilityLabel}
+                  accessibilityState={{ checked: app.settings.theme === theme }}
+                  aria-checked={app.settings.theme === theme}
+                  onPress={() => app.updateSettings({ theme })}
+                  style={[
+                    styles.providerButton,
+                    app.settings.theme === theme && styles.providerButtonActive
+                  ]}
+                >
+                  <Text style={[
+                    styles.providerButtonText,
+                    app.settings.theme === theme && styles.providerButtonTextActive
+                  ]}>{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </Section>
 
         <Section title="Cooking workspace" subtitle="Cooking data is saved on this device. Use verified household pairing to exchange encrypted updates.">
@@ -525,7 +560,7 @@ export default function SettingsScreen() {
               value={apiKey}
               onChangeText={setApiKey}
               placeholder="API key"
-              placeholderTextColor="#94a3b8"
+              placeholderTextColor={themeColor('#94a3b8')}
               autoCapitalize="none"
               autoCorrect={false}
               style={styles.input}

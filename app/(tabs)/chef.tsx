@@ -1,7 +1,9 @@
+import {useAppTheme} from '@/theme/theme';
 import { SharedChefRequest } from '@/loro/app/SharedChefRequest';
 import { allowsFreshLocalInference } from '@/loro/app/inference-gate.mjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { ConversationHistoryModal } from '@/components/ConversationHistoryModal';
@@ -90,6 +92,7 @@ function isDictationActive(status: DictationStatus): boolean {
 }
 
 export default function ChefScreen() {
+  useAppTheme();
   const router = useRouter();
   const app = useAppState();
   const [input, setInput] = useState('');
@@ -533,7 +536,7 @@ export default function ChefScreen() {
               value={input}
               onChangeText={setInput}
               placeholder={app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Write a private message…' : 'Type or dictate to Chef…'}
-              placeholderTextColor="#94a3b8"
+              placeholderTextColor={themeColor('#94a3b8')}
               style={[styles.composer, dictationActive && styles.composerDictating]}
               multiline
               onSubmitEditing={() => {
