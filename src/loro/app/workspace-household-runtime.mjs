@@ -17,7 +17,7 @@ import {preparePolicyDocumentKeys} from './prepare-policy-document-keys.mjs';
 import {readVerifiedPolicyDocumentSet} from './stage-policy-document-set.mjs';
 import {readVerifiedActivatedPolicyDocumentSet,readPolicyReturnActivationEvidence} from './read-activated-policy-document-set.mjs';
 import {readRecipeCatalog} from './selected-recipe-catalog.mjs';
-import {discoverSelectedAdultRemoval} from './adult-removal-discovery.mjs';
+import {discoverSelectedAdultRemoval,discoverSelectedDraftRotation} from './adult-removal-discovery.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 import {unsupportedPolicySource} from '../authority/policy-document-set.mjs';
 
@@ -194,6 +194,16 @@ export async function resolveOriginalHousehold({storage,scope,pin,provider,devic
  if(!initial.ok)throw Error(initial.error.code??initial.error);
  if(initial.value){
   const raw=initial.value;
+  const draftCandidate=await discoverSelectedDraftRotation(raw,provider);
+  if(draftCandidate){
+   if(!paired?.keys)throw Error('INVALID_AUTHORITY');
+   const {operationId,authorDeviceId}=draftCandidate,role=authorDeviceId===deviceId?'sponsor':'recipient';
+   const draftRotation={operationId,role,withWrapping:paired.useWrapping};
+   const resolved=await resolveDraftRotationRuntimeAuthority({storage,scope,pin,provider,authorDevice:deviceId,sodium,LoroDoc,keys:paired.keys,...draftRotation});
+   const current=await storage.readPairingAuthority(scope);
+   if(!current.ok||!sameRemoval(current.value,raw))throw Error('STALE_AUTHORITY');
+   return {resolved,installedSet:null,draftRotation};
+  }
   const candidate=await discoverSelectedAdultRemoval(raw,provider);
   if(candidate){
    if(!paired?.keys)throw Error('INVALID_AUTHORITY');

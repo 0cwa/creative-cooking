@@ -110,8 +110,9 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const activatedPolicy=selected?.activatedPolicy??(!selected?originalHouse.activatedPolicy:undefined);
   const returnedPolicy=!selected?originalHouse.returnedPolicy:undefined;
   const adultRemoval=selected?.adultRemoval??(!selected?originalHouse.adultRemoval:undefined);
-  const readOnlyPolicy=activatedPolicy||returnedPolicy||adultRemoval;
-  const householdRuntime=await openWorkspaceHouseholdRuntime({storage:db.storage,resolved:house,installedSet,activatedPolicy,returnedPolicy,adultRemoval,
+  const draftRotation=!selected?originalHouse.draftRotation:undefined;
+  const readOnlyPolicy=activatedPolicy||returnedPolicy||adultRemoval||draftRotation;
+  const householdRuntime=await openWorkspaceHouseholdRuntime({storage:db.storage,resolved:house,installedSet,activatedPolicy,returnedPolicy,adultRemoval,draftRotation,
    pin:activePin,provider,sodium,keys,signing:{...signing,publicKey:signingRef},wrapping,LoroDoc,decodeImportBlobMeta});
   const disclosure=disclosureService({storage:db.storage,scope:activeScope,rootPin:activePin,provider,deviceId:r.device,
    installedSet:installedSet?{...installedSet,sodium,LoroDoc}:null});
@@ -144,10 +145,10 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const withCurrent = <T,>(use:(revision:number)=>Promise<T>)=>selection.withCurrent(selectedId,use);
   const workspaceSequences={reserve:(scopeId:string,operationId:string)=>{
    if(scopeId===selectedPersonal.scopeId)return sequences!.reserve(r.personal,operationId);
-   if(adultRemoval)throw Error('READ_ONLY_WORKSPACE');
+   if(adultRemoval||draftRotation)throw Error('READ_ONLY_WORKSPACE');
    return selected&&scopeId===activeScope.id?joinedSequences.reserve(scopeId,operationId):sequences!.reserve(scopeId,operationId);
   }};
-  const policyBranches=await bindPolicyBranches({runtime:householdRuntime,keys,service:disclosure,sodium,withCurrent,eligible:!selected&&!installedSet&&!returnedPolicy&&!adultRemoval,activated:!!activatedPolicy});
+  const policyBranches=await bindPolicyBranches({runtime:householdRuntime,keys,service:disclosure,sodium,withCurrent,eligible:!selected&&!installedSet&&!returnedPolicy&&!adultRemoval&&!draftRotation,activated:!!activatedPolicy});
   const installedRecipeIds=installedSet||readOnlyPolicy?house.members.flatMap((member:{recipeId:string|null})=>member.recipeId===null?[]:[member.recipeId]):undefined;
   const householdContent=bindHouseholdContent({runtime:householdRuntime,withCurrent,sequences:workspaceSequences,disclosure,originalRecipeDocuments,shoppingRecipeCopies});
   return {policyBranches,recovery,recoveryImport,guardians,personalRotation:rotatePersonal,personalPairing:pairPersonal,householdPairing:readOnlyPolicy?readOnlyPairing(householdPairing,adultRemoval):householdPairing,householdCompromise:(readOnlyPolicy?unavailableInReadOnly:(x:any)=>x)(householdCompromise({runtime:householdRuntime,withCurrent})),householdLocalTrust:(readOnlyPolicy?unavailableInReadOnly:(x:any)=>x)(householdLocalTrust({runtime:householdRuntime,withCurrent})),authorizeHousehold:()=>selection.withCurrent(selectedId,()=>householdRuntime.authorize()),cookingFiles:readOnlyPolicy?unavailableInReadOnly(cooking):cooking,direct,household:householdRuntime,personal:runtime(personal,'personal',selectedPersonal.pin),disclosure:readOnlyPolicy?unavailableInReadOnly(disclosure):disclosure,disclosureProvider:provider,readOnly:!!readOnlyPolicy,adultRemovalAccess:adultRemovalWorkspaceAccess({adultRemoval,readOnly:!!readOnlyPolicy,installedSet}),needsDisclosureSetup:!selected&&bootstrapPolicy.needsSetup,needsDisclosureRenewal:bootstrapPolicy.needsRenewal||!!selected&&bootstrapPolicy.needsSetup,deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),sequences:workspaceSequences,householdContent,installedRecipeIds,close:()=>{joinedSequences?.close();householdPins?.close();ceremonyStore?.close();for(const store of guardianTrustStores)store.close();sequences?.close();db.close();master.close();meta.close()}};

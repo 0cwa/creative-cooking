@@ -616,6 +616,24 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const recipientMount={storage:c.storage,keys:recipientKeys,deviceId:c.deviceId,role:'recipient',
   signing:{publicKey:other.signingKeyRef,operationId:'unused-recipient-signing'},
   withWrapping:async use=>{wrappingReads++;return use(otherWrap.privateKey);}};
+ const reconnected=openSQLiteStorage({executeSync(sql,params=[]){
+  const statement=publishedDb.prepare(sql);
+  return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+ }});
+ const discoveryArgs={storage:reconnected,scope,pin:a.root.head,provider:a.provider,deviceId:a.deviceId,sodium,LoroDoc,paired:{keys:publisherKeys}};
+ const discovered=await resolveOriginalHousehold(discoveryArgs);
+ assert.equal(discovered.draftRotation.role,'sponsor');
+ const discoveredMount=await openWorkspaceHouseholdRuntime({...discovered,storage:reconnected,pin:a.root.head,provider:a.provider,sodium,keys:publisherKeys,signing:sponsorMount.signing,LoroDoc,decodeImportBlobMeta});
+ assert.deepEqual((await bindHouseholdContent({runtime:discoveredMount}).readCooking()).pantry.map(item=>item.name),['Beans']);
+ assert.throws(()=>bindHouseholdContent({runtime:discoveredMount}).createRecipe('blocked',{}),/READ_ONLY_WORKSPACE/);
+ await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,paired:{keys:{use:async()=>{throw Error('missing key')}}}}));
+ const noReceipt=Object.assign(Object.create(reconnected),{readDraftRotationPublication:async()=>({ok:true,value:null})});
+ await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,storage:noReceipt}));
+ const tamperedReceipt=Object.assign(Object.create(reconnected),{readDraftRotationPublication:async (...args)=>{const result=await reconnected.readDraftRotationPublication(...args);result.value.proof[0]^=1;return result;}});
+ await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,storage:tamperedReceipt}));
+ const wrongHead=Object.assign(Object.create(reconnected),{readPairingAuthority:async (...args)=>{const result=await reconnected.readPairingAuthority(...args);const state=JSON.parse(new TextDecoder().decode(result.value.authorityState));state.activeHead='0'.repeat(64);result.value.authorityState=new TextEncoder().encode(JSON.stringify(state));return result;}});
+ await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,storage:wrongHead}));
+ await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,deviceId:'wrong'}));
  const mountedSponsor=await mountRotation(sponsorMount),mountedRecipient=await mountRotation(recipientMount);
  for(const mounted of [mountedSponsor,mountedRecipient]){
   const content=bindHouseholdContent({runtime:mounted});
