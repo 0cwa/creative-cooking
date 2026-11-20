@@ -341,6 +341,45 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const recipient={version:1,scopeId:rotationParent.householdId,parentHead:rotationParent.head,deviceId:a.deviceId,wrappingKey:sodium.to_hex(wrap.publicKey)};
  const otherRecipient={...recipient,deviceId:c.deviceId,wrappingKey:sodium.to_hex(otherWrap.publicKey)};
  const recipientBindings=[{...recipient,signature:signRotation('revocation-recipient',recipient)},{...otherRecipient,signature:sodium.to_hex(sodium.crypto_sign_detached(domain('revocation-recipient',otherRecipient),c.signingTestKey.privateKey))}];
+ let selectedForRotation=true;
+ const draftService=(peer,runtime,wrappingKey)=>householdPairing({
+  runtime,storage:runtime.storage,scope,pin:a.root.head,provider:runtime.authority.provider,sodium,LoroDoc,deviceId:peer.deviceId,
+  adultId:'adult',signingKey:sodium.to_hex(peer.signingTestKey.publicKey),wrappingPublicKey:wrappingKey,
+  withCurrent:use=>{if(!selectedForRotation)throw Error('HOUSEHOLD_SELECTION_CHANGED');return use();}
+ }).draftRotation;
+ const draftSponsor=draftService(a,reopenedRuntime,recipient.wrappingKey);
+ const draftApprover=draftService(c,c.runtime,otherRecipient.wrappingKey);
+ const localAgreement={version:1,householdId:scope.id,parentHead:rotationParent.head,policyHash:rotationParent.policyHash,
+  roster:rotationParent.roster,delegation:'currentCooking',sourcePolicyHashes:[rotationParent.policyHash]};
+ const acceptance={adultId:other.adultId,deviceId:c.deviceId};
+ await acceptAdmissionAgreement(c.storage,scope,a.root.head,c.provider,{...localAgreement,
+  acceptances:[{...acceptance,signature:sodium.to_hex(sodium.crypto_sign_detached(
+   domain('admission-agreement-acceptance',{agreement:localAgreement,...acceptance}),c.signingTestKey.privateKey))}]});
+ assert.notEqual(must(await c.storage.readPairingAuthority(scope)).authorizationSnapshot,rotationRecord.authorizationSnapshot);
+ const draftBinding=await draftApprover.binding();
+ assert.deepEqual(draftBinding,recipientBindings[1]);
+ await assert.rejects(()=>draftSponsor.prepare({draftId:saved.draftId,bindings:[],explicit:true}),/RECIPIENT_BINDINGS_REQUIRED/);
+ const revokedBinding=await draftService(b,b.runtime,sodium.to_hex(sodium.crypto_box_keypair().publicKey)).binding();
+ await assert.rejects(()=>draftSponsor.prepare({draftId:saved.draftId,bindings:[draftBinding,revokedBinding],explicit:true}),/INVALID_RECIPIENT/);
+ const preparedDraft=await draftSponsor.prepare({draftId:saved.draftId,bindings:[draftBinding],explicit:true});
+ const reviewInput={proposal:preparedDraft.proposal,publisherParent:preparedDraft.publisherParent};
+ const reviewedDraft=await draftApprover.review(reviewInput);
+ assert.equal(reviewedDraft.complete,false);
+ assert.equal(reviewedDraft.suspectDevice,b.deviceId);
+ assert.deepEqual(reviewedDraft.recipients,[a.deviceId,c.deviceId]);
+ const publicText=JSON.stringify(reviewInput);
+ for(const privateValue of [saved.draftId,reportHash,'3 cups','Beans'])assert.ok(!publicText.includes(privateValue));
+ await assert.rejects(()=>draftApprover.review({...reviewInput,publisherParent:{...reviewInput.publisherParent,authorizationSnapshot:'0'.repeat(64)}}),/INVALID_AUTHORITY/);
+ await assert.rejects(()=>draftApprover.approve({...reviewInput,explicit:true,confirmed:'0'.repeat(64)}),/REVIEW_CHANGED/);
+ const approvedDraft=await draftApprover.approve({...reviewInput,explicit:true,confirmed:reviewedDraft.confirmation});
+ assert.equal(approvedDraft.complete,true);
+ assert.deepEqual(approvedDraft.approved,[{adultId:'adult',deviceId:c.deviceId}]);
+ assert.equal((await draftSponsor.review(approvedDraft)).canApprove,false);
+ await assert.rejects(()=>draftSponsor.approve({...approvedDraft,explicit:true,confirmed:reviewedDraft.confirmation}),/ALREADY_APPROVED/);
+ selectedForRotation=false;
+ try {assert.throws(()=>draftApprover.review(reviewInput),/HOUSEHOLD_SELECTION_CHANGED/);}
+ finally {selectedForRotation=true;}
+ assert.deepEqual(a.rows(),savedRows);
  const {digest}=await import('../compromise/revocation.mjs');
  const grantBody={version:1,householdId:rotationParent.householdId,parentHead:rotationParent.head,eventHash,newEpochId:destination.epochId,newGeneration:destination.generation,documentId:destination.documentId,manifestHash:candidate.manifestHash,recipients:[a.deviceId,c.deviceId],packageRefs:['retention-package','retention-package-other'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only'};
  const bindingsHash=await digest(a.provider,'draft-rotation-recipient-bindings-v1',recipientBindings);
@@ -717,6 +756,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,binding));
  await assert.rejects(()=>prepareDraftRotationProjection(projectionArgs));
  await assert.rejects(()=>prepareDraftRotationManifest({runtime:reopenedRuntime,binding,item,allocateSeed}));
+ await assert.rejects(()=>draftSponsor.prepare({draftId:saved.draftId,bindings:[draftBinding],explicit:true}));
  await assert.rejects(()=>publishDraftRotation(publishArgs));
  assert.deepEqual(a.rows(),afterEdit);
 });
