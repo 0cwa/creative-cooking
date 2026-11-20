@@ -509,6 +509,33 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
    });
   }
  });
+ const {reopenDraftRotationSponsor,releaseDraftRotation}=await import('../compromise/release-draft-rotation.mjs');
+ const releaseOptions={storage:publishedStorage,scope,operationId:'retention-revoke',pin:a.root.head,provider:a.provider,sodium,LoroDoc,keys:publisherKeys,deviceId:a.deviceId};
+ const beforeRelease=publishedDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+ const metadata=await reopenDraftRotationSponsor(releaseOptions);
+ assert.deepEqual(metadata.record,publication.next);
+ const exported=await releaseDraftRotation({...releaseOptions,recipientDeviceId:c.deviceId});
+ assert.deepEqual(exported.bytes,publication.files[0].bytes);
+ assert.deepEqual(exported.proof,publication.proof);
+ for(const recipientDeviceId of [b.deviceId,a.deviceId,'wrong'])await assert.rejects(()=>releaseDraftRotation({...releaseOptions,recipientDeviceId}));
+ await assert.rejects(()=>reopenDraftRotationSponsor({...releaseOptions,deviceId:c.deviceId}));
+ await assert.rejects(()=>releaseDraftRotation({...releaseOptions,deviceId:c.deviceId,recipientDeviceId:c.deviceId}));
+ const readPublication=publishedStorage.readDraftRotationPublication.bind(publishedStorage);
+ const readAuthorityRecord=publishedStorage.readPairingAuthority.bind(publishedStorage);
+ for(const mutate of [
+  p=>{const envelope=JSON.parse(new TextDecoder().decode(p.proof));envelope[2].signature='0'.repeat(128);p.proof=domain(envelope[1],envelope[2]);}, p=>{p.files[0].bytes[0]^=1},
+  p=>{p.documents[0].bytes[0]^=1}, p=>{p.documents[0].sourceRevision++},
+  p=>{p.documents[0].localKey.record.wrapped[0]^=1},
+  p=>{p.expected.authorizationSnapshot='0'.repeat(64)},
+ ]) {
+  publishedStorage.readDraftRotationPublication=async (...args)=>{const result=await readPublication(...args);const value=structuredClone(result.value);mutate(value);return {ok:true,value};};
+  try {await assert.rejects(()=>reopenDraftRotationSponsor(releaseOptions));} finally {publishedStorage.readDraftRotationPublication=readPublication;}
+ }
+ publishedStorage.readPairingAuthority=async (...args)=>{const result=await readAuthorityRecord(...args);return {ok:true,value:{...result.value,revision:result.value.revision+1}};};
+ try {await assert.rejects(()=>reopenDraftRotationSponsor(releaseOptions));} finally {publishedStorage.readPairingAuthority=readAuthorityRecord;}
+ await assert.rejects(()=>reopenDraftRotationSponsor({...releaseOptions,keys:{use:async()=>{throw Error('missing key')}}}));
+ await assert.rejects(()=>reopenDraftRotationSponsor({...releaseOptions,keys:{use:async (op,id,fn)=>fn(new Uint8Array(32))}}));
+ assert.deepEqual(publishedDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),beforeRelease);
  const archived=publishedDb.prepare('SELECT value FROM loro_records WHERE key=?');
  for(const row of savedRows.filter(({key})=>JSON.parse(key)[0]!=='pairing-authority'))assert.equal(archived.get(row.key).value,row.value);
  await assert.rejects(()=>readAuthority(publishedStorage,scope,a.root.head,a.provider),/INVALID_ROTATION/);
