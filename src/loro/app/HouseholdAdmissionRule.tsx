@@ -53,6 +53,7 @@ export function HouseholdAdmissionRule() {
       setNotice(code === 'POLICY_BASELINE_UNAVAILABLE' ? 'This device needs the cooking updates for the signed starting point. Open the parent branch and exchange updates before trying again.' :
         code === 'CHECKOUT_REQUIRED' ? 'Open the parent cooking branch before opening this branch.' :
         code === 'CONFLICT' || code === 'INVALID_AUTHORITY' ? 'The household changed. Reopen the workspace and review the branch again.' :
+        code === 'IO' ? 'Could not save the branch switch. Check device storage and try again.' :
         code || 'Could not process the admission rule.');
     }
     finally { setBusy(false); }
