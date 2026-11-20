@@ -271,6 +271,7 @@ const validateRecord = (k: string, v: any) => {
     case 'policy-set-activation': valid=parts.length===3 && validId(parts[1]) && validPolicySetReceipt(v) && v.expected.scope.id===parts[1] && v.next.acceptedParent===parts[2]; break;
     case 'policy-staged-set': valid=validStagedPolicyDocumentSet(v) && parts.length===3 && v.targetHead===parts[2]; break;
     case 'adult-removal-recipient': valid=parts.length===3 && validAdultRemovalRecipient(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
+    case 'draft-rotation-recipient': valid=parts.length===3 && v?.version===2 && validAdultRemovalRecipient(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
     case 'adult-removal-publication': case 'draft-rotation-publication':
       valid=parts.length===3 && validAdultRemovalPublication(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
     case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
@@ -1126,33 +1127,47 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   /** First write only, after the caller authenticates the recipient receipt and opened file. */
   async commitAdultRemovalRecipient(input:AdultRemovalRecipient) {
+    return this.commitDocumentSetRotationRecipient(input,'adult-removal');
+  }
+  async commitDraftRotationRecipient(input:AdultRemovalRecipient) {
+    if(input?.version!==2)return fail('MALFORMED');
+    return this.commitDocumentSetRotationRecipient(input,'draft-rotation');
+  }
+  private async commitDocumentSetRotationRecipient(input:AdultRemovalRecipient,kind:'adult-removal'|'draft-rotation') {
     input=snapshot(input);
     if(!validAdultRemovalRecipient(input))return fail('MALFORMED');
     const {expected,next,operationId,documents}=input, scope=expected.scope.id;
     try{return await this.run(true,async tx=>{
-      const authority=key('pairing-authority','household',scope), receipt=key('adult-removal-recipient',scope,operationId);
+      const authority=key('pairing-authority','household',scope), receipt=key(kind+'-recipient',scope,operationId);
       const catalog=key('projection-document-set',scope,next.acceptedParent);
       if(!sameRecord(await tx.get(authority),expected)||await tx.get(receipt)!==undefined||await tx.get(catalog)!==undefined)conflict();
       for(const d of documents)if(await tx.get(key('document-owner',scope,d.documentId))!==undefined||
         await tx.get(key('document',scope,d.documentId))!==undefined||await tx.get(key('projection-document',scope,d.documentId))!==undefined)conflict();
       for(const {localKey} of documents)if((await installLocalKey(tx,localKey.record,localKey.catalog)).replayed)conflict();
-      this.fault?.('adult-removal-recipient-keys');
+      this.fault?.(kind+'-recipient-keys');
       for(const d of documents){
         await tx.put(key('document-owner',scope,d.documentId),next.acceptedParent);
         await tx.put(key('document',scope,d.documentId),{bytes:d.bytes,revision:0});
       }
       await tx.put(catalog,adultRemovalCatalog(input));
       await tx.put(receipt,input);
-      this.fault?.('adult-removal-recipient-receipt');
+      this.fault?.(kind+'-recipient-receipt');
       await tx.put(authority,next);
       return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}
   }
   /** Structural read only; authentication belongs to the recipient verifier. */
   async readAdultRemovalRecipient(scope:string,operationId:string) {
+    return this.readDocumentSetRotationRecipient(scope,operationId,'adult-removal');
+  }
+  /** Structural read only. Verify the signed receipt before opening a workspace. */
+  async readDraftRotationRecipient(scope:string,operationId:string) {
+    return this.readDocumentSetRotationRecipient(scope,operationId,'draft-rotation');
+  }
+  private async readDocumentSetRotationRecipient(scope:string,operationId:string,kind:'adult-removal'|'draft-rotation') {
     if(!validId(scope)||!validId(operationId))return fail('MALFORMED');
     try{return await this.run(false,async tx=>{
-      const saved:AdultRemovalRecipient|undefined=await tx.get(key('adult-removal-recipient',scope,operationId));
+      const saved:AdultRemovalRecipient|undefined=await tx.get(key(kind+'-recipient',scope,operationId));
       if(saved===undefined)return {ok:true as const,value:null};
       if(!validAdultRemovalRecipient(saved)||saved.operationId!==operationId||saved.expected.scope.id!==scope||
         !sameRecord(await tx.get(key('pairing-authority','household',scope)),saved.next)||

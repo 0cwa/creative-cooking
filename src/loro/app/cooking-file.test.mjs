@@ -518,6 +518,9 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.deepEqual(exported.bytes,publication.files[0].bytes);
  assert.deepEqual(exported.proof,publication.proof);
  const {withOpenedDraftRotationRelease}=await import('../compromise/open-draft-rotation.mjs');
+ const recipientKeys=c.storage.localKeys(testMaster(),sodium);
+ await recipientKeys.provision('retention-recipient-master');
+ await c.edit('retention-local-only',1,{legacy:true});
  const recipientRecord=must(await c.storage.readPairingAuthority(scope));
  const openArgs={storage:c.storage,scope,pin:a.root.head,provider:a.provider,sodium,LoroDoc,release:exported,recipientDeviceId:c.deviceId,recipientAdultId:other.adultId,wrappingSecret:otherWrap.privateKey,confirmedHead:eventHash,confirmedGrantHash:publicationConfirmation.grantHash,expectedRevision:recipientRecord.revision,signSelection:message=>sodium.crypto_sign_detached(message,c.signingTestKey.privateKey)};
  const recipientRows=c.rows();
@@ -531,6 +534,48 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  for(const change of [{pin:'0'.repeat(64)},{confirmedHead:'0'.repeat(64)},{confirmedGrantHash:'0'.repeat(64)},{recipientDeviceId:b.deviceId},{recipientAdultId:'wrong'},{expectedRevision:recipientRecord.revision+1},{wrappingSecret:wrap.privateKey}])await assert.rejects(()=>withOpenedDraftRotationRelease({...openArgs,...change},()=>{}));
  for(const field of ['proof','bytes']) {const release=structuredClone(exported);release[field][0]^=1;await assert.rejects(()=>withOpenedDraftRotationRelease({...openArgs,release},()=>{}));}
  assert.deepEqual(c.rows(),recipientRows);
+ const {installDraftRotationRelease,draftRotationRecipientPurpose}=await import('../compromise/install-draft-rotation.mjs');
+ const installArgs={...openArgs,keys:recipientKeys};
+ await assert.rejects(()=>installDraftRotationRelease({...installArgs,confirmedGrantHash:'0'.repeat(64)}),/REVIEW_CHANGED/);
+ await assert.rejects(()=>installDraftRotationRelease({...installArgs,recipientDeviceId:b.deviceId}),/INVALID_RECIPIENT/);
+ for(const fault of ['draft-rotation-recipient-keys','draft-rotation-recipient-receipt']){
+  c.faultAt(fault);
+  try {await assert.rejects(()=>installDraftRotationRelease(installArgs),/IO/);}
+  finally {c.faultAt(null);}
+  assert.deepEqual(c.rows(),recipientRows);
+  assert.equal((await c.runtime.document()).doc.getMap('pantry:retention-local-only').get('name'),'retention-local-only');
+ }
+ const authorityKey=JSON.stringify(['pairing-authority','household',scope.id]);
+ const oldAuthority=recipientRows.find(row=>row.key===authorityKey).value;
+ const changedAuthority=JSON.parse(oldAuthority);changedAuthority.revision++;
+ const commitRecipient=c.storage.commitDraftRotationRecipient.bind(c.storage);
+ c.storage.commitDraftRotationRecipient=async input=>{
+  c.replaceRow(authorityKey,JSON.stringify(changedAuthority));
+  try {return await commitRecipient(input);}
+  finally {c.replaceRow(authorityKey,oldAuthority);}
+ };
+ try {await assert.rejects(()=>installDraftRotationRelease(installArgs),/CONFLICT/);}
+ finally {c.storage.commitDraftRotationRecipient=commitRecipient;}
+ assert.deepEqual(c.rows(),recipientRows);
+ assert.deepEqual(await installDraftRotationRelease(installArgs),{head:eventHash});
+ c.reopen();
+ const recipientReceipt=must(await c.storage.readDraftRotationRecipient(scope.id,'retention-revoke'));
+ assert.equal(must(await c.storage.readAdultRemovalRecipient(scope.id,'retention-revoke')),null);
+ assert.deepEqual(must(await c.storage.readPairingAuthority(scope)),recipientReceipt.next);
+ assert.deepEqual(recipientReceipt.expected,recipientRecord);
+ assert.deepEqual(recipientReceipt.ciphertext,exported.bytes);
+ assert.deepEqual(recipientReceipt.documents.map(row=>row.bytes),opened.documents.map(row=>row.seed.snapshot));
+ const [,receiptPurpose,receiptBody]=JSON.parse(new TextDecoder().decode(recipientReceipt.proof));
+ assert.equal(receiptPurpose,draftRotationRecipientPurpose);
+ assert.deepEqual(receiptBody.selection,opened.selection);
+ assert.ok(await c.provider.verify(other.signingKeyRef,domain(receiptPurpose,receiptBody),sodium.from_hex(recipientReceipt.signature)));
+ for(const [i,{operationId,identity,keyHash}] of receiptBody.targets.entries()){
+  await recipientKeys.use(operationId,identity,key=>assert.equal(sodium.to_hex(sodium.crypto_generichash(32,key)),keyHash));
+  assert.equal(keyHash,proof.body.keyCommitments[i].keyHash);
+ }
+ const originalRecipientRows=new Map(c.rows().map(row=>[row.key,row.value]));
+ for(const row of recipientRows.filter(row=>row.key!==authorityKey))assert.equal(originalRecipientRows.get(row.key),row.value);
+ await assert.rejects(()=>readAuthority(c.storage,scope,a.root.head,c.provider),/INVALID_ROTATION/);
 
  for(const recipientDeviceId of [b.deviceId,a.deviceId,'wrong'])await assert.rejects(()=>releaseDraftRotation({...releaseOptions,recipientDeviceId}));
  await assert.rejects(()=>reopenDraftRotationSponsor({...releaseOptions,deviceId:c.deviceId}));
