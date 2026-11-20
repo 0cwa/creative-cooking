@@ -112,6 +112,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
  const otherContext=await browser.newContext({baseURL});
  try{
   const source=await sourceContext.newPage(),receiver=await receiverContext.newPage(),other=await otherContext.newPage();
+  for(const page of [source,receiver,other])page.setDefaultTimeout(10000);
   await test.step('create independent devices, private messages and a configured provider credential',async()=>{
    await start(source);await start(receiver);await start(other);
    await source.getByPlaceholder('API key',{exact:true}).fill(credential);
