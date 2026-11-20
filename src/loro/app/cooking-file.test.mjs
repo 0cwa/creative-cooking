@@ -322,6 +322,41 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.ok(projection.documents.every(doc=>doc.policyBundle.entries.every(entry=>entry.incomplete&&entry.policyHashes.includes(acceptedPolicy.policyHash))));
  assert.ok(projection.documents.every(doc=>doc.policyBundle.policies.some(row=>row.policyHash===acceptedPolicy.policyHash)));
  assert.deepEqual(await prepareDraftRotationProjection(projectionArgs),projection);
+ const {verifyPublicParent}=await import('../pairing/household-recipient-proof.mjs');
+ const {record:rotationRecord,state:rotationState,nodes:rotationNodes}=await verifyPublicParent(reopenedStorage,projection.source.expectedAuthority.scope,a.root.head,a.provider);
+ const rotationParent=rotationNodes.get(rotationState.activeHead),wrap=sodium.crypto_box_keypair();
+ const survivor=rotationParent.devices.find(d=>d.deviceId===a.deviceId);
+ const rotationEvent={version:2,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:rotationParent.householdId,parentHead:rotationParent.head,policyHash:rotationParent.policyHash,generation:rotationParent.generation,epochId:rotationParent.epochId,proposalId:'retention-revoke',kind:'revokeDevice',authorDeviceId:a.deviceId,frozenAdultRoster:rotationParent.roster,subject:{deviceId:b.deviceId,documentId:destination.documentId,newGeneration:destination.generation,newEpochId:destination.epochId,devices:[{deviceId:a.deviceId,signingKeyRef:survivor.signingKeyRef,wrappingKeyRef:sodium.to_hex(wrap.publicKey),peerId:'102'}]},nextPolicy:null};
+ const signRotation=(purpose,body)=>sodium.to_hex(sodium.crypto_sign_detached(domain(purpose,body),a.signingTestKey.privateKey));
+ const eventHash=sodium.to_hex(await a.provider.hash(domain('event',rotationEvent)));
+ const approval={version:1,householdId:rotationParent.householdId,eventHash,parentHead:rotationParent.head,policyHash:rotationParent.policyHash,generation:rotationParent.generation,epochId:rotationParent.epochId,adultId:survivor.adultId,deviceId:a.deviceId};
+ const item={event:rotationEvent,authorSignature:signRotation('event-signature',rotationEvent),approvals:[{...approval,signature:signRotation('approval-signature',approval)}]};
+ const {prepareDraftRotationManifest}=await import('../compromise/draft-rotation-manifest.mjs');
+ const candidate=await prepareDraftRotationManifest({runtime:reopenedRuntime,binding,item,allocateSeed});
+ assert.equal(candidate.complete,true);
+ const recipient={version:1,scopeId:rotationParent.householdId,parentHead:rotationParent.head,deviceId:a.deviceId,wrappingKey:sodium.to_hex(wrap.publicKey)};
+ const recipientBindings=[{...recipient,signature:signRotation('revocation-recipient',recipient)}];
+ const {digest}=await import('../compromise/revocation.mjs');
+ const grantBody={version:1,householdId:rotationParent.householdId,parentHead:rotationParent.head,eventHash,newEpochId:destination.epochId,newGeneration:destination.generation,documentId:destination.documentId,manifestHash:candidate.manifestHash,recipients:[a.deviceId],packageRefs:['retention-package'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only'};
+ const bindingsHash=await digest(a.provider,'draft-rotation-recipient-bindings-v1',recipientBindings);
+ const grant={...grantBody,signatures:[{adultId:survivor.adultId,deviceId:a.deviceId,signature:signRotation('draft-rotation-set-grant-vote-v1',{grant:grantBody,bindingsHash,adultId:survivor.adultId,deviceId:a.deviceId})}]};
+ const {verifyDraftRotationGrant}=await import('../compromise/draft-rotation-grant.mjs');
+ const verifyArgs={provider:a.provider,pin:a.root.head,parent:rotationParent,nodes:rotationNodes,state:rotationState,item,grant,manifest:candidate.manifest,recipientBindings};
+ assert.equal((await verifyDraftRotationGrant(verifyArgs)).complete,true);
+ const previewItem={...item,approvals:[]},previewGrant={...grant,signatures:[]};
+ assert.equal((await verifyDraftRotationGrant({...verifyArgs,item:previewItem,grant:previewGrant,requireQuorum:false})).complete,false);
+ await assert.rejects(()=>verifyDraftRotationGrant({...verifyArgs,item:previewItem,grant:previewGrant}),/QUORUM_REQUIRED/);
+ await assert.rejects(()=>verifyDraftRotationGrant({...verifyArgs,grant:{...grant,signatures:[{...grant.signatures[0],signature:'0'.repeat(128)}]},requireQuorum:false}),/INVALID_GRANT/);
+ const alteredEntries=structuredClone(candidate.manifest.entries);alteredEntries[0].policyBundleHash='0'.repeat(64);
+ await assert.rejects(()=>verifyDraftRotationGrant({...verifyArgs,manifest:{...candidate.manifest,entries:alteredEntries}}),/INVALID_GRANT/);
+ await assert.rejects(()=>prepareDraftRotationManifest({runtime:reopenedRuntime,binding:{...binding,reportHash:'0'.repeat(64)},item,allocateSeed}));
+ await assert.rejects(()=>prepareDraftRotationManifest({runtime:reopenedRuntime,binding:{...binding,suspectDevice:a.deviceId},item,allocateSeed}),/INVALID_DRAFT_SOURCE/);
+
+ await assert.rejects(()=>verifyDraftRotationGrant({...verifyArgs,manifest:{...candidate.manifest,draftBindingHash:'0'.repeat(64)}}),/INVALID_GRANT/);
+ await assert.rejects(()=>verifyDraftRotationGrant({...verifyArgs,recipientBindings:[{...recipientBindings[0],deviceId:b.deviceId}]}),/INVALID_RECIPIENT/);
+ await assert.rejects(()=>prepareDraftRotationManifest({runtime:reopenedRuntime,binding:{...binding,draftId:'wrong'},item,allocateSeed}));
+ assert.deepEqual(a.rows(),savedRows);
+
  await assert.rejects(()=>prepareDraftRotationProjection({...projectionArgs,destination:{...destination,epochId:a.root.epochId}}),/INVALID_DOCUMENT_SET/);
  const readSource=reopenedStorage.readDisclosureSource.bind(reopenedStorage);
  reopenedStorage.readDisclosureSource=(scopeId,effect)=>effect==='retention-pantry'?Promise.resolve({ok:true,value:null}):readSource(scopeId,effect);
@@ -389,6 +424,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId));
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,binding));
  await assert.rejects(()=>prepareDraftRotationProjection(projectionArgs));
+ await assert.rejects(()=>prepareDraftRotationManifest({runtime:reopenedRuntime,binding,item,allocateSeed}));
  assert.deepEqual(a.rows(),afterEdit);
 });
 

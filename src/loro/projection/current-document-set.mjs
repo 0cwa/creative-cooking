@@ -94,6 +94,12 @@ async function checkOrderedDocumentSetManifest({pin,parent,item,eventHash,manife
   return target;
 }
 
+// Draft rotation proposals use the same bounded ordered set rules, but are not
+// accepted by authority replay or any of the adult-removal release paths.
+export async function checkDraftRotationSetEntries(args) {
+  return checkOrderedDocumentSetManifest({...args,format:7,hashField:'revocationEventHash'});
+}
+
 /** The legacy public authority bundle includes earlier manifests verbatim. */
 export function requirePublicRecipeHistory(state,liveRecipeIds) {
   for(const {admission} of state.events) {
