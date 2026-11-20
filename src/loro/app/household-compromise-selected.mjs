@@ -68,7 +68,9 @@ export function selectedHouseholdCompromise({runtime,withCurrent,current}) {
     if(suspectDevice!==prepared.suspectDevice||
        !prepared.candidates.some(candidate=>candidate.documentId===documentId&&candidate.objectId===objectId))throw Error('INVALID_BOUNDARY');
     await current(revision,prepared.confirmation);
-    must(await storage.checkSelectedHouseholdSources(prepared.guard));
+    const source=await storage.checkSelectedHouseholdSources(prepared.guard);
+    if(!source.ok&&(source.error?.code??source.error)==='CONFLICT')throw Error('STALE_SOURCE');
+    must(source);
     const signed=await buildSelectedOperationReport(runtime,{candidates:prepared.candidates,suspectDevice,boundary:{documentId,objectId}});
     if(!sameReportValue(prepared.guard,signed.guard))throw Error('STALE_SOURCE');
     return service.freeze(signed);

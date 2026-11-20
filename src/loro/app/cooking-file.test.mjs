@@ -343,7 +343,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const stalePlan=await reports.prepare(currentConfirmation,b.deviceId);
  await save(a.runtime,'retention-later',[{...pantry,commandId:'retention-later',effectId:'retention-later',data:{...pantry.data,itemId:'retention-later'}}]);
  const afterEdit=a.rows();
- await assert.rejects(()=>reports.sign(stalePlan,boundary),/CONFLICT|STALE_SOURCE/);
+ await assert.rejects(()=>reports.sign(stalePlan,boundary),/STALE_SOURCE/);
  assert.deepEqual(a.rows(),afterEdit);
  await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId));
 });
