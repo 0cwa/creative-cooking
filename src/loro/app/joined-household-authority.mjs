@@ -1,10 +1,10 @@
-import {authorityBytes,resolveAdultRemovalRuntimeAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {authorityBytes,resolveAdultRemovalRuntimeAuthority,resolveDraftRotationRuntimeAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {readInstalledHouseholdDocumentSet} from '../pairing/household-document-set.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {householdReceiverIds} from './household-transfer.mjs';
 import {selectedOwnDeviceSet} from '../pairing/household-own-device-set.mjs';
 import {domain} from '../authority/validator.mjs';
-import {discoverSelectedAdultRemoval} from './adult-removal-discovery.mjs';
+import {discoverSelectedAdultRemoval,discoverSelectedDraftRotation} from './adult-removal-discovery.mjs';
 
 const decoder=new TextDecoder('utf-8',{fatal:true});
 const same=(a,b)=>{const x=authorityBytes(a),y=authorityBytes(b);return x.length===y.length&&x.every((v,i)=>v===y[i])};
@@ -48,7 +48,7 @@ export async function verifyJoinedOrigin({chain,expectedParent,ancestryHead=expe
 
 /** Discover the local receipt from pinned selected authority. A public parent
  * alone does not authorize creating or exposing a sequence counter. */
-export async function joinedHouseholdAuthority({storage,scope,pin,provider,deviceId,sodium,operationId,confirmedParent,legacy,pins,paired=undefined,allowActivatedPolicy=false,allowAdultRemoval=false}) {
+export async function joinedHouseholdAuthority({storage,scope,pin,provider,deviceId,sodium,operationId,confirmedParent,legacy,pins,paired=undefined,allowActivatedPolicy=false,allowAdultRemoval=false,allowDraftRotation=false}) {
  scope=structuredClone(scope);
  legacy=structuredClone(legacy);
  const raw=await storage.readPairingAuthority(scope);
@@ -56,22 +56,26 @@ export async function joinedHouseholdAuthority({storage,scope,pin,provider,devic
  let state;
  try { state=raw.value&&JSON.parse(decoder.decode(raw.value.authorityState)); }
  catch { throw Error('INVALID_ADMISSION'); }
- const removal=await discoverSelectedAdultRemoval(raw.value,provider);
+ const draft=await discoverSelectedDraftRotation(raw.value,provider);
+ const removal=draft??await discoverSelectedAdultRemoval(raw.value,provider);
  if(removal){
-  if(!allowAdultRemoval||!paired?.keys||!paired.LoroDoc||operationId!==householdReceiverIds(sodium,scope,deviceId).operationId)throw Error('INVALID_ADMISSION');
+  if(!(draft?allowDraftRotation:allowAdultRemoval)||!paired?.keys||!paired.LoroDoc||operationId!==householdReceiverIds(sodium,scope,deviceId).operationId)throw Error('INVALID_ADMISSION');
   const role=removal.authorDeviceId===deviceId?'sponsor':'recipient';
-  const readReceipt=()=>role==='sponsor'?storage.readAdultRemovalPublication(scope.id,removal.operationId):storage.readAdultRemovalRecipient(scope.id,removal.operationId);
+  const receiptMethod=draft
+   ? (role==='sponsor'?'readDraftRotationPublication':'readDraftRotationRecipient')
+   : (role==='sponsor'?'readAdultRemovalPublication':'readAdultRemovalRecipient');
+  const readReceipt=()=>storage[receiptMethod](scope.id,removal.operationId);
   const first=await readReceipt();
   if(!first.ok||!first.value||!same(first.value.next,raw.value))throw Error('INVALID_ADMISSION');
-  const adultRemoval={operationId:removal.operationId,role,withWrapping:paired.useWrapping};
-  const resolved=await resolveAdultRemovalRuntimeAuthority({storage,scope,pin,provider,authorDevice:deviceId,operationId:removal.operationId,role,sodium,LoroDoc:paired.LoroDoc,keys:paired.keys,withWrapping:paired.useWrapping});
+  const rotation={operationId:removal.operationId,role,withWrapping:paired.useWrapping};
+  const resolved=await (draft?resolveDraftRotationRuntimeAuthority:resolveAdultRemovalRuntimeAuthority)({storage,scope,pin,provider,authorDevice:deviceId,operationId:removal.operationId,role,sodium,LoroDoc:paired.LoroDoc,keys:paired.keys,withWrapping:paired.useWrapping});
   const savedPin=(await pins?.list())?.find(value=>value?.scope?.kind==='household'&&value.scope.id===scope.id);
   if(confirmedParent!==undefined&&confirmedParent!==savedPin?.head)throw Error('INVALID_ADMISSION');
   let chain;try{chain=JSON.parse(decoder.decode(first.value.expected.authorityState));}catch{throw Error('INVALID_ADMISSION');}
   await verifyJoinedOrigin({chain,expectedParent:first.value.expected.acceptedParent,savedPin,storage,scope,pin,provider,sodium,deviceId,legacy});
   const after=await readReceipt(),current=await storage.readPairingAuthority(scope);
   if(!after.ok||!after.value||!same(after.value,first.value)||!current.ok||!same(current.value,raw.value))throw Error('INVALID_ADMISSION');
-  return {resolved,installedSet:null,adultRemoval};
+  return draft?{resolved,installedSet:null,draftRotation:rotation}:{resolved,installedSet:null,adultRemoval:rotation};
  }
  // This opt-in is reserved for the future allocator/bootstrap integration.
  // The untrusted head locates a receipt; the resolver authenticates it and

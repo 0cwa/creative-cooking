@@ -110,7 +110,7 @@ async function openLockedWorkspace(name:string,create:boolean,initialPolicy:Retu
   const activatedPolicy=selected?.activatedPolicy??(!selected?originalHouse.activatedPolicy:undefined);
   const returnedPolicy=!selected?originalHouse.returnedPolicy:undefined;
   const adultRemoval=selected?.adultRemoval??(!selected?originalHouse.adultRemoval:undefined);
-  const draftRotation=!selected?originalHouse.draftRotation:undefined;
+  const draftRotation=selected?.draftRotation??(!selected?originalHouse.draftRotation:undefined);
   const readOnlyPolicy=activatedPolicy||returnedPolicy||adultRemoval||draftRotation;
   const householdRuntime=await openWorkspaceHouseholdRuntime({storage:db.storage,resolved:house,installedSet,activatedPolicy,returnedPolicy,adultRemoval,draftRotation,
    pin:activePin,provider,sodium,keys,signing:{...signing,publicKey:signingRef},wrapping,LoroDoc,decodeImportBlobMeta});

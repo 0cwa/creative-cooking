@@ -109,7 +109,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
   const activatedPolicy=selected?.activatedPolicy??(!selected?originalHouse.activatedPolicy:undefined);
   const returnedPolicy=!selected?originalHouse.returnedPolicy:undefined;
   const adultRemoval=selected?.adultRemoval??(!selected?originalHouse.adultRemoval:undefined);
-  const draftRotation=!selected?originalHouse.draftRotation:undefined;
+  const draftRotation=selected?.draftRotation??(!selected?originalHouse.draftRotation:undefined);
   const readOnlyPolicy=activatedPolicy||returnedPolicy||adultRemoval||draftRotation;
   const household=await openWorkspaceHouseholdRuntime({storage,resolved:house,installedSet,activatedPolicy,returnedPolicy,adultRemoval,draftRotation,pin:activePin,provider,
    sodium,keys,signing:{...signing,publicKey:signingRef},wrapping,LoroDoc,decodeImportBlobMeta});
@@ -166,7 +166,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
    sequences:{reserve:(scopeId,operationId)=>{
-    if(scopeId!==selectedPersonal.scopeId)throw Error('INVALID_AUTHORITY');
+    if(scopeId!==selectedPersonal.scopeId){if((adultRemoval||draftRotation)&&scopeId===activeScope.id)throw Error('READ_ONLY_WORKSPACE');throw Error('INVALID_AUTHORITY');}
     return sequences.reserve(r.personal,operationId);
    }},
    close:()=>{joinedSequences?.close();pairing.close();sequences.close();db.close();master.close()}

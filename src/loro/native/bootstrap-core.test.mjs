@@ -1206,8 +1206,59 @@ test('own-device prepared set publishes all recipients', {timeout:40_000}, () =>
 test('own-device set preparation binds the exact source', {timeout:40_000}, () => ownDeviceScenario(true));
 test('own-device household release and install roll back, reopen and preserve distinct-adult votes', {timeout:40_000}, () => ownDeviceScenario());
 
-test('joined adult removal reopens with its original pin and existing counter', {timeout:120_000}, async()=>{
- const organizerName='native-removal-joined-sponsor', recipientName='native-removal-joined-recipient';
+async function publishJoinedDraftRotation({organizer,recipient,runtime,pin,scope,provider,state,nodes,parentNode,author,removed,keys,signing}){
+ const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
+ const {prepareDraftRotationManifest}=await import('../compromise/draft-rotation-manifest.mjs');
+ const {verifyDraftRotationGrant}=await import('../compromise/draft-rotation-grant.mjs');
+ const {publishDraftRotation}=await import('../compromise/publish-draft-rotation.mjs');
+ const {digest}=await import('../compromise/revocation.mjs');
+ const reports=recipient.householdCompromise.selected,{confirmation}=await reports.open();
+ const prepared=await reports.prepare(confirmation,removed.deviceId);
+ const operation=prepared.operations.find(op=>op.effectId==='joined-mint');
+ assert.ok(operation);
+ const {reportHash}=await reports.sign(prepared,{suspectDevice:removed.deviceId,documentId:operation.documentId,objectId:operation.objectId});
+ const {draftId}=await reports.saveDraft(confirmation,reportHash,[operation.effectId]);
+ const {report}=await selectedOperationReportService(runtime).reopen(reportHash);
+ const source=report.payload.observation.manifest;
+ const binding={draftId,reportHash,suspectDevice:removed.deviceId,sourceHead:parentNode.head,
+  documents:[{recipeId:null,documentId:source.root.documentId},...source.children.map(({recipeId,documentId})=>({recipeId,documentId}))]};
+ const event={version:2,suiteId:runtime.scope.suiteId,householdId:scope.id,parentHead:parentNode.head,
+  proposalId:'joined-draft-rotation',kind:'revokeDevice',authorDeviceId:author.deviceId,policyHash:parentNode.policyHash,
+  generation:parentNode.generation,epochId:parentNode.epochId,frozenAdultRoster:parentNode.roster,nextPolicy:null,
+  subject:{deviceId:removed.deviceId,documentId:'joined-rotation-root',newGeneration:parentNode.generation+1,
+   newEpochId:'joined-rotation-epoch',devices:[{deviceId:author.deviceId,signingKeyRef:author.signingKeyRef,
+    wrappingKeyRef:recipient.wrappingPublicKey,peerId:'999'}]}};
+ const sign=async(purpose,body)=>sodium.to_hex(await provider.sign(author.signingKeyRef,domain(purpose,body)));
+ const item={event,authorSignature:await sign('event-signature',event),approvals:[]};
+ let seedCounter=900;
+ const projected=await prepareDraftRotationManifest({runtime,binding,item,allocateSeed:()=>({seedId:randomUUID(),peerId:String(++seedCounter)})});
+ const {manifest,eventHash,manifestHash}=projected;
+ const wrapBinding={version:1,scopeId:scope.id,parentHead:parentNode.head,deviceId:author.deviceId,wrappingKey:recipient.wrappingPublicKey};
+ const recipientBindings=[{...wrapBinding,signature:await sign('revocation-recipient',wrapBinding)}];
+ const body={version:1,householdId:scope.id,parentHead:parentNode.head,eventHash,manifestHash,newEpochId:event.subject.newEpochId,
+  newGeneration:event.subject.newGeneration,documentId:event.subject.documentId,recipients:[author.deviceId],
+  packageRefs:['joined-draft-rotation-package'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only'};
+ const bindingsHash=await digest(provider,'draft-rotation-recipient-bindings-v1',recipientBindings);
+ const grant={...body,signatures:[]};
+ for(const workspace of [organizer,recipient]){
+  const device=parentNode.devices.find(d=>d.deviceId===workspace.deviceId),voter={adultId:device.adultId,deviceId:device.deviceId};
+  const vote={version:1,householdId:scope.id,eventHash,parentHead:parentNode.head,policyHash:parentNode.policyHash,
+   generation:parentNode.generation,epochId:parentNode.epochId,...voter};
+  const localSign=async(purpose,value)=>sodium.to_hex(await workspace.disclosureProvider.sign(device.signingKeyRef,domain(purpose,value)));
+  item.approvals.push({...vote,signature:await localSign('approval-signature',vote)});
+  grant.signatures.push({...voter,signature:await localSign('draft-rotation-set-grant-vote-v1',{grant:body,bindingsHash,...voter})});
+ }
+ const proposal={item,grant,manifest,recipientBindings};
+ const verified=await verifyDraftRotationGrant({provider,pin,parent:parentNode,nodes,state,...proposal});
+ return publishDraftRotation({runtime,sodium,keys,signingKey:author.signingKeyRef,
+  withSigningSecret:use=>keys.use(signing.operationId,signing.identity,use),binding,proposal,
+  confirmation:{explicit:true,eventHash,grantHash:verified.grantHash}});
+}
+
+async function joinedRotationScenario(draftRotation){
+ const prefix=draftRotation?'native-draft-rotation-joined':'native-removal-joined';
+ const organizerName=prefix+'-sponsor',recipientName=prefix+'-recipient';
+ const recipe={id:'joined-soup',title:'Joined soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
  let organizer,recipient,captured;
  const openRecipient=create=>openNativeWorkspaceWith({...args(recipientName,create),openDirect:async input=>{captured=input;return null}});
  try {
@@ -1215,16 +1266,17 @@ test('joined adult removal reopens with its original pin and existing counter', 
   recipient=await openRecipient(true);
   await acceptPolicy(organizer);
   await addPantry(organizer,'joined-leek');
+  if(draftRotation)await organizer.householdContent.createRecipe('joined-recipe',recipe);
   const sponsor=organizer.householdPairing, joining=recipient.householdPairing, scope=scopeOf(organizer);
   const delegation=await sponsor.prepareDelegation({explicit:true});
   const {item,eventHash}=await sponsor.prepareInvite({recipient:joining.identity,explicit:true});
   await sponsor.acceptDelegation({agreement:{...delegation.agreement,acceptances:[delegation.acceptance]},explicit:true});
-  const {grant,manifest,seed,policyBundle}=await sponsor.prepareGrant({item,explicit:true});
-  assert.equal(manifest.version,4);
-  const ceremony=await sponsor.prepareCeremony({item,grant,manifest,seed,explicit:true});
+  const {grant,manifest,seed,policyBundle,documents}=await sponsor.prepareGrant({item,explicit:true});
+  assert.equal(manifest.version,draftRotation?5:4);
+  const ceremony=await sponsor.prepareCeremony({item,grant,manifest,seed,documents,explicit:true});
   const parent=await sponsor.exportParent();
   await joining.acceptParent({bundle:parent,confirmedRootPin:parent.rootPin,confirmedSelectedHead:parent.selectedHead,explicit:true});
-  const verified=await joining.verifyOffer({offer:{scope,item,grant,ceremony},confirmedHash:ceremony.oob.hash});
+  const verified=await joining.verifyOffer({offer:{scope,item,grant,ceremony,...(draftRotation?{manifestVersion:5}:{})},confirmedHash:ceremony.oob.hash});
   const initiator=sponsor.session({...ceremony,role:'initiator',confirmedHash:ceremony.oob.hash});
   const responder=joining.session({...verified,role:'responder',confirmedHash:ceremony.oob.hash});
   const [oa,ob]=await Promise.all([initiator.initialize(),responder.initialize()]);
@@ -1233,13 +1285,12 @@ test('joined adult removal reopens with its original pin and existing counter', 
   await Promise.all([initiator.finish(ab,2),responder.finish(aa,2)]);
   const selection={from:item.event.parentHead,to:eventHash,deviceId:organizer.deviceId,index:parent.state.selections.length};
   selection.signature=sodium.to_hex(await organizer.disclosureProvider.sign(sponsor.identity.signingKey,domain('select-head',{root:parent.rootPin,householdId:scope.id,...selection})));
-  const published=await sponsor.transfer.publish({item,grant,manifest,seed,policyBundle,ceremonies:[{transcript:ceremony.transcript,guard:ceremony.guard,oob:ceremony.oob,context:ceremony.context,messages:(await initiator.evidence()).messages}],existingCeremonies:[],selection});
+  const published=await sponsor.transfer.publish({item,grant,manifest,seed,policyBundle,documents,ceremonies:[{transcript:ceremony.transcript,guard:ceremony.guard,oob:ceremony.oob,context:ceremony.context,messages:(await initiator.evidence()).messages}],existingCeremonies:[],selection});
   const bytes=await sponsor.transfer.seal({operationId:published.operationId,recipientDevice:recipient.deviceId});
-  await joining.transfer.install({scope,bytes});
+  await joining.transfer.install({scope,bytes,documentSet:verified.documentSet});
   await joining.selection.select(scope);
   recipient.close();recipient=await openRecipient(false);
   await addPantry(recipient,'joined-mint');
-  const recipe={id:'joined-soup',title:'Joined soup',portions:2,ingredients:[],steps:[],stepIds:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
   const {runtime:capturedRuntime,provider}=captured,storage=capturedRuntime.storage,pin=parent.rootPin;
   const master=openMaster(recipientName),keys=storage.localKeys(master,sodium);await keys.unlock();
   const bootstrapDb=new DatabaseSync(join(dir,`${recipientName}.sqlite`));
@@ -1247,16 +1298,19 @@ test('joined adult removal reopens with its original pin and existing counter', 
   const reservation=JSON.parse(new TextDecoder().decode(await master.unwrap('workspace-master',bootstrapRow.data,new TextEncoder().encode('creative-cooking/native-bootstrap/v1'))));
   const signing={operationId:'device-signing',identity:{version:1,scope:{kind:'personal',id:reservation.personal},deviceId:reservation.device,purpose:'device-signing',epochId:reservation.personalEpoch},publicKey:joining.identity.signingKey};
   const {resolveRuntimeAuthority}=await import('../authority/chain.mjs');
-  const resolved=await resolveRuntimeAuthority(storage,scope,pin,provider,recipient.deviceId);
-  const runtime=await openWorkspaceHouseholdRuntime({storage,resolved,pin,provider,sodium,keys,signing,LoroDoc,decodeImportBlobMeta});
+  const runtime=draftRotation?capturedRuntime:await openWorkspaceHouseholdRuntime({storage,
+   resolved:await resolveRuntimeAuthority(storage,scope,pin,provider,recipient.deviceId),pin,provider,sodium,keys,signing,LoroDoc,decodeImportBlobMeta});
   const counterName=houseCounterName(recipientName,scope,recipient.deviceId);
-  const counterConnection=openDatabase(counterName);
   const {openNativeSequences}=await import('./sequences.mjs');
-  const sequences=openNativeSequences(counterConnection,[scope.id],false);
   const {bindHouseholdContent}=await import('../app/household-content.mjs');
-  const content=bindHouseholdContent({runtime,sequences,disclosure:recipient.disclosure,originalRecipeDocuments:true});
-  try {await content.createRecipe('joined-recipe',recipe);} finally {counterConnection.close();}
-  const before=await content.readCooking();
+  if(!draftRotation){
+   const counterConnection=openDatabase(counterName);
+   try {
+    const sequences=openNativeSequences(counterConnection,[scope.id],false);
+    await bindHouseholdContent({runtime,sequences,disclosure:recipient.disclosure,originalRecipeDocuments:true}).createRecipe('joined-recipe',recipe);
+   } finally {counterConnection.close();}
+  }
+  const before=await bindHouseholdContent({runtime,originalRecipeDocuments:!draftRotation}).readCooking();
   const {householdRevocation}=await import('../app/household-revocation.mjs');
   const {prepareAdultRemovalDocumentSet}=await import('../projection/current-document-set.mjs');
   const {publishAdultRemovalDocumentSet}=await import('../compromise/publish-adult-removal-set.mjs');
@@ -1264,46 +1318,82 @@ test('joined adult removal reopens with its original pin and existing counter', 
   const {verifyAdultRemovalGrant}=await import('../compromise/adult-removal-grant.mjs');
   const {state,nodes}=await verifyPublicParent(storage,scope,pin,provider),parentNode=nodes.get(state.activeHead);
   const author=parentNode.devices.find(d=>d.deviceId===recipient.deviceId),removed=parentNode.devices.find(d=>d.deviceId===organizer.deviceId);
-  const rotation=householdRevocation({storage,scope,pin,provider,sodium,master,runtime,deviceId:recipient.deviceId,adultId:author.adultId,
-   signingKey:author.signingKeyRef,wrappingPublicKey:joining.identity.wrappingKey,store:{transaction:()=>{}},withSecrets:()=>{},LoroDoc,randomUUID});
-  const draft=await rotation.prepare({targetAdultId:removed.adultId,bindings:[],explicit:true});
-  let seedCounter=900;
-  const prepared=await prepareAdultRemovalDocumentSet({runtime,service:recipient.disclosure,item:draft.proposal.item,allocateSeed:()=>({seedId:randomUUID(),peerId:String(++seedCounter)})});
-  const removalItem=structuredClone(draft.proposal.item),subject=removalItem.event.subject;
-  const removalGrant={version:3,householdId:scope.id,parentHead:parentNode.head,eventHash:prepared.eventHash,newEpochId:subject.newEpochId,
-   newGeneration:subject.newGeneration,documentId:subject.documentId,manifestHash:prepared.manifestHash,recipients:[recipient.deviceId],
-   packageRefs:['joined-removal-package'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only',signatures:[]};
-  const body=Object.fromEntries(Object.entries(removalGrant).filter(([key])=>key!=='signatures'));
-  for(const member of [organizer,recipient]){
-   const device=parentNode.devices.find(d=>d.deviceId===member.deviceId),voter={adultId:device.adultId,deviceId:device.deviceId};
-   const vote={version:1,householdId:scope.id,eventHash:prepared.eventHash,parentHead:parentNode.head,policyHash:parentNode.policyHash,generation:parentNode.generation,epochId:parentNode.epochId,...voter};
-   const sign=async(purpose,value)=>sodium.to_hex(await member.disclosureProvider.sign(device.signingKeyRef,domain(purpose,value)));
-   removalItem.approvals.push({...vote,signature:await sign('approval-signature',vote)});
-   removalGrant.signatures.push({...voter,signature:await sign('adult-removal-set-grant-vote-v3',{grant:body,...voter})});
+  if(draftRotation){
+   await publishJoinedDraftRotation({organizer,recipient,runtime,pin,scope,provider,state,nodes,parentNode,author,removed,keys,signing});
+  }else{
+   const rotation=householdRevocation({storage,scope,pin,provider,sodium,master,runtime,deviceId:recipient.deviceId,adultId:author.adultId,
+    signingKey:author.signingKeyRef,wrappingPublicKey:joining.identity.wrappingKey,store:{transaction:()=>{}},withSecrets:()=>{},LoroDoc,randomUUID});
+   const draft=await rotation.prepare({targetAdultId:removed.adultId,bindings:[],explicit:true});
+   let seedCounter=900;
+   const prepared=await prepareAdultRemovalDocumentSet({runtime,service:recipient.disclosure,item:draft.proposal.item,allocateSeed:()=>({seedId:randomUUID(),peerId:String(++seedCounter)})});
+   const removalItem=structuredClone(draft.proposal.item),subject=removalItem.event.subject;
+   const removalGrant={version:3,householdId:scope.id,parentHead:parentNode.head,eventHash:prepared.eventHash,newEpochId:subject.newEpochId,
+    newGeneration:subject.newGeneration,documentId:subject.documentId,manifestHash:prepared.manifestHash,recipients:[recipient.deviceId],
+    packageRefs:['joined-removal-package'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only',signatures:[]};
+   const body=Object.fromEntries(Object.entries(removalGrant).filter(([key])=>key!=='signatures'));
+   for(const member of [organizer,recipient]){
+    const device=parentNode.devices.find(d=>d.deviceId===member.deviceId),voter={adultId:device.adultId,deviceId:device.deviceId};
+    const vote={version:1,householdId:scope.id,eventHash:prepared.eventHash,parentHead:parentNode.head,policyHash:parentNode.policyHash,generation:parentNode.generation,epochId:parentNode.epochId,...voter};
+    const sign=async(purpose,value)=>sodium.to_hex(await member.disclosureProvider.sign(device.signingKeyRef,domain(purpose,value)));
+    removalItem.approvals.push({...vote,signature:await sign('approval-signature',vote)});
+    removalGrant.signatures.push({...voter,signature:await sign('adult-removal-set-grant-vote-v3',{grant:body,...voter})});
+   }
+   const proposal={item:removalItem,grant:removalGrant,manifest:prepared.manifest,recipientBindings:draft.proposal.recipientBindings};
+   const checked=await verifyAdultRemovalGrant({provider,pin,parent:parentNode,nodes,state,...proposal});
+   await publishAdultRemovalDocumentSet({runtime,service:recipient.disclosure,sodium,keys,signingKey:author.signingKeyRef,
+    withSigningSecret:fn=>keys.use(signing.operationId,signing.identity,fn),proposal,confirmation:{explicit:true,eventHash:checked.eventHash,grantHash:checked.grantHash}});
   }
-  const proposal={item:removalItem,grant:removalGrant,manifest:prepared.manifest,recipientBindings:draft.proposal.recipientBindings};
-  const checked=await verifyAdultRemovalGrant({provider,pin,parent:parentNode,nodes,state,...proposal});
-  await publishAdultRemovalDocumentSet({runtime,service:recipient.disclosure,sodium,keys,signingKey:author.signingKeyRef,
-   withSigningSecret:fn=>keys.use(signing.operationId,signing.identity,fn),proposal,confirmation:{explicit:true,eventHash:checked.eventHash,grantHash:checked.grantHash}});
   const {joinedHouseholdAuthority}=await import('../app/joined-household-authority.mjs');
   const {householdReceiverIds}=await import('../app/household-transfer.mjs');
   const receiveId=householdReceiverIds(sodium,scope,recipient.deviceId).operationId;
   const legacy=(await storage.householdRecipient.find(scope.id,receiveId)).value;
   await assert.rejects(()=>joinedHouseholdAuthority({storage,scope,pin,provider,sodium,deviceId:recipient.deviceId,operationId:receiveId,legacy,paired:{keys,LoroDoc}}),/INVALID_ADMISSION/);
   const counterPath=join(dir,`${houseCounterName(recipientName,scope,author.deviceId)}.sqlite`);
+  const enrollmentRows=()=>{
+   const db=new DatabaseSync(join(dir,`${recipientName}.sqlite`));
+   try{return db.prepare('SELECT key,value FROM loro_records WHERE key IN (?,?) ORDER BY key').all(
+    JSON.stringify(['native-household-enrollment',scope.id]),JSON.stringify(['native-household-activation',scope.id]));
+   }finally{db.close();}
+  };
+  const savedEnrollment=enrollmentRows();
+  assert.equal(savedEnrollment.length,2);
   recipient.close();recipient=undefined;
   const counter=new DatabaseSync(counterPath),prior=counter.prepare('SELECT value FROM loro_sequence_counters WHERE scope=?').get(scope.id).value;counter.close();
   recipient=await openRecipient(false);
-  assert.equal(recipient.readOnly,true);assert.equal(recipient.adultRemovalAccess,'sponsor');
-  assert.equal((await recipient.householdPairing.adultRemoval.status()).role,'sponsor');
-  await assert.rejects(()=>recipient.householdPairing.adultRemoval.prepare({}),/READ_ONLY_WORKSPACE/);
+  assert.equal(recipient.readOnly,true);
+  if(!draftRotation){
+   assert.equal(recipient.adultRemovalAccess,'sponsor');
+   assert.equal((await recipient.householdPairing.adultRemoval.status()).role,'sponsor');
+   await assert.rejects(()=>recipient.householdPairing.adultRemoval.prepare({}),/READ_ONLY_WORKSPACE/);
+  }
+  assert.throws(()=>recipient.sequences.reserve(scope.id,'blocked-counter'),/READ_ONLY_WORKSPACE/);
+  assert.ok(await recipient.sequences.reserve(recipient.personal.scope.scopeId,'rotation-personal-counter')>0);
   assert.deepEqual(await recipient.householdContent.readCooking(),before);
   assert.equal((await recipient.householdContent.readRecipe('joined-soup')).doc.getMap('recipe:joined-soup').get('title'),'Joined soup');
   assert.throws(()=>recipient.householdContent.execute('no',[]),/READ_ONLY_WORKSPACE/);
   recipient.close();recipient=undefined;
+  assert.deepEqual(enrollmentRows(),savedEnrollment);
   const counterCheck=openDatabase(houseCounterName(recipientName,scope,author.deviceId));
-  try{const seq=openNativeSequences(counterCheck,[scope.id],false);assert.equal(await seq.reserve(scope.id,'after-removal'),prior+1);}finally{counterCheck.close();}
+  try {
+   assert.equal(counterCheck.executeSync('SELECT value FROM loro_sequence_counters WHERE scope=?',[scope.id]).rows[0].value,prior);
+   const seq=openNativeSequences(counterCheck,[scope.id],false);
+   assert.equal(await seq.reserve(scope.id,'after-rotation'),prior+1);
+  } finally {counterCheck.close();}
   const {openSQLiteTransaction}=await import('../storage/sqlite.ts');
+  if(draftRotation){
+   const databasePath=join(dir,`${recipientName}.sqlite`);
+   const receiptKey=JSON.stringify(['draft-rotation-publication',scope.id,'joined-draft-rotation']);
+   const db=new DatabaseSync(databasePath);
+   const saved=db.prepare('SELECT value FROM loro_records WHERE key=?').get(receiptKey);
+   assert.ok(saved);
+   db.prepare('DELETE FROM loro_records WHERE key=?').run(receiptKey);db.close();
+   try {await assert.rejects(openRecipient(false),/INVALID_ADMISSION/);}
+   finally {
+    const restore=new DatabaseSync(databasePath);
+    try {restore.prepare('INSERT INTO loro_records VALUES (?,?)').run(receiptKey,saved.value);}
+    finally {restore.close();}
+   }
+  }
   const pinDb=openDatabase(`${recipientName}-pairing`),pinTx=openSQLiteTransaction(pinDb);
   const pinSlot=JSON.stringify(['pin',scope.id]),pinAad=new TextEncoder().encode(`creative-cooking/household-pin/v1/${scope.id}`);
   const savedPin=await pinTx(false,tx=>tx.get(pinSlot));
@@ -1328,7 +1418,9 @@ test('joined adult removal reopens with its original pin and existing counter', 
   rmSync(counterPath);
   await assert.rejects(openRecipient(false),/MISSING_SEQUENCES/);
  } finally {organizer?.close();recipient?.close();removeWorkspace(organizerName);removeWorkspace(recipientName);}
-});
+}
+test('joined adult removal reopens with its original pin and existing counter', {timeout:120_000}, ()=>joinedRotationScenario(false));
+test('joined draft rotation reopens with its original v5 pin and existing counter', {timeout:240_000}, ()=>joinedRotationScenario(true));
 
 test('joined legacy admission reopens activated policy with its existing counter', {timeout:120_000}, async()=>{
  const organizerName='native-activated-joined-sponsor', recipientName='native-activated-joined-recipient';
