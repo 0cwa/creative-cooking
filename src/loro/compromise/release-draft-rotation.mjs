@@ -42,7 +42,7 @@ async function verifyPublication({storage,scope,operationId,pin,provider,sodium,
   if(!fields(file,['recipientDeviceId','bytes']) || !fields(commitment,['recipientDeviceId','fileHash']) || file.recipientDeviceId!==id || commitment.recipientDeviceId!==id || commitment.fileHash!==hex(sodium.crypto_generichash(32,file.bytes)))throw Error('INVALID_FILE');
  }
  if(!same(must(await storage.readPairingAuthority(scope)),saved.next))throw Error('STALE_AUTHORITY');
- return {saved,body,recipients,metadata:{record:saved.next,child:successor.child,members}};
+ return {saved,body,recipients,metadata:{record:saved.next,parentHead:saved.expected.acceptedParent,child:successor.child,members}};
 }
 
 /** Authenticate the sponsor's retained draft rotation without releasing any file. */

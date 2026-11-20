@@ -47,7 +47,7 @@ export function householdPairing({
   });
   const revocation=householdRevocation({...preparation,master,runtime,signingKey,wrappingPublicKey,withSecrets,LoroDoc,sha256});
   const adultRemoval=householdAdultRemoval({...member,sodium,runtime,service,signingKey,randomUUID,revocation,keys,withSecrets,LoroDoc});
-  const draftRotation=householdDraftRotation({...member,sodium,runtime,signingKey,randomUUID,revocation});
+  const draftRotation=householdDraftRotation({...member,sodium,runtime,signingKey,randomUUID,revocation,keys,withSecrets,LoroDoc});
   const readmission=continuity&&householdReadmission({...authority,sodium,runtime,rotation:revocation,withSecrets,
     deviceId,signingKey,wrappingPublicKey,pins,transfer,...continuity});
   const ownDevice=householdOwnDevice({name,sodium,storage,scope,pin,provider,store,pins,identity,runtime,service,keys,master,withSecrets,
@@ -57,7 +57,9 @@ export function householdPairing({
     identity, selection, selectedHousehold,
     adultRemoval:Object.fromEntries(Object.entries(adultRemoval).map(([name,method])=>[name,active(method)])),
     draftRotation:{binding:active(draftRotation.binding),prepare:active(draftRotation.prepare),
-      review:active(draftRotation.review),approve:active(draftRotation.approve)},
+      review:active(draftRotation.review),approve:active(draftRotation.approve),publish:active(draftRotation.publish),
+      status:active(draftRotation.status),exportFile:active(draftRotation.exportFile),
+      reviewFile:active(draftRotation.reviewFile),install:active(draftRotation.install)},
     ownDevice:Object.fromEntries(Object.entries(ownDevice).map(([key,value])=>[key,typeof value!=='function'?value:
       (runtime.authority?.installedSet?.paired&&['history','resume','publish','publishPreparedSet','recoverPreparedSet','installEstablished'].includes(key)||
        runtime.authority?.installedSet&&!runtime.authority.installedSet.paired&&['request','propose','inspect','confirm','accept','resume','history','prepareSet','publishPreparedSet','recoverPreparedSet','prepareEstablishedOffer','verifyEstablishedOffer','installEstablished'].includes(key))?active(value):legacy(value)])),

@@ -1,5 +1,6 @@
 import type {PairingAuthorityRecord,PairingScope} from '../contracts/pairing.ts';
 import type {OfflineRuntime} from '../engine/runtime.mjs';
+import type {LocalKeys} from '../storage/local-keys.ts';
 
 type Voter = {adultId:string;deviceId:string};
 export type DraftRotationRecipientBinding = {
@@ -30,14 +31,25 @@ export type DraftRotationReview = {
 };
 type ProposalInput = {proposal:DraftRotationProposal;publisherParent?:PairingAuthorityRecord};
 type Prepared = DraftRotationReview & {proposal:DraftRotationProposal;publisherParent:PairingAuthorityRecord};
+type FileReview = Pick<DraftRotationReview,'eventHash'|'grantHash'|'confirmation'|'parentHead'|'suspectDevice'> &
+ {operationId:string;sourceRevision:number};
 
 export function householdDraftRotation(options:{
  storage:OfflineRuntime['storage'];scope:PairingScope;pin:string;provider:OfflineRuntime['authority']['provider'];
- sodium:{randombytes_buf(size:number):Uint8Array};runtime:OfflineRuntime;deviceId:string;adultId:string;signingKey:string;
+ sodium:{randombytes_buf(size:number):Uint8Array;crypto_generichash(size:number,bytes:Uint8Array):Uint8Array;
+  crypto_sign_detached(bytes:Uint8Array,secret:Uint8Array):Uint8Array};
+ runtime:OfflineRuntime;deviceId:string;adultId:string;signingKey:string;
  randomUUID:()=>string;revocation:{binding():Promise<DraftRotationRecipientBinding>};
+ keys:LocalKeys;LoroDoc:OfflineRuntime['LoroDoc'];
+ withSecrets:<T>(use:(keys:{signingSecret:Uint8Array;wrappingSecret:Uint8Array})=>Promise<T>)=>Promise<T>;
 }):{
  binding():Promise<DraftRotationRecipientBinding>;
  prepare(input:{draftId:string;bindings:DraftRotationRecipientBinding[];explicit:boolean}):Promise<Prepared>;
  review(input:ProposalInput):Promise<DraftRotationReview>;
  approve(input:ProposalInput & {confirmed:string;explicit:boolean}):Promise<Prepared>;
+ publish(input:{draftId:string;proposal:DraftRotationProposal;confirmed:string;explicit:boolean}):Promise<{operationId:string;head:string}>;
+ status(operationId?:string):Promise<{operationId:string;head:string;recipients:string[]}>;
+ exportFile(input:{operationId:string;recipientDeviceId:string}):Promise<Uint8Array>;
+ reviewFile(input:{file:Uint8Array}):Promise<FileReview>;
+ install(input:{file:Uint8Array;confirmed:string;sourceRevision:number;explicit:boolean}):Promise<{head:string}>;
 };

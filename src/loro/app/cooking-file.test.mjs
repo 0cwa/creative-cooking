@@ -534,7 +534,31 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const publisherKeys=Object.assign(Object.create(publishedKeys),{use:(op,identity,fn)=>op==='retention-signing'?fn(a.signingTestKey.privateKey):publishedKeys.use(op,identity,fn)});
  const publisher=await openWorkspaceHouseholdRuntime({storage:publishedStorage,resolved:await resolveRuntimeAuthority(publishedStorage,scope,a.root.head,a.provider,a.deviceId),
   pin:a.root.head,provider:a.provider,sodium,keys:publisherKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
- assert.deepEqual(await publishDraftRotation({...publishArgs,runtime:publisher,keys:publisherKeys}),{operationId:'retention-revoke',head:eventHash});
+ const pairRotation=(peer,runtime,keys,wrappingSecret,wrappingPublicKey)=>householdPairing({
+  runtime,storage:runtime.storage,scope,pin:a.root.head,provider:runtime.authority.provider,sodium,LoroDoc,
+  deviceId:peer.deviceId,adultId:'adult',signingKey:sodium.to_hex(peer.signingTestKey.publicKey),wrappingPublicKey,
+  keys:Object.assign(Object.create(keys),{use:(op,identity,fn)=>op==='facade-signing'?fn(peer.signingTestKey.privateKey):
+   op==='facade-wrapping'?fn(wrappingSecret):keys.use(op,identity,fn)}),
+  signing:{operationId:'facade-signing'},wrapping:{operationId:'facade-wrapping'}
+ });
+ const publisherService=pairRotation(a,publisher,publisherKeys,wrap.privateKey,recipient.wrappingKey).draftRotation;
+ const publishInput={draftId:saved.draftId,proposal:publishArgs.proposal,
+  confirmed:(await publisherService.review({proposal:publishArgs.proposal})).confirmation,explicit:true};
+ await assert.rejects(()=>publisherService.publish({...publishInput,confirmed:'changed'}),/REVIEW_CHANGED/);
+ await assert.rejects(()=>publisherService.publish({...publishInput,draftId:'0'.repeat(64)}));
+ const writePublication=publishedStorage.commitDraftRotationPublication.bind(publishedStorage);
+ publishedStorage.commitDraftRotationPublication=async (...args)=>{
+  const result=await writePublication(...args);
+  if(result.ok)throw Error('lost response');
+  return result;
+ };
+ const publicationResult={operationId:'retention-revoke',head:eventHash};
+ try {assert.deepEqual(await publisherService.publish(publishInput),publicationResult);}
+ finally {publishedStorage.commitDraftRotationPublication=writePublication;}
+ const publisherRows=publishedDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all();
+ assert.deepEqual(await publisherService.publish(publishInput),publicationResult);
+ await assert.rejects(()=>publisherService.publish({...publishInput,draftId:'0'.repeat(64)}),/RETRY_MISMATCH/);
+ assert.deepEqual(publishedDb.prepare('SELECT key,value FROM loro_records ORDER BY key').all(),publisherRows);
  const publication=must(await publishedStorage.readDraftRotationPublication(scope.id,'retention-revoke'));
  assert.deepEqual(publication.next,successor.record);
  assert.equal(must(await publishedStorage.readAdultRemovalPublication(scope.id,'retention-revoke')),null);
@@ -562,6 +586,8 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const {encodeDraftRotationRelease,decodeDraftRotationRelease,MAX_DRAFT_ROTATION_FILE}=await import('../pairing/draft-rotation-wire.mjs');
  const {encodeAdultRemovalRelease,decodeAdultRemovalRelease}=await import('../pairing/adult-removal-wire.mjs');
  const frame=encodeDraftRotationRelease(exported), decoded=decodeDraftRotationRelease(frame);
+ assert.deepEqual(await publisherService.exportFile({operationId:'retention-revoke',recipientDeviceId:c.deviceId}),frame);
+ await assert.rejects(()=>draftService(b,b.runtime,otherRecipient.wrappingKey).reviewFile({file:frame}),/INVALID_RECIPIENT/);
  assert.deepEqual(decoded,exported);
  assert.throws(()=>decodeAdultRemovalRelease(frame));
  const disguisedDraft=frame.slice();disguisedDraft[2]=0x41;assert.throws(()=>decodeAdultRemovalRelease(disguisedDraft));
@@ -575,6 +601,14 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await recipientKeys.provision('retention-recipient-master');
  await c.edit('retention-local-only',1,{legacy:true});
  const recipientRecord=must(await c.storage.readPairingAuthority(scope));
+ const recipientService=pairRotation(c,c.runtime,recipientKeys,otherWrap.privateKey,otherRecipient.wrappingKey).draftRotation;
+ const reviewedFile=await recipientService.reviewFile({file:frame});
+ assert.equal(reviewedFile.eventHash,eventHash);
+ assert.equal(reviewedFile.sourceRevision,recipientRecord.revision);
+ const installInput={file:frame,confirmed:reviewedFile.confirmation,sourceRevision:reviewedFile.sourceRevision,explicit:true};
+ await assert.rejects(()=>recipientService.install({...installInput,sourceRevision:reviewedFile.sourceRevision+1}),/REVIEW_CHANGED/);
+ const changedFrame=frame.slice();changedFrame[changedFrame.length-1]^=1;
+ await assert.rejects(()=>recipientService.install({...installInput,file:changedFrame}),/REVIEW_CHANGED/);
  const openArgs={storage:c.storage,scope,pin:a.root.head,provider:a.provider,sodium,LoroDoc,release:decoded,recipientDeviceId:c.deviceId,recipientAdultId:other.adultId,wrappingSecret:otherWrap.privateKey,confirmedHead:eventHash,confirmedGrantHash:publicationConfirmation.grantHash,expectedRevision:recipientRecord.revision,signSelection:message=>sodium.crypto_sign_detached(message,c.signingTestKey.privateKey)};
  const recipientRows=c.rows();
  const opened=await withOpenedDraftRotationRelease(openArgs,({documents,selection})=>({documents,selection}));
@@ -625,7 +659,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
   if(result.ok)throw Error('lost response');
   return result;
  };
- try {assert.deepEqual(await Promise.all([installDraftRotationRelease(installArgs),installDraftRotationRelease(installArgs)]),[{head:eventHash},{head:eventHash}]);}
+ try {assert.deepEqual(await Promise.all([recipientService.install(installInput),recipientService.install(installInput)]),[{head:eventHash},{head:eventHash}]);}
  finally {c.storage.commitDraftRotationRecipient=commitRecipient;}
  c.reopen();
  const recipientReceipt=must(await c.storage.readDraftRotationRecipient(scope.id,'retention-revoke'));
@@ -647,6 +681,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const retained=await verifyRetainedDraftRotationRecipient(retainedArgs);
  assert.equal(retained.members.length,2);
  const retryRows=c.rows();
+ assert.deepEqual(await recipientService.install(installInput),{head:eventHash});
  assert.deepEqual(await installDraftRotationRelease({...installArgs,signSelection:()=>{throw Error('unexpected signature')}}),{head:eventHash});
  assert.deepEqual(c.rows(),retryRows);
  for(const change of [{confirmedHead:'0'.repeat(64)},{confirmedGrantHash:'0'.repeat(64)},{recipientAdultId:'wrong'},{recipientDeviceId:b.deviceId},{expectedRevision:recipientRecord.revision+1},{wrappingSecret:wrap.privateKey}])await assert.rejects(()=>verifyRetainedDraftRotationRecipient({...retainedArgs,...change}));
@@ -683,6 +718,11 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const discovered=await resolveOriginalHousehold(discoveryArgs);
  assert.equal(discovered.draftRotation.role,'sponsor');
  const discoveredMount=await openWorkspaceHouseholdRuntime({...discovered,storage:reconnected,pin:a.root.head,provider:a.provider,sodium,keys:publisherKeys,signing:sponsorMount.signing,LoroDoc,decodeImportBlobMeta});
+ const {readOnlyPairing}=await import('./read-only-services.mjs');
+ const sponsorReadOnly=readOnlyPairing(pairRotation(a,discoveredMount,publisherKeys,wrap.privateKey,recipient.wrappingKey),undefined,discovered.draftRotation).draftRotation;
+ assert.deepEqual(await sponsorReadOnly.status(),{...publicationResult,recipients:[c.deviceId]});
+ assert.deepEqual(await sponsorReadOnly.exportFile({operationId:'retention-revoke',recipientDeviceId:c.deviceId}),frame);
+ await assert.rejects(()=>sponsorReadOnly.publish(publishInput),/READ_ONLY_WORKSPACE/);
  assert.deepEqual((await bindHouseholdContent({runtime:discoveredMount}).readCooking()).pantry.map(item=>item.name),['Beans']);
  assert.throws(()=>bindHouseholdContent({runtime:discoveredMount}).createRecipe('blocked',{}),/READ_ONLY_WORKSPACE/);
  await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,paired:{keys:{use:async()=>{throw Error('missing key')}}}}));
@@ -694,6 +734,8 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,storage:wrongHead}));
  await assert.rejects(()=>resolveOriginalHousehold({...discoveryArgs,deviceId:'wrong'}));
  const mountedSponsor=await mountRotation(sponsorMount),mountedRecipient=await mountRotation(recipientMount);
+ const recipientReadOnly=readOnlyPairing(pairRotation(c,mountedRecipient,recipientKeys,otherWrap.privateKey,otherRecipient.wrappingKey),undefined,{role:'recipient'}).draftRotation;
+ await assert.rejects(()=>recipientReadOnly.exportFile({operationId:'retention-revoke',recipientDeviceId:c.deviceId}),/READ_ONLY_WORKSPACE/);
  for(const mounted of [mountedSponsor,mountedRecipient]){
   const content=bindHouseholdContent({runtime:mounted});
   const cooking=await content.readCooking();

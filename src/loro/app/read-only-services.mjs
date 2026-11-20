@@ -5,10 +5,13 @@ export function unavailableInReadOnly(value) {
  if(!value || typeof value!=='object' || Array.isArray(value))return value;
  return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,unavailableInReadOnly(item)]));
 }
-export function readOnlyPairing(pairing,adultRemoval) {
+export function readOnlyPairing(pairing,adultRemoval,draftRotation=undefined) {
  const limited=unavailableInReadOnly(pairing);
  if(adultRemoval?.role==='sponsor' && pairing.adultRemoval){
   limited.adultRemoval={...limited.adultRemoval,status:pairing.adultRemoval.status,exportFile:pairing.adultRemoval.exportFile};
+ }
+ if(draftRotation?.role==='sponsor' && pairing.draftRotation){
+  limited.draftRotation={...limited.draftRotation,status:pairing.draftRotation.status,exportFile:pairing.draftRotation.exportFile};
  }
  return {...limited,selection:pairing.selection,
   selectedHousehold:pairing.selectedHousehold,onInstalled:pairing.onInstalled,

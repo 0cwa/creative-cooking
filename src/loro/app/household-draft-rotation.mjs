@@ -1,26 +1,42 @@
 import {authorityBytes} from '../authority/chain.mjs';
 import {domain,remainingRotationDevices} from '../authority/validator.mjs';
 import {validatePairingAuthority} from '../contracts/pairing.ts';
-import {deriveDraftRotationBinding} from '../compromise/checked-draft-source.mjs';
+import {deriveDraftRotationBinding,retainedDraftRotationBinding} from '../compromise/checked-draft-source.mjs';
 import {verifyDraftRotationGrant} from '../compromise/draft-rotation-grant.mjs';
 import {prepareDraftRotationManifest} from '../compromise/draft-rotation-manifest.mjs';
 import {checkRecipientBinding,digest,exact,grantBody,hex} from '../compromise/revocation.mjs';
+import {publishDraftRotation} from '../compromise/publish-draft-rotation.mjs';
+import {releaseDraftRotation,reopenDraftRotationSponsor} from '../compromise/release-draft-rotation.mjs';
+import {verifyDraftRotationRelease} from '../compromise/open-draft-rotation.mjs';
+import {installDraftRotationRelease} from '../compromise/install-draft-rotation.mjs';
+import {decodeDraftRotationRelease,encodeDraftRotationRelease} from '../pairing/draft-rotation-wire.mjs';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {requirePublicRecipeHistory} from '../projection/current-document-set.mjs';
+import {selectedSourceHash} from '../projection/selected-sources.mjs';
 
 const same=(a,b)=>hex(authorityBytes(a))===hex(authorityBytes(b));
 
 /** Public proposal review. The saved draft stays in local storage and is
  * recovered by its ID when a publisher rebuilds the signed commitments. */
-export function householdDraftRotation({storage,scope,pin,provider,sodium,runtime,deviceId,adultId,signingKey,randomUUID,revocation}){
+export function householdDraftRotation({storage,scope,pin,provider,sodium,runtime,deviceId,adultId,signingKey,randomUUID,revocation,LoroDoc,keys,withSecrets}){
  const household=structuredClone(scope);
  const sign=async (purpose,body)=>hex(await provider.sign(signingKey,domain(purpose,body)));
 
- async function current(){
+ function mountedAuthority(){
   const authority=runtime.authority;
   if(!authority||runtime.storage!==storage||authority.rootPin!==pin||authority.provider!==provider||
-     authority.activatedPolicy||authority.returnedPolicy||authority.adultRemoval||authority.draftRotation||
-     authority.installedSet?.paired||runtime.scope.scopeId!==household.id||runtime.scope.authorDevice!==deviceId)throw Error('UNSUPPORTED_VERSION');
+     runtime.scope.scopeId!==household.id||runtime.scope.authorDevice!==deviceId)throw Error('UNSUPPORTED_VERSION');
+  return authority;
+ }
+
+ function mutableContext(){
+  const authority=mountedAuthority();
+  if(authority.activatedPolicy||authority.returnedPolicy||authority.adultRemoval||authority.draftRotation||
+     authority.installedSet?.paired)throw Error('UNSUPPORTED_VERSION');
+ }
+
+ async function current(){
+  mutableContext();
   const verified=await verifyPublicParent(storage,household,pin,provider);
   const parent=verified.nodes.get(verified.state.activeHead);
   const {record}=verified,authorized=await runtime.authorize();
@@ -49,7 +65,7 @@ export function householdDraftRotation({storage,scope,pin,provider,sodium,runtim
   if(!exact(proposal,'item,grant,manifest,recipientBindings'))throw Error('INVALID_PROPOSAL');
   const checked=await verifyDraftRotationGrant({provider,pin,...context,...proposal,requireQuorum:false});
   requirePublicRecipeHistory(context.state,new Set(proposal.manifest.entries.map(entry=>entry.recipeId)));
-  const confirmation=await digest(provider,'draft-rotation-set-review-v1',{eventHash:checked.eventHash,grantHash:checked.grantHash});
+  const confirmation=await proposalConfirmation(checked.eventHash,checked.grantHash);
   const approved=proposal.item.approvals.map(({adultId,deviceId})=>({adultId,deviceId}));
   return {...checked,confirmation,parentHead:context.parent.head,suspectDevice:proposal.item.event.subject.deviceId,
    recipients:proposal.grant.recipients.slice(),approved,canApprove:!approved.some(vote=>vote.adultId===adultId)};
@@ -130,5 +146,110 @@ export function householdDraftRotation({storage,scope,pin,provider,sodium,runtim
   await unchanged(context.record);
   return value;
  }
- return {prepare,review,approve,binding};
+
+ const options={storage,scope:household,pin,provider,sodium,LoroDoc,keys};
+ const sponsorOptions=operationId=>({...options,deviceId,operationId});
+ const recipientOptions={...options,recipientDeviceId:deviceId,recipientAdultId:adultId};
+ const proposalConfirmation=(eventHash,grantHash)=>digest(provider,'draft-rotation-set-review-v1',{eventHash,grantHash});
+
+ async function proposalHashes(proposal){
+  if(!exact(proposal,'item,grant,manifest,recipientBindings'))throw Error('INVALID_PROPOSAL');
+  const eventHash=await digest(provider,'event',proposal.item.event);
+  const bindingsHash=await digest(provider,'draft-rotation-recipient-bindings-v1',proposal.recipientBindings);
+  const grantHash=await digest(provider,'draft-rotation-set-grant-v1',{grant:grantBody(proposal.grant),bindingsHash});
+  return {eventHash,grantHash};
+ }
+
+ async function publish({draftId,proposal,confirmed,explicit}){
+  if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
+  mutableContext();
+  const {eventHash,grantHash}=await proposalHashes(proposal);
+  const {event}=proposal.item,operationId=event.proposalId;
+  if(confirmed!==await proposalConfirmation(eventHash,grantHash)||runtime.scope.branchHead!==event.parentHead||
+     event.authorDeviceId!==deviceId)throw Error('REVIEW_CHANGED');
+  async function retained(){
+   const found=await storage.readDraftRotationPublication(household.id,operationId);
+   if(!found.ok)throw Error('INVALID_RECEIPT');
+   if(!found.value)return null;
+   const verified=await reopenDraftRotationSponsor({...sponsorOptions(operationId),expectedProposal:proposal});
+   const binding=await retainedDraftRotationBinding(storage,household.id,draftId);
+   if(await selectedSourceHash(provider,'draft-rotation-binding-v1',binding)!==proposal.manifest.draftBindingHash)throw Error('RETRY_MISMATCH');
+   await unchanged(verified.record);
+   return {operationId,head:verified.record.acceptedParent};
+  }
+  const saved=await retained();
+  if(saved)return saved;
+  try{
+   const checked=await review({proposal});
+   if(!checked.complete||checked.confirmation!==confirmed)throw Error('REVIEW_CHANGED');
+   const binding=await deriveDraftRotationBinding(runtime,draftId);
+   return await publishDraftRotation({runtime,sodium,keys,signingKey,
+    withSigningSecret:use=>withSecrets(({signingSecret})=>use(signingSecret)),binding,proposal,
+    confirmation:{explicit:true,eventHash,grantHash}});
+  }catch(error){
+   const recovered=await retained();
+   if(recovered)return recovered;
+   throw error;
+  }
+ }
+
+ async function authorizeSponsor(operationId){
+  const mounted=mountedAuthority().draftRotation;
+  if(mounted){
+   if(mounted.options.role!=='sponsor'||mounted.options.operationId!==operationId)throw Error('INVALID_RECIPIENT');
+   await runtime.authorize();
+  }else mutableContext();
+  const verified=await reopenDraftRotationSponsor(sponsorOptions(operationId));
+  if(!mounted&&runtime.scope.branchHead!==verified.parentHead)throw Error('STALE_AUTHORITY');
+  return verified;
+ }
+
+ async function status(operationId=mountedAuthority().draftRotation?.options.operationId){
+  if(!operationId)throw Error('INVALID_RECEIPT');
+  const verified=await authorizeSponsor(operationId);
+  return {operationId,head:verified.record.acceptedParent,recipients:verified.child.runtime.acceptedRecipients.filter(id=>id!==deviceId)};
+ }
+
+ async function exportFile({operationId,recipientDeviceId}){
+  await authorizeSponsor(operationId);
+  return encodeDraftRotationRelease(await releaseDraftRotation({...sponsorOptions(operationId),recipientDeviceId}));
+ }
+
+ const fileConfirmation=(file,sourceRevision,eventHash,grantHash)=>digest(provider,'draft-rotation-file-review-v1',
+  {scope:household,deviceId,sourceRevision,eventHash,grantHash,fileHash:hex(sodium.crypto_generichash(32,file))});
+
+ async function inspectFile(file,release,local){
+  const sourceRevision=local.record.revision;
+  const {checked}=await verifyDraftRotationRelease({...recipientOptions,release,expectedRevision:sourceRevision});
+  const {eventHash,grantHash}=checked;
+  const confirmation=await fileConfirmation(file,sourceRevision,eventHash,grantHash);
+  await unchanged(local.record);
+  return {eventHash,grantHash,confirmation,sourceRevision,parentHead:local.parent.head,
+   operationId:release.proposal.item.event.proposalId,suspectDevice:release.proposal.item.event.subject.deviceId};
+ }
+
+ async function reviewFile({file}){
+  const release=decodeDraftRotationRelease(file);
+  return inspectFile(file,release,await current());
+ }
+
+ async function install({file,confirmed,sourceRevision,explicit}){
+  if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
+  mutableContext();
+  const release=decodeDraftRotationRelease(file),{proposal}=release;
+  const {eventHash,grantHash}=await proposalHashes(proposal);
+  if(runtime.scope.branchHead!==proposal.item.event.parentHead||!Number.isSafeInteger(sourceRevision)||sourceRevision<0||
+     confirmed!==await fileConfirmation(file,sourceRevision,eventHash,grantHash))throw Error('REVIEW_CHANGED');
+  const saved=await storage.readDraftRotationRecipient(household.id,proposal.item.event.proposalId);
+  if(!saved.ok)throw Error('INVALID_RECEIPT');
+  if(!saved.value){
+   const checked=await inspectFile(file,release,await current());
+   if(checked.confirmation!==confirmed||checked.sourceRevision!==sourceRevision)throw Error('REVIEW_CHANGED');
+  }
+  return withSecrets(({signingSecret,wrappingSecret})=>installDraftRotationRelease({...recipientOptions,release,wrappingSecret,
+   signSelection:bytes=>sodium.crypto_sign_detached(bytes,signingSecret),
+   confirmedHead:eventHash,confirmedGrantHash:grantHash,expectedRevision:sourceRevision}));
+ }
+
+ return {prepare,review,approve,binding,publish,status,exportFile,reviewFile,install};
 }
