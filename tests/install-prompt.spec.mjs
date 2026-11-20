@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { expect, test } from '@playwright/test';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 async function offerInstall(page, outcome = 'accepted') {
   await page.evaluate((choice) => {
@@ -18,10 +18,16 @@ async function offerInstall(page, outcome = 'accepted') {
   }, outcome);
 }
 
+async function waitForKitchenReady(page) {
+  await expect(page.getByRole('progressbar', { name: 'Creative Cooking is getting the kitchen ready' })).toHaveCount(0);
+  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+}
+
 test('offers installation only after engagement and captures the CTA screenshot', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('./');
+  await startLocalWorkspace(page);
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
+  await waitForKitchenReady(page);
 
   await offerInstall(page);
   await expect(page.getByText('Install Creative Cooking', { exact: true })).toHaveCount(0);
@@ -47,8 +53,9 @@ test('offers installation only after engagement and captures the CTA screenshot'
 });
 
 test('remembers when the user dismisses the install tip', async ({ page }) => {
-  await page.goto('./');
+  await startLocalWorkspace(page);
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
+  await waitForKitchenReady(page);
   await offerInstall(page);
 
   const ingredient = page.getByLabel('Ingredient and details');

@@ -1,4 +1,5 @@
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 
 export function SettingsGlyph() {
   return (

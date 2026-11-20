@@ -1,0 +1,1 @@
+{"expo":{"name":"K1 Crypto Probe","slug":"k1-crypto-probe","scheme":"k1-crypto-probe","version":"1.0.0","android":{"package":"org.creativecooking.k1probe"},"plugins":["expo-router","react-native-libsodium"],"experiments":{"typedRoutes":false}}}

@@ -16,7 +16,11 @@ const config: ExpoConfig = {
     shortName: 'Cook',
     favicon: './assets/icon-192.png'
   },
-  plugins: ['expo-router', 'expo-secure-store'],
+  plugins: ['expo-router', 'expo-secure-store', './src/loro/native/with-loro-master.cjs'],
+  android: {
+    package: 'com.creativecooking.app',
+    permissions: ['android.permission.ACCESS_NETWORK_STATE']
+  },
   experiments: {
     typedRoutes: true,
     baseUrl

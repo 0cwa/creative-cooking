@@ -1,8 +1,7 @@
 import type { IngredientPreference, PantryItem } from './types';
+import { normalizeIngredientName } from './ingredient-name.mjs';
 
-export function normalizeIngredientName(value: string): string {
-  return value.trim().replace(/\s+/g, ' ');
-}
+export { normalizeIngredientName };
 
 export function parseIngredientInput(value: string): string[] {
   return value

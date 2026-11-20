@@ -1,0 +1,5 @@
+# Bootstrap browser proof
+
+The original bootstrap and sequence files are copied from commit `60c1749232cf894679b392cbcb6b7eb4f32f9708`; only import paths in the bootstrap were adjusted. The fixture uses an isolated browser context and synthetic database names. Build `client.ts` with esbuild 0.25.12 as a browser ESM bundle in a scratch directory, copy `node_modules/loro-crdt/web/loro_wasm_bg.wasm` beside it, then run `PROOF_DIR=<scratch> TEST_CDP_ENDPOINT=<isolated CDP URL> node tests/loro/bootstrap-proof/proof.mjs` through `agent-heavy`.
+
+The proof exercises both original bugs and the corrected behavior in actual browser IndexedDB, Web Crypto, Sodium and Loro. It pauses two tabs during bootstrap, deletes only synthetic key records and checks for replacement writes, checks sequence corruption while a handle is open and after reopen, and tests interrupted setup and missing Web Locks. It does not use a real workspace. The separate `tests/loro-local-preview.spec.mjs` exercises the built app and preserves an existing workspace across fresh-preview creation.

@@ -1,17 +1,16 @@
 import { useMemo, useRef } from 'react';
-import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, PanResponder, Pressable, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import type { IngredientPreference, PantryItem } from '@/domain/types';
 import { StarRating } from './StarRating';
 
 export function PantryRow({
   item,
   onDelete,
-  onBuyAgain,
   onPreference
 }: {
   item: PantryItem;
   onDelete(): void;
-  onBuyAgain(): void;
   onPreference(value: IngredientPreference): void;
 }) {
   const x = useRef(new Animated.Value(0)).current;
@@ -31,27 +30,16 @@ export function PantryRow({
   );
 
   return (
-    <View style={styles.shell}>
+    <View testID={`pantry-item-${item.id}`} style={styles.shell}>
       <View style={styles.deleteBackdrop}><Text style={styles.deleteBackdropText}>Remove</Text></View>
       <Animated.View style={[styles.row, { transform: [{ translateX: x }] }]} {...responder.panHandlers}>
         <View style={styles.textWrap}>
           <Text style={styles.name}>{item.name}</Text>
           <StarRating value={item.preference} onChange={onPreference} />
         </View>
-        <View style={styles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Buy ${item.name} again`}
-            accessibilityHint="Removes it from Pantry and adds it to Shopping"
-            onPress={onBuyAgain}
-            style={styles.buyAgainButton}
-          >
-            <Text style={styles.buyAgainText}>Buy again</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={onDelete} style={styles.removeButton}>
-            <Text style={styles.removeText}>×</Text>
-          </Pressable>
-        </View>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={onDelete} style={styles.removeButton}>
+          <Text style={styles.removeText}>×</Text>
+        </Pressable>
       </Animated.View>
     </View>
   );
@@ -64,9 +52,6 @@ const styles = StyleSheet.create({
   row: { minHeight: 72, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, paddingLeft: 16, flexDirection: 'row', alignItems: 'center' },
   textWrap: { flex: 1, gap: 3 },
   name: { color: '#172033', fontSize: 17, fontWeight: '600' },
-  actions: { flexDirection: 'row', alignItems: 'center', marginRight: 4 },
-  buyAgainButton: { minWidth: 80, height: 44, borderRadius: 12, backgroundColor: '#f0fdf4', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
-  buyAgainText: { color: '#166534', fontSize: 12.5, fontWeight: '800' },
-  removeButton: { width: 48, height: 52, alignItems: 'center', justifyContent: 'center' },
+  removeButton: { width: 52, height: 52, marginRight: 4, alignItems: 'center', justifyContent: 'center' },
   removeText: { fontSize: 28, color: '#94a3b8', lineHeight: 30 }
 });

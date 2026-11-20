@@ -1,0 +1,29 @@
+{
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "esbuild": "0.25.12",
+    "expo": "57.0.32",
+    "expo-crypto": "57.0.3",
+    "expo-router": "57.0.22",
+    "fast-text-encoding": "1.0.6",
+    "libsodium-wrappers": "0.7.15",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-libsodium": "1.7.0",
+    "react-native-safe-area-context": "5.7.0",
+    "react-native-screens": "4.26.0",
+    "shamir-secret-sharing": "0.0.4"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node node.mjs",
+    "bundle": "esbuild browser.mjs --bundle --format=esm --outfile=browser-bundle.js",
+    "native:prebuild": "expo prebuild --platform android",
+    "native:assemble": "cd android && ./gradlew assembleDebug assembleRelease"
+  },
+  "main": "expo-router/entry"
+}

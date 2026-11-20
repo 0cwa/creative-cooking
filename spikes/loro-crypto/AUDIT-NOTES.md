@@ -1,0 +1,7 @@
+# Fixture dependency audit, 2026-11-17
+
+The `npm audit` report saved in task scratch identifies six affected packages: Expo and @expo/fingerprint (moderate, propagated from minimatch), minimatch (moderate), Expo Router and query-string (high, propagated from decode-uri-component), and decode-uri-component (high, also a moderate advisory). These are six package findings, not six independent root defects.
+
+Source inspection of this locked tree shows Expo Router 57.0.22 depends on query-string 7.1.3 and decode-uri-component 0.2.2; router path parsing imports query-string, so malformed incoming URLs may reach the decoder. This is a denial-of-service concern for any app accepting untrusted deep links; the fixture's test values do not establish that a production route is safe. The other path is Expo -> @expo/fingerprint -> minimatch: fingerprint's path utilities construct matchers from ignore patterns. That is relevant to build/fingerprinting when patterns can be influenced by an untrusted project, not evidence that the crypto primitive or Android runtime executes those matchers. These are source-based attack-path assessments, not exploitation tests or an exhaustive reachability analysis. Review patched compatible versions and affected entry points before adopting these dependencies. Do not infer a clean audit or downgrade/upgrade dependencies blindly.
+
+Relevant advisories: GHSA-vcc3-ghjq-m6fr and GHSA-qr28-fpjm-wq7f (decode), GHSA-g3hv-75wg-m249 (minimatch). npm's suggested major-version changes require separate compatibility review.

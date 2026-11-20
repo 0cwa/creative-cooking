@@ -1,0 +1,1 @@
+{"name":"relay-household-poc","private":true,"version":"1.0.0","type":"module","scripts":{"test":"node test.mjs && node --test contracts.test.mjs agreed-contracts.test.mjs","test:contracts":"node --test contracts.test.mjs agreed-contracts.test.mjs"},"dependencies":{"loro-crdt":"1.17.1"}}

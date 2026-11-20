@@ -1,0 +1,21 @@
+{
+  "name": "loro-storage-native-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start --localhost",
+    "test:node": "node node-test.mjs"
+  },
+  "dependencies": {
+    "expo": "57.0.17",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "loro-react-native": "1.10.3",
+    "@op-engineering/op-sqlite": "18.2.5"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  },
+  "type": "module"
+}

@@ -189,6 +189,31 @@ export function parseRecipeIngredientsText(
   });
 }
 
+/** Keeps step identities attached through text edits and reorderings. */
+export function preserveRecipeStepIds(
+  steps: string[], previousSteps: string[], previousIds: string[] = [], recipeId = 'draft'
+): string[] {
+  const available = new Map<string, string[]>();
+  previousSteps.forEach((step, index) => {
+    const id = previousIds[index];
+    if (!id) return;
+    const key = step.trim();
+    available.set(key, [...(available.get(key) ?? []), id]);
+  });
+  const used = new Set<string>();
+  return steps.map((step, index) => {
+    const candidates = available.get(step.trim());
+    const id = candidates?.shift();
+    if (id && !used.has(id)) { used.add(id); return id; }
+    const base = `step-${recipeId}-${index}-${step.trim().length}`;
+    let candidate = base;
+    let suffix = 1;
+    while (used.has(candidate)) candidate = `${base}-${suffix++}`;
+    used.add(candidate);
+    return candidate;
+  });
+}
+
 export function formatRecipeTextList(items: string[] | undefined): string {
   return (items ?? []).join('\n');
 }
@@ -238,16 +263,13 @@ export function scaleRecipeIngredients(
   }));
 }
 
-export function shoppingIngredients(
+/** Recipe previews use pantry availability; legacy flags are consumed only during migration. */
+export function missingPantryIngredients(
   ingredients: RecipeIngredient[],
-  pantryNames?: string[]
+  pantryNames: string[]
 ): RecipeIngredient[] {
-  const pantry = pantryNames === undefined
-    ? null
-    : new Set(pantryNames.map((name) => normalizeIngredientName(name).toLocaleLowerCase()));
-
+  const pantry = new Set(pantryNames.map((name) => normalizeIngredientName(name).toLocaleLowerCase()));
   return ingredients.filter((ingredient) => (
-    Boolean(ingredient.needsShopping)
-    || Boolean(pantry && !pantry.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase()))
+    !pantry.has(normalizeIngredientName(ingredient.name).toLocaleLowerCase())
   ));
 }

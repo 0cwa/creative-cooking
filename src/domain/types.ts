@@ -6,12 +6,19 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const DICTATION_ENGINES = ['browser', 'whisper'] as const;
 export type DictationEngine = (typeof DICTATION_ENGINES)[number];
 
+export const THEME_PREFERENCES = ['system', 'light', 'dark'] as const;
+export type ThemePreference = (typeof THEME_PREFERENCES)[number];
+
 export function isDictationEngine(value: unknown): value is DictationEngine {
   return typeof value === 'string' && (DICTATION_ENGINES as readonly string[]).includes(value);
 }
 
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return typeof value === 'string' && (THEME_PREFERENCES as readonly string[]).includes(value);
 }
 
 export type PantryItem = {
@@ -22,17 +29,55 @@ export type PantryItem = {
   updatedAt: string;
 };
 
-export type ShoppingItem = {
+export type ShoppingList = {
   id: string;
   name: string;
-  amount?: string;
-  pantryPreference?: IngredientPreference;
+  currentCycleId: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  removedAt?: string;
+};
+
+export type ShoppingCycle = {
+  id: string;
+  listId: string;
+  startedAt: string;
+};
+
+export type ShoppingItem = {
+  id: string;
+  listId: string;
+  name: string;
+  recipeId?: string;
+  ingredientId?: string;
+  displayQuantity?: string;
+  displayUnit?: string;
+  purchaseCycleId: string;
   checked: boolean;
-  createdAt: string;
-  updatedAt: string;
+  purchasedCycleId?: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  removedAt?: string;
+};
+
+export type ShoppingPurchase = {
+  id: string;
+  listId: string;
+  purchaseCycleId: string;
+  itemIds: string[];
+  pantryItemIds: string[];
+  purchasedAt: string;
+};
+
+export type ShoppingState = {
+  lists: ShoppingList[];
+  cycles: ShoppingCycle[];
+  items: ShoppingItem[];
+  purchases: ShoppingPurchase[];
 };
 
 export type RecipeIngredient = {
+  id?: string;
   name: string;
   amount?: string;
   needsShopping?: boolean;
@@ -45,6 +90,8 @@ export type Recipe = {
   portions: number;
   ingredients: RecipeIngredient[];
   steps: string[];
+  /** Stable identities parallel to steps; absent in legacy records until normalized. */
+  stepIds?: string[];
   notes?: string[];
   createdAt: string;
   updatedAt: string;
@@ -84,6 +131,7 @@ export type MealContext = {
 };
 
 export type AppSettings = {
+  theme: ThemePreference;
   systemPrompt: string;
   allergies: string[];
   sendLocalTime: boolean;
@@ -95,8 +143,8 @@ export type AppSettings = {
 
 export type PersistedState = {
   pantry: PantryItem[];
-  shoppingList: ShoppingItem[];
   recipes: Recipe[];
+  shopping: ShoppingState;
   chatMessages: ChatMessage[];
   chatHistory: ChatConversation[];
   activeConversationId: string | null;

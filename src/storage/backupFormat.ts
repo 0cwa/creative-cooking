@@ -1,8 +1,10 @@
-import type { AppSettings, ChatConversation, ChatMessage, MealContext, PantryItem, PersistedState, Recipe, ShoppingItem } from '../domain/types';
+import type { AppSettings, ChatConversation, ChatMessage, MealContext, PantryItem, PersistedState, Recipe } from '../domain/types';
+import { normalizeRecipes } from '../domain/recipeIdentity.ts';
+import { emptyShoppingState, migrateLegacyShopping, validateShoppingState } from '../domain/shopping.ts';
 
 type BackupEnvelope = {
   format: 'creative-cooking-backup';
-  version: 1;
+  version: 2;
   exportedAt: string;
   state: PersistedState;
 };
@@ -21,10 +23,14 @@ function isDictationEngine(value: unknown): value is AppSettings['dictationEngin
   return value === 'browser' || value === 'whisper';
 }
 
+function isThemePreference(value: unknown): value is AppSettings['theme'] {
+  return value === 'system' || value === 'light' || value === 'dark';
+}
+
 export function serializeBackupEnvelope(state: PersistedState, exportedAt: string): string {
   const envelope: BackupEnvelope = {
     format: 'creative-cooking-backup',
-    version: 1,
+    version: 2,
     exportedAt,
     state
   };
@@ -33,14 +39,20 @@ export function serializeBackupEnvelope(state: PersistedState, exportedAt: strin
 
 export function parseBackupEnvelope(raw: string, defaults: PersistedState): PersistedState {
   const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed) || parsed.format !== 'creative-cooking-backup' || parsed.version !== 1 || !isRecord(parsed.state)) {
+  if (!isRecord(parsed) || parsed.format !== 'creative-cooking-backup'
+    || (parsed.version !== 1 && parsed.version !== 2) || !isRecord(parsed.state)) {
     throw new Error('This is not a supported Creative Cooking backup.');
   }
 
   const state = parsed.state;
   const pantry = Array.isArray(state.pantry) ? (state.pantry as PantryItem[]) : [];
-  const shoppingList = Array.isArray(state.shoppingList) ? (state.shoppingList as ShoppingItem[]) : [];
-  const recipes = Array.isArray(state.recipes) ? (state.recipes as Recipe[]) : [];
+  const recipes = normalizeRecipes(Array.isArray(state.recipes) ? (state.recipes as Recipe[]) : []);
+  if (parsed.version === 2 && state.shopping === undefined) {
+    throw new Error('This backup is missing its shopping data.');
+  }
+  const shopping = state.shopping === undefined
+    ? migrateLegacyShopping(recipes)
+    : validateShoppingState(state.shopping);
   const chatMessages = Array.isArray(state.chatMessages) ? (state.chatMessages as ChatMessage[]) : [];
   const chatHistory = Array.isArray(state.chatHistory) ? (state.chatHistory as ChatConversation[]) : [];
   const activeConversationId = typeof state.activeConversationId === 'string'
@@ -71,25 +83,29 @@ export function parseBackupEnvelope(raw: string, defaults: PersistedState): Pers
   const dictationEngine = isDictationEngine(settingsRecord.dictationEngine)
     ? settingsRecord.dictationEngine
     : defaults.settings.dictationEngine;
+  const theme = isThemePreference(settingsRecord.theme)
+    ? settingsRecord.theme
+    : defaults.settings.theme;
   const settings = {
     ...defaults.settings,
     ...settingsRecord,
     providerId,
     model,
     dictationEngine,
+    theme,
     allergies: Array.isArray(settingsRecord.allergies)
       ? (settingsRecord.allergies as AppSettings['allergies'])
       : [...defaults.settings.allergies]
   } as AppSettings;
 
-  return { pantry, shoppingList, recipes, chatMessages, chatHistory, activeConversationId, mealContext, settings };
+  return { pantry, recipes, shopping, chatMessages, chatHistory, activeConversationId, mealContext, settings };
 }
 
 export function freshStateFromDefaults(defaults: PersistedState): PersistedState {
   return {
     pantry: [],
-    shoppingList: [],
     recipes: [],
+    shopping: emptyShoppingState(),
     chatMessages: [],
     chatHistory: [],
     activeConversationId: null,

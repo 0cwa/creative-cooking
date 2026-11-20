@@ -60,9 +60,9 @@ For compatibility, manually constructed plain `?ort=sk-or-...` links are also ac
 
 ## Local data and backups
 
-The PWA stores ordinary app state in IndexedDB, requests durable browser storage once, and shows the current status in Settings. Existing `creative-cooking-state-v1` data from the previous localStorage-backed storage path is migrated automatically after upgrade. Browser persistence behavior differs: some browsers ask the user while others grant or deny persistence silently.
+The Loro workspace stores pantry, recipes, shopping lists, and private notes on this device. On web it uses IndexedDB. On Android it uses SQLite. Verified household members can exchange encrypted updates. Settings also offers the available encrypted recovery controls.
 
-Settings supports the same versioned JSON backup format on web, iOS, and Android for pantry, recipes, chats, meal context, and settings. Web uses browser download/restore; native builds use the system document picker and share sheet. Provider API keys are deliberately excluded from backups.
+The former PowerSync implementation lives on [`archive/powersync-2026-11-15`](https://github.com/0cwa/creative-cooking/tree/archive/powersync-2026-11-15). Starting Loro creates separate storage and leaves existing data alone. To read or export PowerSync data, use the archived build with the original browser origin or native application storage.
 
 ## Provider credentials
 
@@ -72,3 +72,4 @@ No project-owned LLM secret is committed or bundled. Users connect their own Ope
 
 - [Build plan](docs/BUILD_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Content sync, recovery, and support limits](docs/CONTENT-SYNC.md)

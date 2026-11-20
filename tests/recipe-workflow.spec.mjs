@@ -1,116 +1,62 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
-test('saved recipe can be scaled, edited, shopped, added to Pantry, and persisted', async ({ page }) => {
-  const state = {
-    pantry: [{
-      id: 'pantry-lentils',
-      name: 'lentils',
-      preference: 4,
-      createdAt: '2026-09-21T10:00:00.000Z',
-      updatedAt: '2026-09-21T10:00:00.000Z'
-    }],
-    recipes: [{
-      id: 'recipe-lentils',
-      title: 'Lentil bowl',
-      description: 'A bright pantry dinner.',
-      portions: 2,
-      ingredients: [
-        { name: 'lentils', amount: '1 cup' },
-        { name: 'lemon', amount: '1/2' }
-      ],
-      steps: ['Warm the lentils.', 'Finish with lemon.'],
-      notes: ['Taste before salting.'],
-      createdAt: '2026-09-21T10:00:00.000Z',
-      updatedAt: '2026-09-21T10:00:00.000Z'
-    }]
+function contrastRatio(foreground, background) {
+  const channels = (value) => value.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
+  const luminance = (color) => {
+    const [red, green, blue] = channels(color).map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
   };
+  const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (values[0] + 0.05) / (values[1] + 0.05);
+}
 
-  await page.addInitScript((seed) => {
-    window.localStorage.setItem('creative-cooking-state-v1', JSON.stringify(seed));
-  }, state);
+test('shopping lists work locally without recipes or accounts and retain logical removals', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await startLocalWorkspace(page,'./shopping');
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('New shopping list name')).toHaveCount(1);
+  const mobileLayout = await page.evaluate(() => ({
+    viewportWidth: document.documentElement.clientWidth,
+    documentWidth: document.documentElement.scrollWidth
+  }));
+  expect(mobileLayout.documentWidth).toBeLessThanOrEqual(mobileLayout.viewportWidth);
+  const contrast = await page.evaluate(() => {
+    const input = document.querySelector('[aria-label="New shopping list name"]');
+    return {
+      placeholder: getComputedStyle(input, '::placeholder').color,
+      background: getComputedStyle(input).backgroundColor
+    };
+  });
+  expect(contrastRatio(contrast.placeholder, contrast.background)).toBeGreaterThanOrEqual(4.5);
+  await page.getByLabel('New shopping list name').focus();
+  await expect.poll(async () => page.getByLabel('New shopping list name').evaluate((input) => getComputedStyle(input).borderTopWidth)).toBe('2px');
+  await page.getByLabel('New shopping list name').fill('Quick shop');
+  await page.getByRole('button', { name: 'Create shopping list' }).click();
+  await expect(page.getByText('Quick shop', { exact: true })).toBeVisible();
 
-  await page.goto('./recipes');
-  await expect(page.getByText('Lentil bowl', { exact: true })).toBeVisible();
+  await page.getByLabel('Shopping item name').fill('beans');
+  await page.getByLabel('Shopping quantity').fill('2');
+  await page.getByLabel('Shopping unit').fill('cans');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.getByText('2 cans', { exact: true })).toBeVisible();
+  await page.getByLabel('Edit beans').click();
+  await page.getByLabel('Edit item name').fill('white beans');
+  await page.getByLabel('Edit item quantity').fill('3');
+  await page.getByLabel('Edit item unit').fill('cans');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('3 cans', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const desktopWidth = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth }));
+  expect(desktopWidth.document).toBeLessThanOrEqual(desktopWidth.viewport);
 
-  await page.getByLabel('Open recipe Lentil bowl').click();
-  await expect(page.getByLabel('2 portions')).toBeVisible();
-  await expect(page.getByText('Need to shop', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add needed ingredient to Shopping' })).toBeVisible();
-
-  await page.getByLabel('Increase portions').click();
-  await expect(page.getByLabel('3 portions')).toBeVisible();
-  await expect(page.getByText(/1 1\/2 cup lentils/)).toBeVisible();
-  await expect(page.getByText(/3\/4 lemon/).first()).toBeVisible();
-
-  await page.getByLabel('Edit recipe Lentil bowl').click();
-  await expect(page.getByText('Edit it like a recipe', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Amount for ingredient 1')).toHaveCount(0);
-  await expect(page.getByLabel('Recipe ingredients')).toHaveValue('1 1/2 cup lentils\n3/4 lemon');
-  await page.getByLabel('Recipe title').fill('Bright lentil bowl');
-  await page.getByLabel('Recipe ingredients').fill('1 1/2 cup lentils\n3/4 lemon\n1 tbsp olive oil');
-  await page.getByLabel('Recipe method').fill('1. Warm the lentils.\n2. Finish with lemon.\n3. Drizzle with olive oil.');
-  await page.getByLabel('Recipe notes').fill('Taste before salting.\nBest served warm.');
-  await page.getByLabel('Save recipe changes').click();
-  await expect(page.getByRole('dialog').getByText('Bright lentil bowl', { exact: true })).toBeVisible();
-  await expect(page.getByText(/1 tbsp olive oil/).first()).toBeVisible();
-  await expect(page.getByText(/3\. Drizzle with olive oil\./)).toBeVisible();
-
-  await expect(page.getByText('Need to shop', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Add 2 needed ingredients to Shopping' }).click();
-  await expect(page.getByRole('button', { name: 'Open Shopping' })).toBeVisible();
-  await page.getByLabel('Close recipe').click();
-
-  await page.goto('./shopping');
-  await expect(page.getByLabel('lemon purchased')).toBeVisible();
-  await expect(page.getByLabel('olive oil purchased')).toBeVisible();
-  await page.getByLabel('lemon purchased').click();
-  await page.getByLabel('olive oil purchased').click();
-  await page.getByRole('button', { name: 'Put checked items in Pantry' }).click();
-
-  await expect.poll(async () => page.evaluate(async () => {
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('creative-cooking', 1);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const raw = await new Promise((resolve, reject) => {
-      const transaction = database.transaction('app-state', 'readonly');
-      const request = transaction.objectStore('app-state').get('creative-cooking-state-v1');
-      request.onsuccess = () => resolve(request.result ?? '');
-      request.onerror = () => reject(request.error);
-    });
-    database.close();
-    return raw;
-  })).toContain('Bright lentil bowl');
-
-  await expect.poll(async () => page.evaluate(async () => {
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('creative-cooking', 1);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const raw = await new Promise((resolve, reject) => {
-      const transaction = database.transaction('app-state', 'readonly');
-      const request = transaction.objectStore('app-state').get('creative-cooking-state-v1');
-      request.onsuccess = () => resolve(request.result ?? '');
-      request.onerror = () => reject(request.error);
-    });
-    database.close();
-    const persisted = JSON.parse(raw);
-    return persisted.recipes[0].ingredients.find((ingredient) => ingredient.name === 'olive oil')?.amount ?? null;
-  })).toBe('1 tbsp');
-
-  await page.goto('./');
-  await expect(page.getByText('lemon', { exact: true })).toBeVisible();
-  await expect(page.getByText('olive oil', { exact: true })).toBeVisible();
-
-  await page.goto('./recipes');
-  await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();
-  await page.getByLabel('Open recipe Bright lentil bowl').click();
-  await expect(page.getByText('Need to shop', { exact: true })).toHaveCount(0);
-
+  await page.getByRole('button', { name: 'Remove list' }).click();
+  await page.getByRole('button', { name: 'Confirm remove list' }).click();
+  await expect(page.getByText('Create a list', { exact: true })).toBeVisible();
+  await expect(page.getByText('Saved on this device only.', { exact: true })).toBeVisible();
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByText('Bright lentil bowl', { exact: true })).toBeVisible();
-  await page.getByLabel('Open recipe Bright lentil bowl').click();
-  await expect(page.getByLabel('3 portions')).toBeVisible();
+  await expect(page.getByText('Create a list', { exact:true })).toBeVisible();
+  await expect(page.getByText('white beans', { exact:true })).toHaveCount(0);
 });

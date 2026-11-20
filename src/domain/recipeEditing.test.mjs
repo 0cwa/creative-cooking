@@ -4,12 +4,12 @@ import {
   formatRecipeIngredientLine,
   formatRecipeIngredientsText,
   formatRecipeTextList,
+  missingPantryIngredients,
   parseRecipeIngredientLine,
   parseRecipeIngredientsText,
   parseRecipeTextList,
   scaleIngredientAmount,
-  scaleRecipeIngredients,
-  shoppingIngredients
+  scaleRecipeIngredients
 } from './recipeEditing.ts';
 
 test('formats structured ingredients as natural recipe lines', () => {
@@ -84,38 +84,12 @@ test('scales recipe ingredient amounts without changing ingredient metadata', ()
   ]);
 });
 
-test('returns explicitly marked shopping ingredients when pantry context is not supplied', () => {
+test('recipe shopping previews use pantry availability instead of legacy flags', () => {
   assert.deepEqual(
-    shoppingIngredients([
-      { name: 'carrots', needsShopping: true },
-      { name: 'salt' },
-      { name: 'lemon', needsShopping: false }
-    ]),
-    [{ name: 'carrots', needsShopping: true }]
-  );
-});
-
-test('shopping list also includes recipe ingredients missing from Pantry', () => {
-  assert.deepEqual(
-    shoppingIngredients(
-      [
-        { name: 'Carrots', needsShopping: false },
-        { name: 'sea salt' },
-        { name: 'Lemon', needsShopping: true }
-      ],
-      ['carrots', 'SEA   SALT']
-    ),
-    [{ name: 'Lemon', needsShopping: true }]
-  );
-
-  assert.deepEqual(
-    shoppingIngredients(
-      [
-        { name: 'carrots' },
-        { name: 'lemon' }
-      ],
-      ['carrots']
-    ),
-    [{ name: 'lemon' }]
+    missingPantryIngredients([
+      { name: 'rice', needsShopping: true },
+      { name: 'beans' }
+    ], ['Rice']),
+    [{ name: 'beans' }]
   );
 });
