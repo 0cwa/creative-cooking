@@ -2,6 +2,18 @@ import {reopenSelectedRetention} from './selected-reconstruction.mjs';
 import {selectedOperationReportService} from './selected-report-service.mjs';
 import {sameReportValue} from './report.mjs';
 
+/** Derive the private publication binding from authenticated local evidence. */
+export async function deriveDraftRotationBinding(runtime,draftId) {
+ const draft=await reopenSelectedRetention(runtime,draftId);
+ const opened=await selectedOperationReportService(runtime).reopen(draft.reportHash);
+ const {suspectDevice,observation:{manifest}}=opened.report.payload;
+ const binding={draftId,reportHash:draft.reportHash,suspectDevice,sourceHead:manifest.parentHead,
+  documents:[{recipeId:null,documentId:manifest.root.documentId},
+   ...manifest.children.map(({recipeId,documentId})=>({recipeId,documentId}))]};
+ await checkedDraftSource(runtime,binding);
+ return binding;
+}
+
 /** Rebuild a saved draft for detached preparation. No policy projection or
  * authority follows from this result; visibility provenance must be verified
  * independently before any effect can be projected. */

@@ -299,6 +299,9 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const {checkedDraftSource}=await import('../compromise/checked-draft-source.mjs');
  const binding={draftId:saved.draftId,reportHash,suspectDevice:b.deviceId,sourceHead:report.report.payload.observation.manifest.parentHead,
   documents:draft.documents.map(({recipeId,documentId})=>({recipeId,documentId}))};
+ const {deriveDraftRotationBinding}=await import('../compromise/checked-draft-source.mjs');
+ assert.deepEqual(await deriveDraftRotationBinding(reopenedRuntime,saved.draftId),binding);
+ await assert.rejects(()=>deriveDraftRotationBinding(reopenedRuntime,'0'.repeat(64)),/NOT_FOUND/);
  const checkedDraft=await checkedDraftSource(reopenedRuntime,binding);
  const checkedRecipe=new LoroDoc();checkedRecipe.import(checkedDraft.documents[1].snapshot);
  assert.equal(checkedRecipe.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'3 cups');
