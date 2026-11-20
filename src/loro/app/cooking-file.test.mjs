@@ -557,7 +557,17 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  try {await assert.rejects(()=>installDraftRotationRelease(installArgs),/CONFLICT/);}
  finally {c.storage.commitDraftRotationRecipient=commitRecipient;}
  assert.deepEqual(c.rows(),recipientRows);
- assert.deepEqual(await installDraftRotationRelease(installArgs),{head:eventHash});
+ let arrived=0,releaseCommits;
+ const bothAtCommit=new Promise(resolve=>{releaseCommits=resolve;});
+ c.storage.commitDraftRotationRecipient=async input=>{
+  if(++arrived===2)releaseCommits();
+  await bothAtCommit;
+  const result=await commitRecipient(input);
+  if(result.ok)throw Error('lost response');
+  return result;
+ };
+ try {assert.deepEqual(await Promise.all([installDraftRotationRelease(installArgs),installDraftRotationRelease(installArgs)]),[{head:eventHash},{head:eventHash}]);}
+ finally {c.storage.commitDraftRotationRecipient=commitRecipient;}
  c.reopen();
  const recipientReceipt=must(await c.storage.readDraftRotationRecipient(scope.id,'retention-revoke'));
  assert.equal(must(await c.storage.readAdultRemovalRecipient(scope.id,'retention-revoke')),null);
@@ -572,6 +582,23 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  for(const [i,{operationId,identity,keyHash}] of receiptBody.targets.entries()){
   await recipientKeys.use(operationId,identity,key=>assert.equal(sodium.to_hex(sodium.crypto_generichash(32,key)),keyHash));
   assert.equal(keyHash,proof.body.keyCommitments[i].keyHash);
+ }
+ const {verifyRetainedDraftRotationRecipient}=await import('../compromise/reopen-draft-rotation.mjs');
+ const retainedArgs={...installArgs,operationId:'retention-revoke'};
+ const retained=await verifyRetainedDraftRotationRecipient(retainedArgs);
+ assert.equal(retained.members.length,2);
+ const retryRows=c.rows();
+ assert.deepEqual(await installDraftRotationRelease({...installArgs,signSelection:()=>{throw Error('unexpected signature')}}),{head:eventHash});
+ assert.deepEqual(c.rows(),retryRows);
+ for(const change of [{confirmedHead:'0'.repeat(64)},{confirmedGrantHash:'0'.repeat(64)},{recipientAdultId:'wrong'},{recipientDeviceId:b.deviceId},{expectedRevision:recipientRecord.revision+1},{wrappingSecret:wrap.privateKey}])await assert.rejects(()=>verifyRetainedDraftRotationRecipient({...retainedArgs,...change}));
+ for(const field of ['proof','bytes']) {const release=structuredClone(exported);release[field][0]^=1;await assert.rejects(()=>installDraftRotationRelease({...installArgs,release}));}
+ await assert.rejects(()=>verifyRetainedDraftRotationRecipient({...retainedArgs,keys:{use:async()=>{throw Error('missing key')}}}),/missing key/);
+ await assert.rejects(()=>verifyRetainedDraftRotationRecipient({...retainedArgs,keys:{use:async (_o,_i,callback)=>callback(new Uint8Array(32))}}),/INVALID_KEY/);
+ const readRecipient=c.storage.readDraftRotationRecipient.bind(c.storage);
+ for(const field of ['proof','ciphertext']) {
+  c.storage.readDraftRotationRecipient=async (...args)=>{const result=await readRecipient(...args);result.value[field][0]^=1;return result;};
+  try {await assert.rejects(()=>verifyRetainedDraftRotationRecipient(retainedArgs));}
+  finally {c.storage.readDraftRotationRecipient=readRecipient;}
  }
  const originalRecipientRows=new Map(c.rows().map(row=>[row.key,row.value]));
  for(const row of recipientRows.filter(row=>row.key!==authorityKey))assert.equal(originalRecipientRows.get(row.key),row.value);

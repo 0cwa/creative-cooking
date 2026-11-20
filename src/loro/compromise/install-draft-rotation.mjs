@@ -1,3 +1,4 @@
+import {reopenDraftRotationRecipient} from './reopen-draft-rotation.mjs';
 import {domain} from '../authority/validator.mjs';
 import {recipientBodyV2,recipientTargetV2} from './adult-removal-receipt.mjs';
 import {withOpenedDraftRotationRelease} from './open-draft-rotation.mjs';
@@ -11,6 +12,10 @@ export async function installDraftRotationRelease(options){
  const scope=structuredClone(options.scope),release=structuredClone(options.release);
  const {storage,pin,provider,sodium,keys,recipientDeviceId,recipientAdultId,signSelection,
   confirmedHead,confirmedGrantHash}=options;
+ const operationId=release.proposal.item.event.proposalId;
+ const reopen=()=>reopenDraftRotationRecipient({...options,scope,release,operationId});
+ const prior=await reopen();
+ if(prior)return prior;
  if(typeof signSelection!=='function')throw Error('INVALID_SIGNER');
  return withOpenedDraftRotationRelease({...options,scope,release},async opened=>{
   const recipient=opened.child.devices.find(device=>device.active&&device.deviceId===recipientDeviceId&&device.adultId===recipientAdultId);
@@ -32,10 +37,12 @@ export async function installDraftRotationRelease(options){
   if(!(signed instanceof Uint8Array)||signed.length!==64)throw Error('INVALID_SIGNER');
   const signature=hex(signed);
   if(!await verifySignature(provider,recipient.signingKeyRef,draftRotationRecipientPurpose,body,signature))throw Error('INVALID_SIGNER');
-  const result=await storage.commitDraftRotationRecipient({version:2,operationId,recipientDeviceId,
+  let result;
+  try { result=await storage.commitDraftRotationRecipient({version:2,operationId,recipientDeviceId,
    publisherProof:release.proof,manifestHash:release.proposal.grant.manifestHash,proof,signature,ciphertext:release.bytes,
    publisherRecord:release.publisherRecord,expected:opened.expected,next:opened.record,documents});
   if(!result.ok)throw Error(result.error?.code??result.error);
+  } catch(error) { const recovered=await reopen(); if(recovered)return recovered; throw error; }
   return {head:opened.record.acceptedParent};
  });
 }
