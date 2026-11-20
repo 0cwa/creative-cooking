@@ -53,6 +53,8 @@ export function householdCompromise(options:{
     inspect(confirmation:Confirmation,reportHash:string):Promise<SelectedReport>;
     saveDraft(confirmation:Confirmation,reportHash:string,selectedEffectIds:string[]):Promise<{draftId:string;replayed:boolean}>;
     reopenDraft(confirmation:Confirmation,draftId:string):Promise<SelectedDraft>;
+    deleteSaved(confirmation:Confirmation,kind:'draft'|'report',id:string,explicit:boolean):
+      Promise<{confirmation:Confirmation;reportHashes:string[];draftIds:string[]}>;
   };
   open():Promise<{confirmation:Confirmation;reports:{reviewId:string}[]}>;
   devices(confirmation:Confirmation):Promise<string[]>;

@@ -19,6 +19,7 @@ export function SelectedIncident({service}:{service:Service}) {
   const [selected,setSelected]=useState<string[]>([]);
   const [busy,setBusy]=useState(false);
   const [status,setStatus]=useState('');
+  const [removal,setRemoval]=useState<{kind:'draft'|'report';id:string}|null>(null);
   const generation=useRef(0);
   const busyRef=useRef(false);
   useEffect(()=>()=>{generation.current++;},[service]);
@@ -28,16 +29,25 @@ export function SelectedIncident({service}:{service:Service}) {
     const current=generation.current;
     const active=()=>generation.current===current;
     void task(active).catch(e=>{
-      if(active())setStatus(['STALE_SOURCE','DRAFT_SOURCE_CHANGED','STALE_DOCUMENT','STALE_EVIDENCE'].includes(e?.message)
-        ? 'The source changed. Start a new report and choose the operations again.'
-        : 'The report or draft could not be opened or saved. Reopen this section and try again.');
+      if(active())setStatus(e?.message==='CAPACITY'
+        ? 'This device has reached the saved report or draft limit. Delete an obsolete entry, then try again.'
+        : e?.message==='REPORT_IN_USE_OR_AUTHORITY_CHANGED'
+          ? 'The report could not be deleted. Delete drafts that use it first, or reopen this section if the household changed.'
+          : ['STALE_SOURCE','DRAFT_SOURCE_CHANGED','STALE_DOCUMENT','STALE_EVIDENCE'].includes(e?.message)
+            ? 'The source changed. Start a new report and choose the operations again.'
+            : 'The report or draft could not be opened, saved or deleted. Reopen this section and try again.');
     }).finally(()=>{if(active()){busyRef.current=false;setBusy(false);}});
   }
   function close() {
     generation.current++; busyRef.current=false; setBusy(false); setSession(null); setDevices([]);
-    setPlan(null); setBoundary(null); setReport(null); setDraft(null); setSelected([]); setStatus('');
+    setPlan(null); setBoundary(null); setReport(null); setDraft(null); setSelected([]); setStatus('');setRemoval(null);
   }
   function showReport(value:Report) {setReport(value);setPlan(null);setBoundary(null);setDraft(null);setSelected([]);}
+  function removeControl(kind:'draft'|'report',id:string) {
+    return <Pressable accessibilityRole="button" disabled={busy} onPress={()=>setRemoval({kind,id})}>
+      <Text>Delete local {kind} {id}</Text>
+    </Pressable>;
+  }
   return <View style={{gap:6}}>
     <Pressable accessibilityRole="button" onPress={()=>session?close():run(async active=>{
       const next=await service.selected.open();
@@ -67,14 +77,28 @@ export function SelectedIncident({service}:{service:Service}) {
           if(active()){setSession(next);showReport(value);setStatus('Signed report frozen on this device.');}
         })}><Text>Sign and freeze local report</Text></Pressable>
       </View>}
-      {session.reportHashes.map(id=><Pressable key={id} accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
+      {session.reportHashes.map(id=><View key={id}><Pressable accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
         const value=await service.selected.inspect(session.confirmation,id); if(active())showReport(value);
-      })}><Text>Open local report {id}</Text></Pressable>)}
-      {session.draftIds.map(id=><Pressable key={id} accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
+      })}><Text>Open local report {id}</Text></Pressable>{removeControl('report',id)}</View>)}
+      {session.draftIds.map(id=><View key={id}><Pressable accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
         const value=await service.selected.reopenDraft(session.confirmation,id);
         const source=await service.selected.inspect(session.confirmation,value.reportHash);
         if(active()){setDraft(value);setDraftDevice(source.suspectDevice);setReport(null);setPlan(null);}
-      })}><Text>Open local draft {id}</Text></Pressable>)}
+      })}><Text>Open local draft {id}</Text></Pressable>{removeControl('draft',id)}</View>)}
+      {removal&&<View style={{gap:6}}>
+        <Text selectable>Delete the saved local {removal.kind} {removal.id}?</Text>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={()=>setRemoval(null)}><Text>Cancel deletion</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
+          const {kind,id}=removal;
+          const next=await service.selected.deleteSaved(session.confirmation,kind,id,true);
+          if(active()){
+            setSession(next);setRemoval(null);
+            if(kind==='draft'&&draft?.draftId===id)setDraft(null);
+            if(kind==='report'&&report?.reportHash===id){setReport(null);setSelected([]);}
+            setStatus(kind==='draft'?'Local draft deleted.':'Local report and its frozen evidence deleted.');
+          }
+        })}><Text>Confirm delete local {removal.kind}</Text></Pressable>
+      </View>}
       {report&&<View style={{gap:6}}>
         <Text selectable>Reported device {report.suspectDevice}</Text>
         <Text selectable>Signed boundary operation {report.boundary.objectId}</Text>

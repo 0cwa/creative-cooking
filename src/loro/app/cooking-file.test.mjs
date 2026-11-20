@@ -291,6 +291,34 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const savedRows=a.rows();
  assert.deepEqual(await saveSelectedRetention(runtime,{reportHash,selectedEffectIds:[...selectedIds].reverse()}),{draftId:saved.draftId,replayed:true});
  assert.deepEqual(a.rows(),savedRows);
+ await assert.rejects(()=>reports.deleteSaved(currentConfirmation,'report',reportHash,true),/REPORT_IN_USE/);
+ await assert.rejects(()=>reports.deleteSaved(currentConfirmation,'draft',saved.draftId,false),/CONFIRMATION_REQUIRED/);
+ await assert.rejects(()=>reports.deleteSaved(confirmation,'draft',saved.draftId,true),/STALE_REPORT_SELECTION/);
+ assert.deepEqual(a.rows(),savedRows);
+ const storedReport=must(await a.storage.readSelectedOperationReport(scope.id,reportHash));
+ const capacityIds=Array.from({length:16},(_,i)=>(i+1).toString(16).padStart(64,'0'));
+ const storeExtraReport=id=>a.storage.freezeSelectedOperationReport({scopeId:scope.id,reportHash:id,
+  reportBytes:storedReport.record.reportBytes,objects:storedReport.objects,guard:report.guard});
+ const storeExtraDraft=id=>a.storage.saveSelectedRetention({scopeId:scope.id,draftId:id,reportHash,
+  selectedEffectIds:[],guard:report.guard,frozen:storedReport});
+ for(const id of capacityIds.slice(0,-1)){must(await storeExtraReport(id));must(await storeExtraDraft(id));}
+ const last=capacityIds.at(-1);
+ assert.equal((await storeExtraReport(last)).error.code,'CAPACITY');
+ assert.equal((await storeExtraDraft(last)).error.code,'CAPACITY');
+ const full=a.rows();
+ a.faultAt('write');
+ try {await assert.rejects(()=>reports.deleteSaved(currentConfirmation,'report',capacityIds[0],true),/IO/);}
+ finally {a.faultAt(null);}
+ assert.deepEqual(a.rows(),full);
+ await reports.deleteSaved(currentConfirmation,'report',capacityIds[0],true);
+ await reports.deleteSaved(currentConfirmation,'draft',capacityIds[0],true);
+ must(await storeExtraReport(last));
+ must(await storeExtraDraft(last));
+ for(const id of capacityIds.slice(1)){
+  await reports.deleteSaved(currentConfirmation,'report',id,true);
+  await reports.deleteSaved(currentConfirmation,'draft',id,true);
+ }
+ assert.deepEqual(a.rows(),savedRows);
  a.reopen();
  let publicationFault;
  const reopenedStorage=openSQLiteStorage(a.connection,boundary=>{if(boundary===publicationFault)throw Error('injected failure');});

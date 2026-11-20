@@ -93,5 +93,13 @@ export function selectedHouseholdCompromise({runtime,withCurrent,current}) {
    await current(revision,confirmation);
    return preview(runtime,await reopenSelectedRetention(runtime,draftId));
   }),
+  deleteSaved:(confirmation,kind,id,explicit)=>withCurrent(async revision=>{
+   if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');
+   const auth=await current(revision,confirmation);
+   const result=await storage.deleteSelectedCompromise(auth.expectedAuthority,kind,id);
+   if(!result.ok&&(result.error?.code??result.error)==='CONFLICT')throw Error('REPORT_IN_USE_OR_AUTHORITY_CHANGED');
+   must(result);
+   return {confirmation:auth.token,...must(await storage.listSelectedCompromise(scope.scopeId))};
+  }),
  };
 }

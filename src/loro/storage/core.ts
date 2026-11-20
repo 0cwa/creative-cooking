@@ -15,7 +15,7 @@ import {isPolicyDocumentId} from '../authority/validator.mjs';
 import {commandRecipeId,isRecipeDocumentId} from '../domain/recipe-document.mjs';
 import type { AtomicStorage, CommitResult, GroupCommitResult, LocalCommit, LocalCommitGroup, ImportCommit, InboxItem, OutboxReceipt, StorageError, SavedOutcome, Result } from '../contracts/index.ts';
 
-type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; keys(): Promise<string[]> };
+type Tx = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void>; delete(key: string): Promise<void>; keys(): Promise<string[]> };
 type RotationSourceGuard = {
   source:{documentId:string;bytes:Uint8Array;revision:number}|null;
 } & ({} | {reviewId:string;review:unknown;original:{checkpoint:Uint8Array;objects:Uint8Array[]}});
@@ -446,7 +446,7 @@ function projectionKey(x: unknown,allowUnboundV2=false,allowSet=false): string |
 export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage, RuntimeStorageReader, ProjectionAtomicStorage {
   private readonly run: TransactionRunner;
   private readonly fault?: (boundary: string) => void;
-  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({keys: () => tx.keys(), get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }})); }
+  constructor(run: TransactionRunner, fault?: (boundary: string) => void) { this.fault = fault; this.run = (write, body) => run(write, tx => body({keys: () => tx.keys(), get: async k => { const value = await tx.get(k); validateRecord(k,value); return value; }, put: async (k,v) => { await tx.put(k,v); fault?.('write'); }, delete: async k => { await tx.delete(k); fault?.('write'); }})); }
   /** Read durable records for runtime queues without exposing mutable stored buffers. */
   async listRecords(namespace: 'document' | 'object' | 'inbox' | 'cursor' | 'receipt-state', scopeId: string): Promise<Result<readonly { identity: readonly string[]; value: unknown }[], StorageError>> {
     try { return await this.run(false, async tx => {
@@ -1869,6 +1869,29 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       const reportHashes=ids('compromise-selected-report-v2'),draftIds=ids('compromise-selected-draft-v1');
       if(reportHashes.length>16||draftIds.length>16)return corrupt();
       return {ok:true as const,value:{reportHashes,draftIds}};
+    });}catch(e){return fail(mapError(e));}
+  }
+  /** Delete only local review records, including stale drafts from an earlier head. */
+  async deleteSelectedCompromise(expected:LocalCommit['expectedAuthority'],kind:'draft'|'report',id:string) {
+    expected=snapshot(expected);
+    const scopeId=expected?.scope?.id;
+    if(expected?.scope?.kind!=='household'||!expected.record||!validId(scopeId)||!hexOf(id,64)||!['draft','report'].includes(kind))return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      await this.requireAuthority(tx,expected);
+      if(kind==='draft'){
+        await tx.delete(key('compromise-selected-draft-v1',scopeId,id));
+      }else{
+        const prefix=key('compromise-selected-draft-v1',scopeId).slice(0,-1)+',';
+        for(const slot of await tx.keys()){
+          if(!slot.startsWith(prefix))continue;
+          const draft=await tx.get(slot);
+          if(!draft||!hexOf(draft.reportHash,64))return corrupt();
+          if(draft.reportHash===id)conflict();
+        }
+        await tx.delete(key('compromise-selected-report-v2',scopeId,id));
+        await tx.delete(key('compromise-selected-originals-v2',scopeId,id));
+      }
+      return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}
   }
   /** Read both halves together; authentication of the report and originals is the caller's responsibility. */

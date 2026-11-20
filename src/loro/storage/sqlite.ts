@@ -36,6 +36,7 @@ export function openSQLiteTransaction(db: SQLiteConnection): TransactionRunner {
           keys: async () => (db.executeSync('SELECT key FROM loro_records').rows ?? []).map(row => row.key),
           get: async k => { const row = db.executeSync('SELECT value FROM loro_records WHERE key = ?', [k]).rows?.[0]; return row === undefined ? undefined : decode(row.value); },
           put: async (k,v) => { db.executeSync('INSERT INTO loro_records (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',[k,encode(v)]); },
+          delete: async k => { db.executeSync('DELETE FROM loro_records WHERE key = ?', [k]); },
         });
         db.executeSync('COMMIT'); return result;
       } catch(e) { try { db.executeSync('ROLLBACK'); } catch {} throw e; }
