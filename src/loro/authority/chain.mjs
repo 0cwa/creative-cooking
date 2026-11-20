@@ -391,18 +391,28 @@ export async function resolveRuntimeAuthority(storage,scope,pin,provider,authorD
 }
 
 /** Explicit read-only authority from a fully verified retained adult-removal receipt. */
-export async function resolveAdultRemovalRuntimeAuthority({storage,scope,pin,provider,authorDevice,operationId,role,sodium,LoroDoc,keys,withWrapping}) {
+export async function resolveAdultRemovalRuntimeAuthority(options) {
+ const {resolveAdultRemovalReceipt}=await import('../compromise/resolve-adult-removal.mjs');
+ return resolveRotationRuntimeAuthority(options,resolveAdultRemovalReceipt);
+}
+
+/** Explicit read-only authority from a fully verified retained draft-rotation receipt. */
+export async function resolveDraftRotationRuntimeAuthority(options) {
+ const {resolveDraftRotationReceipt}=await import('../compromise/resolve-draft-rotation.mjs');
+ return resolveRotationRuntimeAuthority(options,resolveDraftRotationReceipt);
+}
+
+async function resolveRotationRuntimeAuthority({storage,scope,pin,provider,authorDevice,operationId,role,sodium,LoroDoc,keys,withWrapping},resolveReceipt) {
  scope=copy(scope);
  if(scope?.kind!=='household'||!['sponsor','recipient'].includes(role))throw Error('INVALID_AUTHORITY_CONFIG');
- const {resolveAdultRemovalReceipt}=await import('../compromise/resolve-adult-removal.mjs');
  const options={storage,scope,pin,provider,deviceId:authorDevice,operationId,role,sodium,LoroDoc,keys};
  let opened;
  if(role==='recipient'){
   if(typeof withWrapping!=='function')throw Error('INVALID_AUTHORITY_CONFIG');
   let called=false;
-  await withWrapping(async wrappingSecret=>{if(called)throw Error('INVALID_AUTHORITY_CONFIG');called=true;opened=await resolveAdultRemovalReceipt({...options,wrappingSecret});});
+  await withWrapping(async wrappingSecret=>{if(called)throw Error('INVALID_AUTHORITY_CONFIG');called=true;opened=await resolveReceipt({...options,wrappingSecret});});
   if(!called||!opened)throw Error('INVALID_AUTHORITY');
- }else opened=await resolveAdultRemovalReceipt(options);
+ }else opened=await resolveReceipt(options);
  if(!opened)throw Error('INVALID_AUTHORITY');
  const {record,child,members}=opened;
  let state;try{state=JSON.parse(dec.decode(record.authorityState));}catch{throw Error('INVALID_AUTHORITY');}

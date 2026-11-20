@@ -6,18 +6,19 @@ import {openSelectedRecipeCatalog,openShoppingRecipeCatalog,projectSelectedRecip
 
 /** Use the platform's shared workspace operation boundary for reads and saves. */
 export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,disclosure,originalRecipeDocuments=false,shoppingRecipeCopies=false}) {
+ const readOnly=()=>{const a=runtime.authority;return !!(a?.activatedPolicy||a?.returnedPolicy||a?.adultRemoval||a?.draftRotation);};
  async function recipeRuntime(recipeId){
   if(recipeId===undefined)return runtime;
-  if(runtime.authority?.installedSet || runtime.authority?.activatedPolicy || runtime.authority?.returnedPolicy || runtime.authority?.adultRemoval){
+  if(runtime.authority?.installedSet || readOnly()){
    const {members}=await runtime.authorization();
    if(members.some(member=>member.recipeId===recipeId))return runtime.forRecipe(recipeId);
-   if(runtime.authority.activatedPolicy || runtime.authority.returnedPolicy || runtime.authority.adultRemoval)throw Error('INVALID_RECIPE_DOCUMENT');
+   if(readOnly())throw Error('INVALID_RECIPE_DOCUMENT');
    if(runtime.authority.recipeDelivery){
     const {children}=await openSelectedRecipeCatalog(runtime,recipeId);
     if(children.has(recipeId))return runtime.forRecipe(recipeId);
    }
   }
-  if(originalRecipeDocuments){
+  if(originalRecipeDocuments&&!readOnly()){
    const {children}=await openSelectedRecipeCatalog(runtime,recipeId);
    if(children.has(recipeId))return runtime.forRecipe(recipeId);
   }
@@ -25,14 +26,14 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
  }
  return {
   readCooking:()=>withCurrent(async()=>{
-   if(originalRecipeDocuments){
+   if(originalRecipeDocuments&&!readOnly()){
     const selected=await openSelectedRecipeCatalog(runtime);
     return {...projectCooking(selected.parent.doc),recipes:projectSelectedRecipes(selected),
      separateRecipeIds:[...selected.children.keys()]};
    }
    const {doc}=await runtime.document();
    const cooking=projectCooking(doc);
-   if(!runtime.authority?.installedSet && !runtime.authority?.activatedPolicy && !runtime.authority?.returnedPolicy && !runtime.authority?.adultRemoval)return {...cooking,separateRecipeIds:[]};
+   if(!runtime.authority?.installedSet && !readOnly())return {...cooking,separateRecipeIds:[]};
    const {members}=await runtime.authorization();
    const separateRecipeIds=[];
    for(const {recipeId} of members){
@@ -57,14 +58,14 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
    return {...await target.document(),scope:target.scope};
   }),
   execute:(actionId,commands,recipeId=undefined)=>{
-   if(runtime.authority?.activatedPolicy || runtime.authority?.returnedPolicy || runtime.authority?.adultRemoval)throw Error('READ_ONLY_WORKSPACE');
+   if(readOnly())throw Error('READ_ONLY_WORKSPACE');
    const input=structuredClone(commands);
    return withCurrent(async()=>{
     const target=await recipeRuntime(recipeId);
     return executeAction(target,sequences,actionId,input,disclosure);
    });
   },
-  ...(shoppingRecipeCopies?{recoverShoppingCopy:(attempt)=>withCurrent(async()=>{
+  ...(shoppingRecipeCopies&&!readOnly()?{recoverShoppingCopy:(attempt)=>withCurrent(async()=>{
    if(!attempt.commands?.length)return false;
    return !!await recoverDisclosureAction(runtime,attempt.actionId,attempt.commands,disclosure);
   }),saveShoppingCopy:(attempt,before,after)=>withCurrent(async()=>{
@@ -96,7 +97,7 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
    }
   })}:{}),
   createRecipe:(actionId,recipe,beforeNewCommit=/** @type {(() => void)|undefined} */(undefined))=>{
-   if(runtime.authority?.activatedPolicy || runtime.authority?.returnedPolicy || runtime.authority?.adultRemoval)throw Error('READ_ONLY_WORKSPACE');
+   if(readOnly())throw Error('READ_ONLY_WORKSPACE');
    const after=structuredClone(recipe);
    return withCurrent(async()=>{
     // The engine checks the stored document and root revision at publication.

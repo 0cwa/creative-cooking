@@ -1,5 +1,5 @@
 import {assertCommandScope} from '../domain/personal-codec.mjs';
-import {resolveAdultRemovalRuntimeAuthority,resolveReturnedPolicyAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
+import {resolveAdultRemovalRuntimeAuthority,resolveDraftRotationRuntimeAuthority,resolveReturnedPolicyAuthority,resolveActivatedPolicyAuthority,resolveInstalledSetAuthority,resolveRuntimeAuthority} from '../authority/chain.mjs';
 import {resolvePersonalAuthority} from '../authority/personal.mjs';
 import * as registry from '../domain/registry.mjs';
 import {commandRecipeId,recipeCatalogBinding,recipeDocumentId} from '../domain/recipe-document.mjs';
@@ -38,7 +38,7 @@ export class OfflineRuntime {
   get recipeId() { return this.#recipeId; }
   async forRecipe(recipeId, creation = /** @type {{codec:any;prepareKey:()=>Promise<any>}|null} */(null)) {
     if (this.#recipeId !== null || !this.authority || (this.authority.kind ?? 'household') !== 'household') throw Error('INVALID_RECIPE_DOCUMENT');
-    if(creation&&(this.authority?.activatedPolicy||this.authority?.returnedPolicy||this.authority?.adultRemoval))throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(creation&&(this.authority?.activatedPolicy||this.authority?.returnedPolicy||this.#rotation))throw Error('SOURCE_PROVENANCE_REQUIRED');
     const auth=await this.authorization(),{members}=auth;
     const documentId=await recipeDocumentId(this.scope,this.authority.rootPin,this.authority.provider,recipeId);
     if(creation&&(!members||!this.authority.installedSet?.recipeCatalog||
@@ -59,6 +59,7 @@ export class OfflineRuntime {
       (!replay&&(command.kind==='recipe-create')!==!!this.recipeCreation))throw Error('UNSUPPORTED_VERSION');
     if (this.#recipeId !== null && commandRecipeId(command) !== this.#recipeId) throw Error('INVALID_RECIPE_DOCUMENT');
   }
+  get #rotation() { return this.authority?.adultRemoval??this.authority?.draftRotation; }
   async authorization() {
     const s=this.scope;
     if (!this.fixtureAuthority) {
@@ -67,11 +68,12 @@ export class OfflineRuntime {
       const scope={kind,id:s.scopeId},{rootPin:pin,provider,installedSet}=this.authority;
       if(installedSet&&kind!=='household')throw Error('INVALID_AUTHORITY_CONFIG');
       const resolver=kind==='personal' ? resolvePersonalAuthority : resolveRuntimeAuthority;
-      const activated=this.authority.activatedPolicy, returned=this.authority.returnedPolicy, removal=this.authority.adultRemoval;
-      if(removal&&(activated||returned||installedSet||kind!=='household'))throw Error('INVALID_AUTHORITY_CONFIG');
+      const activated=this.authority.activatedPolicy, returned=this.authority.returnedPolicy, removal=this.#rotation;
+      if(this.authority.adultRemoval&&this.authority.draftRotation||removal&&(activated||returned||installedSet||kind!=='household'))throw Error('INVALID_AUTHORITY_CONFIG');
       if(returned&&(activated||installedSet||kind!=='household'))throw Error('INVALID_AUTHORITY_CONFIG');
       if(activated&&(installedSet||kind!=='household'))throw Error('INVALID_AUTHORITY_CONFIG');
-      const resolved=removal ? await resolveAdultRemovalRuntimeAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,...removal.options}) : returned ? await resolveReturnedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:returned.targetHead,keys:returned.keys,sodium:returned.sodium}) : activated ? await resolveActivatedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:activated.targetHead,keys:activated.keys}) : installedSet
+      const resolveRotation=this.authority.draftRotation?resolveDraftRotationRuntimeAuthority:resolveAdultRemovalRuntimeAuthority;
+      const resolved=removal ? await resolveRotation({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,...removal.options}) : returned ? await resolveReturnedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:returned.targetHead,keys:returned.keys,sodium:returned.sodium}) : activated ? await resolveActivatedPolicyAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,LoroDoc:this.LoroDoc,targetHead:activated.targetHead,keys:activated.keys}) : installedSet
         ? await resolveInstalledSetAuthority({storage:this.storage,scope,pin,provider,authorDevice:s.authorDevice,
           operationId:installedSet.operationId,sodium:installedSet.sodium,LoroDoc:this.LoroDoc,paired:installedSet.paired})
         : await resolver(this.storage,scope,pin,provider,s.authorDevice);
@@ -121,7 +123,7 @@ export class OfflineRuntime {
   async document() {
     const {expectedAuthority,pairedSeed,sourceClaims}=await this.authorization();
     const stored=required(await this.storage.reopenBranchDocument(expectedAuthority,this.scope.documentId));
-    if(this.authority?.adultRemoval){
+    if(this.#rotation){
       if(!stored || stored.revision!==0 || !pairedSeed || !same(stored.bytes,pairedSeed.snapshot))throw Error('INVALID_SOURCE');
     }
     if(sourceClaims){
@@ -152,7 +154,7 @@ export class OfflineRuntime {
     return this.#prepareOnDocument(input,null,undefined,true);
   }
   async #prepareOnDocument({operationId, command, deviceSequence}, staged, verifyRecipeSource, activatedEdit=false) {
-    if(this.authority?.adultRemoval || this.authority?.returnedPolicy || (this.authority?.activatedPolicy&&!activatedEdit))throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.#rotation || this.authority?.returnedPolicy || (this.authority?.activatedPolicy&&!activatedEdit))throw Error('SOURCE_PROVENANCE_REQUIRED');
     command=structuredClone(command);
     command=checkCommand(command);
     this.assertRecipeCommand(command);
@@ -185,7 +187,7 @@ export class OfflineRuntime {
   }
   /** Atomically commit ordered commands against one authority-bound document. */
   async executeBatch({operationId,items},verifyRecipeSource=undefined) {
-    if(this.authority?.activatedPolicy||this.authority?.returnedPolicy||this.authority?.adultRemoval)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.authority?.activatedPolicy||this.authority?.returnedPolicy||this.#rotation)throw Error('SOURCE_PROVENANCE_REQUIRED');
     if(typeof operationId!=='string'||!operationId||!Array.isArray(items)||!items.length) throw Error('MALFORMED');
     items=structuredClone(items);
     await this.authorize();
@@ -229,7 +231,7 @@ export class OfflineRuntime {
     return {peer:[...ends.keys()][0],frontiers:meta.startFrontiers,predecessors:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort()};
   }
   async importItem(item) {
-    if(this.authority?.activatedPolicy||this.authority?.returnedPolicy||this.authority?.adultRemoval)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.authority?.activatedPolicy||this.authority?.returnedPolicy||this.#rotation)throw Error('SOURCE_PROVENANCE_REQUIRED');
     if(this.recipeCreation)throw Error('UNSUPPORTED_VERSION');
     item=structuredClone(item);
     if(!(item?.bytes instanceof Uint8Array))throw Error('MALFORMED_UPDATE');
@@ -272,7 +274,7 @@ export class OfflineRuntime {
     return required(await this.storage.commitImport({version:2,scopeId:s.scopeId,operationId:`import:${item.itemId}`,expectedAuthority,itemId:item.itemId,documents:[{documentId:s.documentId,bytes:doc.export({mode:'snapshot'}),expectedRevision:revision}],commands:[{version:1,commandId:command.commandId,effectId:command.effectId,documentId:s.documentId,kind:command.kind,payload:commandBytes(command),dependencyEffectIds:command.dependencyEffectIds}],effectIds:h.semanticEffectIds},{authorDevice:h.authorDevice,bytes:item.bytes}));
   }
   async recoverInbox() {
-    if(this.authority?.adultRemoval)throw Error('SOURCE_PROVENANCE_REQUIRED');
+    if(this.#rotation)throw Error('SOURCE_PROVENANCE_REQUIRED');
     const items=required(await this.storage.listStagedInbox(this.scope.scopeId));
     const results=new Map(), remaining=new Map(items.map(item=>[item.itemId,item]));
     let progress;

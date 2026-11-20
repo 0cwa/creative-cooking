@@ -603,6 +603,49 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const originalRecipientRows=new Map(c.rows().map(row=>[row.key,row.value]));
  for(const row of recipientRows.filter(row=>row.key!==authorityKey))assert.equal(originalRecipientRows.get(row.key),row.value);
  await assert.rejects(()=>readAuthority(c.storage,scope,a.root.head,c.provider),/INVALID_ROTATION/);
+ const {resolveDraftRotationRuntimeAuthority}=await import('../authority/chain.mjs');
+ const mountRotation=async({storage,keys,deviceId,role,withWrapping,signing})=>{
+  const operationId='retention-revoke',pin=a.root.head,provider=a.provider;
+  const draftRotation={role,operationId,withWrapping};
+  const resolved=await resolveDraftRotationRuntimeAuthority({storage,scope,pin,provider,authorDevice:deviceId,LoroDoc,sodium,keys,...draftRotation});
+  return openWorkspaceHouseholdRuntime({storage,resolved,draftRotation,pin,provider,LoroDoc,decodeImportBlobMeta,sodium,keys,signing});
+ };
+ const sponsorMount={storage:publishedStorage,keys:publisherKeys,deviceId:a.deviceId,role:'sponsor',
+  signing:{publicKey:survivor.signingKeyRef,operationId:'retention-signing'}};
+ let wrappingReads=0;
+ const recipientMount={storage:c.storage,keys:recipientKeys,deviceId:c.deviceId,role:'recipient',
+  signing:{publicKey:other.signingKeyRef,operationId:'unused-recipient-signing'},
+  withWrapping:async use=>{wrappingReads++;return use(otherWrap.privateKey);}};
+ const mountedSponsor=await mountRotation(sponsorMount),mountedRecipient=await mountRotation(recipientMount);
+ for(const mounted of [mountedSponsor,mountedRecipient]){
+  const content=bindHouseholdContent({runtime:mounted});
+  const cooking=await content.readCooking();
+  assert.deepEqual(cooking.pantry.map(item=>item.name),['Beans']);
+  assert.deepEqual(cooking.separateRecipeIds,['retention-recipe']);
+  assert.equal(cooking.recipes[0].title,'Soup');
+  assert.equal(cooking.recipes[0].ingredients[0].amount,'3 cups');
+  assert.equal((await content.readRecipe('retention-recipe')).revision,0);
+  await assert.rejects(()=>mounted.forRecipe('unlisted-recipe'),/INVALID_RECIPE_DOCUMENT/);
+  await assert.rejects(()=>mounted.executeBatch({}),/SOURCE_PROVENANCE_REQUIRED/);
+  await assert.rejects(()=>mounted.importItem({}),/SOURCE_PROVENANCE_REQUIRED/);
+  assert.throws(()=>content.createRecipe('rotation-create',{}),/READ_ONLY_WORKSPACE/);
+ }
+ assert.ok(wrappingReads>=2);
+ await assert.rejects(()=>mountRotation({...recipientMount,deviceId:b.deviceId}),/INVALID_RECEIPT/);
+ await assert.rejects(()=>mountRotation({...recipientMount,keys:{use:async()=>{throw Error('missing key')}}}),/missing key/);
+ c.storage.readDraftRotationRecipient=async (...args)=>{const result=await readRecipient(...args);result.value.proof[0]^=1;return result;};
+ try {await assert.rejects(()=>mountedRecipient.document(),/INVALID_PROOF/);}
+ finally {c.storage.readDraftRotationRecipient=readRecipient;}
+ const readDocument=c.storage.reopenBranchDocument.bind(c.storage);
+ c.storage.reopenBranchDocument=async (...args)=>{
+  const result=await readDocument(...args);
+  const altered=new LoroDoc();altered.import(result.value.bytes);
+  altered.getMap('pantry:retention-pantry').set('name','Unverified replacement');
+  return {ok:true,value:{...result.value,bytes:altered.export({mode:'snapshot'})}};
+ };
+ try {await assert.rejects(()=>mountedRecipient.document(),/INVALID_SOURCE/);}
+ finally {c.storage.reopenBranchDocument=readDocument;}
+ assert.deepEqual(c.rows(),retryRows);
 
  for(const recipientDeviceId of [b.deviceId,a.deviceId,'wrong'])await assert.rejects(()=>releaseDraftRotation({...releaseOptions,recipientDeviceId}));
  await assert.rejects(()=>reopenDraftRotationSponsor({...releaseOptions,deviceId:c.deviceId}));
