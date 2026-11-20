@@ -305,7 +305,7 @@ function checkChildState(state,recipeId) {
     Object.keys(state).some(name=>!maps.has(name))) throw Error('INVALID_DOCUMENT_SET');
 }
 
-async function verifyDocuments({manifest,documents,provider,pin,state,LoroDoc}) {
+export async function verifyDocuments({manifest,documents,provider,pin,state,LoroDoc}) {
   if (!Array.isArray(documents) || documents.length!==manifest.entries.length) throw Error('INVALID_DOCUMENT_SET');
   let bytes=0;
   const effects=new Set(),commands=new Set(),childIds=new Set(manifest.entries.slice(1).map(entry=>entry.recipeId));

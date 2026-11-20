@@ -82,10 +82,10 @@ const must = result => {
   assert.equal(result.ok,true,JSON.stringify(result.error));
   return result.value;
 };
-async function household(t,{onDisk=false}={}) {
+async function household(t,{onDisk=false,third=false}={}) {
   await sodium.ready;
   const dataKey = sodium.randombytes_buf(32);
-  const signing = [sodium.crypto_sign_keypair(),sodium.crypto_sign_keypair()];
+  const signing = Array.from({length:third?3:2},()=>sodium.crypto_sign_keypair());
   t.after(() => {dataKey.fill(0); for (const pair of signing) pair.privateKey.fill(0);});
   const refs = signing.map(pair => sodium.to_hex(pair.publicKey));
   const provider = testProvider(sodium,{initialKey:dataKey});
@@ -96,7 +96,7 @@ async function household(t,{onDisk=false}={}) {
   const root = {
     householdId:scope.id,head:'',policyHash:await policyId(provider,policy),generation:1,epochId:'epoch',
     roster:['adult'],policy,devices:refs.map((signingKeyRef,index) => ({adultId:'adult',deviceId:`device-${index}`,signingKeyRef,active:true})),
-    runtime:{documentId:'cooking',authorPeers:{'device-0':'1','device-1':'2'},acceptedRecipients:['device-0','device-1']}
+    runtime:{documentId:'cooking',authorPeers:Object.fromEntries(refs.map((_,i)=>[`device-${i}`,String(i+1)])),acceptedRecipients:refs.map((_,i)=>`device-${i}`)}
   };
   root.head = await rootPin(provider,root);
   const directory=onDisk ? mkdtempSync(join(tmpdir(),'recipe-catalog-')) : null;
@@ -192,7 +192,7 @@ function fixtureSessionStore(connection){
 }
 
 test('frozen selected retention holds a shopping copy when its recipe field is excluded',async t=>{
- const [a,b]=await household(t,{onDisk:true}),keys=a.storage.localKeys(testMaster(),sodium);
+ const [a,b,c]=await household(t,{onDisk:true,third:true}),keys=a.storage.localKeys(testMaster(),sodium);
  await keys.provision('retention-master');
  const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
  const acceptedPolicy=await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
@@ -325,8 +325,8 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const {verifyPublicParent}=await import('../pairing/household-recipient-proof.mjs');
  const {record:rotationRecord,state:rotationState,nodes:rotationNodes}=await verifyPublicParent(reopenedStorage,projection.source.expectedAuthority.scope,a.root.head,a.provider);
  const rotationParent=rotationNodes.get(rotationState.activeHead),wrap=sodium.crypto_box_keypair();
- const survivor=rotationParent.devices.find(d=>d.deviceId===a.deviceId);
- const rotationEvent={version:2,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:rotationParent.householdId,parentHead:rotationParent.head,policyHash:rotationParent.policyHash,generation:rotationParent.generation,epochId:rotationParent.epochId,proposalId:'retention-revoke',kind:'revokeDevice',authorDeviceId:a.deviceId,frozenAdultRoster:rotationParent.roster,subject:{deviceId:b.deviceId,documentId:destination.documentId,newGeneration:destination.generation,newEpochId:destination.epochId,devices:[{deviceId:a.deviceId,signingKeyRef:survivor.signingKeyRef,wrappingKeyRef:sodium.to_hex(wrap.publicKey),peerId:'102'}]},nextPolicy:null};
+ const survivor=rotationParent.devices.find(d=>d.deviceId===a.deviceId),other=rotationParent.devices.find(d=>d.deviceId===c.deviceId),otherWrap=sodium.crypto_box_keypair();
+ const rotationEvent={version:2,suiteId:'candidate-ed25519-xchacha20-sealedbox-v1',householdId:rotationParent.householdId,parentHead:rotationParent.head,policyHash:rotationParent.policyHash,generation:rotationParent.generation,epochId:rotationParent.epochId,proposalId:'retention-revoke',kind:'revokeDevice',authorDeviceId:a.deviceId,frozenAdultRoster:rotationParent.roster,subject:{deviceId:b.deviceId,documentId:destination.documentId,newGeneration:destination.generation,newEpochId:destination.epochId,devices:[{deviceId:a.deviceId,signingKeyRef:survivor.signingKeyRef,wrappingKeyRef:sodium.to_hex(wrap.publicKey),peerId:'102'},{deviceId:c.deviceId,signingKeyRef:other.signingKeyRef,wrappingKeyRef:sodium.to_hex(otherWrap.publicKey),peerId:'103'}]},nextPolicy:null};
  const signRotation=(purpose,body)=>sodium.to_hex(sodium.crypto_sign_detached(domain(purpose,body),a.signingTestKey.privateKey));
  const eventHash=sodium.to_hex(await a.provider.hash(domain('event',rotationEvent)));
  const approval={version:1,householdId:rotationParent.householdId,eventHash,parentHead:rotationParent.head,policyHash:rotationParent.policyHash,generation:rotationParent.generation,epochId:rotationParent.epochId,adultId:survivor.adultId,deviceId:a.deviceId};
@@ -335,14 +335,45 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const candidate=await prepareDraftRotationManifest({runtime:reopenedRuntime,binding,item,allocateSeed});
  assert.equal(candidate.complete,true);
  const recipient={version:1,scopeId:rotationParent.householdId,parentHead:rotationParent.head,deviceId:a.deviceId,wrappingKey:sodium.to_hex(wrap.publicKey)};
- const recipientBindings=[{...recipient,signature:signRotation('revocation-recipient',recipient)}];
+ const otherRecipient={...recipient,deviceId:c.deviceId,wrappingKey:sodium.to_hex(otherWrap.publicKey)};
+ const recipientBindings=[{...recipient,signature:signRotation('revocation-recipient',recipient)},{...otherRecipient,signature:sodium.to_hex(sodium.crypto_sign_detached(domain('revocation-recipient',otherRecipient),c.signingTestKey.privateKey))}];
  const {digest}=await import('../compromise/revocation.mjs');
- const grantBody={version:1,householdId:rotationParent.householdId,parentHead:rotationParent.head,eventHash,newEpochId:destination.epochId,newGeneration:destination.generation,documentId:destination.documentId,manifestHash:candidate.manifestHash,recipients:[a.deviceId],packageRefs:['retention-package'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only'};
+ const grantBody={version:1,householdId:rotationParent.householdId,parentHead:rotationParent.head,eventHash,newEpochId:destination.epochId,newGeneration:destination.generation,documentId:destination.documentId,manifestHash:candidate.manifestHash,recipients:[a.deviceId,c.deviceId],packageRefs:['retention-package','retention-package-other'],contentClasses:['pantry','recipe','shopping'],disclosure:'current-state-only'};
  const bindingsHash=await digest(a.provider,'draft-rotation-recipient-bindings-v1',recipientBindings);
  const grant={...grantBody,signatures:[{adultId:survivor.adultId,deviceId:a.deviceId,signature:signRotation('draft-rotation-set-grant-vote-v1',{grant:grantBody,bindingsHash,adultId:survivor.adultId,deviceId:a.deviceId})}]};
  const {verifyDraftRotationGrant}=await import('../compromise/draft-rotation-grant.mjs');
  const verifyArgs={provider:a.provider,pin:a.root.head,parent:rotationParent,nodes:rotationNodes,state:rotationState,item,grant,manifest:candidate.manifest,recipientBindings};
  assert.equal((await verifyDraftRotationGrant(verifyArgs)).complete,true);
+ const {sealDraftRotationFile,withOpenedDraftRotationFile}=await import('../pairing/draft-rotation-file.mjs');
+ const codec={...verifyArgs,sodium,LoroDoc,documents:candidate.documents,recipientId:c.deviceId};
+ const dataKeys=[sodium.randombytes_buf(32),sodium.randombytes_buf(32)];
+ const file=await sealDraftRotationFile({...codec,keys:dataKeys,signingSecret:a.signingTestKey.privateKey});
+ await withOpenedDraftRotationFile({...codec,file,wrappingSecret:otherWrap.privateKey},({keys,documents})=>{
+  assert.deepEqual(keys,dataKeys); assert.deepEqual(documents,candidate.documents);
+ });
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file,recipientId:b.deviceId,wrappingSecret:otherWrap.privateKey},()=>{}));
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file,recipientId:a.deviceId,wrappingSecret:wrap.privateKey},()=>{}));
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file,wrappingSecret:sodium.crypto_box_keypair().privateKey},()=>{}));
+ await assert.rejects(()=>sealDraftRotationFile({...codec,keys:[dataKeys[0],dataKeys[0]],signingSecret:a.signingTestKey.privateKey}),/INVALID_KEYS/);
+ const {openDeviceCopy,sealDeviceCopy}=await import('../pairing/personal-copy.mjs');
+ const fileHash=await digest(a.provider,'draft-rotation-file-binding-v1',{scope:rotationParent.householdId,pin:a.root.head,parentHead:rotationParent.head,
+  manifestHash:candidate.manifestHash,grantHash:(await verifyDraftRotationGrant(verifyArgs)).grantHash,successorHead:eventHash,
+  sender:a.deviceId,senderSigningKey:survivor.signingKeyRef,senderWrappingKey:recipient.wrappingKey,
+  recipient:c.deviceId,recipientSigningKey:other.signingKeyRef,recipientWrappingKey:otherRecipient.wrappingKey,packageRef:'retention-package-other'});
+ const fileDomain='draft-rotation-document-set-file-v1';
+ const contents=openDeviceCopy(sodium,fileDomain,file,fileHash,{initiator:{signingPublicKey:a.signingTestKey.publicKey},responder:{wrappingPublicKey:otherWrap.publicKey}},otherWrap.privateKey);
+ const reseal=value=>sealDeviceCopy(sodium,fileDomain,fileHash,{wrappingPublicKey:otherWrap.publicKey},a.signingTestKey.privateKey,value);
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file:reseal({...contents,packets:[...contents.packets].reverse()}),wrappingSecret:otherWrap.privateKey},()=>{}),/INVALID_PROOF/);
+ const alteredContents=structuredClone(contents);alteredContents.documents[1].policyBundle.version=99;
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file:reseal(alteredContents),wrappingSecret:otherWrap.privateKey},()=>{}));
+ const corrupt=file.slice();corrupt[corrupt.length-1]^=1;
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file:corrupt,wrappingSecret:otherWrap.privateKey},()=>{}));
+ const badDocuments=structuredClone(candidate.documents);badDocuments[1].policyBundle.version=99;
+ await assert.rejects(()=>sealDraftRotationFile({...codec,documents:badDocuments,keys:dataKeys,signingSecret:a.signingTestKey.privateKey}));
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file,grant:{...grant,manifestHash:'0'.repeat(64)},wrappingSecret:otherWrap.privateKey},()=>{}));
+ await assert.rejects(()=>withOpenedDraftRotationFile({...codec,file,manifest:{...candidate.manifest,draftBindingHash:'0'.repeat(64)},wrappingSecret:otherWrap.privateKey},()=>{}));
+ dataKeys.forEach(key=>key.fill(0));
+
  const previewItem={...item,approvals:[]},previewGrant={...grant,signatures:[]};
  assert.equal((await verifyDraftRotationGrant({...verifyArgs,item:previewItem,grant:previewGrant,requireQuorum:false})).complete,false);
  await assert.rejects(()=>verifyDraftRotationGrant({...verifyArgs,item:previewItem,grant:previewGrant}),/QUORUM_REQUIRED/);
