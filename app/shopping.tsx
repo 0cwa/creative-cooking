@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -7,7 +8,7 @@ import type { ShoppingItem } from '@/domain/types';
 import { useAppState } from '@/state/AppState';
 
 function newId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return `${prefix}-${randomUUID()}`;
 }
 
 function sourceKey(recipeId: string, ingredientId?: string): string | undefined {
@@ -30,9 +31,7 @@ export default function ShoppingScreen() {
     setShoppingItemChecked,
     startNewPurchaseCycle,
     purchaseCheckedShoppingItems,
-    contentWorkspaceName,
-    contentSyncStatus,
-    contentSyncError,
+    canEditSharedContent,
     localPersistenceStatus,
     storageError
   } = useAppState();
@@ -95,17 +94,7 @@ export default function ShoppingScreen() {
       ? 'Saving changes on this device…'
     : localPersistenceStatus === 'error'
       ? 'Local save needs attention.'
-    : contentSyncStatus === 'local-only'
-      ? 'Saved on this device only.'
-      : contentSyncStatus === 'offline-unverified'
-        ? 'Saved on this device. Membership and current sync status are unverified while offline.'
-        : contentSyncStatus === 'unconfigured'
-          ? `Saved locally in ${contentWorkspaceName}; this app build has no sync service configured.`
-          : contentSyncStatus === 'synced'
-            ? `Saved in ${contentWorkspaceName}; the server has confirmed the current upload and download queue.`
-            : contentSyncStatus === 'attention' || contentSyncStatus === 'error'
-              ? `Saved locally in ${contentWorkspaceName}; sync needs attention.${contentSyncError ? ` ${contentSyncError}` : ''}`
-              : `Saved locally in ${contentWorkspaceName}; waiting for the server to confirm sync.`;
+    : 'Saved on this device only.';
 
   const createList = () => {
     const name = listName.trim();
@@ -142,8 +131,8 @@ export default function ShoppingScreen() {
     setMessage(`${itemName.trim()} added to ${selectedList.name}.`);
   };
 
-  const addRecipeItems = () => {
-    if (!selectedList || !sourceRecipe) return;
+  const addRecipeItems = async () => {
+    if (!canEditSharedContent || !selectedList || !sourceRecipe) return;
     if (!selectedPreviewRows.length) {
       setMessage('Select at least one ingredient to add.');
       return;
@@ -153,14 +142,20 @@ export default function ShoppingScreen() {
       return;
     }
     const at = new Date().toISOString();
-    addShoppingItems(selectedList.id, addablePreviewRows.map(({ ingredient }) => ({
-      id: newId('shopping-item'),
-      name: ingredient.name,
-      recipeId: sourceRecipe.id,
-      ...(ingredient.id ? { ingredientId: ingredient.id } : {}),
-      ...(ingredient.amount === undefined ? {} : { displayQuantity: ingredient.amount }),
-      at
-    })));
+    setMessage('');
+    try {
+      await addShoppingItems(selectedList.id, addablePreviewRows.map(({ ingredient }) => ({
+        id: newId('shopping-item'),
+        name: ingredient.name,
+        recipeId: sourceRecipe.id,
+        ...(ingredient.id ? { ingredientId: ingredient.id } : {}),
+        ...(ingredient.amount === undefined ? {} : { displayQuantity: ingredient.amount }),
+        at
+      })));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not add recipe ingredients.');
+      return;
+    }
     setMessage(`${addablePreviewRows.length} ingredient${addablePreviewRows.length === 1 ? '' : 's'} added to ${selectedList.name}.`);
   };
 
@@ -416,9 +411,9 @@ export default function ShoppingScreen() {
                 </Text>
                 <Pressable
                   accessibilityRole="button"
-                  disabled={!selectedList || !addablePreviewRows.length}
+                  disabled={!canEditSharedContent || !selectedList || !addablePreviewRows.length}
                   onPress={addRecipeItems}
-                  style={[styles.primaryAction, (!selectedList || !addablePreviewRows.length) && styles.disabledAction]}
+                  style={[styles.primaryAction, (!canEditSharedContent || !selectedList || !addablePreviewRows.length) && styles.disabledAction]}
                 >
                   <Text style={styles.primaryActionText}>Add {addablePreviewRows.length} ingredients to list</Text>
                 </Pressable>

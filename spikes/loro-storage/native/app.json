@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Loro Storage Fixture",
+    "slug": "loro-storage-fixture",
+    "version": "1.0.0",
+    "android": {
+      "package": "dev.creativecooking.loro.storagefixture"
+    },
+    "newArchEnabled": true
+  }
+}

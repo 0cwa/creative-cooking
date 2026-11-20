@@ -1,0 +1,5 @@
+// One serializable record per device database. transaction callbacks must be synchronous.
+export async function openSessionStore(name) {
+ const db=await new Promise((resolve,reject)=>{const q=indexedDB.open(name,1);q.onupgradeneeded=()=>q.result.createObjectStore('ceremony');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
+ return {transaction(fn,{readOnly=false}={}){if(typeof readOnly!=='boolean')return Promise.reject(Error('MALFORMED'));return new Promise((resolve,reject)=>{const tx=db.transaction('ceremony',readOnly?'readonly':'readwrite'), object=tx.objectStore('ceremony'), q=object.get('state');let result, failure;q.onsuccess=()=>{try{const data=q.result??{};result=fn({get:k=>Object.hasOwn(data,k)?structuredClone(data[k]):undefined,put:(k,v)=>{if(readOnly)throw Error('READ_ONLY');data[k]=structuredClone(v)}});if(result&&typeof result.then==='function')throw Error('ASYNC_TRANSACTION');if(!readOnly)object.put(data,'state')}catch(e){failure=e;tx.abort()}};tx.oncomplete=()=>resolve(result);tx.onabort=()=>reject(failure??tx.error??Error('ABORT'));tx.onerror=()=>{}})},close(){db.close()}};
+}

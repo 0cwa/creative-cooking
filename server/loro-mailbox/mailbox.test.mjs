@@ -1,0 +1,117 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {generateKeyPairSync,sign,verify,createHash,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {openMailbox,randomMailboxSecrets} from './server.mjs';
+import {relayClient,ed25519ReceiptVerifier} from '../../src/loro/relay/client.mjs';
+import {candidateCodec,candidateObjectId,SUITE} from '../../src/loro/crypto/candidate.mjs';
+import {testProvider} from '../../src/loro/crypto/test-provider.mjs';
+import sodium from 'libsodium-wrappers';
+await sodium.ready;
+const hash=b=>createHash('sha256').update(b).digest();
+const hashProvider={hash:async b=>sodium.crypto_generichash(32,b)};
+const encoder=new TextEncoder();
+test('HTTP encrypted candidate, durable retry, quota, cursors, expiry and verified relay receipt',async()=>{
+ const root=process.env.MAILBOX_TEST_ROOT;if(!root) throw Error('MAILBOX_TEST_ROOT required');const dir=await mkdtemp(join(root,'mailbox-'));const path=join(dir,'mailbox.sqlite');
+ const relayKeys=generateKeyPairSync('ed25519'), deviceKeys=generateKeyPairSync('ed25519'), key=randomBytes(32), secrets=randomMailboxSecrets();let now=1000, service;
+ const signing=sodium.crypto_sign_keypair(),recipient=sodium.crypto_box_keypair();
+ const provider=testProvider(sodium,{signing,recipient,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)});
+ const codec=candidateCodec(provider),h={version:1,suiteId:SUITE,scopeId:'scope',documentId:'doc',documentGeneration:0,branchHead:'head',policyHashes:[],epochId:'epoch',authorDevice:'sender',deviceSequence:1,predecessorRefs:[],semanticEffectIds:[],payloadKind:'update'};
+ const one=await codec.sealContent(h,encoder.encode('secret recipe'),'data'),two=await codec.sealContent({...h,deviceSequence:2},encoder.encode('second'),'data'),three=await codec.sealContent({...h,deviceSequence:3},encoder.encode('third'),'data');
+ const {relayId,verifyReceipt}=await ed25519ReceiptVerifier(new Uint8Array(relayKeys.publicKey.export({type:'spki',format:'der'})));
+ assert.equal(relayId,hash(relayKeys.publicKey.export({type:'spki',format:'der'})).toString('hex'));
+ async function start(){service=openMailbox({path,signingKey:relayKeys.privateKey,hashProvider,now:()=>now});await new Promise(r=>service.server.listen(0,'127.0.0.1',r));const baseUrl=`http://127.0.0.1:${service.server.address().port}`;return {baseUrl,client:relayClient({baseUrl,mailbox:secrets.id,relayId,...secrets,hashProvider,verifyReceipt,expectedExpires:2000,now:()=>now})};}
+ async function stop(){await new Promise((resolve,reject)=>service.server.close(e=>e?reject(e):resolve()));service.close();}
+ try {let {baseUrl,client}=await start();service.provision({...secrets,quota:one.bytes.length+two.bytes.length,expires:2000});
+  const receipt=await client.put(one);assert.equal(receipt.claims.kind,'relay-stored');assert.deepEqual(await client.put(one),receipt);assert.deepEqual((await codec.openContent((await client.get(one.id)).bytes)).value,encoder.encode('secret recipe'));
+  await client.put(two);await assert.rejects(client.put(three),/QUOTA_FULL/);const first=await client.list({limit:1}),second=await client.list({after:first.cursor,limit:1});assert.equal(first.objects[0].id,one.id);assert.equal(second.objects[0].id,two.id);assert.deepEqual(await client.list({after:second.cursor,limit:1}),{objects:[],cursor:two.id});await assert.rejects(client.list({after:'f'.repeat(64)}),/CURSOR/);
+  const bad=await fetch(`${baseUrl}/v1/mailboxes/${secrets.id}/objects/${one.id}`,{method:'PUT',headers:{authorization:`Bearer ${secrets.appendCapability}`},body:new Uint8Array([1])});assert.equal(bad.status,400);assert.equal((await bad.json()).error,'HASH_MISMATCH');
+  const unauthorized=await fetch(`${baseUrl}/v1/mailboxes/${secrets.id}/objects/${one.id}`,{headers:{authorization:`Bearer ${secrets.appendCapability}`}});assert.equal(unauthorized.status,401);
+  const distrust=relayClient({baseUrl,mailbox:secrets.id,relayId,...secrets,hashProvider,verifyReceipt:async()=>false,expectedExpires:2000,now:()=>now});await assert.rejects(distrust.put(one),/INVALID_PROOF/);
+  await stop();({client}=await start());assert.deepEqual(await client.put(one),receipt);assert.deepEqual((await client.get(two.id)).bytes,two.bytes);now=2000;await assert.rejects(client.get(one.id),/EXPIRED/);await stop();service=null;
+ } finally {if(service){await new Promise(r=>service.server.close(r));service.close();}await rm(dir,{recursive:true,force:true});}
+});
+
+test('colliding identity cannot replace different durable bytes',async()=>{const root=process.env.MAILBOX_TEST_ROOT;const dir=await mkdtemp(join(root,'mailbox-'));const pair=generateKeyPairSync('ed25519'),secrets=randomMailboxSecrets(),id='aa'.repeat(32),hashProvider={hash:async()=>new Uint8Array(32).fill(170)};const service=openMailbox({path:join(dir,'db'),signingKey:pair.privateKey,hashProvider});try{service.provision({...secrets,quota:100,expires:Date.now()+10000});await new Promise(r=>service.server.listen(0,'127.0.0.1',r));const url=`http://127.0.0.1:${service.server.address().port}/v1/mailboxes/${secrets.id}/objects/${id}`;const put=body=>fetch(url,{method:'PUT',headers:{authorization:`Bearer ${secrets.appendCapability}`},body});assert.equal((await put('one')).status,201);assert.equal((await put('two')).status,409);}finally{await new Promise(r=>service.server.close(r));service.close();await rm(dir,{recursive:true,force:true});}});
+
+test('durable relay stages one object per cursor and records verified relay receipts across failures and reopen',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');const {openSQLiteStorage}=await import('../../src/loro/storage/sqlite.ts');const {durableRelay}=await import('../../src/loro/relay/storage.mjs');const {inboxAdapter}=await import('../../src/loro/transport/adapter.mjs');
+ const root=process.env.MAILBOX_TEST_ROOT,dir=await mkdtemp(join(root,'relay-boundary-')),pair=generateKeyPairSync('ed25519'),peer=generateKeyPairSync('ed25519'),secrets=randomMailboxSecrets();let service,db,fault='';
+ const conn=()=>{db=new DatabaseSync(join(dir,'client.sqlite'));return {executeSync:(sql,params=[])=>{const q=db.prepare(sql);return {rows:sql.startsWith('SELECT')?q.all(...params):(q.run(...params),[])};}};};
+ const signing=sodium.crypto_sign_keypair(),recipient=sodium.crypto_box_keypair(),provider=testProvider(sodium,{signing,recipient,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:sodium.randombytes_buf(32)}),codec=candidateCodec(provider);
+ const header={version:1,suiteId:SUITE,scopeId:'scope',documentId:'doc',documentGeneration:0,branchHead:'head',policyHashes:[],epochId:'epoch',authorDevice:'sender',deviceSequence:1,predecessorRefs:[],semanticEffectIds:[],payloadKind:'update'};
+ const one=await codec.sealContent(header,encoder.encode('one'),'data'),two=await codec.sealContent({...header,deviceSequence:2},encoder.encode('two'),'data');
+ try {const expires=Date.now()+100000;service=openMailbox({path:join(dir,'relay.sqlite'),signingKey:pair.privateKey,hashProvider});service.provision({...secrets,quota:100000,expires});await new Promise(r=>service.server.listen(0,'127.0.0.1',r));const baseUrl=`http://127.0.0.1:${service.server.address().port}`,pinned=await ed25519ReceiptVerifier(new Uint8Array(pair.publicKey.export({type:'spki',format:'der'})));const client=relayClient({baseUrl,mailbox:secrets.id,...secrets,...pinned,hashProvider,expectedExpires:expires});
+ let store=openSQLiteStorage(conn(),x=>{if(x===fault) throw Error('injected');});const local={expectedAuthority:{version:2,scope:{kind:'personal',id:'scope'},record:null},scopeId:'scope',operationId:'operation',documents:[{documentId:'doc',bytes:new Uint8Array([1]),expectedRevision:null}],commands:[{version:1,commandId:'command',effectId:'effect',documentId:'doc',kind:'write',payload:new Uint8Array([1]),dependencyEffectIds:[]}],outbound:[{object:one,branchHead:'head',epochId:'epoch'}]};assert.equal((await store.commitLocal(local)).ok,true);
+ const invalidClaims={domain:'creative-cooking/relay-receipt/v1',version:1,kind:'relay-stored',relayId:pinned.relayId,mailbox:secrets.id,objectId:one.id,size:one.bytes.length,method:'PUT',path:`/v1/mailboxes/${secrets.id}/objects/${one.id}`,expires:-1};
+ const invalidReceipt={claims:invalidClaims,signature:sign(null,Buffer.from(JSON.stringify(invalidClaims)),pair.privateKey).toString('base64url')};
+ const dishonest=relayClient({baseUrl,mailbox:secrets.id,...secrets,...pinned,hashProvider,expectedExpires:expires,fetch:async()=>new Response(JSON.stringify(invalidReceipt))});
+ await assert.rejects(durableRelay({client:dishonest,storage:store,scopeId:'scope',source:'mailbox',relayId:pinned.relayId}).send(one),/INVALID_PROOF/);
+ assert.deepEqual((await store.listReceiptStates('scope')).value,[]);
+ let relay=durableRelay({client,storage:store,scopeId:'scope',source:'mailbox',relayId:pinned.relayId});fault='receipt';await assert.rejects(relay.send(one));assert.deepEqual((await store.listReceiptStates('scope')).value,[]);db.close();fault='';store=openSQLiteStorage(conn(),x=>{if(x===fault) throw Error('injected');});relay=durableRelay({client,storage:store,scopeId:'scope',source:'mailbox',relayId:pinned.relayId});assert.equal((await relay.send(one)).replayed,false);assert.equal((await relay.send(one)).replayed,true);assert.deepEqual((await store.listReceiptStates('scope')).value,[{objectId:one.id,destination:'relay',recipientId:pinned.relayId,state:'stored'}]);
+ await client.put(two);fault='cursor';await assert.rejects(relay.fetchAndStage(null));assert.deepEqual((await store.listCursors('scope')).value,[]);assert.deepEqual((await store.listStagedInbox('scope')).value,[]);db.close();fault='';store=openSQLiteStorage(conn(),x=>{if(x===fault) throw Error('injected');});relay=durableRelay({client,storage:store,scopeId:'scope',source:'mailbox',relayId:pinned.relayId});assert.equal((await relay.fetchAndStage(null)).cursor,one.id);await assert.rejects(relay.fetchAndStage(null),/CONFLICT/);assert.equal((await relay.fetchAndStage(one.id)).cursor,two.id);assert.deepEqual((await relay.fetchAndStage(two.id)),{staged:false,cursor:two.id});assert.equal((await store.listStagedInbox('scope')).value.length,2);
+ const receiptProvider={sign:async c=>new Uint8Array(sign(null,Buffer.from(JSON.stringify(c)),peer.privateKey)),verify:async(c,b)=>verify(null,Buffer.from(JSON.stringify(c)),peer.publicKey,b)};const adapter=inboxAdapter({storage:store,reader:store,verifyObject:async b=>(await codec.openContent(b)).object,receiptProvider,scopeId:'scope',source:'peer',recipientId:'peer',trustHead:'head'});const claims={version:1,scopeId:'scope',objectId:one.id,transferId:'transfer',recipientId:'peer',trustHead:'head',state:'stored'},signature=await receiptProvider.sign(claims);await adapter.acceptReceipt({claims,bytes:signature,receiptId:'peer-receipt',expectedRecipient:'peer'});assert.deepEqual((await store.listReceiptStates('scope')).value.map(x=>x.destination).sort(),['peer','relay']);
+ db.close();db=null;store=openSQLiteStorage(conn());assert.equal((await store.listCursors('scope')).value[0].cursor,two.id);assert.equal((await store.listReceiptStates('scope')).value.length,2);
+ } finally {if(db) db.close();if(service){await new Promise(r=>service.server.close(r));service.close();}await rm(dir,{recursive:true,force:true});}
+});
+
+
+test('upload expiry is checked after hashing for both insertion and retry',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ const root=process.env.MAILBOX_TEST_ROOT,dir=await mkdtemp(join(root,'relay-expiry-'));
+ try {
+  for(const retry of [false,true]) {
+   const path=join(dir,retry?'retry.sqlite':'insert.sqlite'),pair=generateKeyPairSync('ed25519'),secrets=randomMailboxSecrets();
+   let now=10,expireDuringHash=false;
+   const delayedHash={hash:async bytes=>{const result=await hashProvider.hash(bytes);if(expireDuringHash) now=100;return result;}};
+   const bytes=new Uint8Array([1,2,3]),id=await candidateObjectId(hashProvider,bytes);
+   const service=openMailbox({path,signingKey:pair.privateKey,hashProvider:delayedHash,now:()=>now});
+   service.provision({...secrets,quota:1000,expires:100});
+   await new Promise(resolve=>service.server.listen(0,'127.0.0.1',resolve));
+   try {
+    const url=`http://127.0.0.1:${service.server.address().port}/v1/mailboxes/${secrets.id}/objects/${id}`;
+    const put=()=>fetch(url,{method:'PUT',headers:{authorization:`Bearer ${secrets.appendCapability}`},body:bytes});
+    if(retry) assert.equal((await put()).status,201);
+    expireDuringHash=true;
+    const response=await put();assert.equal(response.status,410);assert.equal((await response.json()).error,'EXPIRED');
+    const db=new DatabaseSync(path);try {assert.equal(db.prepare('SELECT COUNT(*) AS count FROM objects').get().count,retry?1:0);} finally {db.close();}
+   } finally {await new Promise(resolve=>service.server.close(resolve));service.close();}
+  }
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('receipt expiry and canonical signature are checked before upload success',async()=>{
+ const pair=generateKeyPairSync('ed25519'),secrets=randomMailboxSecrets();
+ const pinned=await ed25519ReceiptVerifier(new Uint8Array(pair.publicKey.export({type:'spki',format:'der'})));
+ const bytes=new Uint8Array([4,5,6]),id=await candidateObjectId(hashProvider,bytes);let signedExpiry=2000,now=1000,aliasSignature=false,expireDuringVerification=false;
+ const client=relayClient({baseUrl:'http://127.0.0.1',mailbox:secrets.id,...secrets,...pinned,verifyReceipt:async(claims,signature)=>{const valid=verify(null,Buffer.from(JSON.stringify(claims)),pair.publicKey,Buffer.from(signature,'base64url'));if(expireDuringVerification) now=2000;return valid;},hashProvider,expectedExpires:2000,now:()=>now,fetch:async()=>{
+  const claims={domain:'creative-cooking/relay-receipt/v1',version:1,kind:'relay-stored',relayId:pinned.relayId,mailbox:secrets.id,objectId:id,size:bytes.length,method:'PUT',path:`/v1/mailboxes/${secrets.id}/objects/${id}`,expires:signedExpiry};
+  let signature=sign(null,Buffer.from(JSON.stringify(claims)),pair.privateKey).toString('base64url');
+  if(aliasSignature) {const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';const original=signature;signature=signature.slice(0,-1)+alphabet[alphabet.indexOf(signature.at(-1))|1];assert.notEqual(signature,original);assert.deepEqual(Buffer.from(signature,'base64url'),Buffer.from(original,'base64url'));}
+  return new Response(JSON.stringify({claims,signature}));
+ }});
+ for(const expires of [-1,1999,2001]) {signedExpiry=expires;await assert.rejects(client.put({id,bytes}),/INVALID_PROOF/);}
+ signedExpiry=2000;assert.equal((await client.put({id,bytes})).claims.expires,2000);
+ now=2000;await assert.rejects(client.put({id,bytes}),/EXPIRED/);now=1000;
+ expireDuringVerification=true;await assert.rejects(client.put({id,bytes}),/EXPIRED/);expireDuringVerification=false;now=1000;
+ aliasSignature=true;await assert.rejects(client.put({id,bytes}),/INVALID_PROOF/);
+ const claims={example:'signed'},signature=sign(null,Buffer.from(JSON.stringify(claims)),pair.privateKey).toString('base64url');
+ const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_',alias=signature.slice(0,-1)+alphabet[alphabet.indexOf(signature.at(-1))|1];
+ assert.equal(await pinned.verifyReceipt(claims,signature),true);assert.equal(await pinned.verifyReceipt(claims,alias),false);
+});
+
+test('pinned SPKI identity and verifier share one immutable snapshot',async()=>{
+ const pair=generateKeyPairSync('ed25519'),other=generateKeyPairSync('ed25519');
+ const original=Buffer.from(pair.publicKey.export({type:'spki',format:'der'})),input=Buffer.from(original);
+ const realImport=crypto.subtle.importKey;let release,started;
+ const gate=new Promise(resolve=>{release=resolve;}),imported=new Promise(resolve=>{started=resolve;});
+ crypto.subtle.importKey=async function(...args) {const key=await realImport.apply(this,args);started();await gate;return key;};
+ try {
+  const pending=ed25519ReceiptVerifier(input);await imported;
+  input.set(other.publicKey.export({type:'spki',format:'der'}));release();
+  const pinned=await pending;assert.equal(pinned.relayId,hash(original).toString('hex'));
+  const claims={example:'pinned'},signature=sign(null,Buffer.from(JSON.stringify(claims)),pair.privateKey).toString('base64url');
+  assert.equal(await pinned.verifyReceipt(claims,signature),true);
+ } finally {release();crypto.subtle.importKey=realImport;}
+});

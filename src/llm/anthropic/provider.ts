@@ -1,8 +1,9 @@
+import { dispatchProviderRequest } from '@/llm/request-boundary.mjs';
 import { CHEF_TOOLS } from '@/chef/tools';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { SseDataParser } from '@/llm/openrouter/streaming';
 import { executeChefTool } from '@/llm/toolExecution';
-import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
+import type { ChefRunResult, LlmProvider, ToolExecutor, ProviderRequestReview } from '@/llm/types';
 
 type AnthropicTextBlock = { type: 'text'; text: string };
 type AnthropicToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
@@ -75,29 +76,14 @@ async function messageOnce(
   options: {
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
+    reviewRequest?: ProviderRequestReview;
     onStreamActivity?: () => void;
   }
 ): Promise<AnthropicBlock[]> {
   let response: Response;
   try {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-        'Content-Type': 'application/json'
-      },
-      signal: options.signal,
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages,
-        ...(toolsEnabled ? { tools: anthropicTools() } : {}),
-        stream: true
-      })
-    });
+    const body=JSON.stringify({model,max_tokens:4096,system:systemPrompt,messages,...(toolsEnabled?{tools:anthropicTools()}:{}),stream:true});
+    response = await dispatchProviderRequest({endpoint:'https://api.anthropic.com/v1/messages',model,body,headers:{'x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','Content-Type':'application/json'},signal:options.signal,dispatch:options.reviewRequest});
   } catch (error) {
     throw normalizeLlmError(error);
   }
@@ -222,7 +208,7 @@ async function message(
   systemPrompt: string,
   messages: AnthropicMessage[],
   toolsEnabled: boolean,
-  options: { signal?: AbortSignal; onTextDelta?: (delta: string) => void }
+  options: { signal?: AbortSignal; onTextDelta?: (delta: string) => void; reviewRequest?: ProviderRequestReview }
 ): Promise<AnthropicBlock[]> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let streamStarted = false;
@@ -235,7 +221,7 @@ async function message(
       });
     } catch (error) {
       const normalized = normalizeLlmError(error);
-      if (!(normalized.retryable && !streamStarted && !options.signal?.aborted && attempt === 0)) throw normalized;
+      if (!(!options.reviewRequest && normalized.retryable && !streamStarted && !options.signal?.aborted && attempt === 0)) throw normalized;
       await waitForRetry(normalized.retryAfterMs ?? 600, options.signal);
     }
   }
@@ -253,7 +239,7 @@ function runTool(block: AnthropicToolUseBlock, tools: ToolExecutor) {
 export const anthropicProvider: LlmProvider = {
   id: 'anthropic',
   name: 'Anthropic',
-  async run({ apiKey, model, systemPrompt, messages, tools, signal, onTextDelta }): Promise<ChefRunResult> {
+  async run({ apiKey, model, systemPrompt, messages, tools, signal, onTextDelta, reviewRequest }): Promise<ChefRunResult> {
     const working: AnthropicMessage[] = messages.map((item) => ({
       role: item.role,
       content: item.content
@@ -266,6 +252,7 @@ export const anthropicProvider: LlmProvider = {
         let roundTextStarted = false;
         const blocks = await message(apiKey, model, systemPrompt, working, Boolean(tools), {
           signal,
+          reviewRequest,
           onTextDelta: (delta) => {
             if (!roundTextStarted && collectedText) onTextDelta?.('\n\n');
             roundTextStarted = true;

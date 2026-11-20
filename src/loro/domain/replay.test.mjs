@@ -1,0 +1,83 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
+import sodium from 'libsodium-wrappers';import {LoroDoc,decodeImportBlobMeta} from 'loro-crdt/nodejs';
+import {openSQLiteStorage} from '../storage/sqlite.ts';import {candidateCodec,SUITE} from '../crypto/candidate.mjs';import {testProvider} from '../crypto/test-provider.mjs';import {FixtureOfflineRuntime} from '../engine/runtime.mjs';import {recipeIntentions,apply as applyDomain,operations} from './registry.mjs';import {replayAuthenticated} from './replay.mjs';
+import {policyBaseline,verifyRetainedPolicyBaseline} from '../authority/policy-baseline.mjs';
+await sodium.ready;
+test('signed history detects an overwritten value at the same operation ID',async()=>{
+ const provider={hash:async bytes=>sodium.crypto_generichash(32,bytes)};
+ const history=firstTitle=>{
+  const doc=new LoroDoc();
+  doc.setPeerId('21');
+  const recipe=doc.getMap('recipe:r');
+  recipe.set('title',firstTitle);
+  recipe.set('title','Current title');
+  return doc;
+ };
+ const source=history('Signed title'),altered=history('Altered title');
+ assert.deepEqual(altered.toJSON(),source.toJSON());
+ const baseline=await policyBaseline(source,provider),alteredBaseline=await policyBaseline(altered,provider);
+ assert.deepEqual(alteredBaseline.frontiers,baseline.frontiers);
+ assert.notEqual(alteredBaseline.historyHash,baseline.historyHash);
+ for(const doc of [source,altered])doc.getMap('recipe:r').set('title','Later edit');
+ const retained=doc=>({revision:1,bytes:doc.export({mode:'snapshot'})});
+ await verifyRetainedPolicyBaseline(LoroDoc,retained(source),baseline,provider);
+ await assert.rejects(verifyRetainedPolicyBaseline(LoroDoc,retained(altered),baseline,provider),/POLICY_BASELINE_UNAVAILABLE/);
+});
+test('authenticated out-of-order updates retain dependencies and reject mismatched semantic payloads',async()=>{
+ const signing=sodium.crypto_sign_keypair(),recipient=sodium.crypto_box_keypair(),dataKey=sodium.randombytes_buf(32),p=testProvider(sodium,{signing,publicSigning:signing.publicKey,publicRecipient:recipient.publicKey,initialKey:dataKey});p.sign=async(_,b)=>sodium.crypto_sign_detached(b,signing.privateKey);p.verify=async(_,b,s)=>sodium.crypto_sign_verify_detached(s,b,signing.publicKey);const codec=candidateCodec(p);
+ const scope={scopeId:'h',documentId:'d',documentGeneration:0,branchHead:'head',authorizationSnapshot:'authority',policyHashes:['policy'],epochId:'epoch',authorDevice:'a',acceptedAuthors:['a','b'],authorPeers:{a:'1',b:'2'},acceptedRecipients:['peer'],suiteId:SUITE};
+ const open=(author)=>{const db=new DatabaseSync(':memory:'),storage=openSQLiteStorage({executeSync:(sql,args=[])=>{const st=db.prepare(sql);return {rows:sql.startsWith('SELECT')?st.all(...args):(st.run(...args),[])}}});return {db,storage,runtime:new FixtureOfflineRuntime({storage,codec,LoroDoc,decodeImportBlobMeta,scope:{...scope,authorDevice:author},keyRef:'data'})}};const a=open('a'),b=open('b');
+ try{const authorityState=new TextEncoder().encode(JSON.stringify({acceptedAuthors:scope.acceptedAuthors,authorPeers:scope.authorPeers,acceptedRecipients:scope.acceptedRecipients,epochId:scope.epochId,policyHashes:scope.policyHashes,documentId:scope.documentId,documentGeneration:scope.documentGeneration}));for(const client of [a,b])assert.equal((await client.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'h'},revision:0,acceptedParent:'head',authorizationSnapshot:'authority',authorityState}})).ok,true);
+ const make=(kind,effectId,data,dependencyEffectIds=[])=>({version:1,kind,commandId:effectId,effectId,dependencyEffectIds,data}),at='2026-01-01T00:00:00Z';
+ await a.runtime.execute({operationId:'list',deviceSequence:1,command:make('shopping-list-create','list',{listId:'l',cycleId:'c',name:'Market',at})});await a.runtime.execute({operationId:'item',deviceSequence:2,command:make('shopping-item-put','item',{listId:'l',cycleId:'c',itemId:'i',name:'Carrot',checked:true,at},['list'])});
+ const out=await a.runtime.outboundFor('peer'),tagged=await Promise.all(out.map(async o=>[o,(await codec.openContent(o.bytes)).header.semanticEffectIds[0]])),item=tagged.find(x=>x[1]==='item')[0],list=tagged.find(x=>x[1]==='list')[0];
+ const stage=async(o,expectedCursor,cursor)=>assert.equal((await b.storage.stageInbox({scopeId:'h',object:{id:o.objectId,bytes:o.bytes},source:'peer',expectedCursor,cursor})).ok,true);
+ await stage(item,null,'1');assert.equal((await b.runtime.recoverInbox())[0].error.message,'MISSING_DEPENDENCY');await stage(list,'1','2');const recovered=await b.runtime.recoverInbox();assert.ok(recovered.every(x=>!x.error));assert.ok((await b.runtime.recoverInbox()).every(x=>x.result.replayed));
+ const buy=(id,author)=>make('purchase',id,{id,listId:'l',purchaseCycleId:'c',itemIds:['i'],pantryItemIds:[],purchasedAt:at,author},['list','item']);
+ await a.runtime.execute({operationId:'a-buy',deviceSequence:3,command:buy('a-buy','a')});await b.runtime.execute({operationId:'b-buy',deviceSequence:1,command:buy('b-buy','b')});
+ const find=async(client,id)=>{for(const x of await client.runtime.outboundFor('peer'))if((await codec.openContent(x.bytes)).header.semanticEffectIds[0]===id)return x;throw Error('missing outbound')};
+ await stage(await find(a,'a-buy'),'2','3');assert.ok((await b.runtime.recoverInbox()).every(x=>!x.error));const bPurchase=await find(b,'b-buy');assert.equal((await a.storage.stageInbox({scopeId:'h',object:{id:bPurchase.objectId,bytes:bPurchase.bytes},source:'peer',expectedCursor:null,cursor:'1'})).ok,true);assert.ok((await a.runtime.recoverInbox()).every(x=>!x.error));
+ for(const client of [a,b])assert.deepEqual(Object.keys((await client.runtime.document()).doc.getMap('purchases').toJSON()).sort(),['a-buy','b-buy']);
+
+ await a.runtime.execute({operationId:'recipe',deviceSequence:4,command:make('recipe-create','recipe',{recipe:{id:'r',title:'Soup',portions:2,ingredients:[],steps:[],stepIds:[]},author:'a',at})});await stage(await find(a,'recipe'),'3','4');assert.ok((await b.runtime.recoverInbox()).every(x=>!x.error));
+ await a.runtime.execute({operationId:'title-a',deviceSequence:5,command:make('recipe-field','title-a',{recipeId:'r',field:'title',value:'Stew',author:'a',at},['recipe'])});await b.runtime.execute({operationId:'title-b',deviceSequence:2,command:make('recipe-field','title-b',{recipeId:'r',field:'title',value:'Broth',author:'b',at},['recipe'])});
+ await stage(await find(a,'title-a'),'4','5');assert.ok((await b.runtime.recoverInbox()).every(x=>!x.error));const bTitle=await find(b,'title-b');assert.equal((await a.storage.stageInbox({scopeId:'h',object:{id:bTitle.objectId,bytes:bTitle.bytes},source:'peer',expectedCursor:'1',cursor:'2'})).ok,true);assert.ok((await a.runtime.recoverInbox()).every(x=>!x.error));
+ for(const client of [a,b])assert.deepEqual(recipeIntentions((await client.runtime.document()).doc,'r').map(x=>[x.effectId,x.author]),[['title-a','a'],['title-b','b']]);
+ await a.runtime.execute({operationId:'next-cycle',deviceSequence:6,command:make('shopping-cycle-start','next-cycle',{listId:'l',previousCycleId:'c',cycleId:'c2',at},['list'])});await b.runtime.execute({operationId:'late-buy',deviceSequence:3,command:buy('late-buy','b')});await b.runtime.execute({operationId:'other-cycle',deviceSequence:4,command:make('shopping-cycle-start','other-cycle',{listId:'l',previousCycleId:'c',cycleId:'c3',at},['list'])});
+ await stage(await find(a,'next-cycle'),'5','6');assert.ok((await b.runtime.recoverInbox()).every(x=>!x.error));const late=await find(b,'late-buy');assert.equal((await a.storage.stageInbox({scopeId:'h',object:{id:late.objectId,bytes:late.bytes},source:'peer',expectedCursor:'2',cursor:'3'})).ok,true);assert.ok((await a.runtime.recoverInbox()).every(x=>!x.error));assert.equal((await a.runtime.document()).doc.getMap('purchases').get('late-buy').id,'late-buy');
+ const other=await find(b,'other-cycle');assert.equal((await a.storage.stageInbox({scopeId:'h',object:{id:other.objectId,bytes:other.bytes},source:'peer',expectedCursor:'3',cursor:'4'})).ok,true);await a.runtime.importItem({itemId:other.objectId,bytes:other.bytes});
+ const reopenedStorage=openSQLiteStorage({executeSync:(sql,args=[])=>{const st=a.db.prepare(sql);return {rows:sql.startsWith('SELECT')?st.all(...args):(st.run(...args),[])}}});const reopenedRuntime=new FixtureOfflineRuntime({storage:reopenedStorage,codec,LoroDoc,decodeImportBlobMeta,scope,keyRef:'data'});
+ const checkpoint=(await reopenedRuntime.document()).doc.export({mode:'snapshot'});const rebuilt=await replayAuthenticated({runtime:reopenedRuntime,checkpoint});assert.equal(rebuilt.held.length,0);assert.ok(rebuilt.doc.getMap('shopping-cycles').get('c2'));assert.ok(rebuilt.doc.getMap('shopping-cycles').get('c3'));assert.ok(!rebuilt.doc.oplogVersion().toJSON().has('1'));assert.ok(!rebuilt.doc.oplogVersion().toJSON().has('2'));const fromEmpty=await replayAuthenticated({runtime:reopenedRuntime,checkpoint:new Uint8Array()});assert.equal(fromEmpty.held.length,0);assert.ok(fromEmpty.doc.getMap('shopping-cycles').get('c2'));assert.ok(fromEmpty.doc.getMap('shopping-cycles').get('c3'));const excluded=await replayAuthenticated({runtime:reopenedRuntime,checkpoint:new Uint8Array(),excludedEffectIds:['list']});assert.ok(excluded.held.some(x=>x.command.effectId==='list'&&x.reason==='EXCLUDED'));assert.ok(excluded.held.some(x=>x.command.effectId==='late-buy'&&x.reason==='DEPENDENCY_EXCLUDED'));assert.equal(excluded.doc.getMap('purchases').get('late-buy'),undefined);assert.equal(rebuilt.doc.getMap('purchases').get('late-buy').id,'late-buy');assert.deepEqual(recipeIntentions(rebuilt.doc,'r').map(x=>x.effectId),['title-a','title-b']);
+ const values=doc=>({title:doc.getMap('recipe:r').get('title'),cycle:doc.getMap('shopping-list:l').get('currentCycleId')});
+ const sourceA=(await a.runtime.document()).doc,sourceB=(await b.runtime.document()).doc;
+ assert.deepEqual(values(sourceA),values(sourceB));
+ const oppositeArrangement=await replayAuthenticated({runtime:b.runtime,checkpoint:new Uint8Array()});
+ for(const doc of [rebuilt.doc,fromEmpty.doc,oppositeArrangement.doc])assert.deepEqual(values(doc),values(sourceA));
+ // Concurrent cycle writes from exactly the same frontier must keep the
+ // source winner under both outbound/inbox arrangements too.
+ await a.runtime.execute({operationId:'tie-a',deviceSequence:7,command:make('shopping-cycle-start','tie-a',{listId:'l',previousCycleId:'c3',cycleId:'c4',at},['other-cycle'])});
+ await b.runtime.execute({operationId:'tie-b',deviceSequence:5,command:make('shopping-cycle-start','tie-b',{listId:'l',previousCycleId:'c3',cycleId:'c5',at},['other-cycle'])});
+ await stage(await find(a,'tie-a'),'6','7');assert.ok((await b.runtime.recoverInbox()).every(x=>!x.error));
+ const tieB=await find(b,'tie-b');assert.equal((await a.storage.stageInbox({scopeId:'h',object:{id:tieB.objectId,bytes:tieB.bytes},source:'peer',expectedCursor:'4',cursor:'5'})).ok,true);await a.runtime.importItem({itemId:tieB.objectId,bytes:tieB.bytes});
+ const tiedSource=(await a.runtime.document()).doc;assert.deepEqual(values(tiedSource),values((await b.runtime.document()).doc));
+ for(const runtime of [a.runtime,b.runtime])assert.deepEqual(values((await replayAuthenticated({runtime,checkpoint:new Uint8Array()})).doc),values(tiedSource));
+ const source=await a.runtime.document(),d=source.doc;d.setPeerId('1');const before=d.oplogVersion();d.getMap('purchases').set('evil',{id:'different'});const update=d.export({mode:'update',from:before}),meta=decodeImportBlobMeta(update,true);const header={version:1,suiteId:SUITE,scopeId:'h',documentId:'d',documentGeneration:0,branchHead:'head',policyHashes:['policy'],epochId:'epoch',authorDevice:'a',deviceSequence:7,predecessorRefs:meta.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort(),semanticEffectIds:['evil'],payloadKind:'loro-update-v1'};const command=make('recipe-field','evil',{recipeId:'r',field:'title',value:'Forged',author:'a',at},['recipe']);const object=await codec.sealContent(header,new TextEncoder().encode(JSON.stringify({version:1,command,update:Array.from(update)})),'data');await stage({objectId:object.id,bytes:object.bytes},'7','8');await assert.rejects(b.runtime.importItem({itemId:object.id,bytes:object.bytes}),/MALFORMED_UPDATE/);assert.equal((await b.storage.getInboxApplication('h',object.id)).value,null);
+ const prior=(await b.runtime.document()).revision,invalid={...command,effectId:'evil2',commandId:'evil2',unexpected:'unsafe'},bad=await codec.sealContent({...header,semanticEffectIds:['evil2'],deviceSequence:7},new TextEncoder().encode(JSON.stringify({version:1,command:invalid,update:Array.from(update)})),'data');await stage({objectId:bad.id,bytes:bad.bytes},'8','9');await assert.rejects(b.runtime.importItem({itemId:bad.id,bytes:bad.bytes}),/MALFORMED_COMMAND/);assert.equal((await b.storage.getInboxApplication('h',bad.id)).value,null);assert.equal((await b.runtime.document()).revision,prior);
+
+ // A single signed Loro change may contain both an already known prefix and
+ // additional operations. Both fresh and informed receivers must reject it.
+ const c=open('b'),fresh=open('b');
+ try {
+  for(const client of [c,fresh]) assert.equal((await client.storage.compareAndSwapPairingAuthority({expectedRevision:null,record:{scope:{kind:'household',id:'h'},revision:0,acceptedParent:'head',authorizationSnapshot:'authority',authorityState}})).ok,true);
+  const one=make('pantry-create','one',{itemId:'same',name:'One',preference:3,at,author:'a'}),two=make('pantry-create','two',{itemId:'same',name:'Two',preference:4,at:'2026-01-02T00:00:00Z',author:'a'});
+  const crafted=new LoroDoc();crafted.setPeerId('1');applyDomain(crafted,one);const prefixLength=operations(one).length;applyDomain(crafted,two);
+  const full=crafted.export({mode:'update'});assert.equal(decodeImportBlobMeta(full,true).changeNum,1);const prefix=crafted.forkAt([{peer:'1',counter:prefixLength-1}]).export({mode:'update'});
+  const seal=async(command,update,sequence)=>{const m=decodeImportBlobMeta(update,true);return codec.sealContent({version:1,suiteId:SUITE,scopeId:'h',documentId:'d',documentGeneration:0,branchHead:'head',policyHashes:['policy'],epochId:'epoch',authorDevice:'a',deviceSequence:sequence,predecessorRefs:m.startFrontiers.map(({peer,counter})=>`${peer}:${counter}`).sort(),semanticEffectIds:[command.effectId],payloadKind:'loro-update-v1'},new TextEncoder().encode(JSON.stringify({version:1,command,update:Array.from(update)})),'data')};
+  const first=await seal(one,prefix,1),overlap=await seal(two,full,2);
+  const add=async(client,object,cursor,expectedCursor)=>assert.equal((await client.storage.stageInbox({scopeId:'h',object:{id:object.id,bytes:object.bytes},source:'peer',expectedCursor,cursor})).ok,true);
+  await add(c,first,'1',null);await c.runtime.importItem({itemId:first.id,bytes:first.bytes});await add(c,overlap,'2','1');await add(fresh,overlap,'1',null);
+  for(const client of [c,fresh]) {const revision=(await client.runtime.document()).revision;await assert.rejects(client.runtime.importItem({itemId:overlap.id,bytes:overlap.bytes}),/MALFORMED_UPDATE/);assert.equal((await client.runtime.document()).revision,revision);assert.equal((await client.storage.getInboxApplication('h',overlap.id)).value,null);}
+ } finally {c.db.close();fresh.db.close();}
+
+ }finally{a.db.close();b.db.close()}
+});

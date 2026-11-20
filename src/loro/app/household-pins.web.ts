@@ -1,0 +1,11 @@
+import {validPairingScope} from '../contracts/pairing.ts';
+const enc=new TextEncoder(),dec=new TextDecoder('utf-8',{fatal:true});
+const req=<T,>(r:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
+const aad=(id:string)=>enc.encode(`creative-cooking/household-pin/v1/${id}`);
+const valid=(v:any)=>v&&Object.keys(v).sort().join(',')==='head,pin,scope,version'&&v.version===1&&validPairingScope(v.scope)&&v.scope.kind==='household'&&/^[0-9a-f]{64}$/.test(v.pin)&&/^[0-9a-f]{64}$/.test(v.head);
+/** Retains explicit independent confirmations under the device master key. */
+export async function openHouseholdPins(name:string,master:any){
+ const opening=indexedDB.open(`${name}-household-pins`,1);opening.onupgradeneeded=()=>opening.result.createObjectStore('pins');const db=await req(opening);
+ const read=async(id:string)=>{const wrapped=await req(db.transaction('pins','readonly').objectStore('pins').get(id));if(wrapped===undefined)return null;let value:any;try{value=JSON.parse(dec.decode(await master.unwrap('workspace-master',wrapped,aad(id))))}catch{throw Error('PIN_CATALOG_CORRUPT')}if(!valid(value)||value.scope.id!==id)throw Error('PIN_CATALOG_CORRUPT');return value};
+ return {close:()=>db.close(),list:async()=>{const keys=await req(db.transaction('pins','readonly').objectStore('pins').getAllKeys());if(keys.some(k=>typeof k!=='string'))throw Error('PIN_CATALOG_CORRUPT');return Promise.all(keys.map(k=>read(k as string)))},save:async(value:any)=>{value=structuredClone(value);if(!valid(value))throw Error('MALFORMED');const locks=globalThis.navigator?.locks;if(!locks)throw Error('LOCK_UNAVAILABLE');return locks.request(`creative-cooking/household-pin/v1/${name}`,{mode:'exclusive'},async()=>{const previous=await read(value.scope.id);if(previous){if(previous.version!==value.version||previous.scope.kind!==value.scope.kind||previous.scope.id!==value.scope.id||previous.pin!==value.pin||previous.head!==value.head)throw Error('PIN_CONFLICT');return}const wrapped=await master.wrap('workspace-master',enc.encode(JSON.stringify(value)),aad(value.scope.id));await new Promise<void>((resolve,reject)=>{const tx=db.transaction('pins','readwrite');tx.objectStore('pins').put(wrapped,value.scope.id);tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{}})})}};
+}

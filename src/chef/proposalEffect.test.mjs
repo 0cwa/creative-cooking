@@ -25,3 +25,12 @@ test('Chef proposal planning is pure and produces stable effect identities and t
   assert.equal(first.state.pantry[0].createdAt, at);
   assert.equal(first.state.pantry[0].id, replay.state.pantry[0].id);
 });
+
+test('accepting a stored recipe proposal still checks current allergies', () => {
+  const source = structuredClone(DEFAULT_STATE);
+  source.settings.allergies = ['peanut'];
+  const proposal = { id: 'allergy', toolName: 'recipe_save', status: 'pending', arguments: JSON.stringify({ title: 'Peanut soup', portions: 2, ingredients: [{ name: 'peanut', amount: '1' }], steps: ['Mix'] }) };
+  const before = structuredClone(source);
+  assert.throws(() => planChefProposalEffect(source, 'household', 'chat', proposal), /Recipe blocked by allergy validation/);
+  assert.deepEqual(source, before);
+});

@@ -85,6 +85,8 @@ export function planChefProposalEffect(
       if (!validation.ok) throw new RecipeAllergyError(validation.matches);
     },
     saveRecipe: (recipe) => {
+      const validation = validateRecipeAllergies(recipe.ingredients, next.settings.allergies);
+      if (!validation.ok) throw new RecipeAllergyError(validation.matches);
       const args = parseToolArguments(proposal.arguments);
       const input = recipe as Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>;
       const created: Recipe = normalizeRecipes([{

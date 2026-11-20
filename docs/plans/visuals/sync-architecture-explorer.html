@@ -1,0 +1,938 @@
+<div id="sync-explorer" class="sx">
+<style>
+#sync-explorer{--ev-impl:var(--chart-2);--ev-test:var(--chart-1);--ev-model:var(--chart-3);--ev-prop:var(--chart-4);--ev-gap:var(--muted-foreground);font-family:var(--font-sans);color:var(--foreground);line-height:1.45;min-width:0}
+#sync-explorer *{box-sizing:border-box}
+#sync-explorer p{margin:0}
+#sync-explorer .sx-status{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+#sync-explorer .sx-muted{color:var(--muted-foreground)}
+#sync-explorer .sx-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 6px;padding:0;list-style:none;font-size:12px}
+#sync-explorer .sx-legend li{display:inline-flex;align-items:center;gap:6px}
+#sync-explorer .sx-sw{display:inline-block;width:16px;height:11px;border-radius:3px;border:1.5px solid var(--sw);background:color-mix(in srgb,var(--sw) 16%,transparent)}
+#sync-explorer .sx-sw[data-ev=impl]{--sw:var(--ev-impl)}
+#sync-explorer .sx-sw[data-ev=test]{--sw:var(--ev-test)}
+#sync-explorer .sx-sw[data-ev=model]{--sw:var(--ev-model)}
+#sync-explorer .sx-sw[data-ev=prop]{--sw:var(--ev-prop);border-style:dashed}
+#sync-explorer .sx-sw[data-ev=gap]{--sw:var(--ev-gap);border-style:dotted}
+#sync-explorer .sx-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 12px}
+#sync-explorer .sx-tab{font:inherit;font-size:13px;color:var(--foreground);background:transparent;border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;min-height:34px}
+#sync-explorer .sx-tab[aria-selected=true]{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+#sync-explorer .sx-panel{display:flex;flex-direction:column;gap:10px}
+#sync-explorer .sx-panel[hidden]{display:none}
+#sync-explorer .sx-controls{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-end}
+#sync-explorer .sx-field{display:flex;flex-direction:column;gap:4px;min-width:0;max-width:100%;font-size:13px}
+#sync-explorer .sx-field[hidden],#sync-explorer .sx-check[hidden]{display:none}
+#sync-explorer select{font:inherit;font-size:13px;color:var(--foreground);background-color:var(--background);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;min-height:34px;max-width:100%}
+#sync-explorer option,#sync-explorer optgroup{color:var(--foreground);background-color:var(--background)}
+#sync-explorer .sx-checks{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;margin:0;padding:0;border:0;min-width:0}
+#sync-explorer .sx-checks legend{padding:0;margin:0 0 4px;font-size:12px;color:var(--muted-foreground);width:100%}
+#sync-explorer .sx-check{display:inline-flex;align-items:center;gap:6px;min-height:28px}
+#sync-explorer input[type=checkbox]{accent-color:var(--primary);width:16px;height:16px;margin:0}
+@media (pointer:coarse){#sync-explorer select,#sync-explorer .sx-tab{min-height:44px}#sync-explorer .sx-check{min-height:44px}}
+#sync-explorer .sx-readout{font-size:13px;border-left:3px solid var(--primary);padding:2px 0 2px 10px}
+#sync-explorer .sx-readout b{font-weight:500}
+#sync-explorer .sx-diagram{width:100%;min-width:0}
+#sync-explorer svg.sx-svg{display:block;width:100%;overflow:visible}
+#sync-explorer .sx-node rect{fill:color-mix(in srgb,var(--ev) 12%,transparent);stroke:var(--ev);stroke-width:1.25;transition:opacity .15s,stroke-width .15s}
+#sync-explorer .sx-node{--ev:var(--border);transition:opacity .15s}
+#sync-explorer .sx-node[data-ev=impl]{--ev:var(--ev-impl)}
+#sync-explorer .sx-node[data-ev=test]{--ev:var(--ev-test)}
+#sync-explorer .sx-node[data-ev=model]{--ev:var(--ev-model)}
+#sync-explorer .sx-node[data-ev=prop]{--ev:var(--ev-prop)}
+#sync-explorer .sx-node[data-ev=prop] rect{stroke-dasharray:5 3}
+#sync-explorer .sx-node[data-ev=gap]{--ev:var(--ev-gap)}
+#sync-explorer .sx-node[data-ev=gap] rect{stroke-dasharray:2 3}
+#sync-explorer .sx-node[data-ev=none] rect{fill:transparent;stroke:var(--border)}
+#sync-explorer .sx-node[data-kind=layer] rect{fill:color-mix(in srgb,var(--secondary) 70%,transparent);stroke:transparent}
+#sync-explorer .sx-node[data-kind=decision] rect{fill:color-mix(in srgb,var(--primary) 10%,transparent);stroke:var(--primary);stroke-width:2.25;stroke-dasharray:none}
+#sync-explorer .sx-node[data-result=Deny] rect{stroke:var(--destructive,var(--primary))}
+#sync-explorer .sx-node[data-state=dim],#sync-explorer .sx-node[data-state=na],#sync-explorer .sx-node[data-state=off],#sync-explorer .sx-node[data-state=unreached]{opacity:.45}
+#sync-explorer .sx-node[data-state=stop] rect,#sync-explorer .sx-node[data-state=focus] rect{stroke:var(--primary);stroke-width:2.5}
+#sync-explorer .sx-node[data-state=quarantined] rect{stroke:var(--destructive,var(--primary));stroke-dasharray:6 3}
+#sync-explorer .sx-t{fill:var(--foreground);font-size:12px;font-weight:500}
+#sync-explorer .sx-b{fill:var(--muted-foreground);font-size:12px}
+#sync-explorer .sx-g{fill:var(--muted-foreground);font-size:11px;letter-spacing:.02em}
+#sync-explorer .sx-lane{fill:var(--muted-foreground);font-size:12px;font-weight:500}
+#sync-explorer .sx-rule{stroke:var(--border);stroke-width:1}
+#sync-explorer .sx-edge{fill:none;stroke:var(--muted-foreground);stroke-width:1.5;transition:opacity .15s}
+#sync-explorer .sx-edge[data-state=active]{stroke:var(--foreground);stroke-width:2}
+#sync-explorer .sx-edge[data-state=dim]{opacity:.35;stroke-dasharray:3 4}
+#sync-explorer .sx-edge[data-state=block]{stroke:var(--destructive,var(--primary));stroke-dasharray:6 3;stroke-width:2}
+#sync-explorer .sx-ah{fill:var(--muted-foreground)}
+#sync-explorer .sx-ah-active{fill:var(--foreground)}
+#sync-explorer .sx-ah-block{fill:var(--destructive,var(--primary))}
+#sync-explorer .sx-el{fill:var(--foreground);font-size:11px;paint-order:stroke;stroke:var(--background);stroke-width:4px;stroke-linejoin:round}
+#sync-explorer details{font-size:13px}
+#sync-explorer summary{color:var(--muted-foreground);padding:4px 0}
+#sync-explorer details ol,#sync-explorer details ul{margin:4px 0 4px;padding-left:20px;display:flex;flex-direction:column;gap:3px}
+#sync-explorer .sx-note{font-size:13px;color:var(--muted-foreground)}
+#sync-explorer code{font-family:var(--font-mono,monospace);font-size:12px}
+@media (prefers-reduced-motion:reduce){#sync-explorer .sx-node,#sync-explorer .sx-node rect,#sync-explorer .sx-edge{transition:none}}
+</style>
+
+<div class="sx-status">
+  <p><b>Main runs</b> archived PowerSync (<code>069d9ab</code>, real code). <b>Proposed</b>: Loro, an optional encrypted mailbox and bounded contracts; only narrow real-Loro tests and a Boolean contract model have run. <b>TAlkCo</b> <code>e4c34c2</code>: docs and research only, no application runtime, no stack chosen.</p>
+  <ul class="sx-legend" aria-label="Evidence legend, used on every diagram node">
+    <li><span class="sx-sw" data-ev="impl" aria-hidden="true"></span>Code exists (archived app)</li>
+    <li><span class="sx-sw" data-ev="test" aria-hidden="true"></span>Real Loro test (narrow)</li>
+    <li><span class="sx-sw" data-ev="model" aria-hidden="true"></span>Boolean model</li>
+    <li><span class="sx-sw" data-ev="prop" aria-hidden="true"></span>Proposed design</li>
+    <li><span class="sx-sw" data-ev="gap" aria-hidden="true"></span>Unverified or gap</li>
+  </ul>
+  <p class="sx-note">Ana, Ben, Chi and Dee are synthetic. Checkboxes are assumed inputs that stand in for proofs and consent. Decisions come from a copy of the spike's <code>decide()</code> model: illustrations of rule order, not cryptography, real consent or real authorization.</p>
+</div>
+
+<div class="sx-tabs" role="tablist" aria-label="Explorer sections">
+  <button class="sx-tab" id="sx-tab-arch" role="tab" type="button" aria-controls="sx-panel-arch" aria-selected="true">Architectures</button>
+  <button class="sx-tab" id="sx-tab-pc" role="tab" type="button" aria-controls="sx-panel-pc" aria-selected="false">Personal vs shared</button>
+  <button class="sx-tab" id="sx-tab-rc" role="tab" type="button" aria-controls="sx-panel-rc" aria-selected="false">Recovery and rogue keys</button>
+  <button class="sx-tab" id="sx-tab-tk" role="tab" type="button" aria-controls="sx-panel-tk" aria-selected="false">Cooking ↔ TAlkCo</button>
+</div>
+
+<section class="sx-panel" id="sx-panel-arch" role="tabpanel" aria-labelledby="sx-tab-arch">
+  <div class="sx-controls">
+    <label class="sx-field">Alternative
+      <select id="arch-option">
+        <option value="powersync">Archived PowerSync (what main runs)</option>
+        <option value="loro">Proposed: Loro + optional mailbox</option>
+        <option value="local">Local only + manual transfer</option>
+        <option value="lan">LAN multicast discovery</option>
+      </select>
+    </label>
+  </div>
+  <p class="sx-readout" id="arch-readout" aria-live="polite"></p>
+  <div class="sx-diagram" id="arch-diagram"></div>
+  <p class="sx-note">Left: one concern each. Right: who owns it. Several edges into one box means one component holds several kinds of power. Fresh-data plan: no migration of PowerSync data, and existing installs must never be silently reset.</p>
+  <details><summary>Diagram as text</summary><ol id="arch-alt"></ol></details>
+  <details><summary>Sources and limits</summary><ul>
+    <li>Archive files: <code>src/content/powerSyncSchema.ts</code>, <code>server/src/syncAuth.ts</code>, <code>src/storage/backupFormat.ts</code>, <code>credentialVault.ts</code> at <code>069d9ab</code> (via TALKCO-COMPARISON.md). Deployment topology and retention: unchecked.</li>
+    <li>Loro rows: LORO-RELAY-IMPLEMENTATION.md and the spike. Only merge has real Loro tests (reordered/duplicate delivery, two purchase IDs, independent fields, snapshot reopen). Trust is an abstract model; keys and mailbox are design only.</li>
+    <li>Automerge 3.5 failed one historical Hermes probe; that is not a universal incompatibility claim.</li>
+  </ul></details>
+</section>
+
+<section class="sx-panel" id="sx-panel-pc" role="tabpanel" aria-labelledby="sx-tab-pc" hidden>
+  <p class="sx-note">Ana and Ben are equal adults with different preferences: Ana uses an AI chef, Ben keeps his own data off external AI. Each person's choices govern their own data; a shared item carries the agreement accepted when it was shared. Every applicable source and recipient rule must permit the request; required consents and quorums are checked separately.</p>
+  <div class="sx-controls">
+    <label class="sx-field">Scenario
+      <select id="pc-scenario">
+        <option value="ai-recipe">AI chef gets a shared recipe Ana selected</option>
+        <option value="ai-allergy">Ana's prompt includes Ben's allergy</option>
+        <option value="ben-note">Ana pastes Ben's personal note into a prompt</option>
+        <option value="relax">Ana relaxes her setting to "anyone with the link"</option>
+        <option value="replay">Ben's consent reused for another recipient</option>
+      </select>
+    </label>
+    <label class="sx-field" id="pc-consent-field">Ben's recorded consent
+      <select id="pc-consent">
+        <option value="none">None recorded</option>
+        <option value="exact">For this exact request</option>
+        <option value="other">For a different recipient (Dee)</option>
+      </select>
+    </label>
+  </div>
+  <fieldset class="sx-checks">
+    <legend>Assumed inputs (model stand-ins, not real proofs)</legend>
+    <label class="sx-check"><input type="checkbox" id="pc-proof" checked>Device proof verifies</label>
+    <label class="sx-check"><input type="checkbox" id="pc-conflict">Offline: two policy heads conflict</label>
+    <label class="sx-check" id="pc-local-wrap"><input type="checkbox" id="pc-local">Ask for an on-device alternative</label>
+    <label class="sx-check" id="pc-widen-wrap"><input type="checkbox" id="pc-widen">Ana and Ben accept a successor agreement adding link holders</label>
+  </fieldset>
+  <p class="sx-readout" id="pc-readout" aria-live="polite"></p>
+  <div class="sx-diagram" id="pc-diagram"></div>
+  <p class="sx-note">Gates run top to bottom in the model's order; the first failing gate decides. Allowed plaintext cannot be recalled: neither encryption nor revocation is DRM.</p>
+  <details><summary>Diagram as text</summary><ol id="pc-alt"></ol></details>
+  <details><summary>Sources and limits</summary><ul>
+    <li>Decision logic is the spike's <code>contracts.mjs</code> <code>decide()</code>, copied verbatim; its 8 tests in <code>contracts.test.mjs</code> cover these behaviors. The model takes already-verified Boolean inputs and verifies no signature.</li>
+    <li>The specification (LORO-POLICY-CONTRACTS.md) orders host and retention checks last; this model checks retention before consent. No scenario here uses retention.</li>
+    <li>Content labels such as "allergy" are assumed. Free text can contain inferences that no software reliably detects.</li>
+    <li>A successor agreement covers content shared under it; history under the old agreement keeps its restriction unless every affected person consents.</li>
+  </ul></details>
+</section>
+
+<section class="sx-panel" id="sx-panel-rc" role="tabpanel" aria-labelledby="sx-tab-rc" hidden>
+  <div class="sx-controls">
+    <label class="sx-field">Scenario
+      <select id="rc-scenario">
+        <optgroup label="Personal recovery">
+          <option value="self">Self-reliant: Ana uses her printed code</option>
+          <option value="assisted">Assisted: Ana's 2-of-3 personal guardians</option>
+          <option value="outside">Outside guardian Chi asks for the household key</option>
+          <option value="escrow">Household demands Ana escrow private keys</option>
+        </optgroup>
+        <optgroup label="Rogue keys">
+          <option value="rogue1">One rogue device of three</option>
+          <option value="rogue2">Two compromised devices, both Ana's</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="sx-field" id="rg-choice-field">Checkpoint choice
+      <select id="rg-choice">
+        <option value="none">No choice yet</option>
+        <option value="ben">Ben picks the earlier checkpoint</option>
+        <option value="ana">Ana keeps the latest head</option>
+      </select>
+    </label>
+  </div>
+  <fieldset class="sx-checks" id="rc-checks">
+    <legend>Assumed inputs (model stand-ins, not real proofs)</legend>
+    <label class="sx-check" id="rc-g-ben-wrap"><input type="checkbox" id="rc-g-ben">Ben returns a share</label>
+    <label class="sx-check" id="rc-g-chi-wrap"><input type="checkbox" id="rc-g-chi">Chi returns a share</label>
+    <label class="sx-check" id="rc-g-dee-wrap"><input type="checkbox" id="rc-g-dee">Dee returns a share</label>
+    <label class="sx-check" id="rc-dup-wrap"><input type="checkbox" id="rc-dup">Chi holds two share copies</label>
+    <label class="sx-check" id="rc-consent-wrap"><input type="checkbox" id="rc-consent">Ana authorizes creating or releasing this package</label>
+    <label class="sx-check" id="rc-confirm-wrap"><input type="checkbox" id="rc-confirm">Ben confirms Ana's new device</label>
+  </fieldset>
+  <p class="sx-readout" id="rc-readout" aria-live="polite"></p>
+  <p class="sx-note">Consent here authorizes creating or releasing the package. Withdrawing it cannot revoke shares, packages or plaintext already distributed.</p>
+  <div class="sx-diagram" id="rc-diagram"></div>
+  <p class="sx-note" id="rc-foot"></p>
+  <details><summary>Diagram as text</summary><ol id="rc-alt"></ol></details>
+  <details><summary>Sources and limits</summary><ul>
+    <li>Recovery lanes use the copied <code>decide()</code> model. Rogue-key counts use a copy of the spike's <code>reconstruction()</code> (<code>model.mjs</code>, test V5: devices a1 and a2 are Ana's, b1 is Ben's; device threshold 2, adult threshold 2).</li>
+    <li>"Ana keeps the latest head" is an illustrative input, not a tested V5 case. In V5, Ben's choice rebuilt a clean Loro document from the checkpoint and the selected benign edit, and kept the rejected operations exportable.</li>
+    <li>A recovery code is a bearer secret. Guardian recovery here is secret reconstruction, not threshold signing. No real share, key or signature exists in this page or the spike.</li>
+    <li>Dependencies can make selective replay impossible; the plan never promises removal of causal operations.</li>
+  </ul></details>
+</section>
+
+<section class="sx-panel" id="sx-panel-tk" role="tabpanel" aria-labelledby="sx-tab-tk" hidden>
+  <div class="sx-controls">
+    <label class="sx-field">Concern
+      <select id="tk-concern">
+        <option value="identity">People, devices and contexts</option>
+        <option value="metadata">Metadata and unlinkability</option>
+        <option value="keys">Key release vs custody</option>
+        <option value="domain">CRDT and domain meaning</option>
+        <option value="ai">AI and third-party data</option>
+        <option value="evidence">What has actually run</option>
+      </select>
+    </label>
+  </div>
+  <p class="sx-readout" id="tk-readout" aria-live="polite"></p>
+  <div class="sx-diagram" id="tk-diagram"></div>
+  <p class="sx-note">Cooking's single HTTP mailbox is not a TAlkCo production answer: TAlkCo's contextual identities, metadata unlinkability, deniability and custody needs go beyond what one household mailbox provides. Share fixture vocabulary first, not an engine or wire format.</p>
+  <details><summary>Diagram as text</summary><ol id="tk-alt"></ol></details>
+  <details><summary>Remaining fixture gaps</summary><ol>
+    <li>Two devices of one person plus a fork: Ana's two devices and Ben approve incompatible successors while partitioned, delivered reordered and duplicated. Expect two visible heads, Ana counted once, no cursor-chosen authority, offline edits kept.</li>
+    <li>Consent replay plus AI: replay one recipe consent for another recipient, or send a second person's inferred allergy to an external prompt. Expect hold or deny; an explicit personal on-device action still allowed.</li>
+    <li>Durability and side effects: crash between document mutation and outbox commit; deliver a duplicate purchase envelope and two adults' distinct purchases. Expect all-or-nothing on reopen, one event for the duplicate, two events for two purchases.</li>
+    <li>Run one bounded fixture only after TAlkCo picks its first application surface and observer budget. Still unaddressed: crypto, crash atomicity, context unlinkability, late-reader audience, ratchet restore, host custody.</li>
+  </ol></details>
+  <details><summary>Sources and limits</summary><ul>
+    <li>TALKCO-COMPARISON.md, read-only comparison at Cooking <code>9843eb8</code> and TAlkCo <code>e4c34c2</code>. TAlkCo architecture and profile documents label themselves DRAFT.</li>
+    <li>Package licensing for any reuse: unchecked.</li>
+  </ul></details>
+</section>
+
+<script>
+(function(){
+'use strict';
+// ---------- Pure model section (no DOM). decide() is copied verbatim from spikes/relay-household-poc/contracts.mjs ----------
+// Deliberately finite, input-driven illustration; proof booleans stand in for verification.
+function decide(r) {
+  const result = (result, reason) => ({ result, reasons: [reason] });
+  const keys = ['action','policy','accepted','conflict','proof','admitted','recipient','destination','content','purpose','rules','consents','requiredPeople','quorums','local','retention'];
+  if (!r || Object.keys(r).some(k => !keys.includes(k)) || keys.some(k => !(k in r)) ||
+      !['editLocal','restorePrivate','releasePrivatePackage','releaseSharedKey','disclose','approve','publish','enrollHost'].includes(r.action) ||
+      !['valid','missing','invalid'].includes(r.proof) ||
+      ![r.accepted,r.conflict,r.admitted,r.local].every(x => typeof x === 'boolean') ||
+      ![r.policy,r.recipient,r.destination,r.content,r.purpose].every(x => typeof x === 'string') ||
+      ![r.rules,r.consents,r.requiredPeople,r.quorums].every(Array.isArray) || !r.requiredPeople.every(v => typeof v === 'string') ||
+      r.rules.some(x => !x || Object.keys(x).sort().join() !== 'actions,contents,destinations,purposes,recipients' || ![x.actions,x.contents,x.destinations,x.purposes,x.recipients].every(a => Array.isArray(a) && a.every(v => typeof v === 'string'))) ||
+      r.consents.some(x => !x || Object.keys(x).sort().join() !== 'content,person,policy,purpose,recipient,scope' || Object.values(x).some(v => typeof v !== 'string')) ||
+      r.quorums.some(x => !x || Object.keys(x).sort().join() !== 'approvals,electorate,threshold' || !Array.isArray(x.approvals) || !Array.isArray(x.electorate) || !x.approvals.every(v => typeof v === 'string') || !x.electorate.every(v => typeof v === 'string') || !Number.isInteger(x.threshold) || x.threshold < 1 || x.threshold > new Set(x.electorate).size) ||
+      (r.retention !== null && (!Array.isArray(r.retention) || r.retention.some(x => !x || Object.keys(x).sort().join() !== 'max,min' || !Number.isFinite(x.min) || !Number.isFinite(x.max) || x.min < 0 || x.max < x.min)))) return result('Deny','INVALID_INPUT');
+  if (r.proof === 'invalid') return result('Deny','INVALID_INPUT');
+  if (r.action === 'editLocal') return result('LocalOnly','LOCAL_EDIT');
+  if (r.proof === 'missing') return result('Pending','MISSING_EVIDENCE');
+  if (!r.accepted || r.conflict) return result('Pending','POLICY_UNRESOLVED');
+  if (['releaseSharedKey','approve','publish'].includes(r.action) && !r.admitted) return result('Pending','ADMISSION_REQUIRED');
+  if (r.rules.some(x => !x.actions.includes(r.action) || !x.recipients.includes(r.recipient) || !x.destinations.includes(r.destination) || !x.contents.includes(r.content) || !x.purposes.includes(r.purpose))) return r.local ? result('LocalOnly','LOCAL_ALTERNATIVE') : result('Deny','PROHIBITED');
+  if (r.retention?.length && Math.max(...r.retention.map(x => x.min)) > Math.min(...r.retention.map(x => x.max))) return result('Deny','INCOMPATIBLE');
+  if (r.requiredPeople.some(person => !r.consents.some(x => x.person === person && x.policy === r.policy && x.recipient === r.recipient && x.content === r.content && x.purpose === r.purpose && x.scope === r.action))) return result('RequireConsent','CONSENT_REQUIRED');
+  if (r.quorums.some(x => new Set(x.approvals.filter(a => x.electorate.includes(a))).size < x.threshold)) return result('Pending','QUORUM_REQUIRED');
+  return result('Allow','OK');
+}
+// Copied from spikes/relay-household-poc/model.mjs (export keyword removed).
+function reconstruction({devices, operations, checkpoint, selected, deviceApprovals, adultApprovals, personalConsent}) {
+  const deviceVotes = [...new Set(deviceApprovals)].filter(id=>devices.some(d=>d.id===id));
+  const adults = [...new Set(devices.map(d=>d.adult))];
+  const adultVotes = [...new Set(adultApprovals)].filter(id=>adults.includes(id));
+  const chosen = operations.filter(op=>selected.includes(op.id));
+  if (!checkpoint.trustedBy || !checkpoint.newBranch) throw new Error('explicit checkpoint and new branch required');
+  return {editPermission:'any authorized device',checkpointChoiceBy:checkpoint.trustedBy, newBranch:checkpoint.newBranch, deviceVote:{votes:deviceVotes.length,threshold:2,approved:deviceVotes.length>=2},adultVote:{votes:adultVotes.length,electorate:adults.length,threshold:2,approved:adultVotes.length>=2},checkpoint,selected:chosen,quarantined:operations.filter(op=>!selected.includes(op.id)),rejectedHistoryExport:operations,personalRecovery:{codeOnly:{guardianAccess:false},guardians:{enabled:personalConsent,thresholdCanRead:personalConsent}}};
+}
+
+const REASON_TEXT = {
+  OK:'every applicable gate passed',
+  LOCAL_EDIT:'saved on this device; routine local edits need no vote',
+  LOCAL_ALTERNATIVE:'a rule blocks the request, so only the explicitly requested on-device alternative runs',
+  MISSING_EVIDENCE:'required evidence is missing, so the request waits',
+  INVALID_INPUT:'input or proof is invalid',
+  POLICY_UNRESOLVED:'conflicting or unaccepted policy heads; never last-write-wins',
+  ADMISSION_REQUIRED:'this device is not admitted to the household yet',
+  PROHIBITED:'an applicable rule does not allow this recipient, destination, content or purpose; no consent is requested for a known prohibition',
+  INCOMPATIBLE:'host and retention terms do not intersect',
+  CONSENT_REQUIRED:'a named person has not consented to this exact recipient, content, purpose and policy',
+  QUORUM_REQUIRED:'not enough distinct eligible people have approved'
+};
+const GATES = [
+  {id:'g-input', title:'1. Input and proof', reasons:['INVALID_INPUT','MISSING_EVIDENCE','LOCAL_EDIT']},
+  {id:'g-policy', title:'2. Policy resolved and accepted', reasons:['POLICY_UNRESOLVED']},
+  {id:'g-admit', title:'3. Admission', reasons:['ADMISSION_REQUIRED']},
+  {id:'g-audience', title:'4. Every rule allows it', reasons:['PROHIBITED','LOCAL_ALTERNATIVE']},
+  {id:'g-host', title:'5. Host and retention', reasons:['INCOMPATIBLE']},
+  {id:'g-consent', title:'6. Named consent', reasons:['CONSENT_REQUIRED']},
+  {id:'g-quorum', title:'7. Distinct-people quorum', reasons:['QUORUM_REQUIRED']}
+];
+
+// ---- Tab 1: architecture alternatives ----
+const LAYERS = [
+  ['domain','Domain meaning'],['merge','Merge of edits'],['authority','Membership authority'],
+  ['delivery','Delivery'],['custody','Custody and retention'],['keys','Key release'],['visible','Visible to host or network']
+];
+const ARCH = {
+  powersync:{
+    readout:'<b>Archived PowerSync</b>: one backend service holds merge, membership authority, delivery and custody, and it can read the content. This is the code on main.',
+    owners:[
+      {id:'ps-domain',rows:['domain'],ev:'impl',title:'Domain types',body:'src/domain recipes, shopping cycles, purchases'},
+      {id:'ps-backend',rows:['merge','authority','delivery','custody'],ev:'impl',title:'Backend + database + PowerSync service',body:'SQL versions and conflict rows; sync JWT sub=userId, 300 s; server-mediated replica; soft deletes. Deployment and retention unchecked.'},
+      {id:'ps-keys',rows:['keys'],ev:'impl',title:'No household E2EE keys',body:'Server-readable mutation API'},
+      {id:'ps-visible',rows:['visible'],ev:'impl',title:'Content and account identity',body:'The operator can read synced records'}
+    ]},
+  loro:{
+    readout:'<b>Proposed Loro + mailbox</b>: each concern has its own owner. Only the merge box has real Loro tests; the mailbox is optional and its receipt is never authority.',
+    owners:[
+      {id:'lo-domain',rows:['domain'],ev:'prop',title:'Versioned domain codecs',body:'Stable IDs; purchases are append-only events'},
+      {id:'lo-merge',rows:['merge'],ev:'test',title:'Loro document per recipe or list',body:'Same-field edits keep one winner; superseded value shown separately'},
+      {id:'lo-trust',rows:['authority'],ev:'model',title:'Signed trust DAG, adult presets',body:'Forks stay visible; relay order decides nothing'},
+      {id:'lo-mailbox',rows:['delivery'],ev:'prop',title:'Optional HTTP mailbox',body:'Durable receipt is not peer receipt or authority'},
+      {id:'lo-custody',rows:['custody'],ev:'prop',title:'Devices + operator retention window',body:'A promise, not proof of deletion'},
+      {id:'lo-keys',rows:['keys'],ev:'gap',title:'Fresh random epoch keys in device envelopes',body:'No cryptography implemented yet'},
+      {id:'lo-visible',rows:['visible'],ev:'prop',title:'Mailbox ID, sizes, timing, address',body:'Not names, membership lists or provider keys'}
+    ]},
+  local:{
+    readout:'<b>Local only</b>: the device holder decides everything; moving data means handing someone a file, and whoever holds the file can read it.',
+    owners:[
+      {id:'lc-domain',rows:['domain'],ev:'impl',title:'Domain types',body:'Same domain rules'},
+      {id:'lc-device',rows:['merge','authority'],ev:'prop',title:'One device, its holder decides',body:'Nothing to merge until an import'},
+      {id:'lc-file',rows:['delivery','custody'],ev:'impl',title:'Manual export file',body:'Archived backup format is unencrypted JSON; holder keeps copies'},
+      {id:'lc-keys',rows:['keys'],ev:'prop',title:'Device storage only',body:'No sharing keys exist'},
+      {id:'lc-visible',rows:['visible'],ev:'prop',title:'Whoever receives the file',body:'No network host involved'}
+    ]},
+  lan:{
+    readout:'<b>LAN multicast</b>: finds nearby peers but provides no authority, keys or offline delivery. At most an optional hint beside a real merge and trust layer.',
+    owners:[
+      {id:'ln-domain',rows:['domain'],ev:'prop',title:'Domain codecs',body:'Unchanged'},
+      {id:'ln-merge',rows:['merge'],ev:'prop',title:'Still needs a CRDT',body:'Multicast moves bytes; it does not merge'},
+      {id:'ln-auth',rows:['authority','keys'],ev:'gap',title:'Not provided',body:'Reachability is not authority or key release'},
+      {id:'ln-delivery',rows:['delivery','custody'],ev:'prop',title:'Same-network peers only',body:'Offline or away devices miss updates'},
+      {id:'ln-visible',rows:['visible'],ev:'gap',title:'Neighbours on the LAN',body:'Presence and timing; unverified'}
+    ]}
+};
+
+// ---- Tab 2: personal vs shared contracts ----
+const R = {
+  anaAI:{name:"Ana's personal AI choice",rule:{actions:['disclose'],recipients:['provider'],destinations:['external'],contents:['selected-recipe','household-allergy','ben-note'],purposes:['meal-advice']}},
+  sharedRecipe:{name:'Shared recipe agreement (p1)',rule:{actions:['disclose','publish'],recipients:['household','provider'],destinations:['device','external','relay'],contents:['selected-recipe','shared-recipe'],purposes:['meal-advice','share']}},
+  sharedAllergy:{name:'Shared allergy agreement (p1)',rule:{actions:['disclose'],recipients:['household','provider'],destinations:['device','external'],contents:['household-allergy'],purposes:['meal-advice']}},
+  benNote:{name:"Ben's personal rule",rule:{actions:['disclose'],recipients:['ana','ben'],destinations:['device'],contents:['ben-note'],purposes:['meal-advice','cooking']}},
+  anaShare:{name:"Ana's personal sharing setting",rule:{actions:['publish'],recipients:['household','link-holders'],destinations:['relay'],contents:['shared-recipe'],purposes:['share']}},
+  sharedP2:{name:'Successor shared agreement (p2)',rule:{actions:['publish'],recipients:['household','link-holders'],destinations:['relay'],contents:['shared-recipe'],purposes:['share']}},
+  sharedFriends:{name:'Shared recipe agreement (p1)',rule:{actions:['disclose'],recipients:['household','chi','dee'],destinations:['relay'],contents:['shared-recipe'],purposes:['share']}}
+};
+const PC_SCEN = {
+  'ai-recipe':{label:'Ana sends a shared recipe she selected to her AI provider.',who:'The AI provider now holds',req:{action:'disclose',recipient:'provider',destination:'external',content:'selected-recipe',purpose:'meal-advice'},rules:['anaAI','sharedRecipe'],people:[],controls:[],
+    note:'Ben prefers no external AI for his own data; the shared recipe agreement both accepted still allows recipe text for meal advice.'},
+  'ai-allergy':{label:"Ana's prompt includes Ben's allergy, which the household recorded as Ben's affected interest.",who:'The AI provider now holds',req:{action:'disclose',recipient:'provider',destination:'external',content:'household-allergy',purpose:'meal-advice'},rules:['anaAI','sharedAllergy'],people:['ben'],controls:['consent'],
+    note:"Ana's relaxed AI choice is not enough: the affected person, Ben, must consent to this exact recipient, content and purpose."},
+  'ben-note':{label:"Ana pastes Ben's personal note into her AI prompt.",who:'The AI provider now holds',req:{action:'disclose',recipient:'provider',destination:'external',content:'ben-note',purpose:'meal-advice'},rules:['anaAI','benNote'],people:[],controls:['local'],
+    note:"Ben's own rule keeps his note on devices. Ben could change his rule; the system does not ask him to consent around a known prohibition."},
+  'relax':{label:'Ana publishes a shared recipe to anyone with the link.',who:'Link holders now hold',req:{action:'publish',recipient:'link-holders',destination:'relay',content:'shared-recipe',purpose:'share'},rules:['anaShare','sharedRecipe'],people:[],controls:['widen'],
+    note:"Ana relaxing her own setting cannot widen an audience both adults accepted. Only a successor agreement both accept can, and it covers content shared under it."},
+  'replay':{label:"Ana shares a co-authored recipe with Chi, reusing Ben's consent.",who:'Chi now holds',req:{action:'disclose',recipient:'chi',destination:'relay',content:'shared-recipe',purpose:'share'},rules:['sharedFriends'],people:['ben'],controls:['consent'],defaultConsent:'other',
+    note:'Consent binds one recipient, content, purpose and policy; consent given for Dee does not carry over to Chi.'}
+};
+function pcRequest(s){
+  const sc = PC_SCEN[s.scenario];
+  let ruleKeys = sc.rules.slice();
+  let policy = 'p1';
+  if (s.scenario === 'relax' && s.widen) { ruleKeys = ['anaShare','sharedP2']; policy = 'p2'; }
+  const consents = [];
+  if (sc.people.length && s.consent !== 'none') {
+    consents.push({person:'ben',policy,recipient:s.consent==='exact'?sc.req.recipient:'dee',content:sc.req.content,purpose:sc.req.purpose,scope:sc.req.action});
+  }
+  const req = {action:sc.req.action,policy,accepted:true,conflict:!!s.conflict,proof:s.proof?'valid':'missing',admitted:true,
+    recipient:sc.req.recipient,destination:sc.req.destination,content:sc.req.content,purpose:sc.req.purpose,
+    rules:ruleKeys.map(k=>R[k].rule),consents,requiredPeople:sc.people.slice(),quorums:[],local:sc.controls.includes('local')&&!!s.local,retention:null};
+  return {req, ruleKeys, decision:decide(req), scenario:sc};
+}
+
+// ---- Tab 3: recovery lanes and rogue keys ----
+const BASE = () => ({action:'restorePrivate',policy:'p1',accepted:true,conflict:false,proof:'valid',admitted:false,recipient:'ana',destination:'device',content:'catalog',purpose:'recover',rules:[],consents:[],requiredPeople:[],quorums:[],local:false,retention:null});
+const RC_DEFAULTS = {
+  self:{confirm:false},
+  assisted:{gBen:true,gChi:true,gDee:false,dup:false,consent:true,confirm:false},
+  outside:{gBen:true,gChi:true,gDee:true,dup:false,consent:true},
+  escrow:{gBen:true,gChi:true,gDee:true,dup:false,consent:false,confirm:false}
+};
+const RC_CONTROLS = {self:['confirm'],assisted:['gBen','gChi','gDee','dup','consent','confirm'],outside:['gBen','gChi','gDee','dup'],escrow:['gBen','gChi','gDee','consent','confirm'],rogue1:[],rogue2:[]};
+function approvalsOf(s){ const a=[]; if(s.gBen)a.push('ben'); if(s.gChi){a.push('chi'); if(s.dup)a.push('chi');} if(s.gDee)a.push('dee'); return a; }
+function rcLanes(s){
+  const lanes = [];
+  const approvals = approvalsOf(s);
+  const quorum = {electorate:['ben','chi','dee'],threshold:2,approvals};
+  // Lane 1: recovery of Ana's private catalog
+  if (s.scenario === 'self') {
+    const req = BASE();
+    lanes.push({id:'recovery',title:"Recovery: Ana's private catalog",req,decision:decide(req),inputs:[{id:'in-code',ev:'prop',title:'Printed recovery code',body:'Bearer secret; wraps only Ana\'s catalog',state:'on'}]});
+  } else if (s.scenario === 'escrow') {
+    const req = Object.assign(BASE(),{action:'releasePrivatePackage',recipient:'guardians',content:'private-keys',purpose:'escrow',requiredPeople:['ana'],quorums:[quorum],
+      consents:s.consent?[{person:'ana',policy:'p1',recipient:'guardians',content:'private-keys',purpose:'escrow',scope:'releasePrivatePackage'}]:[]});
+    lanes.push({id:'recovery',title:"Escrow of Ana's private keys",req,decision:decide(req),inputs:guardianInputs(s,'Supports the demand').concat([{id:'in-consent',ev:'model',title:"Ana's own consent",body:s.consent?'Given (assumed)':'Not given',state:s.consent?'on':'off'}])});
+  } else {
+    const req = Object.assign(BASE(),{action:'releasePrivatePackage',requiredPeople:['ana'],quorums:[quorum],
+      consents:s.consent?[{person:'ana',policy:'p1',recipient:'ana',content:'catalog',purpose:'recover',scope:'releasePrivatePackage'}]:[]});
+    lanes.push({id:'recovery',title:"Recovery: Ana's personal guardian package",req,decision:decide(req),inputs:guardianInputs(s,'Returns a share').concat([{id:'in-consent',ev:'model',title:"Ana's consent to this preset",body:s.consent?'Given (assumed)':'Not given',state:s.consent?'on':'off'}])});
+  }
+  // Lane 2: routine editing
+  const edit = Object.assign(BASE(),{action:'editLocal',content:'recipe-edit',purpose:'cook'});
+  lanes.push({id:'editing',title:"Editing: Ana's new device",req:edit,decision:decide(edit),inputs:[{id:'in-edit',ev:'model',title:'Ana edits a recipe',body:'Routine change on her own device',state:'on'}]});
+  // Lane 3: household authority
+  if (s.scenario === 'outside') {
+    const req = Object.assign(BASE(),{action:'releaseSharedKey',admitted:true,recipient:'chi',content:'household-epoch-key',purpose:'membership',
+      rules:[{actions:['releaseSharedKey'],recipients:['ana','ben'],destinations:['device'],contents:['household-epoch-key'],purposes:['membership']}],quorums:[quorum]});
+    lanes.push({id:'authority',title:'Authority: household key',req,decision:decide(req),inputs:[
+      {id:'in-chi',ev:'model',title:'Chi asks for the household key',body:'Holds a personal-package share',state:'on'},
+      {id:'in-hk',ev:'prop',title:'Household key agreement',body:'Recipients: Ana, Ben only',state:'on'}]});
+  } else {
+    const req = Object.assign(BASE(),{action:'releaseSharedKey',admitted:!!s.confirm,recipient:'ana-new-device',content:'household-epoch-key',purpose:'membership'});
+    lanes.push({id:'authority',title:'Authority: household keys and vote',req,decision:decide(req),inputs:[
+      {id:'in-confirm',ev:'model',title:'Ben, a current adult, confirms',body:s.confirm?'Against a trusted checkpoint (assumed)':'Not yet confirmed',state:s.confirm?'on':'off'}]});
+  }
+  return lanes;
+}
+function guardianInputs(s,verb){
+  return [['ben','Ben','household adult',s.gBen],['chi','Chi','outside friend',s.gChi],['dee','Dee','outside friend',s.gDee]].map(([id,name,role,on])=>({
+    id:'in-g-'+id,ev:'model',title:name+' ('+role+')',body:on?(verb+(id==='chi'&&s.dup?'; two copies count once':'')):'Unavailable or withholding',state:on?'on':'off'}));
+}
+const DEVICES = [{id:'a1',adult:'Ana',name:'Ana phone'},{id:'a2',adult:'Ana',name:'Ana tablet'},{id:'b1',adult:'Ben',name:'Ben phone'}];
+const OPS = [{id:'good',device:'b1',effect:'add rice'},{id:'bad1',device:'a1',effect:'delete recipe'},{id:'bad2',device:'a2',effect:'clear list'}];
+function rogue(s){
+  const compromised = s.scenario==='rogue1' ? ['a1'] : ['a1','a2'];
+  const ops = s.scenario==='rogue1' ? OPS.slice(0,2) : OPS.slice();
+  const trustedBy = s.choice==='ana' ? 'Ana' : 'Ben';
+  const selected = s.choice==='ana' ? ops.map(o=>o.id) : ['good'];
+  const res = reconstruction({devices:DEVICES.map(d=>({id:d.id,adult:d.adult})),operations:ops,checkpoint:{id:'base',trustedBy,newBranch:s.choice==='ana'?'latest':'clean',effects:['recipe']},selected,deviceApprovals:compromised,adultApprovals:['Ana'],personalConsent:false});
+  return {compromised, ops, res};
+}
+
+// ---- Tab 4: Cooking <-> TAlkCo ----
+const TK = {
+  identity:{readout:'Both projects separate a person from their devices; neither has a working secure admission yet.',focus:'tk-diverge',
+    arch:['impl','Server auth: sync JWT sub=userId, 300 s; spaces are backend objects. No device-bound multi-adult approval.'],
+    prop:['model','Adult identity separate from device keys; trust events bind parent policy and electorate; forks stay visible.'],
+    toT:'Count distinct people, not devices. Keep household admission rules out of channels and community roles.',
+    toC:"Don't collapse identity, proof, authority and audience; account keys don't define social permission.",
+    talk:['prop','Contextual profiles, device lifecycle, introductions and authority grants are separate planned questions (DRAFT).'],
+    diverge:'TAlkCo context aliases must not become one global correlation ID; Cooking adult IDs exist only inside a household.',
+    gap:'Secure admission is unchecked in both. Fixture 1 tests two devices of one person plus a fork.'},
+  metadata:{readout:'The largest divergence: a household mailbox accepts visible metadata that TAlkCo aims to hide.',focus:'tk-diverge',
+    arch:['impl','Server-mediated sync; the backend reads content and account identity. Deployment topology unchecked.'],
+    prop:['prop','Mailbox operator sees mailbox ID, ciphertext size, timing and network address; not names, membership or provider keys.'],
+    toT:'Even a minimal ciphertext host still sees one mailbox per household and its traffic pattern.',
+    toC:'Treat metadata leakage and denial of service as explicit product tradeoffs; delivery is not custody is not trust.',
+    talk:['prop','Needs context separation and metadata unlinkability across conversations, channels and workspaces; carriers are candidates only.'],
+    diverge:'The Cooking mailbox hides neither timing nor size, and one mailbox links a household. Not a TAlkCo answer.',
+    gap:'No observer budget defined. No experiment here addresses unlinkability or traffic privacy.'},
+  keys:{readout:'Both distinguish who may unlock data from who stores the ciphertext; neither has implemented cryptography.',focus:'tk-gap',
+    arch:['impl','Portable JSON backup v1/v2; provider keys in SecureStore on native but localStorage on web. No encrypted household backup or rotation.'],
+    prop:['prop','Fresh random epoch keys; a recovery code wraps a catalog only; optional consented guardians; no recall claim.'],
+    toT:'Separate personal recovery from household authority; a guardian package is readable by its threshold.',
+    toC:'Key release has several purposes; key delivery is not ciphertext custody; lease expiry is not global deletion.',
+    talk:['prop','DRAFT encryption profile: object keys, recipient descriptors, ratchets or MLS, recovery, conditional release (TACo candidate), deniability.'],
+    diverge:"TAlkCo's deniability and public-evidence needs don't belong in household content; signed audit can conflict with deniability.",
+    gap:'No cryptography implemented or reviewed in either. Ratchet restore and host custody remain open in TAlkCo.'},
+  domain:{readout:'Cooking can give TAlkCo concrete domain counterexamples; CRDT convergence alone proves little.',focus:'tk-toT',
+    arch:['impl','PowerSync replica over normalized tables with versions and tombstones; the server conflict path keeps rejected edits.'],
+    prop:['test','Loro 1.17.1 tests: reordered and duplicate updates converge, two purchase IDs survive, a snapshot reopens; same-title edits keep one winner.'],
+    toT:'Add a domain-semantics fixture: purchases are events, same-field loss is visible, content history is not a permission graph.',
+    toC:'One accepted owner per state machine; quarantine missing authority or dependencies; arrival time is not authority.',
+    talk:['prop','Candidates: Automerge, Yjs/Yrs, Loro, p2panda; must handle revoked dependencies, late history and checkpoints.'],
+    diverge:'TAlkCo needs message, reply, edit and withdraw semantics; Cooking needs shopping cycles and pantry. Share no schema.',
+    gap:'Selective rebuild with dependent Loro operations and TAlkCo revoked-dependency repair are both unproven.'},
+  ai:{readout:'Cooking has a concrete AI disclosure question; TAlkCo has not defined AI flows yet.',focus:'tk-toT',
+    arch:['impl','Chef provider integrations exist; chats and settings are in portable JSON; no field-level audience policy on prompts found.'],
+    prop:['model','Chats stay personal in a household; sharing is a deliberate copy; the model checks recipient, content and purpose.'],
+    toT:"If TAlkCo adds AI: an explicit selected-context boundary with affected-person consent.",
+    toC:'Recipient and context separation: who sees a message is a policy decision, not a side effect.',
+    talk:['gap','AI and provider policy are not in the cited core architecture; actual AI flow unchecked.'],
+    diverge:'Different domains; no shared provider-policy engine.',
+    gap:'Free text can hold inferences (an allergy, a health hint) that no classifier reliably finds. Fixture 2 tests consent replay and an inferred allergy.'},
+  evidence:{readout:'Evidence differs in kind: real archived code, narrow tests and a model in Cooking; documents and research in TAlkCo.',focus:'tk-gap',
+    arch:['impl','Real code on main, archived at 069d9ab. Reading it does not prove deployed uptime or recovery.'],
+    prop:['test','Ran: narrow real-Loro tests and 8 Boolean contract-model tests. Not run: crypto, network, relay, crash atomicity.'],
+    toT:'Compact real-Loro and domain counterexamples; independently composable policy boundaries; a household rogue-majority case.',
+    toC:'Scope access vs unlinkability, key release vs custody, delivery vs authority.',
+    talk:['prop','e4c34c2: documentation, research and generators; no application runtime; no stack approved.'],
+    diverge:'No evidence for reusing either production engine; share fixture vocabulary first.',
+    gap:'Fixture 3 tests a crash between mutation and outbox commit, and duplicate vs distinct purchases. Run after TAlkCo picks a first surface.'}
+};
+
+const MODEL = {decide, reconstruction, pcRequest, rcLanes, rogue, PC_SCEN, RC_DEFAULTS, ARCH, TK, GATES};
+if (typeof window !== 'undefined') window.__syncExplorerModel = MODEL;
+if (typeof document === 'undefined') return;
+
+// ---------- DOM section ----------
+const root = document.getElementById('sync-explorer');
+if (!root) return;
+const $ = id => root.querySelector('#'+id);
+const NS = 'http://www.w3.org/2000/svg';
+const CW = 6.6, LH = 16, PAD = 8;
+
+function wrap(text, w, cw){
+  const max = Math.max(6, Math.floor((w - 2*PAD) / (cw || CW)));
+  const out = []; let cur = '';
+  for (const word of String(text || '').split(/\s+/)) {
+    if (!word) continue;
+    let wd = word;
+    if (!cur) cur = wd; else if ((cur + ' ' + wd).length <= max) cur += ' ' + wd; else { out.push(cur); cur = wd; }
+    while (cur.length > max) { out.push(cur.slice(0, max - 1) + '-'); cur = cur.slice(max - 1); }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+function S(tag, attrs, parent){
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) if (attrs[k] !== undefined && attrs[k] !== null) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function Diagram(id){ this.id = id; this.nodes = {}; this.order = []; this.edges = []; this.extras = []; this.alt = []; }
+Diagram.prototype.measure = function(w, o){
+  const t = wrap(o.title, w), b = o.body ? wrap(o.body, w) : [], g = o.tag ? wrap(o.tag, w, 6.1) : [];
+  return {t, b, g, h: PAD + g.length * 15 + t.length * LH + b.length * LH + PAD - 2};
+};
+Diagram.prototype.node = function(id, x, y, w, o){
+  const m = this.measure(w, o);
+  const n = Object.assign({id, x, y, w, h: Math.max(o.minH || 0, m.h), lines: m}, o);
+  this.nodes[id] = n; this.order.push(n); return n;
+};
+Diagram.prototype.edge = function(a, b, o){ this.edges.push(Object.assign({a, b}, o || {})); };
+Diagram.prototype.lane = function(x, y, w, text){ this.extras.push({type:'lane', x, y, w, text}); };
+Diagram.prototype.render = function(host, label){
+  host.textContent = '';
+  let H = 0; for (const n of this.order) H = Math.max(H, n.y + n.h);
+  for (const x of this.extras) H = Math.max(H, x.y + 4);
+  const W = this.width;
+  const svg = S('svg', {class:'sx-svg', viewBox:'0 0 ' + W + ' ' + Math.ceil(H + 4), width: W, height: Math.ceil(H + 4), role:'img', 'aria-label': label}, host);
+  svg.style.width = W + 'px'; svg.style.maxWidth = '100%';
+  const defs = S('defs', {}, svg);
+  for (const [k, cls] of [['n','sx-ah'],['a','sx-ah-active'],['b','sx-ah-block']]) {
+    const m = S('marker', {id: this.id + '-ah-' + k, viewBox:'0 0 10 10', refX:'9', refY:'5', markerWidth:'9', markerHeight:'9', markerUnits:'userSpaceOnUse', orient:'auto-start-reverse'}, defs);
+    S('path', {d:'M0 0 L10 5 L0 10 z', class: cls}, m);
+  }
+  for (const x of this.extras) {
+    if (x.type === 'lane') { const t = S('text', {x: x.x, y: x.y, class:'sx-lane'}, svg); t.textContent = x.text; }
+    if (x.type === 'rule') S('line', {x1: x.x1, y1: x.y, x2: x.x2, y2: x.y, class:'sx-rule'}, svg);
+  }
+  const eg = S('g', {}, svg);
+  for (const e of this.edges) {
+    const A = this.nodes[e.a], B = this.nodes[e.b]; if (!A || !B) continue;
+    const side = e.side || 'h';
+    let x1, y1, x2, y2, d;
+    if (side === 'h') {
+      x1 = A.x + A.w; y1 = e.ay != null ? e.ay : A.y + A.h / 2; x2 = B.x; y2 = e.by != null ? e.by : B.y + B.h / 2;
+      const mx = (x1 + x2) / 2; d = 'M' + x1 + ' ' + y1 + ' C' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 + ' ' + (x2 - 1) + ' ' + y2;
+    } else if (side === 'v') {
+      x1 = e.ax != null ? e.ax : A.x + A.w / 2; y1 = A.y + A.h; x2 = e.bx != null ? e.bx : B.x + B.w / 2; y2 = B.y;
+      const my = (y1 + y2) / 2; d = 'M' + x1 + ' ' + y1 + ' C' + x1 + ' ' + my + ' ' + x2 + ' ' + my + ' ' + x2 + ' ' + (y2 - 1);
+    } else if (side === 'up') {
+      x1 = e.ax != null ? e.ax : A.x + A.w / 2; y1 = A.y; x2 = e.bx != null ? e.bx : B.x + B.w / 2; y2 = B.y + B.h;
+      const my = (y1 + y2) / 2; d = 'M' + x1 + ' ' + y1 + ' C' + x1 + ' ' + my + ' ' + x2 + ' ' + my + ' ' + x2 + ' ' + (y2 + 1);
+    } else if (side === 'toLeft') {
+      x1 = A.x; y1 = A.y + A.h / 2; x2 = B.x + B.w; y2 = B.y + B.h / 2;
+      const mx = (x1 + x2) / 2; d = 'M' + x1 + ' ' + y1 + ' C' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 + ' ' + (x2 + 1) + ' ' + y2;
+    } else if (side === 'skip') {
+      x1 = A.x; y1 = A.y + A.h / 2; x2 = B.x; y2 = B.y + B.h / 2; const lx = Math.max(2, A.x - 14);
+      d = 'M' + x1 + ' ' + y1 + ' C' + lx + ' ' + y1 + ' ' + lx + ' ' + y2 + ' ' + (x2 - 1) + ' ' + y2;
+    }
+    const st = e.state || 'normal';
+    const k = st === 'active' ? 'a' : st === 'block' ? 'b' : 'n';
+    S('path', {d, class:'sx-edge', 'data-state': st, 'data-edge': e.a + '>' + e.b, 'marker-end': 'url(#' + this.id + '-ah-' + k + ')'}, eg);
+    if (e.label) {
+      const lx = e.lx != null ? e.lx : (x1 + x2) / 2, ly = e.ly != null ? e.ly : (y1 + y2) / 2 + 4;
+      const t = S('text', {x: lx, y: ly, class:'sx-el', 'text-anchor': e.anchor || 'middle'}, eg); t.textContent = e.label;
+    }
+  }
+  for (const n of this.order) {
+    const g = S('g', {class:'sx-node', 'data-node': n.id, 'data-ev': n.ev || 'none', 'data-kind': n.kind || 'node', 'data-state': n.state || 'normal', 'data-result': n.result}, svg);
+    S('rect', {x: n.x + 0.75, y: n.y + 0.75, width: Math.max(1, n.w - 1.5), height: Math.max(1, n.h - 1.5), rx: 8}, g);
+    let cy = n.y + PAD;
+    if (n.vcenter) cy = n.y + (n.h - (n.lines.t.length + n.lines.b.length) * LH) / 2 - 2;
+    for (const line of n.lines.g) { const t = S('text', {x: n.x + PAD, y: cy + 10, class:'sx-g'}, g); t.textContent = line; cy += 15; }
+    for (const line of n.lines.t) { const t = S('text', {x: n.x + PAD, y: cy + 12, class:'sx-t'}, g); t.textContent = line; cy += LH; }
+    for (const line of n.lines.b) { const t = S('text', {x: n.x + PAD, y: cy + 12, class:'sx-b'}, g); t.textContent = line; cy += LH; }
+  }
+  return svg;
+};
+const EVTAG = {impl:'code exists', test:'real Loro test', model:'model', prop:'proposed', gap:'unverified'};
+const evTag = (ev, extra) => (EVTAG[ev] || '') + (extra ? ' · ' + extra : '');
+function fillAlt(id, items){ const ol = $(id); ol.textContent = ''; for (const s of items) { const li = document.createElement('li'); li.textContent = s; ol.appendChild(li); } }
+function width(){ return Math.max(260, Math.floor(root.clientWidth || 700)); }
+
+// ---- Tab 1 render ----
+function renderArch(){
+  const opt = $('arch-option').value, spec = ARCH[opt], W = width();
+  const D = new Diagram('arch'); D.width = W;
+  const narrow = W < 520, gap = narrow ? 26 : 56;
+  const lw = Math.floor(W * (narrow ? 0.36 : 0.3)), rx = lw + gap, rw = W - rx - 2;
+  const rowOf = {}; LAYERS.forEach((l, i) => rowOf[l[0]] = i);
+  // row heights: label height, single-row owner height
+  const rowH = LAYERS.map(l => D.measure(lw, {title: l[1]}).h);
+  for (const o of spec.owners) if (o.rows.length === 1) rowH[rowOf[o.rows[0]]] = Math.max(rowH[rowOf[o.rows[0]]], D.measure(rw, {tag: 'x', title: o.title, body: o.body}).h);
+  const vg = 10;
+  for (const o of spec.owners) if (o.rows.length > 1) {
+    const idx = o.rows.map(r => rowOf[r]); const need = D.measure(rw, {tag:'x', title:o.title, body:o.body}).h;
+    let have = idx.reduce((s, i) => s + rowH[i], 0) + vg * (idx.length - 1);
+    if (need > have) rowH[idx[idx.length - 1]] += need - have;
+  }
+  const rowY = []; let y = 0; for (let i = 0; i < LAYERS.length; i++) { rowY.push(y); y += rowH[i] + vg; }
+  LAYERS.forEach((l, i) => D.node('L-' + l[0], 0, rowY[i], lw, {title: l[1], kind:'layer', minH: rowH[i], vcenter: true}));
+  const alt = [];
+  for (const o of spec.owners) {
+    const idx = o.rows.map(r => rowOf[r]); const i0 = Math.min(...idx), i1 = Math.max(...idx);
+    const h = rowY[i1] + rowH[i1] - rowY[i0];
+    D.node(o.id, rx, rowY[i0], rw, {tag: evTag(o.ev, o.rows.length > 1 ? 'owns ' + o.rows.length + ' layers' : ''), title: o.title, body: o.body, ev: o.ev, minH: h, state: o.rows.length > 1 ? 'focus' : 'normal'});
+    for (const r of o.rows) D.edge('L-' + r, o.id, {by: rowY[rowOf[r]] + rowH[rowOf[r]] / 2, state: o.rows.length > 1 ? 'active' : 'normal'});
+    alt.push(o.rows.map(r => LAYERS[rowOf[r]][1]).join(', ') + ' → ' + o.title + ' (' + EVTAG[o.ev] + '): ' + o.body);
+  }
+  D.render($('arch-diagram'), 'Owner of each concern for ' + $('arch-option').selectedOptions[0].textContent);
+  $('arch-readout').innerHTML = spec.readout;
+  fillAlt('arch-alt', alt);
+}
+
+// ---- Tab 2 render ----
+function pcState(){ return {scenario: $('pc-scenario').value, proof: $('pc-proof').checked, conflict: $('pc-conflict').checked, consent: $('pc-consent').value, local: $('pc-local').checked, widen: $('pc-widen').checked}; }
+function gateIndex(reason){ if (reason === 'OK') return -1; return GATES.findIndex(g => g.reasons.includes(reason)); }
+function ruleMatch(rule, req){ return {action: rule.actions.includes(req.action), recipient: rule.recipients.includes(req.recipient), destination: rule.destinations.includes(req.destination), content: rule.contents.includes(req.content), purpose: rule.purposes.includes(req.purpose)}; }
+function renderPC(){
+  const s = pcState(), sc = PC_SCEN[s.scenario];
+  $('pc-consent-field').hidden = !sc.controls.includes('consent');
+  $('pc-local-wrap').hidden = !sc.controls.includes('local');
+  $('pc-widen-wrap').hidden = !sc.controls.includes('widen');
+  const {req, ruleKeys, decision} = pcRequest(s);
+  const reason = decision.reasons[0], stop = gateIndex(reason);
+  const W = width(), D = new Diagram('pc'); D.width = W;
+  const narrow = W < 520, gx = 16, gw = Math.floor(W * (narrow ? 0.44 : 0.38)), ix = gx + gw + (narrow ? 22 : 48), iw = W - ix - 2;
+  const applies = [true, true, ['releaseSharedKey','approve','publish'].includes(req.action), req.rules.length > 0, req.retention !== null, req.requiredPeople.length > 0, req.quorums.length > 0];
+  // inputs feeding gates
+  const inputs = GATES.map(() => []);
+  inputs[0].push({id:'i-proof', ev:'model', title: s.proof ? 'Device proof verifies' : 'Device proof missing', body: 'assumed input', ok: s.proof});
+  inputs[1].push({id:'i-policy', ev:'model', title: s.conflict ? 'Two conflicting policy heads' : 'Policy ' + req.policy + ' accepted', body: s.conflict ? 'offline peer cannot pick one' : 'by both adults (assumed)', ok: !s.conflict});
+  if (applies[2]) inputs[2].push({id:'i-admit', ev:'model', title:'Ana is an admitted adult', body:'assumed input', ok: true});
+  const altRules = [];
+  ruleKeys.forEach((k, i) => {
+    const r = R[k].rule, m = ruleMatch(r, req), ok = Object.values(m).every(Boolean);
+    const miss = Object.keys(m).filter(f => !m[f]);
+    inputs[3].push({id:'i-rule-' + i, ev: k === 'sharedP2' ? 'prop' : 'model', title: R[k].name, body: 'allows ' + r.recipients.join(', ') + ' · ' + r.contents.join(', ') + (ok ? '' : ' · blocks ' + miss.join(', ')), ok});
+    altRules.push(R[k].name + (ok ? ' allows the request' : ' blocks it on ' + miss.join(', ')));
+  });
+  if (applies[5]) {
+    const c = s.consent;
+    inputs[5].push({id:'i-consent', ev:'model', title: c === 'none' ? "No consent from Ben" : c === 'exact' ? "Ben consented to this request" : "Ben consented for Dee", body: c === 'exact' ? 'recipient, content, purpose, policy match' : c === 'other' ? 'different recipient: does not transfer' : 'silence is not consent', ok: c === 'exact'});
+  }
+  // layout rows
+  let y = 0; const vg = 10;
+  const gateNodes = [];
+  GATES.forEach((g, i) => {
+    let state = !applies[i] ? 'na' : stop === -1 || i < stop ? 'normal' : i === stop ? 'stop' : 'unreached';
+    const status = !applies[i] ? 'not applicable' : stop === -1 || i < stop ? 'passed' : i === stop ? 'stopped here' : 'not reached';
+    const gTitle = applies[i] ? g.title : g.title + ' (not applicable)';
+    const gm = D.measure(gw, applies[i] ? {tag:'x', title: gTitle} : {title: gTitle});
+    let ih = 0; const ins = inputs[i]; for (const n of ins) ih += D.measure(iw, {tag:'x', title:n.title, body:n.body}).h + 6;
+    const rh = Math.max(gm.h, ih - 6);
+    const gn = D.node(g.id, gx, y, gw, {tag: applies[i] ? status : null, title: gTitle, state, ev:'model', minH: gm.h});
+    gn.y = y + (rh - gn.h) / 2; gateNodes.push(gn);
+    let iy = y;
+    for (const n of ins) {
+      const nn = D.node(n.id, ix, iy, iw, {tag: (n.ok ? '✓ ' : '✗ ') + EVTAG[n.ev], title: n.title, body: n.body, ev: n.ev, state: (stop !== -1 && i > stop) ? 'unreached' : 'normal'});
+      iy += nn.h + 6;
+      D.edge(n.id, g.id, {side:'toLeft', state: (stop !== -1 && i > stop) ? 'dim' : n.ok ? 'active' : 'block'});
+    }
+    y += rh + vg;
+  });
+  for (let i = 0; i < gateNodes.length - 1; i++) {
+    const reached = stop === -1 || i + 1 <= stop;
+    D.edge(gateNodes[i].id, gateNodes[i + 1].id, {side:'v', state: reached ? 'active' : 'dim'});
+  }
+  const dTitle = decision.result + ' (' + reason + ')';
+  const dn = D.node('pc-decision', gx, y + 6, gw, {tag:'model decision', title: dTitle, body: REASON_TEXT[reason], kind:'decision', result: decision.result});
+  if (stop === -1) D.edge(gateNodes[gateNodes.length - 1].id, 'pc-decision', {side:'v', state:'active'});
+  else D.edge(gateNodes[stop].id, 'pc-decision', {side:'skip', state:'active'});
+  const ext = !['household','ana','ben'].includes(req.recipient);
+  const conseq = decision.result === 'Allow' ? (ext ? sc.who + ' plaintext. It can be copied and cannot be recalled; revocation is not DRM.' : 'Delivered within the accepted audience.')
+    : decision.result === 'LocalOnly' ? 'Runs on Ana\'s device only; nothing is disclosed. Eligibility of the local alternative is assumed.'
+    : decision.result === 'RequireConsent' ? 'Ask Ben, showing the exact recipient, content and purpose. Nothing is sent meanwhile.'
+    : decision.result === 'Pending' ? 'Held. Ana\'s local work is kept; nothing is sent.'
+    : 'Nothing sent.';
+  const cn = D.node('pc-consequence', ix, y + 6, iw, {tag: decision.result === 'Allow' && ext ? 'limit' : 'effect', title: conseq, ev: decision.result === 'Allow' && ext ? 'gap' : 'none'});
+  D.edge('pc-decision', 'pc-consequence', {state:'active'});
+  D.render($('pc-diagram'), 'Contract gate diagram: ' + sc.label + ' Result ' + dTitle);
+  $('pc-readout').innerHTML = '<b>' + sc.label + '</b> Model result: <b>' + dTitle + '</b>. ' + sc.note;
+  const alt = GATES.map((g, i) => g.title + ': ' + (!applies[i] ? 'not applicable' : stop === -1 || i < stop ? 'passed' : i === stop ? 'stopped here' : 'not reached') + (inputs[i].length ? ' (inputs: ' + inputs[i].map(n => n.title + (n.ok ? ' ✓' : ' ✗')).join('; ') + ')' : ''));
+  alt.push('Decision: ' + dTitle + ', ' + REASON_TEXT[reason] + '.'); alt.push('Effect: ' + conseq); altRules.forEach(a => alt.push('Rule check: ' + a));
+  fillAlt('pc-alt', alt);
+}
+// ---- Tab 3 render ----
+function rcState(){ return {scenario: $('rc-scenario').value, choice: $('rg-choice').value, gBen: $('rc-g-ben').checked, gChi: $('rc-g-chi').checked, gDee: $('rc-g-dee').checked, dup: $('rc-dup').checked, consent: $('rc-consent').checked, confirm: $('rc-confirm').checked}; }
+const RC_IDS = {gBen:'rc-g-ben', gChi:'rc-g-chi', gDee:'rc-g-dee', dup:'rc-dup', consent:'rc-consent', confirm:'rc-confirm'};
+function applyRcDefaults(sc){
+  const d = RC_DEFAULTS[sc]; if (d) for (const k in RC_IDS) $(RC_IDS[k]).checked = !!d[k];
+  if (sc === 'rogue1' || sc === 'rogue2') $('rg-choice').value = 'none';
+}
+function renderRC(){
+  const s = rcState(), isRogue = s.scenario.startsWith('rogue'), shown = RC_CONTROLS[s.scenario];
+  for (const k in RC_IDS) $(RC_IDS[k] + '-wrap').hidden = !shown.includes(k);
+  $('rc-checks').hidden = shown.length === 0;
+  $('rg-choice-field').hidden = !isRogue;
+  const escrow = s.scenario === 'escrow';
+  $('rc-g-chi-wrap').lastChild.textContent = escrow ? 'Chi supports the demand' : 'Chi returns a share';
+  $('rc-g-dee-wrap').lastChild.textContent = escrow ? 'Dee supports the demand' : 'Dee returns a share';
+  $('rc-g-ben-wrap').lastChild.textContent = escrow ? 'Ben supports the demand' : 'Ben returns a share';
+  $('rc-consent-wrap').lastChild.textContent = escrow ? 'Ana authorizes creating or releasing her escrow package' : 'Ana authorizes creating or releasing this package';
+  if (isRogue) renderRogue(s); else renderLanes(s);
+}
+const RC_READ = {
+  self: 'Ana restores her own catalog with nothing but her code. Household keys and her vote wait for a current adult; recovery alone grants neither.',
+  assisted: 'Ana chose assisted recovery. Two of three distinct people must return shares, and whoever meets the threshold can read this package. Provider API keys are never in it.',
+  outside: 'Chi helps with Ana\'s personal package, but that gives Chi nothing in the household. A private guardian cannot receive household keys without a separate accepted shared grant.',
+  escrow: 'A group quorum cannot stand in for Ana\'s own consent: no shared floor can force private-key escrow. If Ana consents, it becomes her chosen assisted preset.'
+};
+function renderLanes(s){
+  const lanes = rcLanes(s), W = width(), D = new Diagram('rc'); D.width = W;
+  const narrow = W < 520, iw = Math.floor(W * (narrow ? 0.44 : 0.4)), dx = iw + (narrow ? 24 : 60), dw = W - dx - 2;
+  let y = 14; const alt = [];
+  lanes.forEach((lane, li) => {
+    D.lane(0, y, W, lane.title); y += 10;
+    let iy = y; const ins = [];
+    for (const inp of lane.inputs) { const n = D.node(inp.id, 0, iy, iw, {tag: evTag(inp.ev, inp.state === 'on' ? 'yes' : 'no'), title: inp.title, body: inp.body, ev: inp.ev, state: inp.state}); ins.push(n); iy += n.h + 6; }
+    const r = lane.decision.result, reason = lane.decision.reasons[0];
+    const dm = D.measure(dw, {tag:'x', title: r + ' (' + reason + ')', body: REASON_TEXT[reason]});
+    const blockH = Math.max(iy - 6 - y, dm.h);
+    const dn = D.node('rc-' + lane.id, dx, y + Math.max(0, (blockH - dm.h) / 2), dw, {tag: 'model decision · ' + lane.req.action, title: r + ' (' + reason + ')', body: REASON_TEXT[reason], kind:'decision', result: r});
+    for (const n of ins) D.edge(n.id, dn.id, {state: n.state === 'on' ? 'active' : 'dim'});
+    alt.push(lane.title + ': inputs ' + lane.inputs.map(i => i.title + ' (' + i.body + ')').join('; ') + ' → ' + r + ' (' + reason + '), ' + REASON_TEXT[reason] + '.');
+    y += blockH + 10;
+    if (li === 0 && lane.decision.result === 'Allow' && lane.req.action === 'releasePrivatePackage') {
+      const who = approvalsOf(s).filter((v, i, a) => a.indexOf(v) === i).map(v => v[0].toUpperCase() + v.slice(1));
+      const wn = D.node('rc-readers', dx, y, dw, {tag:'limit', title: (lane.req.recipient === 'guardians' ? 'Guardians who hold it' : 'Threshold holders') + ' can read this package', body: (who.join(', ') || 'none') + '; device-only provider keys excluded', ev:'gap'});
+      D.edge(dn.id, wn.id, {side:'v', state:'active'});
+      alt.push('Limit: ' + who.join(', ') + ' can read the released package; provider keys are excluded.');
+      y += wn.h + 10;
+    }
+    if (li < lanes.length - 1) { D.extras.push({type:'rule', x1: 0, x2: W, y: y}); y += 18; }
+  });
+  D.render($('rc-diagram'), 'Recovery, editing and authority lanes for ' + $('rc-scenario').selectedOptions[0].textContent);
+  const res = lanes.map(l => '<b>' + l.title.split(':')[0] + '</b>: ' + l.decision.result).join(' · ');
+  $('rc-readout').innerHTML = res + '. ' + RC_READ[s.scenario];
+  $('rc-foot').textContent = 'Three separate lanes: threshold recovery reads a personal package; editing is local and needs no vote; authority over household keys needs admission. No lane grants another.';
+  fillAlt('rc-alt', alt);
+}
+function renderRogue(s){
+  const {compromised, ops, res} = rogue(s), W = width(), D = new Diagram('rg'); D.width = W;
+  const narrow = W < 520, cg = narrow ? 18 : 44;
+  const c1 = Math.floor((W - 2 * cg) * 0.3), c2 = Math.floor((W - 2 * cg) * 0.26), c3 = W - 2 * cg - c1 - c2 - 2;
+  const x2 = c1 + cg, x3 = x2 + c2 + cg;
+  let y = 14; D.lane(0, y, W, 'Who approves "accept the latest head"?'); y += 10;
+  let dy = y; const dn = [];
+  for (const d of DEVICES) {
+    const bad = compromised.includes(d.id);
+    const n = D.node('dev-' + d.id, 0, dy, c1, {tag: bad ? 'compromised (assumed)' : 'honest (assumed)', title: d.name + ' (' + d.id + ')', body: bad ? 'approves' : 'does not approve', ev:'model', state: bad ? 'quarantined' : 'normal'});
+    dn.push(n); dy += n.h + 8;
+  }
+  const colH = dy - 8 - y;
+  const ana = D.node('adult-ana', x2, y, c2, {tag:'adult', title:'Ana', body:'approves via ' + compromised.length + ' device' + (compromised.length > 1 ? 's' : '') + '; counted once', ev:'model'});
+  const ben = D.node('adult-ben', x2, y + colH - D.measure(c2, {tag:'x', title:'Ben', body:'no approval'}).h, c2, {tag:'adult', title:'Ben', body:'no approval', ev:'model'});
+  for (const d of DEVICES) D.edge('dev-' + d.id, d.adult === 'Ana' ? 'adult-ana' : 'adult-ben', {state: compromised.includes(d.id) ? 'active' : 'normal'});
+  const dv = res.deviceVote, av = res.adultVote;
+  const dvn = D.node('count-device', x3, y, c3, {tag:'device count (wrong rule)', title: dv.votes + ' of 3 devices: ' + (dv.approved ? 'passes' : 'fails'), body:'threshold ' + dv.threshold + '; one person with two devices', ev:'model', result: dv.approved ? 'approved' : 'not approved', state: dv.approved ? 'quarantined' : 'normal'});
+  const avn = D.node('count-adult', x3, Math.max(dvn.y + dvn.h + 8, y + colH - D.measure(c3, {tag:'x', title:'x of 2 adults: fails', body:'threshold 2 distinct adults'}).h), c3, {tag:'adult count (plan)', title: av.votes + ' of ' + av.electorate + ' adults: ' + (av.approved ? 'passes' : 'fails'), body:'threshold ' + av.threshold + ' distinct adults', ev:'model', result: av.approved ? 'approved' : 'not approved', state:'focus'});
+  D.edge('adult-ana', 'count-adult', {state: av.votes ? 'active' : 'dim'});
+  D.edge('adult-ana', 'count-device', {state:'active'});
+  y = Math.max(y + colH, avn.y + avn.h) + 22;
+  D.extras.push({type:'rule', x1:0, x2:W, y: y - 10});
+  D.lane(0, y + 4, W, 'History: edits need no vote, so rogue edits exist'); y += 14;
+  const hw = Math.floor((W - cg) / 2), hx2 = hw + cg;
+  D.lane(0, y + 6, hw, 'Original (kept, exportable)'); D.lane(hx2, y + 6, hw, s.choice === 'none' ? 'No new branch yet' : s.choice === 'ben' ? 'New branch "clean" (Ben\'s choice)' : 'Ana\'s branch (latest head)');
+  y += 14;
+  let hy = y; const hist = [];
+  const base = D.node('h-base', 0, hy, hw, {tag:'checkpoint', title:'base: recipe as agreed', ev:'test'}); hy += base.h + 14; hist.push(base);
+  const q = res.quarantined.map(o => o.id), sel = res.selected.map(o => o.id);
+  for (const o of ops) {
+    const dev = DEVICES.find(d => d.id === o.device);
+    const st = s.choice === 'ben' ? (q.includes(o.id) ? 'quarantined' : 'normal') : 'normal';
+    const n = D.node('h-' + o.id, 0, hy, hw, {tag: o.id.startsWith('bad') ? 'destructive edit' : 'benign edit', title: o.effect, body: 'by ' + dev.name + (st === 'quarantined' ? '; quarantined, exportable' : ''), ev:'test', state: st});
+    D.edge(hist[hist.length - 1].id, n.id, {side:'v', state:'normal'}); hist.push(n); hy += n.h + 14;
+  }
+  let ry = y;
+  if (s.choice === 'none') {
+    D.node('b-none', hx2, ry, hw, {tag:'visible, nothing deleted', title:'Both heads stay visible', body:'Each device keeps local work and can export it. Relay order decides nothing.', ev:'prop'});
+  } else if (s.choice === 'ben') {
+    const cb = D.node('b-base', hx2, ry, hw, {tag:'explicit choice by Ben', title:'Rebuilt from base', body:'clean Loro document', ev:'test'});
+    D.edge('h-base', 'b-base', {state:'active'});
+    ry += cb.h + 14; let prev = 'b-base';
+    for (const o of res.selected) { const n = D.node('b-' + o.id, hx2, ry, hw, {tag:'replayed from original', title: o.effect, body:'selected benign edit', ev:'test', state:'focus'}); D.edge(prev, n.id, {side:'v', state:'active'}); D.edge('h-' + o.id, n.id, {state:'active'}); prev = n.id; ry += n.h + 14; }
+  } else {
+    const hb = D.node('b-latest', hx2, ry, hw, {tag:'illustrative input', title:'Keeps the latest head', body:'includes ' + ops.filter(o => o.id !== 'good').map(o => o.effect).join(', '), ev:'model'});
+    D.edge(hist[hist.length - 1].id, 'b-latest', {state:'active'});
+  }
+  D.render($('rc-diagram'), 'Rogue device counting and checkpoint branches for ' + $('rc-scenario').selectedOptions[0].textContent);
+  const r1 = s.scenario === 'rogue1';
+  let read = '<b>' + (r1 ? 'One rogue device' : 'Two compromised devices') + '</b>: device count ' + dv.votes + ' of 3 ' + (dv.approved ? '<b>passes</b>' : 'fails') + '; adult count ' + av.votes + ' of ' + av.electorate + ' fails. ';
+  read += r1 ? 'Neither rule passes, yet the rogue device could still make a destructive routine edit. ' : 'Counting devices would let one person win. ';
+  read += s.choice === 'none' ? 'Choose a checkpoint to see a branch.' : s.choice === 'ben' ? 'Ben\'s new branch replays only the benign edit; the original history and quarantined edits remain exportable. Ben\'s choice is social input, not proof he is honest.' : 'Ana\'s branch keeps everything. Both branches remain visible; neither majority nor minority proves which person is honest.';
+  $('rc-readout').innerHTML = read;
+  $('rc-foot').textContent = 'A majority of devices does not identify an honest person. Recovery is an explicit checkpoint choice that creates a new branch and keeps the original history; dependent operations may block replay.';
+  const alt = DEVICES.map(d => d.name + ' (' + d.id + ', owned by ' + d.adult + '): ' + (compromised.includes(d.id) ? 'compromised, approves' : 'honest, does not approve'));
+  alt.push('Device count: ' + dv.votes + ' of 3, threshold ' + dv.threshold + ', ' + (dv.approved ? 'passes' : 'fails') + '.');
+  alt.push('Adult count: ' + av.votes + ' of ' + av.electorate + ', threshold ' + av.threshold + ', ' + (av.approved ? 'passes' : 'fails') + '.');
+  alt.push('Original history: base, ' + ops.map(o => o.effect + ' by ' + o.device).join(', ') + '; kept and exportable.');
+  alt.push(s.choice === 'none' ? 'No checkpoint chosen: both heads visible.' : s.choice === 'ben' ? 'Ben chooses base: new branch "clean" with ' + res.selected.map(o => o.effect).join(', ') + '; quarantined: ' + res.quarantined.map(o => o.effect).join(', ') + '.' : 'Ana keeps the latest head; both branches visible.');
+  fillAlt('rc-alt', alt);
+}
+
+// ---- Tab 4 render ----
+function renderTK(){
+  const c = TK[$('tk-concern').value], W = width(), D = new Diagram('tk'); D.width = W;
+  const narrow = W < 520, cg = narrow ? 14 : 36, hw = Math.floor((W - cg) / 2), x2 = hw + cg;
+  const st = id => id === c.focus ? 'focus' : 'normal';
+  let y = 0;
+  const p = D.node('tk-prop', 0, y, hw, {tag: evTag(c.prop[0], 'Cooking plan'), title:'Proposed Loro + contracts', body: c.prop[1], ev: c.prop[0]});
+  const a = D.node('tk-arch', x2, y, hw, {tag: evTag(c.arch[0], 'Cooking main, replaced by plan'), title:'Archived PowerSync', body: c.arch[1], ev: c.arch[0]});
+  const h1 = Math.max(a.h, p.h); a.h = p.h = h1;
+  D.edge('tk-arch', 'tk-prop', {side:'toLeft', state:'normal'});
+  y += h1 + 26;
+  const t1 = D.node('tk-toT', 0, y, hw, {tag:'lesson → TAlkCo', title: c.toT, ev:'none', state: st('tk-toT')});
+  const t2 = D.node('tk-toC', x2, y, hw, {tag:'lesson → Cooking', title: c.toC, ev:'none', state: st('tk-toC')});
+  const h2 = Math.max(t1.h, t2.h); t1.h = t2.h = h2;
+  D.edge('tk-prop', 'tk-toT', {side:'v', state:'active', ax: hw * 0.4, bx: hw * 0.4});
+  y += h2 + 26;
+  const tk = D.node('tk-talk', 0, y, W - 2, {tag: evTag(c.talk[0], 'TAlkCo e4c34c2'), title:'TAlkCo: docs and research, no runtime', body: c.talk[1], ev: c.talk[0]});
+  D.edge('tk-toT', 'tk-talk', {side:'v', state:'active', ax: hw * 0.4, bx: hw * 0.4});
+  D.edge('tk-talk', 'tk-toC', {side:'up', state:'active', ax: x2 + hw * 0.5, bx: x2 + hw * 0.5});
+  D.edge('tk-toC', 'tk-prop', {side:'up', state:'active', ax: x2 + hw * 0.2, bx: hw * 0.85});
+  y += tk.h + 26;
+  const dv = D.node('tk-diverge', 0, y, hw, {tag:'keep different', title: c.diverge, ev:'none', state: st('tk-diverge')});
+  const gp = D.node('tk-gap', x2, y, hw, {tag:'unverified in both', title: c.gap, ev:'gap', state: st('tk-gap')});
+  const h4 = Math.max(dv.h, gp.h); dv.h = gp.h = h4;
+  D.edge('tk-talk', 'tk-diverge', {side:'v', state:'normal', ax: hw * 0.5, bx: hw * 0.5});
+  D.edge('tk-talk', 'tk-gap', {side:'v', state:'normal', ax: x2 + hw * 0.5, bx: x2 + hw * 0.5});
+  D.render($('tk-diagram'), 'Cooking and TAlkCo comparison for ' + $('tk-concern').selectedOptions[0].textContent);
+  $('tk-readout').innerHTML = '<b>' + $('tk-concern').selectedOptions[0].textContent + '</b>: ' + c.readout;
+  fillAlt('tk-alt', ['Cooking archived (' + EVTAG[c.arch[0]] + '): ' + c.arch[1], 'Cooking proposed (' + EVTAG[c.prop[0]] + '): ' + c.prop[1], 'Lesson from Cooking to TAlkCo: ' + c.toT, 'Lesson from TAlkCo to Cooking: ' + c.toC, 'TAlkCo (' + EVTAG[c.talk[0]] + '): ' + c.talk[1], 'Keep different: ' + c.diverge, 'Unverified in both: ' + c.gap]);
+}
+
+// ---- tabs and wiring ----
+const TABS = [['arch', renderArch], ['pc', renderPC], ['rc', renderRC], ['tk', renderTK]];
+let active = 'arch', lastW = 0;
+function show(name, focus){
+  active = name;
+  for (const [t] of TABS) {
+    const b = $('sx-tab-' + t), p = $('sx-panel-' + t), on = t === name;
+    b.setAttribute('aria-selected', on ? 'true' : 'false'); p.hidden = !on;
+  }
+  if (focus) $('sx-tab-' + name).focus();
+  draw();
+}
+function draw(){ lastW = width(); TABS.find(t => t[0] === active)[1](); }
+TABS.forEach(([t], i) => {
+  const b = $('sx-tab-' + t);
+  b.addEventListener('click', () => show(t));
+  b.addEventListener('keydown', e => {
+    let j = null;
+    if (e.key === 'ArrowRight') j = (i + 1) % TABS.length; else if (e.key === 'ArrowLeft') j = (i + TABS.length - 1) % TABS.length;
+    else if (e.key === 'Home') j = 0; else if (e.key === 'End') j = TABS.length - 1;
+    if (j !== null) { e.preventDefault(); show(TABS[j][0], true); }
+  });
+});
+$('arch-option').addEventListener('change', draw);
+$('pc-scenario').addEventListener('change', () => { const sc = PC_SCEN[$('pc-scenario').value]; $('pc-consent').value = sc.defaultConsent || 'none'; $('pc-local').checked = false; $('pc-widen').checked = false; draw(); });
+['pc-consent','pc-proof','pc-conflict','pc-local','pc-widen','rg-choice','rc-g-ben','rc-g-chi','rc-g-dee','rc-dup','rc-consent','rc-confirm','tk-concern'].forEach(id => $(id).addEventListener('change', draw));
+$('rc-scenario').addEventListener('change', () => { applyRcDefaults($('rc-scenario').value); draw(); });
+applyRcDefaults('self');
+if (typeof ResizeObserver !== 'undefined') {
+  let raf = 0;
+  new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (Math.abs(width() - lastW) > 1) draw(); }); }).observe(root);
+}
+draw();
+
+// ---- test hook ----
+const CONTROL_IDS = ['arch-option','pc-scenario','pc-consent','pc-proof','pc-conflict','pc-local','pc-widen','rc-scenario','rg-choice','rc-g-ben','rc-g-chi','rc-g-dee','rc-dup','rc-consent','rc-confirm','tk-concern'];
+function setControl(id, v){ const e = $(id); if (!e) throw new Error('no control ' + id); if (e.type === 'checkbox') e.checked = !!v; else e.value = v; e.dispatchEvent(new Event('change', {bubbles:true})); }
+function nodeInfo(){ const p = $('sx-panel-' + active); return [...p.querySelectorAll('[data-node]')].map(n => ({id: n.dataset.node, state: n.dataset.state, result: n.dataset.result || null, text: [...n.querySelectorAll('text')].map(t => t.textContent).join(' ')})); }
+function getNode(id){ return nodeInfo().find(n => n.id === id) || null; }
+const CASES = [
+  ['arch', {'arch-option':'powersync'}, [['ps-backend','state','focus']], 4],
+  ['arch', {'arch-option':'loro'}, [['lo-merge','state','normal']], 0],
+  ['arch', {'arch-option':'local'}, [['lc-file','state','focus']], 0],
+  ['arch', {'arch-option':'lan'}, [['ln-auth','state','focus']], 0],
+  ['pc', {'pc-scenario':'ai-recipe'}, [['pc-decision','result','Allow'],['pc-consequence','text',/cannot be recalled/]]],
+  ['pc', {'pc-scenario':'ai-recipe','pc-proof':false}, [['pc-decision','result','Pending'],['g-input','state','stop']]],
+  ['pc', {'pc-scenario':'ai-recipe','pc-proof':true,'pc-conflict':true}, [['pc-decision','result','Pending'],['g-policy','state','stop']]],
+  ['pc', {'pc-scenario':'ai-allergy'}, [['pc-decision','result','RequireConsent'],['g-consent','state','stop']]],
+  ['pc', {'pc-scenario':'ai-allergy','pc-consent':'other'}, [['pc-decision','result','RequireConsent']]],
+  ['pc', {'pc-scenario':'ai-allergy','pc-consent':'exact'}, [['pc-decision','result','Allow']]],
+  ['pc', {'pc-scenario':'ben-note'}, [['pc-decision','result','Deny'],['g-audience','state','stop']]],
+  ['pc', {'pc-scenario':'ben-note','pc-local':true}, [['pc-decision','result','LocalOnly']]],
+  ['pc', {'pc-scenario':'relax'}, [['pc-decision','result','Deny']]],
+  ['pc', {'pc-scenario':'relax','pc-widen':true}, [['pc-decision','result','Allow']]],
+  ['pc', {'pc-scenario':'replay'}, [['pc-decision','result','RequireConsent']]],
+  ['pc', {'pc-scenario':'replay','pc-consent':'exact'}, [['pc-decision','result','Allow']]],
+  ['rc', {'rc-scenario':'self'}, [['rc-recovery','result','Allow'],['rc-editing','result','LocalOnly'],['rc-authority','result','Pending']]],
+  ['rc', {'rc-scenario':'self','rc-confirm':true}, [['rc-authority','result','Allow']]],
+  ['rc', {'rc-scenario':'assisted'}, [['rc-recovery','result','Allow'],['rc-readers','text',/Ben, Chi/]]],
+  ['rc', {'rc-scenario':'assisted','rc-g-ben':false,'rc-dup':true}, [['rc-recovery','result','Pending']]],
+  ['rc', {'rc-scenario':'assisted','rc-consent':false}, [['rc-recovery','result','RequireConsent']]],
+  ['rc', {'rc-scenario':'outside'}, [['rc-authority','result','Deny']]],
+  ['rc', {'rc-scenario':'escrow'}, [['rc-recovery','result','RequireConsent']]],
+  ['rc', {'rc-scenario':'escrow','rc-consent':true}, [['rc-recovery','result','Allow']]],
+  ['rc', {'rc-scenario':'rogue1'}, [['count-device','result','not approved'],['count-adult','result','not approved'],['b-none','state','normal']]],
+  ['rc', {'rc-scenario':'rogue2'}, [['count-device','result','approved'],['count-adult','result','not approved']]],
+  ['rc', {'rc-scenario':'rogue2','rg-choice':'ben'}, [['b-good','state','focus'],['h-bad1','state','quarantined'],['h-bad2','state','quarantined'],['h-base','state','normal']]],
+  ['rc', {'rc-scenario':'rogue2','rg-choice':'ana'}, [['b-latest','state','normal'],['h-bad2','state','normal']]],
+  ['tk', {'tk-concern':'identity'}, [['tk-diverge','state','focus']]],
+  ['tk', {'tk-concern':'metadata'}, [['tk-diverge','text',/Not a TAlkCo answer/]]],
+  ['tk', {'tk-concern':'keys'}, [['tk-gap','state','focus']]],
+  ['tk', {'tk-concern':'domain'}, [['tk-prop','text',/Loro 1\.17\.1/]]],
+  ['tk', {'tk-concern':'ai'}, [['tk-talk','text',/unchecked/]]],
+  ['tk', {'tk-concern':'evidence'}, [['tk-talk','text',/no application runtime/]]]
+];
+function resetAll(){
+  $('pc-proof').checked = true; $('pc-conflict').checked = false;
+  setControl('arch-option','powersync'); setControl('pc-scenario','ai-recipe'); setControl('rc-scenario','self'); setControl('tk-concern','identity');
+}
+function selfTest(){
+  const out = [];
+  for (const [tab, sets, expects, activeEdges] of CASES) {
+    resetAll(); show(tab);
+    for (const id in sets) setControl(id, sets[id]);
+    const fails = [];
+    for (const [nid, field, want] of expects) {
+      const n = getNode(nid); const got = n ? n[field] : undefined;
+      const ok = n && (want instanceof RegExp ? want.test(got) : got === want);
+      if (!ok) fails.push(nid + '.' + field + ' expected ' + want + ' got ' + got);
+    }
+    if (activeEdges) { const k = $('sx-panel-' + tab).querySelectorAll('path[data-state=active]').length; if (k < activeEdges) fails.push('active edges ' + k + ' < ' + activeEdges); }
+    out.push({tab, sets, pass: fails.length === 0, fails});
+  }
+  resetAll(); show('arch');
+  const summary = {cases: out.length, passed: out.filter(o => o.pass).length, failed: out.filter(o => !o.pass)};
+  root.setAttribute('data-selftest', summary.passed + '/' + summary.cases);
+  try { console.log('[sync-explorer selftest] ' + JSON.stringify(summary)); } catch (e) {}
+  return summary;
+}
+window.syncExplorer = {controls: CONTROL_IDS.slice(), tab: name => show(name), set: setControl, reset: () => { resetAll(); show('arch'); }, state: () => ({tab: active, readout: $(active + '-readout').textContent, nodes: nodeInfo()}), selfTest, model: MODEL};
+})();
+</script>
+</div>

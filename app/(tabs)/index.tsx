@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -8,13 +8,16 @@ import { PantryRow } from '@/components/PantryRow';
 import { normalizeIngredientName } from '@/domain/pantry';
 import { useAppState } from '@/state/AppState';
 
+// Android uses the platform list while retaining the same row controls.
+const PantryList = Platform.OS === 'android' ? FlatList : FlashList;
+
 export default function PantryScreen() {
   const router = useRouter();
   const {
     pantry, addPantryItems, removePantryItem, setPantryPreference,
-    contentWorkspaceName, contentWorkspaceRole, contentSyncStatus, localPersistenceStatus
+    contentWorkspaceName, localPersistenceStatus, canEditSharedContent
   } = useAppState();
-  const readOnly = contentWorkspaceRole === 'viewer';
+  const readOnly = !canEditSharedContent;
   const [input, setInput] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -40,7 +43,7 @@ export default function PantryScreen() {
 
       <View style={styles.workspaceStatusWrap}>
         <Text testID="pantry-workspace-status" style={styles.workspaceStatus}>
-          Cooking in {contentWorkspaceName} · {contentWorkspaceRole ?? 'local'} · {contentSyncStatus.replaceAll('-', ' ')}
+          Cooking in {contentWorkspaceName}
         </Text>
         <Text testID="pantry-local-persistence-status" accessibilityLiveRegion="polite" style={styles.localPersistenceStatus}>
           {localPersistenceStatus === 'saving' ? 'Saving locally' : localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
@@ -48,7 +51,7 @@ export default function PantryScreen() {
       </View>
 
       <View style={styles.listWrap}>
-        <FlashList
+        <PantryList
           data={pantry}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (

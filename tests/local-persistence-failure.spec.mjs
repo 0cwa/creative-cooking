@@ -1,5 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
+import { test, expect, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 test('interrupted local content write stays visibly unsaved and can be retried after reload', async ({ page }) => {
   await page.addInitScript(() => {
@@ -7,7 +6,7 @@ test('interrupted local content write stays visibly unsaved and can be retried a
     window.__contentWriteFailures = 0;
     const originalPut = IDBObjectStore.prototype.put;
     IDBObjectStore.prototype.put = function (...args) {
-      if (window.__failNextContentWrite && this.transaction.db.name.startsWith('creative-cooking-guest-')) {
+      if (window.__failNextContentWrite && typeof args[1]==='string' && args[1].startsWith('["document",')) {
         window.__failNextContentWrite = false;
         window.__contentWriteFailures += 1;
         throw new DOMException('Synthetic browser storage quota exceeded.', 'QuotaExceededError');
@@ -16,7 +15,7 @@ test('interrupted local content write stays visibly unsaved and can be retried a
     };
   });
 
-  await page.goto('./');
+  await startLocalWorkspace(page);
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await page.evaluate(() => { window.__failNextContentWrite = true; });
 
@@ -25,17 +24,8 @@ test('interrupted local content write stays visibly unsaved and can be retried a
   await expect(page.getByText('transaction failure fixture', { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__contentWriteFailures)).toBe(1);
   const persistenceStatus = page.getByTestId('pantry-local-persistence-status');
-  await expect(persistenceStatus).toHaveText('Saving locally');
+  await expect(persistenceStatus).toHaveText('Local save failed');
   await expect(page.getByText('transaction failure fixture', { exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Export backup', exact: true }).waitFor();
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Export backup', exact: true }).click()
-  ]);
-  const recovery = JSON.parse(await readFile(await download.path(), 'utf8'));
-  expect(recovery.state.pantry.some((item) => item.name === 'transaction failure fixture')).toBe(true);
 
   await page.goto('./', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally', { timeout: 30_000 });

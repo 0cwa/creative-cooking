@@ -1,8 +1,9 @@
+import { dispatchProviderRequest } from '@/llm/request-boundary.mjs';
 import { CHEF_TOOLS } from '@/chef/tools';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { SseDataParser } from '@/llm/openrouter/streaming';
 import { executeChefTool } from '@/llm/toolExecution';
-import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
+import type { ChefRunResult, LlmProvider, ToolExecutor, ProviderRequestReview } from '@/llm/types';
 
 type GeminiFunctionCall = {
   id?: string;
@@ -85,25 +86,15 @@ async function generateOnce(
   options: {
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
+    reviewRequest?: ProviderRequestReview;
     onStreamActivity?: () => void;
   }
 ): Promise<GeminiContent> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
   let response: Response;
   try {
-    response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': apiKey,
-        'Content-Type': 'application/json'
-      },
-      signal: options.signal,
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        ...(toolsEnabled ? { tools: geminiTools() } : {})
-      })
-    });
+    const body=JSON.stringify({systemInstruction:{parts:[{text:systemPrompt}]},contents,...(toolsEnabled?{tools:geminiTools()}: {})});
+    response = await dispatchProviderRequest({endpoint,model,body,headers:{'x-goog-api-key':apiKey,'Content-Type':'application/json'},signal:options.signal,dispatch:options.reviewRequest});
   } catch (error) {
     throw normalizeLlmError(error);
   }
@@ -207,7 +198,7 @@ async function generate(
   systemPrompt: string,
   contents: GeminiContent[],
   toolsEnabled: boolean,
-  options: { signal?: AbortSignal; onTextDelta?: (delta: string) => void }
+  options: { signal?: AbortSignal; onTextDelta?: (delta: string) => void; reviewRequest?: ProviderRequestReview }
 ): Promise<GeminiContent> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let streamStarted = false;
@@ -220,7 +211,7 @@ async function generate(
       });
     } catch (error) {
       const normalized = normalizeLlmError(error);
-      if (!(normalized.retryable && !streamStarted && !options.signal?.aborted && attempt === 0)) throw normalized;
+      if (!(!options.reviewRequest && normalized.retryable && !streamStarted && !options.signal?.aborted && attempt === 0)) throw normalized;
       await waitForRetry(normalized.retryAfterMs ?? 600, options.signal);
     }
   }
@@ -249,7 +240,7 @@ function runTool(call: GeminiFunctionCall, internalId: string, tools: ToolExecut
 export const geminiProvider: LlmProvider = {
   id: 'gemini',
   name: 'Google Gemini',
-  async run({ apiKey, model, systemPrompt, messages, tools, signal, onTextDelta }): Promise<ChefRunResult> {
+  async run({ apiKey, model, systemPrompt, messages, tools, signal, onTextDelta, reviewRequest }): Promise<ChefRunResult> {
     const working: GeminiContent[] = messages.map((message) => ({
       role: message.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: message.content }]
@@ -263,6 +254,7 @@ export const geminiProvider: LlmProvider = {
         let roundTextStarted = false;
         const assistant = await generate(apiKey, model, systemPrompt, working, Boolean(tools), {
           signal,
+          reviewRequest,
           onTextDelta: (delta) => {
             if (!roundTextStarted && collectedText) onTextDelta?.('\n\n');
             roundTextStarted = true;

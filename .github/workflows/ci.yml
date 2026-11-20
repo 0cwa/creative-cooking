@@ -30,6 +30,7 @@ jobs:
           node-version: 22.13
           package-manager-cache: false
       - run: npm install --no-audit --no-fund
+      - run: npm run prepare:native
       - run: npm test
       - run: npm run typecheck
       - run: EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web
