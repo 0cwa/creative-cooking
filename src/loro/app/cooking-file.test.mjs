@@ -517,6 +517,21 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const exported=await releaseDraftRotation({...releaseOptions,recipientDeviceId:c.deviceId});
  assert.deepEqual(exported.bytes,publication.files[0].bytes);
  assert.deepEqual(exported.proof,publication.proof);
+ const {withOpenedDraftRotationRelease}=await import('../compromise/open-draft-rotation.mjs');
+ const recipientRecord=must(await c.storage.readPairingAuthority(scope));
+ const openArgs={storage:c.storage,scope,pin:a.root.head,provider:a.provider,sodium,LoroDoc,release:exported,recipientDeviceId:c.deviceId,recipientAdultId:other.adultId,wrappingSecret:otherWrap.privateKey,confirmedHead:eventHash,confirmedGrantHash:publicationConfirmation.grantHash,expectedRevision:recipientRecord.revision,signSelection:message=>sodium.crypto_sign_detached(message,c.signingTestKey.privateKey)};
+ const recipientRows=c.rows();
+ const opened=await withOpenedDraftRotationRelease(openArgs,({documents,selection})=>({documents,selection}));
+ assert.equal(opened.documents.length,2);
+ const rootOpened=new LoroDoc();rootOpened.import(opened.documents[0].seed.snapshot);
+ const recipeOpened=new LoroDoc();recipeOpened.import(opened.documents[1].seed.snapshot);
+ assert.equal(rootOpened.getMap('pantry:retention-pantry').get('name'),'Beans');
+ assert.equal(recipeOpened.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'3 cups');
+ await withOpenedDraftRotationRelease({...openArgs,signSelection:undefined,localSelection:opened.selection},()=>{});
+ for(const change of [{pin:'0'.repeat(64)},{confirmedHead:'0'.repeat(64)},{confirmedGrantHash:'0'.repeat(64)},{recipientDeviceId:b.deviceId},{recipientAdultId:'wrong'},{expectedRevision:recipientRecord.revision+1},{wrappingSecret:wrap.privateKey}])await assert.rejects(()=>withOpenedDraftRotationRelease({...openArgs,...change},()=>{}));
+ for(const field of ['proof','bytes']) {const release=structuredClone(exported);release[field][0]^=1;await assert.rejects(()=>withOpenedDraftRotationRelease({...openArgs,release},()=>{}));}
+ assert.deepEqual(c.rows(),recipientRows);
+
  for(const recipientDeviceId of [b.deviceId,a.deviceId,'wrong'])await assert.rejects(()=>releaseDraftRotation({...releaseOptions,recipientDeviceId}));
  await assert.rejects(()=>reopenDraftRotationSponsor({...releaseOptions,deviceId:c.deviceId}));
  await assert.rejects(()=>releaseDraftRotation({...releaseOptions,deviceId:c.deviceId,recipientDeviceId:c.deviceId}));
