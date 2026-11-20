@@ -1,9 +1,11 @@
+import {useAppTheme} from '@/theme/theme';
 import type { PropsWithChildren } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export function Screen({ children, testID }: PropsWithChildren<{ testID?: string }>) {
-  return <SafeAreaView edges={['top', 'right', 'bottom', 'left']} testID={testID} style={styles.screen}>{children}</SafeAreaView>;
+  const {colors} = useAppTheme();
+  return <SafeAreaView edges={['top', 'right', 'bottom', 'left']} testID={testID ?? "app-screen"} style={[styles.screen, {backgroundColor:colors.background}]}>{children}</SafeAreaView>;
 }
 
 const styles = StyleSheet.create({

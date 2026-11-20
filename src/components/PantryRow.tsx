@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
-import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, PanResponder, Pressable, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import type { IngredientPreference, PantryItem } from '@/domain/types';
 import { StarRating } from './StarRating';
 

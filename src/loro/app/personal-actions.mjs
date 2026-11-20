@@ -1,7 +1,7 @@
 import {chatConversationFromMessages} from '../../domain/conversations.ts';
 const named=(kind,id)=>`${kind}:${encodeURIComponent(id)}`;
 const same=(a,b)=>JSON.stringify(a??null)===JSON.stringify(b??null);
-const preferences=['systemPrompt','allergies','sendLocalTime','city','providerId','model','dictationEngine'];
+const preferences=['systemPrompt','allergies','sendLocalTime','city','providerId','model','dictationEngine','theme'];
 const conversations=state=>{const result=new Map(state.chatHistory.map(c=>[c.id,c]));if(state.activeConversationId&&state.chatMessages.length){const active=chatConversationFromMessages(state.activeConversationId,state.chatMessages);if(active)result.set(active.id,active)}return result;};
 /** Plan independent private messages and per-key personal preferences. */
 export function planPersonalAction({doc,before,after,actionId}) {

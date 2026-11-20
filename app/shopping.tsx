@@ -1,6 +1,8 @@
+import {useAppTheme} from '@/theme/theme';
 import { randomUUID } from 'expo-crypto';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { missingPantryIngredients } from '@/domain/recipeEditing';
@@ -16,6 +18,7 @@ function sourceKey(recipeId: string, ingredientId?: string): string | undefined 
 }
 
 export default function ShoppingScreen() {
+  useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ recipeId?: string }>();
   const recipeId = typeof params.recipeId === 'string' ? params.recipeId : undefined;
@@ -221,7 +224,7 @@ export default function ShoppingScreen() {
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor="#64748b"
+      placeholderTextColor={themeColor('#64748b')}
       onFocus={() => setFocusedField(label)}
       onBlur={() => setFocusedField((current) => current === label ? null : current)}
       style={[styles.input, style, focusedField === label && styles.inputFocused]}

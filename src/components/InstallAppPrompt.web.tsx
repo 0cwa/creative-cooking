@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { StyleSheet } from '@/theme/StyleSheet';
 import { usePathname } from 'expo-router';
 import { useAppState } from '@/state/AppState';
 

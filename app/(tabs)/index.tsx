@@ -1,5 +1,7 @@
+import {useAppTheme} from '@/theme/theme';
 import { useRef, useState } from 'react';
-import { FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { StyleSheet, themeColor } from '@/theme/StyleSheet';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
@@ -12,6 +14,7 @@ import { useAppState } from '@/state/AppState';
 const PantryList = Platform.OS === 'android' ? FlatList : FlashList;
 
 export default function PantryScreen() {
+  useAppTheme();
   const router = useRouter();
   const {
     pantry, addPantryItems, removePantryItem, setPantryPreference,
@@ -87,7 +90,7 @@ export default function PantryScreen() {
             onSubmitEditing={add}
             editable={!readOnly}
             placeholder="e.g. mint (dried)"
-            placeholderTextColor="#94a3b8"
+            placeholderTextColor={themeColor('#94a3b8')}
             returnKeyType="done"
             submitBehavior="submit"
             style={[styles.input, readOnly && styles.inputReadOnly]}
