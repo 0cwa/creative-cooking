@@ -254,7 +254,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.ok(prerequisite.dependencyEffectIds.includes(earlier.effectId));
  assert.ok(!copy.data.recipeSource.effectIds.includes(earlier.effectId));
  const all=report.evidence.map(row=>row.evidence.command.effectId);
- const selectedIds=all.filter(id=>id!==prerequisite.effectId&&id!==earlier.effectId&&id!=='retention-suspect'),beforeRows=a.rows();
+ const selectedIds=all.filter(id=>id!==prerequisite.effectId&&id!=='retention-suspect'),beforeRows=a.rows();
  const {resolveSelectedReportStart}=await import('../compromise/selected-report-start.mjs');
  const start=await resolveSelectedReportStart(runtime,reportHash);
  assert.deepEqual(start.documents.map(({recipeId,snapshot,seedId,identities})=>[recipeId,snapshot.length,seedId,identities]),[
@@ -278,7 +278,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  recipeDoc.import(draft.documents.find(d=>d.recipeId===beforeRecipe.id).snapshot);
  assert.equal(rootDoc.getMap('pantry:retention-pantry').get('name'),'Beans');
  assert.equal(recipeDoc.getMap('recipe:retention-recipe').get('title'),'Soup');
- assert.equal(recipeDoc.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'1 cup');
+ assert.equal(recipeDoc.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'3 cups');
  assert.equal(rootDoc.getMap('shopping-item:retention-item').get('value'),undefined);
  assert.equal(draft.rows.find(r=>r.effectId===prerequisite.effectId).status,'excluded');
  assert.equal(draft.rows.find(r=>r.effectId===copy.effectId).status,'held');
@@ -295,6 +295,17 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const reopenedStorage=openSQLiteStorage(a.connection);
  const reopenedRuntime=await openWorkspaceHouseholdRuntime({storage:reopenedStorage,resolved:await resolveRuntimeAuthority(reopenedStorage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
  const reopened=await reopenSelectedRetention(reopenedRuntime,saved.draftId);
+ const {checkedDraftSource}=await import('../compromise/checked-draft-source.mjs');
+ const binding={draftId:saved.draftId,reportHash,suspectDevice:b.deviceId,sourceHead:report.report.payload.observation.manifest.parentHead,
+  documents:draft.documents.map(({recipeId,documentId})=>({recipeId,documentId}))};
+ const checkedDraft=await checkedDraftSource(reopenedRuntime,binding);
+ const checkedRecipe=new LoroDoc();checkedRecipe.import(checkedDraft.documents[1].snapshot);
+ assert.equal(checkedRecipe.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'3 cups');
+ assert.equal(checkedDraft.rows.find(r=>r.effectId===copy.effectId).status,'held');
+ await assert.rejects(()=>checkedDraftSource(reopenedRuntime,{...binding,suspectDevice:a.deviceId}),/INVALID_DRAFT_SOURCE/);
+ await assert.rejects(()=>checkedDraftSource(reopenedRuntime,{...binding,sourceHead:'wrong'}),/INVALID_DRAFT_SOURCE/);
+ await assert.rejects(()=>checkedDraftSource(reopenedRuntime,{...binding,documents:[...binding.documents].reverse()}),/INVALID_DRAFT_SOURCE/);
+ assert.deepEqual(a.rows(),savedRows);
  assert.deepEqual(reopened.rows,draft.rows);
  const reopenedReports=householdCompromise({runtime:reopenedRuntime,withCurrent:use=>use(0)}).selected;
  const reopenedSession=await reopenedReports.open();
@@ -310,7 +321,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const stored=a.connection.executeSync('SELECT value FROM loro_records WHERE key=?',[draftKey]).rows[0].value;
  const altered=JSON.parse(stored);altered.selectedEffectIds=[];
  a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(altered),draftKey]);
- try {await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId),/CORRUPT/);} finally {a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[stored,draftKey]);}
+ try {await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId),/CORRUPT/);await assert.rejects(()=>checkedDraftSource(reopenedRuntime,binding),/CORRUPT/);} finally {a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[stored,draftKey]);}
  const originalsKey=JSON.stringify(['compromise-selected-originals-v2',scope.id,reportHash]);
  const originals=a.connection.executeSync('SELECT value FROM loro_records WHERE key=?',[originalsKey]).rows[0].value;
  const damaged=JSON.parse(originals);damaged.objects[0].bytes.__storageBytes[0]^=1;
@@ -346,6 +357,8 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await assert.rejects(()=>reports.sign(stalePlan,boundary),/STALE_SOURCE/);
  assert.deepEqual(a.rows(),afterEdit);
  await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId));
+ await assert.rejects(()=>checkedDraftSource(reopenedRuntime,binding));
+ assert.deepEqual(a.rows(),afterEdit);
 });
 
 test('mounted admission rule stages a signed recipe set',async t=>{
