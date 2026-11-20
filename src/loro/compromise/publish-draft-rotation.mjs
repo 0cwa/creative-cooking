@@ -1,9 +1,8 @@
-import {authorityBytes} from '../authority/chain.mjs';
 import {domain} from '../authority/validator.mjs';
 import {MAX_SELECTED_SET_BYTES} from '../contracts/runtime-storage.ts';
 import {verifyPublicParent} from '../pairing/household-recipient-proof.mjs';
 import {sealDraftRotationFile} from '../pairing/draft-rotation-file.mjs';
-import {MAX_ADULT_REMOVAL_FILE} from '../pairing/adult-removal-wire.mjs';
+import {draftRotationReleaseSize} from '../pairing/draft-rotation-wire.mjs';
 import {verifyDraftRotationGrant} from './draft-rotation-grant.mjs';
 import {prepareDraftRotationManifest} from './draft-rotation-manifest.mjs';
 import {authorDraftRotationSuccessor} from './draft-rotation-successor.mjs';
@@ -102,10 +101,7 @@ export async function publishDraftRotation({runtime,sodium,keys,signingKey,withS
   if(!author||!await verifySignature(provider,author.signingKeyRef,draftRotationPublicationPurpose,body,signature))throw Error('INVALID_SIGNER');
   const proof=domain(draftRotationPublicationPurpose,{body,signature});
   if(proof.length+documents.reduce((size,doc)=>size+doc.bytes.length,0)>MAX_SELECTED_SET_BYTES)throw Error('TOO_LARGE');
-  // The release uses the same transfer budget and framed sections as adult removal.
-  const {authorityState,...header}=successor.record;
-  const overhead=21+authorityBytes(header).length+authorityState.length+proof.length;
-  if(files.some(file=>file.bytes.length+overhead>MAX_ADULT_REMOVAL_FILE))throw Error('TOO_LARGE');
+  for(const file of files)draftRotationReleaseSize({bytes:file.bytes,proof,publisherRecord:successor.record,proposal:{item,grant,manifest,recipientBindings}});
 
   must(await storage.commitDraftRotationPublication({version:1,operationId,sponsorDeviceId:deviceId,
    manifestHash:reviewed.manifestHash,proof,expected:record,next:successor.record,documents,files},projected.source,

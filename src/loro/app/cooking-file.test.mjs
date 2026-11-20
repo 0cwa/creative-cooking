@@ -517,12 +517,23 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const exported=await releaseDraftRotation({...releaseOptions,recipientDeviceId:c.deviceId});
  assert.deepEqual(exported.bytes,publication.files[0].bytes);
  assert.deepEqual(exported.proof,publication.proof);
+ const {encodeDraftRotationRelease,decodeDraftRotationRelease,MAX_DRAFT_ROTATION_FILE}=await import('../pairing/draft-rotation-wire.mjs');
+ const {encodeAdultRemovalRelease,decodeAdultRemovalRelease}=await import('../pairing/adult-removal-wire.mjs');
+ const frame=encodeDraftRotationRelease(exported), decoded=decodeDraftRotationRelease(frame);
+ assert.deepEqual(decoded,exported);
+ assert.throws(()=>decodeAdultRemovalRelease(frame));
+ const disguisedDraft=frame.slice();disguisedDraft[2]=0x41;assert.throws(()=>decodeAdultRemovalRelease(disguisedDraft));
+ assert.throws(()=>encodeAdultRemovalRelease(exported));
+ for(const bad of [frame.subarray(0,20),frame.subarray(0,frame.length-1),new Uint8Array(MAX_DRAFT_ROTATION_FILE+1)])assert.throws(()=>decodeDraftRotationRelease(bad));
+ const badLength=frame.slice();new DataView(badLength.buffer).setUint32(5,0xffffffff);assert.throws(()=>decodeDraftRotationRelease(badLength));
+ const swapped=frame.slice();swapped[2]=0x41;assert.throws(()=>decodeDraftRotationRelease(swapped));
+
  const {withOpenedDraftRotationRelease}=await import('../compromise/open-draft-rotation.mjs');
  const recipientKeys=c.storage.localKeys(testMaster(),sodium);
  await recipientKeys.provision('retention-recipient-master');
  await c.edit('retention-local-only',1,{legacy:true});
  const recipientRecord=must(await c.storage.readPairingAuthority(scope));
- const openArgs={storage:c.storage,scope,pin:a.root.head,provider:a.provider,sodium,LoroDoc,release:exported,recipientDeviceId:c.deviceId,recipientAdultId:other.adultId,wrappingSecret:otherWrap.privateKey,confirmedHead:eventHash,confirmedGrantHash:publicationConfirmation.grantHash,expectedRevision:recipientRecord.revision,signSelection:message=>sodium.crypto_sign_detached(message,c.signingTestKey.privateKey)};
+ const openArgs={storage:c.storage,scope,pin:a.root.head,provider:a.provider,sodium,LoroDoc,release:decoded,recipientDeviceId:c.deviceId,recipientAdultId:other.adultId,wrappingSecret:otherWrap.privateKey,confirmedHead:eventHash,confirmedGrantHash:publicationConfirmation.grantHash,expectedRevision:recipientRecord.revision,signSelection:message=>sodium.crypto_sign_detached(message,c.signingTestKey.privateKey)};
  const recipientRows=c.rows();
  const opened=await withOpenedDraftRotationRelease(openArgs,({documents,selection})=>({documents,selection}));
  assert.equal(opened.documents.length,2);
@@ -536,6 +547,12 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.deepEqual(c.rows(),recipientRows);
  const {installDraftRotationRelease,draftRotationRecipientPurpose}=await import('../compromise/install-draft-rotation.mjs');
  const installArgs={...openArgs,keys:recipientKeys};
+ const tampered=structuredClone(exported), envelope=JSON.parse(new TextDecoder().decode(tampered.proof));
+ envelope[2].signature='0'.repeat(128);tampered.proof=domain(envelope[1],envelope[2]);
+ const decodedTampered=decodeDraftRotationRelease(encodeDraftRotationRelease(tampered));
+ await assert.rejects(()=>installDraftRotationRelease({...installArgs,release:decodedTampered}));
+ assert.deepEqual(c.rows(),recipientRows);
+
  await assert.rejects(()=>installDraftRotationRelease({...installArgs,confirmedGrantHash:'0'.repeat(64)}),/REVIEW_CHANGED/);
  await assert.rejects(()=>installDraftRotationRelease({...installArgs,recipientDeviceId:b.deviceId}),/INVALID_RECIPIENT/);
  for(const fault of ['draft-rotation-recipient-keys','draft-rotation-recipient-receipt']){

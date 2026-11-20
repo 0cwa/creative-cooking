@@ -1,3 +1,4 @@
+import {decodeDraftRotationRelease} from '../pairing/draft-rotation-wire.mjs';
 import {adultRemovalWorkspaceAccess} from './adult-removal-access.mjs';
 import {encodeAdultRemovalRelease,decodeAdultRemovalRelease,adultRemovalReleaseSize,MAX_ADULT_REMOVAL_FILE} from '../pairing/adult-removal-wire.mjs';
 import {readOnlyPairing} from './read-only-services.mjs';
@@ -416,6 +417,8 @@ test('adult removal facade publishes, releases and installs one confirmed comple
   const wrongPublisher=structuredClone(release.publisherRecord);wrongPublisher.authorizationSnapshot='0'.repeat(64);
   await assert.rejects(()=>b.pairing.adultRemoval.review({proposal:release.proposal,publisherRecord:wrongPublisher}));
   const frame=encodeAdultRemovalRelease(release),decoded=decodeAdultRemovalRelease(frame);
+  assert.throws(()=>decodeDraftRotationRelease(frame));
+  const disguised=frame.slice();disguised[2]=0x44;assert.throws(()=>decodeDraftRotationRelease(disguised));
   assert.deepEqual(decoded,release);assert.equal(adultRemovalReleaseSize(release),frame.length);
   const sourceRows=a.rows(),receiverRows=b.rows();
   const lengthView=new DataView(frame.buffer,frame.byteOffset,frame.byteLength),headerLength=lengthView.getUint32(5,false);
