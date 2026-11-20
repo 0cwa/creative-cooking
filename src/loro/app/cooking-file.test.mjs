@@ -262,6 +262,32 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.equal(rootDoc.getMap('shopping-item:retention-item').get('value'),undefined);
  assert.equal(draft.rows.find(r=>r.effectId===prerequisite.effectId).status,'excluded');
  assert.equal(draft.rows.find(r=>r.effectId===copy.effectId).status,'held');
+ const {saveSelectedRetention,reopenSelectedRetention}=await import('../compromise/selected-reconstruction.mjs');
+ a.faultAt('selected-retention-draft');
+ try {await assert.rejects(()=>saveSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds}),/IO/);} finally {a.faultAt(null);}
+ assert.deepEqual(a.rows(),beforeRows);
+ const saved=await saveSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds});
+ assert.equal(saved.replayed,false);
+ const savedRows=a.rows();
+ assert.deepEqual(await saveSelectedRetention(runtime,{reportHash,selectedEffectIds:[...selectedIds].reverse()}),{draftId:saved.draftId,replayed:true});
+ assert.deepEqual(a.rows(),savedRows);
+ const reopenedStorage=openSQLiteStorage(a.connection);
+ const reopenedRuntime=await openWorkspaceHouseholdRuntime({storage:reopenedStorage,resolved:await resolveRuntimeAuthority(reopenedStorage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
+ const reopened=await reopenSelectedRetention(reopenedRuntime,saved.draftId);
+ assert.deepEqual(reopened.rows,draft.rows);
+ const draftKey=JSON.stringify(['compromise-selected-draft-v1',scope.id,saved.draftId]);
+ const stored=a.connection.executeSync('SELECT value FROM loro_records WHERE key=?',[draftKey]).rows[0].value;
+ const altered=JSON.parse(stored);altered.selectedEffectIds=[];
+ a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(altered),draftKey]);
+ try {await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId),/CORRUPT/);} finally {a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[stored,draftKey]);}
+ const originalsKey=JSON.stringify(['compromise-selected-originals-v2',scope.id,reportHash]);
+ const originals=a.connection.executeSync('SELECT value FROM loro_records WHERE key=?',[originalsKey]).rows[0].value;
+ const damaged=JSON.parse(originals);damaged.objects[0].bytes.__storageBytes[0]^=1;
+ a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(damaged),originalsKey]);
+ try {await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId));} finally {a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[originals,originalsKey]);}
+ const originalGuard=a.storage.checkSelectedHouseholdSources.bind(a.storage);
+ a.storage.checkSelectedHouseholdSources=async()=>({ok:false,error:{code:'CONFLICT'}});
+ try {await assert.rejects(()=>reopenSelectedRetention(runtime,saved.draftId),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=originalGuard;}
  const withoutEarlier=await reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:all.filter(id=>id!==earlier.effectId)});
  assert.equal(withoutEarlier.rows.find(r=>r.effectId===copy.effectId).reason,'HELD_DEPENDENCY');
  const completeSelection=await reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:all});
@@ -270,7 +296,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.equal(completeSelection.rows.find(r=>r.effectId===copy.effectId).status,'retained');
  assert.equal(copiedRoot.getMap('shopping-item-fields:retention-item').get('displayQuantity'),'2 cups');
  assert.equal(copiedRoot.getMap('shopping-item-fields:retention-item').get('ingredientId'),'carrot');
- assert.deepEqual(a.rows(),beforeRows);
+ assert.deepEqual(a.rows(),savedRows);
  const originalCheck=a.storage.checkSelectedHouseholdSources.bind(a.storage);
  a.storage.checkSelectedHouseholdSources=async()=>({ok:false,error:{code:'CONFLICT'}});
  try {await assert.rejects(()=>reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds}),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=originalCheck;}
@@ -282,7 +308,9 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const check=a.storage.checkSelectedHouseholdSources.bind(a.storage);let checks=0;
  a.storage.checkSelectedHouseholdSources=async guard=>++checks===7?{ok:false,error:{code:'CONFLICT'}}:check(guard);
  try {await assert.rejects(()=>planSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds}),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=check;}
- assert.deepEqual(a.rows(),beforeRows);
+ assert.deepEqual(a.rows(),savedRows);
+ await save(a.runtime,'retention-later',[{...pantry,commandId:'retention-later',effectId:'retention-later',data:{...pantry.data,itemId:'retention-later'}}]);
+ await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId));
 });
 
 test('mounted admission rule stages a signed recipe set',async t=>{

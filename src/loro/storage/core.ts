@@ -259,6 +259,7 @@ const validateRecord = (k: string, v: any) => {
   const parts=JSON.parse(k),namespace=parts[0];
   let valid = false;
   switch (namespace) {
+    case 'compromise-selected-draft-v1': valid=parts.length===3 && validId(parts[1]) && hexOf(parts[2],64) && object(v) && v.version===1 && v.scopeId===parts[1] && v.draftId===parts[2] && hexOf(v.reportHash,64) && denseArray(v.selectedEffectIds,validId) && v.selectedEffectIds.length<=REVIEW_LIMITS.objects && object(v.guard); break;
     case 'compromise-selected-report-v2': valid=parts.length===3 && validId(parts[1]) && hexOf(parts[2],64) && validSelectedReportRecord(v,parts[2]); break;
     case 'compromise-selected-originals-v2': valid=parts.length===3 && validId(parts[1]) && hexOf(parts[2],64) && validSelectedOriginals(v,parts[2]); break;
     case 'compromise-review': valid=object(v) && v.version===1 && typeof v.reviewId==='string'; break;
@@ -1787,6 +1788,28 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
       await tx.put(reportKey,record);this.fault?.('selected-report-record');
       return {ok:true as const,value:{replayed:false}};
     });}catch(e){return fail(mapError(e));}
+  }
+  /** Store only a bounded selection, fenced by the frozen evidence and current sources. */
+  async saveSelectedRetention(input:{scopeId:string;draftId:string;reportHash:string;selectedEffectIds:string[];guard:SelectedHouseholdSources;frozen:any}) {
+    input=snapshot(input);
+    const {scopeId,draftId,reportHash,selectedEffectIds,guard,frozen}=input;
+    if(!validId(scopeId)||!hexOf(draftId,64)||!hexOf(reportHash,64)||!denseArray(selectedEffectIds,validId)||selectedEffectIds.length>REVIEW_LIMITS.objects||new Set(selectedEffectIds).size!==selectedEffectIds.length||!sameRecord(selectedEffectIds,[...selectedEffectIds].sort())||!guard?.expectedAuthority?.scope||guard.expectedAuthority.scope.id!==scopeId||!this.matchesRecipeCatalog(guard.binding,guard.expectedAuthority)||!denseArray(guard.entries,e=>object(e)&&validId(e.recipeId))||guard.entries.length+(guard.members?.length??0)>MAX_SELECTED_CHILDREN||guard.catalogRevision!==guard.entries.length||!validSelectedReportRecord(frozen?.record,reportHash)||!validSelectedOriginals({version:2,reportHash,objects:frozen?.objects},reportHash))return fail('MALFORMED');
+    try{return await this.run(true,async tx=>{
+      await this.requireSelectedHouseholdSources(tx,guard);
+      const report=await tx.get(key('compromise-selected-report-v2',scopeId,reportHash));
+      const originals=await tx.get(key('compromise-selected-originals-v2',scopeId,reportHash));
+      if(!sameRecord(report,frozen.record)||!sameRecord(originals,{version:2,reportHash,objects:frozen.objects}))conflict();
+      const record={version:1,draftId,scopeId,reportHash,selectedEffectIds,guard},k=key('compromise-selected-draft-v1',scopeId,draftId),old=await tx.get(k);
+      if(old!==undefined){if(!sameRecord(old,record))conflict();return {ok:true as const,value:{replayed:true}};}
+      const prefix=key('compromise-selected-draft-v1',scopeId).slice(0,-1)+',';
+      if((await tx.keys()).filter(k=>k.startsWith(prefix)).length>=16)throw new StorageFailure('CAPACITY');
+      await tx.put(k,record);this.fault?.('selected-retention-draft');
+      return {ok:true as const,value:{replayed:false}};
+    });}catch(e){return fail(mapError(e));}
+  }
+  async readSelectedRetention(scopeId:string,draftId:string) {
+    if(!validId(scopeId)||!hexOf(draftId,64))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>({ok:true as const,value:snapshot(await tx.get(key('compromise-selected-draft-v1',scopeId,draftId))??null)}));}catch(e){return fail(mapError(e));}
   }
   /** Read both halves together; authentication of the report and originals is the caller's responsibility. */
   async readSelectedOperationReport(scopeId:string,reportHash:string) {

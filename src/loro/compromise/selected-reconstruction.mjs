@@ -2,7 +2,7 @@ import {resolveSelectedReportStart} from './selected-report-start.mjs';
 import {selectedRetentionGraph} from './selected-retention-graph.mjs';
 import {normalizeSelectedEffectIds} from './selected-retention.mjs';
 import {selectedOperationReportService} from './selected-report-service.mjs';
-import {sameReportValue} from './report.mjs';
+import {sameReportValue,canonicalReportBytes,evidenceSha256} from './report.mjs';
 import {REVIEW_LIMITS} from './review.mjs';
 import {validate,operations,checkPreconditions,apply} from '../domain/registry.mjs';
 import {disclosureService} from '../disclosure/service.mjs';
@@ -75,4 +75,35 @@ export async function reconstructSelectedRetention(runtime,{reportHash,selectedE
  if(!sameReportValue(start.guard,finalStart.guard)||start.documents.length!==finalStart.documents.length||start.documents.some((doc,i)=>{const end=finalStart.documents[i];return doc.documentId!==end.documentId||doc.recipeId!==end.recipeId||doc.seedId!==end.seedId||!sameReportValue([...doc.snapshot],[...end.snapshot])||!sameReportValue(doc.identities,end.identities)||!sameReportValue(doc.policies,end.policies);}))throw Error('STALE_EVIDENCE');
  const guard=await runtime.storage.checkSelectedHouseholdSources(checked.guard);if(!guard.ok)throw Error(guard.error?.code??guard.error);
  return {reportHash,documents,rows,complete:false,state:'local-draft'};
+}
+
+const must=result=>{if(!result.ok)throw Error(result.error?.code??result.error);return result.value;};
+const draftIdentity=async (scopeId,reportHash,selectedEffectIds)=>evidenceSha256(canonicalReportBytes({version:1,scopeId,reportHash,selectedEffectIds}));
+
+/** Save the selection, not nondeterministic detached Loro snapshots. */
+export async function saveSelectedRetention(runtime,{reportHash,selectedEffectIds}) {
+ const selection=normalizeSelectedEffectIds(selectedEffectIds),scopeId=runtime.scope.scopeId;
+ await reconstructSelectedRetention(runtime,{reportHash,selectedEffectIds:selection});
+ const opened=await selectedOperationReportService(runtime).reopen(reportHash);
+ const frozen=must(await runtime.storage.readSelectedOperationReport(scopeId,reportHash));
+ if(!frozen||!sameReportValue([...frozen.record.reportBytes],[...canonicalReportBytes(opened.report)])||!sameReportValue(frozen.objects,opened.evidence.map(row=>({sourceId:row.evidence.sourceId,documentId:row.documentId,objectId:row.evidence.objectId,bytes:row.bytes}))))throw Error('STALE_EVIDENCE');
+ const draftId=await draftIdentity(scopeId,reportHash,selection);
+ const result=must(await runtime.storage.saveSelectedRetention({scopeId,draftId,reportHash,selectedEffectIds:selection,guard:opened.guard,frozen}));
+ return {draftId,...result};
+}
+
+/** All stored data is untrusted; verify its identity, report and sources on every reopen. */
+export async function reopenSelectedRetention(runtime,draftId) {
+ const scopeId=runtime.scope.scopeId,record=must(await runtime.storage.readSelectedRetention(scopeId,draftId));
+ if(!record)throw Error('NOT_FOUND');
+ let selection;
+ try{selection=normalizeSelectedEffectIds(record.selectedEffectIds);}catch{throw Error('CORRUPT');}
+ if(record.version!==1||record.scopeId!==scopeId||record.draftId!==draftId||!sameReportValue(selection,record.selectedEffectIds)||await draftIdentity(scopeId,record.reportHash,selection)!==draftId)throw Error('CORRUPT');
+ const opened=await selectedOperationReportService(runtime).reopen(record.reportHash);
+ if(!sameReportValue(opened.guard,record.guard))throw Error('STALE_EVIDENCE');
+ const draft=await reconstructSelectedRetention(runtime,{reportHash:record.reportHash,selectedEffectIds:selection});
+ const checked=await selectedOperationReportService(runtime).reopen(record.reportHash);
+ if(!sameReportValue(checked.guard,record.guard)||!sameReportValue(record,must(await runtime.storage.readSelectedRetention(scopeId,draftId))))throw Error('STALE_EVIDENCE');
+ must(await runtime.storage.checkSelectedHouseholdSources(record.guard));
+ return {...draft,draftId,selectedEffectIds:selection};
 }
