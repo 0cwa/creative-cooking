@@ -1,7 +1,7 @@
 import {authorityBytes} from '../authority/chain.mjs';
 import {domain,remainingRotationDevices} from '../authority/validator.mjs';
 import {validatePairingAuthority} from '../contracts/pairing.ts';
-import {deriveDraftRotationBinding,retainedDraftRotationBinding} from '../compromise/checked-draft-source.mjs';
+import {retainedDraftRotationBinding} from '../compromise/checked-draft-source.mjs';
 import {verifyDraftRotationGrant} from '../compromise/draft-rotation-grant.mjs';
 import {prepareDraftRotationManifest} from '../compromise/draft-rotation-manifest.mjs';
 import {checkRecipientBinding,digest,exact,grantBody,hex} from '../compromise/revocation.mjs';
@@ -76,7 +76,8 @@ export function householdDraftRotation({storage,scope,pin,provider,sodium,runtim
   if(!Array.isArray(bindings)||bindings.length>127)throw Error('INVALID_RECIPIENT');
   bindings=structuredClone(bindings);
   const context=await current(),{parent}=context;
-  const binding=await deriveDraftRotationBinding(runtime,draftId),suspectDevice=binding.suspectDevice;
+  // Manifest preparation authenticates and reconstructs the draft against the live source.
+  const binding=await retainedDraftRotationBinding(storage,household.id,draftId),suspectDevice=binding.suspectDevice;
   if(binding.sourceHead!==parent.head||suspectDevice===deviceId||!parent.devices.some(d=>d.active&&d.deviceId===suspectDevice))throw Error('INVALID_DRAFT_SOURCE');
   const devices=remainingRotationDevices(parent,{kind:'revokeDevice',subject:{deviceId:suspectDevice}});
   const expected=new Set(devices.map(device=>device.deviceId)),supplied=new Map();
@@ -182,7 +183,7 @@ export function householdDraftRotation({storage,scope,pin,provider,sodium,runtim
   try{
    const checked=await review({proposal});
    if(!checked.complete||checked.confirmation!==confirmed)throw Error('REVIEW_CHANGED');
-   const binding=await deriveDraftRotationBinding(runtime,draftId);
+   const binding=await retainedDraftRotationBinding(storage,household.id,draftId);
    return await publishDraftRotation({runtime,sodium,keys,signingKey,
     withSigningSecret:use=>withSecrets(({signingSecret})=>use(signingSecret)),binding,proposal,
     confirmation:{explicit:true,eventHash,grantHash}});

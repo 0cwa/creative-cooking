@@ -17,8 +17,8 @@ export async function deriveDraftRotationBinding(runtime,draftId) {
  return binding;
 }
 
-/** Recover the preimage of the signed publication's draft commitment.
- * This cannot authorize a new publication against a historical source. */
+/** Read the draft commitment preimage. Callers must authenticate the live
+ * draft for a new publication or compare it to a verified retained commitment. */
 export async function retainedDraftRotationBinding(storage,scopeId,draftId) {
  const saved=await storage.readSelectedRetention(scopeId,draftId),draft=saved.value;
  if(!saved.ok||!draft||draft.scopeId!==scopeId||draft.draftId!==draftId||
