@@ -1,4 +1,4 @@
-import {projectCooking,projectRecipes} from '../domain/app-projection.mjs';
+import {projectLocalCooking,projectRecipes} from '../domain/app-projection.mjs';
 import {executeAction,recoverDisclosureAction} from './action.mjs';
 import {planRecipeAction} from './recipe-actions.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
@@ -28,11 +28,11 @@ export function bindHouseholdContent({runtime,withCurrent=use=>use(),sequences,d
   readCooking:()=>withCurrent(async()=>{
    if(originalRecipeDocuments&&!readOnly()){
     const selected=await openSelectedRecipeCatalog(runtime);
-    return {...projectCooking(selected.parent.doc),recipes:projectSelectedRecipes(selected),
+    return {...projectLocalCooking(selected.parent.doc),recipes:projectSelectedRecipes(selected),
      separateRecipeIds:[...selected.children.keys()]};
    }
    const {doc}=await runtime.document();
-   const cooking=projectCooking(doc);
+   const cooking=projectLocalCooking(doc);
    if(!runtime.authority?.installedSet && !readOnly())return {...cooking,separateRecipeIds:[]};
    const {members}=await runtime.authorization();
    const separateRecipeIds=[];

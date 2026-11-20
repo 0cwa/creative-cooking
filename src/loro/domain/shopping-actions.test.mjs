@@ -27,3 +27,32 @@ test('shopping field commands cannot remove or replace creation-time recipe link
   assert.deepEqual(doc.export({mode:'snapshot'}),before);
  }
 });
+
+test('buy again moves a rated pantry item to shopping and a purchase restores the rating',async()=>{
+ const {planPantryAction}=await import('../app/pantry-actions.mjs');
+ const {projectLocalCooking}=await import('./app-projection.mjs');
+ const {buyAgainFromPantry}=await import('../../domain/shopping.ts');
+ const doc=new LoroDoc();doc.setPeerId('21');let i=0;
+ const commit=cmds=>{for(const c of cmds){checkPreconditions(doc,c);apply(doc,c)}};
+ const rated=[{id:'p1',name:'Smoked paprika',preference:5,createdAt:at,updatedAt:at}];
+ commit(planPantryAction({doc,before:[],after:rated,actionId:`a${++i}`,author:'a',at}));
+ let shopping=emptyShoppingState(),pantry=rated;
+ const save=(next,nextPantry)=>{commit(planShoppingAction({doc,before:shopping,after:next,pantryBefore:pantry,pantryAfter:nextPantry,actionId:`a${++i}`,author:'a',at:later}));shopping=next;pantry=nextPantry};
+ const moved=buyAgainFromPantry(shopping,pantry,{},{pantryItemId:'p1',itemId:'item',newList:{id:'list',cycleId:'cycle',name:'Shopping list',at:later},at:later});
+ assert.equal(moved.listName,'Shopping list');assert.deepEqual(moved.memory,{'smoked paprika':5});
+ save(moved.shopping,moved.pantry);
+ let local=projectLocalCooking(doc);
+ assert.deepEqual(local.pantry,[]);assert.deepEqual(local.shopping.items.map(x=>x.name),['Smoked paprika']);
+ assert.deepEqual(local.rememberedPantryPreferences,{'smoked paprika':5});
+ assert.equal('rememberedPantryPreferences' in projectCooking(doc),false);
+ const again=buyAgainFromPantry(shopping,[{id:'p2',name:'smoked  paprika',preference:3,createdAt:at,updatedAt:at}],moved.memory,{pantryItemId:'p2',itemId:'dup',newList:{id:'unused',cycleId:'unused',name:'x',at:later},at:later});
+ assert.equal(again.alreadyListed,true);assert.equal(again.shopping.items.length,1);assert.deepEqual(again.memory,{});
+ save(setShoppingItemChecked(shopping,'item','cycle',true,later),pantry);
+ const purchase=applyShoppingPurchase(shopping,pantry,{id:'buy',listId:'list',purchaseCycleId:'cycle',purchasedAt:later},local.rememberedPantryPreferences);
+ assert.equal(purchase.pantry[0].preference,5);
+ save(purchase.shopping,purchase.pantry);
+ local=projectLocalCooking(doc);
+ assert.deepEqual(local.pantry.map(x=>[x.name,x.preference]),[['Smoked paprika',5]]);
+ const reopened=new LoroDoc();reopened.import(doc.export({mode:'snapshot'}));assert.deepEqual(projectLocalCooking(reopened),local);
+ assert.throws(()=>planShoppingAction({doc,before:shopping,after:shopping,pantryBefore:pantry,pantryAfter:[{...pantry[0],name:'Paprika'}],actionId:'bad',author:'a',at:later}),/UNSUPPORTED_EDIT/);
+});
