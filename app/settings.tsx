@@ -1,5 +1,6 @@
 import { HouseholdReadmission } from '@/loro/app/HouseholdReadmission';
 import { HouseholdRevocation } from '@/loro/app/HouseholdRevocation';
+import { HouseholdDraftRotation } from '@/loro/app/HouseholdDraftRotation';
 import { HouseholdAdultRemoval } from '@/loro/app/HouseholdAdultRemoval';
 import { HouseholdCompromise } from '@/loro/app/HouseholdCompromise';
 import { HouseholdExistingDevice } from '@/loro/app/HouseholdExistingDevice';
@@ -564,6 +565,7 @@ export default function SettingsScreen() {
             <HouseholdLocalTrust onQuarantine={() => setQuarantineChanged(changed => changed + 1)} />
             <HouseholdCompromise />
             <HouseholdAdultRemoval />
+            <HouseholdDraftRotation />
             <HouseholdRevocation />
             {Platform.OS === 'web' && <HouseholdReadmission />}
             <CookingDirect />

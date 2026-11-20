@@ -162,7 +162,7 @@ async function open({name,create,openDatabase,openMaster,sodium,LoroDoc,decodeIm
    },
    personal:runtime(personal,'personal',selectedPersonal.pin),householdPairing:readOnlyPolicy?readOnlyPairing(householdPairing,adultRemoval,draftRotation):householdPairing,cookingFiles:activeMethods(readOnlyPolicy?unavailableInReadOnly(cooking):cooking),direct,
    householdContent,installedRecipeIds,executeHouseholdAction:householdContent.execute,
-   disclosure:activeMethods(readOnlyPolicy?unavailableInReadOnly(disclosure):disclosure),disclosureProvider:activeMethods(provider),readOnly:!!readOnlyPolicy,adultRemovalAccess:adultRemovalWorkspaceAccess({adultRemoval,readOnly:!!readOnlyPolicy,installedSet}),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
+   disclosure:activeMethods(readOnlyPolicy?unavailableInReadOnly(disclosure):disclosure),disclosureProvider:activeMethods(provider),readOnly:!!readOnlyPolicy,adultRemovalAccess:adultRemovalWorkspaceAccess({adultRemoval,readOnly:!!readOnlyPolicy,installedSet}),draftRotationAccess:adultRemovalWorkspaceAccess({adultRemoval:draftRotation,readOnly:!!readOnlyPolicy,installedSet}),needsDisclosureSetup:!selected&&policyStatus.needsSetup,
    needsDisclosureRenewal:policyStatus.needsRenewal||!!selected&&policyStatus.needsSetup,
    deviceId:r.device,wrappingPublicKey:sodium.to_hex(wrappingPublicKey),recovery,
    sequences:{reserve:(scopeId,operationId)=>{
