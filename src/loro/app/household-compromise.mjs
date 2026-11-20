@@ -4,6 +4,7 @@ import {decodeReportFile,encodeReportFile} from '../compromise/report-file.mjs';
 import {REVIEW_LIMITS} from '../compromise/review.mjs';
 import {finalizeHistoricalDraft,householdReportLineage,outsidePolicyFrontier} from '../compromise/historical.mjs';
 import {projectCooking} from '../domain/app-projection.mjs';
+import {selectedHouseholdCompromise} from './household-compromise-selected.mjs';
 
 const decoder = new TextDecoder('utf-8',{fatal:true});
 const hex = bytes => Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
@@ -164,6 +165,7 @@ export function householdCompromise({runtime,withCurrent,sha256=evidenceSha256,r
   }
 
   return {
+    selected: selectedHouseholdCompromise({runtime,withCurrent,current}),
     open:()=>withCurrent(async revision=>{
       const a = await current(revision,null,false);
       return {confirmation:a.token,reports:await reviews.listReports(scope.scopeId)};

@@ -1811,6 +1811,23 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     if(!validId(scopeId)||!hexOf(draftId,64))return fail('MALFORMED');
     try{return await this.run(false,async tx=>({ok:true as const,value:snapshot(await tx.get(key('compromise-selected-draft-v1',scopeId,draftId))??null)}));}catch(e){return fail(mapError(e));}
   }
+  async listSelectedCompromise(scopeId:string) {
+    if(!validId(scopeId))return fail('MALFORMED');
+    try{return await this.run(false,async tx=>{
+      const keys=await tx.keys();
+      const ids=(namespace:string)=>{
+        const prefix=key(namespace,scopeId).slice(0,-1)+',';
+        return keys.filter(k=>k.startsWith(prefix)).map(k=>{
+          const id=JSON.parse(k)[2];
+          if(!hexOf(id,64)||key(namespace,scopeId,id)!==k)throw new StorageFailure('CORRUPT');
+          return id as string;
+        }).sort();
+      };
+      const reportHashes=ids('compromise-selected-report-v2'),draftIds=ids('compromise-selected-draft-v1');
+      if(reportHashes.length>16||draftIds.length>16)return corrupt();
+      return {ok:true as const,value:{reportHashes,draftIds}};
+    });}catch(e){return fail(mapError(e));}
+  }
   /** Read both halves together; authentication of the report and originals is the caller's responsibility. */
   async readSelectedOperationReport(scopeId:string,reportHash:string) {
     if(!validId(scopeId)||!hexOf(reportHash,64))return fail('MALFORMED');

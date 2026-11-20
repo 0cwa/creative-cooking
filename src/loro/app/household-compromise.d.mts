@@ -9,6 +9,21 @@ type Operation = {objectId:string;authorDevice:string;effectId:string;kind:strin
 type Boundary = {kind:'checkpoint'} | {kind:'operation';ref:string};
 type Draft = {suspectDevice:string;operations:Operation[];checkpoint:string|null;checkpointOversized:boolean;excluded:number;truncated:boolean};
 type Outcome = {objectId?:string;authorDevice?:string;effectId?:string;sourceHead?:string;reason?:string;kind?:string};
+type SelectedOperation = Omit<Operation,'sourceHead'> & {documentId:string;recipeId:string|null};
+type SelectedBoundary = {documentId:string;objectId:string};
+type SelectedPlan = {suspectDevice:string;operations:SelectedOperation[];excluded:number;truncated:boolean};
+type SelectedReport = {reportHash:string;reporterDevice:string;suspectDevice:string;boundary:SelectedBoundary;operations:SelectedOperation[]};
+type SelectedDraft = {
+  draftId:string;
+  reportHash:string;
+  selectedEffectIds:string[];
+  complete:false;
+  rows:{documentId:string;recipeId:string|null;objectId:string;effectId:string;authorDevice:string;
+    authorship:'suspect'|'other';status:'retained'|'excluded'|'held';reason:string}[];
+  pantry:string[];
+  recipes:string[];
+  shopping:string[];
+};
 type Review = {
   reviewId:string;
   reporterDevice:string;
@@ -31,6 +46,14 @@ export function householdCompromise(options:{
   randomUUID?:()=>string;
   randomBytes?:(size:number)=>Uint8Array;
 }): {
+  selected:{
+    open():Promise<{confirmation:Confirmation;reportHashes:string[];draftIds:string[]}>;
+    prepare(confirmation:Confirmation,suspectDevice:string):Promise<SelectedPlan>;
+    sign(plan:SelectedPlan,decision:SelectedBoundary & {suspectDevice:string}):Promise<{reportHash:string;replayed:boolean}>;
+    inspect(confirmation:Confirmation,reportHash:string):Promise<SelectedReport>;
+    saveDraft(confirmation:Confirmation,reportHash:string,selectedEffectIds:string[]):Promise<{draftId:string;replayed:boolean}>;
+    reopenDraft(confirmation:Confirmation,draftId:string):Promise<SelectedDraft>;
+  };
   open():Promise<{confirmation:Confirmation;reports:{reviewId:string}[]}>;
   devices(confirmation:Confirmation):Promise<string[]>;
   prepare(confirmation:Confirmation,suspectDevice:string):Promise<Draft>;
