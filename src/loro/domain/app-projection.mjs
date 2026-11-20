@@ -1,4 +1,5 @@
 import {readShoppingItem} from './registry.mjs';
+import {normalizeIngredientName} from '../../domain/ingredient-name.mjs';
 // Projection of the authenticated domain document. The caller obtains the document
 // through OfflineRuntime.document(), which enforces the selected authority head.
 const named=(kind,id)=>`${kind}:${encodeURIComponent(id)}`;
@@ -37,4 +38,22 @@ export function projectCooking(doc) {
   const base=state[name].value;if(!base)return [];const cycle=state[named('shopping-list',base.listId)]?.currentCycleId;if(!cycle)return [];const v=readShoppingItem(doc,base.itemId,cycle),purchased=purchases.some(p=>p.listId===v.listId&&p.purchaseCycleId===cycle&&p.itemIds.includes(v.itemId)),optional=Object.fromEntries(['recipeId','ingredientId','displayQuantity','displayUnit','removedAt'].filter(k=>v[k]!==undefined&&v[k]!==null).map(k=>[k,v[k]]));return [{id:v.itemId,listId:v.listId,name:v.name,purchaseCycleId:cycle,checked:v.checked,createdAt:v.createdAt??null,updatedAt:v.updatedAt??v.at,...optional,...(purchased?{purchasedCycleId:cycle}:{})}];
  });
  return {recipes,pantry,shopping:{lists,cycles,items,purchases}};
+}
+
+/** Ratings of removed Pantry items, keyed by lower-case name (latest removal
+ * wins). Only the local workspace reads this: shared projections and seeds
+ * deliberately omit removed rows. */
+export function projectRememberedPantryPreferences(doc) {
+ const latest=new Map();
+ for(const id of Object.keys(values(doc,'pantry-index'))){
+  const item=values(doc,named('pantry',id));
+  if(!item.removedAt||typeof item.name!=='string'||!Number.isInteger(item.preference))continue;
+  const key=normalizeIngredientName(item.name).toLocaleLowerCase(),prior=latest.get(key);
+  if(!prior||prior.removedAt<item.removedAt)latest.set(key,item);
+ }
+ return Object.fromEntries([...latest].filter(([,item])=>item.preference!==3).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,item.preference]));
+}
+
+export function projectLocalCooking(doc) {
+ return {...projectCooking(doc),rememberedPantryPreferences:projectRememberedPantryPreferences(doc)};
 }

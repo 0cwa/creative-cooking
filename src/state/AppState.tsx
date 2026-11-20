@@ -8,6 +8,7 @@ import { normalizeRecipes } from '@/domain/recipeIdentity';
 import {
   appendShoppingItems,
   applyShoppingPurchase,
+  buyAgainFromPantry,
   createShoppingList as createShoppingListCommand,
   migrateLegacyShopping,
   removeShoppingItem as removeShoppingItemCommand,
@@ -136,6 +137,8 @@ type AppStateApi = PersistedState & {
   setShoppingItemChecked(id: string, cycleId: string, checked: boolean): void;
   startNewPurchaseCycle(listId: string, cycleId: string): void;
   purchaseCheckedShoppingItems(listId: string, cycleId: string, purchaseId: string, purchasedAt: string): void;
+  /** Move a Pantry item to Shopping in one save. Returns the list name, or null when nothing changed. */
+  buyAgainPantryItem(id: string): { listName: string; alreadyListed: boolean } | null;
   setChatMessages(messages: ChatMessage[]): void;
   appendChatMessage(message: ChatMessage): void;
   setChatProposalStatus(messageId: string, proposalId: string, status: ChefToolProposalStatus): void;
@@ -518,10 +521,25 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
         listId,
         purchaseCycleId: cycleId,
         purchasedAt
-      });
+      }, current.rememberedPantryPreferences);
       if (!purchase.applied) return current;
       return { ...current, shopping: purchase.shopping, pantry: purchase.pantry };
     });
+  }, [ensureSharedEditAllowed, updateAppState]);
+
+  const buyAgainPantryItem = useCallback((id: string) => {
+    if (!ensureSharedEditAllowed()) return null;
+    const current = appStateRef.current;
+    const at = new Date().toISOString();
+    const moved = buyAgainFromPantry(current.shopping, current.pantry, current.rememberedPantryPreferences ?? {}, {
+      pantryItemId: id,
+      itemId: `shopping-item-${randomUUID()}`,
+      newList: { id: `shopping-list-${randomUUID()}`, cycleId: `shopping-cycle-${randomUUID()}`, name: 'Shopping list', at },
+      at
+    });
+    if (!moved) return null;
+    updateAppState({ ...current, shopping: moved.shopping, pantry: moved.pantry, rememberedPantryPreferences: moved.memory });
+    return { listName: moved.listName, alreadyListed: moved.alreadyListed };
   }, [ensureSharedEditAllowed, updateAppState]);
 
   const setChatMessages = useCallback((messages: ChatMessage[]) => {
@@ -660,6 +678,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       setShoppingItemChecked,
       startNewPurchaseCycle,
       purchaseCheckedShoppingItems,
+      buyAgainPantryItem,
       setChatMessages,
       appendChatMessage,
       setChatProposalStatus,
@@ -706,6 +725,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       setShoppingItemChecked,
       startNewPurchaseCycle,
       purchaseCheckedShoppingItems,
+      buyAgainPantryItem,
       setChatMessages,
       appendChatMessage,
       setChatProposalStatus,

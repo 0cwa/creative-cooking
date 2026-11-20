@@ -17,9 +17,19 @@ export default function PantryScreen() {
   useAppTheme();
   const router = useRouter();
   const {
-    pantry, addPantryItems, removePantryItem, setPantryPreference,
+    pantry, shopping, addPantryItems, removePantryItem, setPantryPreference, buyAgainPantryItem,
     contentWorkspaceName, localPersistenceStatus, canEditSharedContent
   } = useAppState();
+  const [notice, setNotice] = useState('');
+  const toBuy = shopping.items.filter((item) => {
+    const list = shopping.lists.find((candidate) => candidate.id === item.listId);
+    return list && !list.removedAt && !item.removedAt && item.purchaseCycleId === list.currentCycleId
+      && item.purchasedCycleId !== list.currentCycleId && !item.checked;
+  }).length;
+  const buyAgain = (id: string, name: string) => {
+    const moved = buyAgainPantryItem(id);
+    if (moved) setNotice(moved.alreadyListed ? `${name} was already on ${moved.listName}.` : `${name} moved to ${moved.listName}.`);
+  };
   const readOnly = !canEditSharedContent;
   const [input, setInput] = useState('');
   const inputRef = useRef<TextInput>(null);
@@ -39,9 +49,14 @@ export default function PantryScreen() {
           <Text style={styles.eyebrow}>YOUR KITCHEN</Text>
           <Text style={styles.title}>Pantry</Text>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settingsButton}>
-          <SettingsGlyph />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable accessibilityRole="button" accessibilityLabel={toBuy ? `Open Shopping, ${toBuy} to buy` : 'Open Shopping'} onPress={() => router.push('/shopping')} style={styles.shoppingButton}>
+            <Text style={styles.shoppingButtonText}>Shopping{toBuy ? ` · ${toBuy}` : ''}</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settingsButton}>
+            <SettingsGlyph />
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.workspaceStatusWrap}>
@@ -51,6 +66,7 @@ export default function PantryScreen() {
         <Text testID="pantry-local-persistence-status" accessibilityLiveRegion="polite" style={styles.localPersistenceStatus}>
           {localPersistenceStatus === 'saving' ? 'Saving locally' : localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
         </Text>
+        {notice ? <Text testID="pantry-notice" accessibilityLiveRegion="polite" style={styles.notice}>{notice}</Text> : null}
       </View>
 
       <View style={styles.listWrap}>
@@ -61,6 +77,7 @@ export default function PantryScreen() {
             <PantryRow
               item={item}
               onDelete={() => removePantryItem(item.id)}
+              onBuyAgain={readOnly ? undefined : () => buyAgain(item.id, item.name)}
               onPreference={(preference) => setPantryPreference(item.id, preference)}
             />
           )}
@@ -109,6 +126,10 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  shoppingButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  shoppingButtonText: { color: '#172033', fontWeight: '700' },
+  notice: { color: '#334155', fontSize: 12.5, fontWeight: '600' },
   settingsButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   workspaceStatusWrap: { paddingHorizontal: 20, paddingBottom: 6, gap: 2 },
   workspaceStatus: { color: '#64748b', fontSize: 12, fontWeight: '700' },

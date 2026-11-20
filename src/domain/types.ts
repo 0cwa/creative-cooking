@@ -141,10 +141,15 @@ export type AppSettings = {
   dictationEngine: DictationEngine;
 };
 
+export type PantryPreferenceMemory = Record<string, IngredientPreference>;
+
 export type PersistedState = {
   pantry: PantryItem[];
   recipes: Recipe[];
   shopping: ShoppingState;
+  /** Ratings of Pantry items that were removed, keyed by lower-case name, so
+   * buying the same ingredient again restores the household's rating. */
+  rememberedPantryPreferences?: PantryPreferenceMemory;
   chatMessages: ChatMessage[];
   chatHistory: ChatConversation[];
   activeConversationId: string | null;

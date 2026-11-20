@@ -3,7 +3,7 @@ import {useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction}
 import {DEFAULT_STATE} from '@/domain/defaults';
 import type {PersistedState,Recipe} from '@/domain/types';
 import type {ContentRuntimeSnapshot,RecipeHistoryEntry} from '@/loro/app/content-runtime-types';
-import {projectCooking} from '../domain/app-projection.mjs';
+import {projectLocalCooking} from '../domain/app-projection.mjs';
 import {planRecipeRestore,readRecipeHistory as recipeHistory} from '../domain/recipe-history.mjs';
 import {projectPersonal} from '../domain/personal-codec.mjs';
 import {planPersonalAction} from './personal-actions.mjs';
@@ -17,10 +17,10 @@ function historyContext(scope:any) {
  const {scopeId,branchHead,documentId,documentGeneration,epochId}=scope;
  return JSON.stringify([scopeId,branchHead,documentId,documentGeneration,epochId]);
 }
-async function readCooking(workspace:any):Promise<Pick<PersistedState,'recipes'|'pantry'|'shopping'>&{separateRecipeIds?:string[]}> {
+async function readCooking(workspace:any):Promise<Pick<PersistedState,'recipes'|'pantry'|'shopping'|'rememberedPantryPreferences'>&{separateRecipeIds?:string[]}> {
  return workspace.householdContent
   ? workspace.householdContent.readCooking()
-  : projectCooking((await workspace.household.document()).doc);
+  : projectLocalCooking((await workspace.household.document()).doc);
 }
 async function readRecipeDocument(workspace:any,recipeId:string) {
  return workspace.householdContent

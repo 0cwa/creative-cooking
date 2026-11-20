@@ -87,3 +87,38 @@ for(const nextEdit of [false,true]) test(`a committed purchase with a lost ackno
  if(nextEdit){await page.getByLabel('Shopping item name').fill('Retry soap');await page.getByRole('button',{name:'Add',exact:true}).click()}else{await page.getByRole('button',{name:'Back',exact:true}).click();await page.getByRole('button',{name:'Open settings'}).click();await page.getByRole('button',{name:'Retry local storage'}).click();await expect(page.getByRole('button',{name:'Retry local storage'})).toHaveCount(0);await page.goto('./shopping')}
  await saved();const purchases=await page.evaluate(async()=>{const name=localStorage.getItem('creative-cooking-local-workspace-v1'),db=await new Promise((resolve,reject)=>{const q=indexedDB.open(`${name}-records`);q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});try{const rows=await new Promise((resolve,reject)=>{const q=db.transaction('records','readonly').objectStore('records').getAll();q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});return rows.flatMap(row=>{try{const parsed=JSON.parse(row.inputKey);return parsed[0]==='local'?(parsed[1].commands??[]).filter(c=>c.kind==='purchase').map(c=>c.effectId):[]}catch{return []}})}finally{db.close()}});expect(purchases).toHaveLength(1);await page.reload();await expect(page.getByText('Purchased',{exact:true})).toHaveCount(1);if(nextEdit)await expect(page.getByText('Retry soap',{exact:true})).toBeVisible();await page.goto('./');await expect(page.getByText('Retry carrot',{exact:true})).toHaveCount(1);
 });
+
+test('buy again moves a rated pantry item to shopping and purchase restores its rating',async({page})=>{
+ test.setTimeout(90_000);
+ await page.goto('./');
+ await page.getByRole('button',{name:'Start fresh local preview'}).click();
+ await page.getByRole('button',{name:'Review household policy'}).click();
+ await page.getByRole('button',{name:'Accept this household policy'}).click();
+ const pantrySaved=()=>expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ await pantrySaved();
+ await page.getByLabel('Ingredient and details').fill('Smoked paprika');
+ await page.getByRole('button',{name:'Add ingredient'}).click();
+ await pantrySaved();
+ await page.getByTestId(/^pantry-item-/).getByRole('button',{name:'Set preference to 5 out of 5'}).click();
+ await pantrySaved();
+ await page.getByRole('button',{name:'Buy Smoked paprika again'}).click();
+ await expect(page.getByTestId('pantry-notice')).toHaveText('Smoked paprika moved to Shopping list.');
+ await pantrySaved();
+ await expect(page.getByTestId(/^pantry-item-/)).toHaveCount(0);
+ await page.reload();
+ await pantrySaved();
+ await expect(page.getByTestId(/^pantry-item-/)).toHaveCount(0);
+ await page.getByRole('button',{name:'Open Shopping, 1 to buy'}).click();
+ const saved=()=>expect(page.getByTestId('shopping-local-persistence-status')).toHaveText('Saved on this device only.');
+ await saved();
+ await page.getByLabel('Check Smoked paprika').click();
+ await saved();
+ await page.getByRole('button',{name:'Add checked to Pantry (1)'}).click();
+ await expect(page.getByText('Purchased',{exact:true})).toBeVisible();
+ await saved();
+ await page.goto('./');
+ await expect(page.getByText('Smoked paprika',{exact:true})).toBeVisible();
+ await expect(page.getByLabel('Food preference 5 out of 5')).toBeVisible();
+ await page.reload();
+ await expect(page.getByLabel('Food preference 5 out of 5')).toBeVisible();
+});

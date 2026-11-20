@@ -1,7 +1,9 @@
 import { normalizeIngredientName } from './pantry.ts';
 import { normalizeRecipes } from './recipeIdentity.ts';
 import type {
+  IngredientPreference,
   PantryItem,
+  PantryPreferenceMemory,
   Recipe,
   ShoppingCycle,
   ShoppingItem,
@@ -384,10 +386,73 @@ export function startNewPurchaseCycle(
   };
 }
 
+export function pantryPreferenceKey(name: string): string {
+  return normalizeIngredientName(name).toLocaleLowerCase();
+}
+
+export type BuyAgainInput = {
+  pantryItemId: string;
+  /** ID for the new shopping item. */
+  itemId: string;
+  /** Used only when the household has no active shopping list yet. */
+  newList: NewShoppingList;
+  at: string;
+};
+
+export type BuyAgainResult = {
+  shopping: ShoppingState;
+  pantry: PantryItem[];
+  memory: PantryPreferenceMemory;
+  listName: string;
+  alreadyListed: boolean;
+};
+
+/** Move a Pantry item onto the first active shopping list (the list the
+ * Shopping screen opens on), creating a list when none exists. The item's
+ * rating is remembered so a later purchase restores it. */
+export function buyAgainFromPantry(
+  shopping: ShoppingState,
+  pantry: PantryItem[],
+  memory: PantryPreferenceMemory,
+  input: BuyAgainInput
+): BuyAgainResult | null {
+  const source = pantry.find((item) => item.id === input.pantryItemId);
+  if (!source) return null;
+  const name = normalizeIngredientName(source.name);
+  if (!name) return null;
+  let next = shopping;
+  let list = next.lists.find((candidate) => !candidate.removedAt);
+  if (!list) {
+    next = createShoppingList(next, input.newList);
+    list = activeList(next, input.newList.id);
+    if (!list) return null;
+  }
+  const key = pantryPreferenceKey(name);
+  const listed = next.items.some((item) => (
+    item.listId === list.id
+    && !item.removedAt
+    && item.purchaseCycleId === list.currentCycleId
+    && item.purchasedCycleId !== list.currentCycleId
+    && pantryPreferenceKey(item.name) === key
+  ));
+  if (!listed) next = appendShoppingItems(next, list.id, [{ id: input.itemId, name, at: input.at }]);
+  const remembered = { ...memory };
+  if (source.preference === 3) delete remembered[key];
+  else remembered[key] = source.preference;
+  return {
+    shopping: next,
+    pantry: pantry.filter((item) => item.id !== source.id),
+    memory: remembered,
+    listName: list.name,
+    alreadyListed: listed
+  };
+}
+
 export function applyShoppingPurchase(
   state: ShoppingState,
   pantry: PantryItem[],
-  command: PurchaseShoppingItems
+  command: PurchaseShoppingItems,
+  memory: PantryPreferenceMemory = {}
 ): ShoppingPurchaseResult {
   if (state.purchases.some((purchase) => purchase.id === command.id)) {
     return { shopping: state, pantry, applied: false, pantryAdded: 0 };
@@ -415,7 +480,7 @@ export function applyShoppingPurchase(
     pantryAdditions.push({
       id: `shopping-purchase:${encodeURIComponent(command.id)}:${encodeURIComponent(item.id)}`,
       name,
-      preference: 3,
+      preference: (memory[key] ?? 3) as IngredientPreference,
       createdAt: command.purchasedAt,
       updatedAt: command.purchasedAt
     });
