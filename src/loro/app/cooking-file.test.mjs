@@ -192,7 +192,7 @@ function fixtureSessionStore(connection){
 }
 
 test('frozen selected retention holds a shopping copy when its recipe field is excluded',async t=>{
- const [a,b,c]=await household(t,{onDisk:true,third:true}),keys=a.storage.localKeys(testMaster(),sodium);
+ const [a,b,c]=await household(t,{onDisk:true,third:true}),master=testMaster(),keys=a.storage.localKeys(master,sodium);
  await keys.provision('retention-master');
  const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
  const acceptedPolicy=await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
@@ -292,7 +292,8 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.deepEqual(await saveSelectedRetention(runtime,{reportHash,selectedEffectIds:[...selectedIds].reverse()}),{draftId:saved.draftId,replayed:true});
  assert.deepEqual(a.rows(),savedRows);
  a.reopen();
- const reopenedStorage=openSQLiteStorage(a.connection);
+ let publicationFault;
+ const reopenedStorage=openSQLiteStorage(a.connection,boundary=>{if(boundary===publicationFault)throw Error('injected failure');});
  const reopenedRuntime=await openWorkspaceHouseholdRuntime({storage:reopenedStorage,resolved:await resolveRuntimeAuthority(reopenedStorage,scope,a.root.head,a.provider,a.deviceId),pin:a.root.head,provider:a.provider,sodium,keys:signingKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
  const reopened=await reopenSelectedRetention(reopenedRuntime,saved.draftId);
  const {checkedDraftSource}=await import('../compromise/checked-draft-source.mjs');
@@ -455,6 +456,63 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  a.storage.checkSelectedHouseholdSources=async guard=>++checks===7?{ok:false,error:{code:'CONFLICT'}}:check(guard);
  try {await assert.rejects(()=>planSelectedRetention(runtime,{reportHash,selectedEffectIds:selectedIds}),/CONFLICT/);} finally {a.storage.checkSelectedHouseholdSources=check;}
  assert.deepEqual(a.rows(),savedRows);
+ const {publishDraftRotation}=await import('../compromise/publish-draft-rotation.mjs');
+ const publicationConfirmation={explicit:true,eventHash,grantHash:(await verifyDraftRotationGrant(verifyArgs)).grantHash};
+ const publishArgs={runtime:reopenedRuntime,sodium,keys:signingKeys,signingKey:survivor.signingKeyRef,
+  withSigningSecret:use=>use(a.signingTestKey.privateKey),binding,proposal:{item,grant,manifest:candidate.manifest,recipientBindings},confirmation:publicationConfirmation};
+ await assert.rejects(()=>publishDraftRotation({...publishArgs,confirmation:{...publicationConfirmation,explicit:false}}),/CONFIRMATION_REQUIRED/);
+ await assert.rejects(()=>publishDraftRotation({...publishArgs,confirmation:{...publicationConfirmation,grantHash:'0'.repeat(64)}}),/REVIEW_CHANGED/);
+ for(const fault of ['draft-rotation-keys','draft-rotation-files']){
+  publicationFault=fault;
+  try {await assert.rejects(()=>publishDraftRotation(publishArgs),/IO/);}
+  finally {publicationFault=null;}
+  assert.deepEqual(a.rows(),savedRows);
+ }
+ const commitRotation=reopenedStorage.commitDraftRotationPublication.bind(reopenedStorage);
+ reopenedStorage.commitDraftRotationPublication=async (...args)=>{
+  a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[JSON.stringify(damaged),originalsKey]);
+  try {return await commitRotation(...args);}
+  finally {a.connection.executeSync('UPDATE loro_records SET value=? WHERE key=?',[originals,originalsKey]);}
+ };
+ try {await assert.rejects(()=>publishDraftRotation(publishArgs),/CONFLICT/);}
+ finally {reopenedStorage.commitDraftRotationPublication=commitRotation;}
+ assert.deepEqual(a.rows(),savedRows);
+
+ // Keep the real late-edit check below on the original fixture.
+ const publishedDb=new DatabaseSync(':memory:');
+ t.after(()=>publishedDb.close());
+ publishedDb.exec('CREATE TABLE loro_records (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+ const insert=publishedDb.prepare('INSERT INTO loro_records VALUES (?,?)');
+ for(const row of savedRows)insert.run(row.key,row.value);
+ const publishedStorage=openSQLiteStorage({executeSync(sql,params=[]){
+  const statement=publishedDb.prepare(sql);
+  return {rows:sql.startsWith('SELECT')?statement.all(...params):(statement.run(...params),[])};
+ }});
+ const publishedKeys=publishedStorage.localKeys(master,sodium);
+ const publisherKeys=Object.assign(Object.create(publishedKeys),{use:(op,identity,fn)=>op==='retention-signing'?fn(a.signingTestKey.privateKey):publishedKeys.use(op,identity,fn)});
+ const publisher=await openWorkspaceHouseholdRuntime({storage:publishedStorage,resolved:await resolveRuntimeAuthority(publishedStorage,scope,a.root.head,a.provider,a.deviceId),
+  pin:a.root.head,provider:a.provider,sodium,keys:publisherKeys,signing:{publicKey:sodium.to_hex(a.signingTestKey.publicKey),operationId:'retention-signing'},LoroDoc,decodeImportBlobMeta});
+ assert.deepEqual(await publishDraftRotation({...publishArgs,runtime:publisher,keys:publisherKeys}),{operationId:'retention-revoke',head:eventHash});
+ const publication=must(await publishedStorage.readDraftRotationPublication(scope.id,'retention-revoke'));
+ assert.deepEqual(publication.next,successor.record);
+ assert.equal(must(await publishedStorage.readAdultRemovalPublication(scope.id,'retention-revoke')),null);
+ assert.deepEqual(publication.documents.map(row=>row.bytes),candidate.documents.map(row=>row.seed.snapshot));
+ assert.deepEqual(publication.files.map(row=>row.recipientDeviceId),[c.deviceId]);
+ const [,purpose,proof]=JSON.parse(new TextDecoder().decode(publication.proof));
+ assert.equal(purpose,'draft-rotation-publication-v1');
+ assert.ok(await a.provider.verify(survivor.signingKeyRef,domain(purpose,proof.body),sodium.from_hex(proof.signature)));
+ await withOpenedDraftRotationFile({...codec,file:publication.files[0].bytes,wrappingSecret:otherWrap.privateKey},async ({keys})=>{
+  for(const [i,{operationId,identity,keyHash}] of proof.body.keyCommitments.entries()){
+   await publisherKeys.use(operationId,identity,key=>{
+    assert.deepEqual(key,keys[i]);
+    assert.equal(keyHash,sodium.to_hex(sodium.crypto_generichash(32,key)));
+   });
+  }
+ });
+ const archived=publishedDb.prepare('SELECT value FROM loro_records WHERE key=?');
+ for(const row of savedRows.filter(({key})=>JSON.parse(key)[0]!=='pairing-authority'))assert.equal(archived.get(row.key).value,row.value);
+ await assert.rejects(()=>readAuthority(publishedStorage,scope,a.root.head,a.provider),/INVALID_ROTATION/);
+
  const stalePlan=await reports.prepare(currentConfirmation,b.deviceId);
  await save(a.runtime,'retention-later',[{...pantry,commandId:'retention-later',effectId:'retention-later',data:{...pantry.data,itemId:'retention-later'}}]);
  const afterEdit=a.rows();
@@ -464,6 +522,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,binding));
  await assert.rejects(()=>prepareDraftRotationProjection(projectionArgs));
  await assert.rejects(()=>prepareDraftRotationManifest({runtime:reopenedRuntime,binding,item,allocateSeed}));
+ await assert.rejects(()=>publishDraftRotation(publishArgs));
  assert.deepEqual(a.rows(),afterEdit);
 });
 

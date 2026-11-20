@@ -155,6 +155,7 @@ type AdultRemovalPublication = {
     localKey:{record:LocalKeyRecord;catalog:ReadyMasterCatalog}}[];
   files:{recipientDeviceId:string;bytes:Uint8Array}[];
 };
+type DraftRotationEvidence = {draftId:string;reportHash:string;draft:any;frozen:{record:any;objects:any[]}};
 function validAdultRemovalPublication(value:unknown,separateProofBudget=false):value is AdultRemovalPublication {
   if(!fields(value,['version','operationId','sponsorDeviceId','manifestHash','proof','expected','next','documents','files'])||
     value.version!==1||!validId(value.operationId)||!validId(value.sponsorDeviceId)||!hexOf(value.manifestHash,64)||
@@ -270,7 +271,8 @@ const validateRecord = (k: string, v: any) => {
     case 'policy-set-activation': valid=parts.length===3 && validId(parts[1]) && validPolicySetReceipt(v) && v.expected.scope.id===parts[1] && v.next.acceptedParent===parts[2]; break;
     case 'policy-staged-set': valid=validStagedPolicyDocumentSet(v) && parts.length===3 && v.targetHead===parts[2]; break;
     case 'adult-removal-recipient': valid=parts.length===3 && validAdultRemovalRecipient(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
-    case 'adult-removal-publication': valid=parts.length===3 && validAdultRemovalPublication(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
+    case 'adult-removal-publication': case 'draft-rotation-publication':
+      valid=parts.length===3 && validAdultRemovalPublication(v) && v.expected.scope.id===parts[1] && v.operationId===parts[2]; break;
     case 'household-own-device-parent': case 'policy-checkout-parent': valid=validBranchDocument(v); break;
     case 'disclosure-policy-archive': case 'disclosure-policy': valid=fields(v,['policy','policyHash','approvals']) && object(v.policy) && typeof v.policyHash==='string' && Array.isArray(v.approvals); break;
     case 'disclosure-source': valid=(fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId']) || (fields(v,['policyHashes','checkpoint','documentId','commandId','envelope','origin','objectId','incomplete']) && v.incomplete===true)) && v.envelope instanceof Uint8Array && ['local','import'].includes(v.origin) && typeof v.objectId==='string' && !!v.objectId && denseArray(v.policyHashes,(x:any)=>typeof x==='string' && !!x) && typeof v.checkpoint==='string' && !!v.checkpoint && typeof v.documentId==='string' && !!v.documentId && typeof v.commandId==='string' && !!v.commandId; break;
@@ -1066,6 +1068,12 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   /** Preverified sponsor primitive. The caller authenticates the successor, proof,
    * projected seeds, wrapped keys and each recipient ciphertext before calling. */
   async commitAdultRemovalPublication(input:AdultRemovalPublication,guard:SelectedHouseholdSources) {
+    return this.commitDocumentSetRotation(input,guard,'adult-removal');
+  }
+  async commitDraftRotationPublication(input:AdultRemovalPublication,guard:SelectedHouseholdSources,evidence:DraftRotationEvidence) {
+    return this.commitDocumentSetRotation(input,guard,'draft-rotation',snapshot(evidence));
+  }
+  private async commitDocumentSetRotation(input:AdultRemovalPublication,guard:SelectedHouseholdSources,kind:'adult-removal'|'draft-rotation',evidence?:DraftRotationEvidence) {
     input=snapshot(input);guard=snapshot(guard);
     if(!validAdultRemovalPublication(input))return fail('MALFORMED');
     const {expected,next,operationId,documents}=input, scope=expected.scope.id;
@@ -1079,26 +1087,39 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
     const sources=[...guard.entries,...(guard.members??[])];
     if(documents.slice(1).some(d=>!sources.some(s=>s.recipeId===d.recipeId&&s.documentId===d.sourceDocumentId&&s.revision===d.sourceRevision)))
       return fail('MALFORMED');
+    if(kind==='draft-rotation'&&(!evidence||!hexOf(evidence.draftId,64)||!hexOf(evidence.reportHash,64)||
+      evidence.draft?.draftId!==evidence.draftId||evidence.draft?.reportHash!==evidence.reportHash||
+      evidence.draft.scopeId!==scope||!sameRecord(evidence.draft.guard,guard)||
+      !validSelectedReportRecord(evidence.frozen?.record,evidence.reportHash)||
+      !validSelectedOriginals({version:2,reportHash:evidence.reportHash,objects:evidence.frozen?.objects},evidence.reportHash)))
+      return fail('MALFORMED');
     try{return await this.run(true,async tx=>{
       const authority=key('pairing-authority','household',scope);
-      const publication=key('adult-removal-publication',scope,operationId);
+      const publication=key(kind+'-publication',scope,operationId);
       const catalog=key('projection-document-set',scope,next.acceptedParent);
       if(!sameRecord(await tx.get(authority),expected)||await tx.get(publication)!==undefined||await tx.get(catalog)!==undefined)conflict();
       await this.requireSelectedHouseholdSources(tx,guard);
+      if(evidence){
+        const {draftId,reportHash,draft,frozen}=evidence;
+        if(!sameRecord(await tx.get(key('compromise-selected-draft-v1',scope,draftId)),draft)||
+           !sameRecord(await tx.get(key('compromise-selected-report-v2',scope,reportHash)),frozen.record)||
+           !sameRecord(await tx.get(key('compromise-selected-originals-v2',scope,reportHash)),{version:2,reportHash,objects:frozen.objects}))
+          conflict();
+      }
       for(const d of documents){
         if(await tx.get(key('document-owner',scope,d.documentId))!==undefined||
           await tx.get(key('document',scope,d.documentId))!==undefined||
           await tx.get(key('projection-document',scope,d.documentId))!==undefined)conflict();
       }
       for(const {localKey} of documents)if((await installLocalKey(tx,localKey.record,localKey.catalog)).replayed)conflict();
-      this.fault?.('adult-removal-keys');
+      this.fault?.(kind+'-keys');
       for(const d of documents){
         await tx.put(key('document-owner',scope,d.documentId),next.acceptedParent);
         await tx.put(key('document',scope,d.documentId),{bytes:d.bytes,revision:0});
       }
       await tx.put(catalog,adultRemovalCatalog(input));
       await tx.put(publication,input);
-      this.fault?.('adult-removal-files');
+      this.fault?.(kind+'-files');
       await tx.put(authority,next);
       return {ok:true as const,value:undefined};
     });}catch(e){return fail(mapError(e));}
@@ -1148,9 +1169,16 @@ export class TransactionalStorage implements AtomicStorage, PairingAtomicStorage
   }
   /** Structural evidence only. The ordinary authority loader still rejects this transition. */
   async readAdultRemovalPublication(scope:string,operationId:string) {
+    return this.readDocumentSetRotation(scope,operationId,'adult-removal');
+  }
+  /** Structural evidence only. Do not release files without authenticating the proof. */
+  async readDraftRotationPublication(scope:string,operationId:string) {
+    return this.readDocumentSetRotation(scope,operationId,'draft-rotation');
+  }
+  private async readDocumentSetRotation(scope:string,operationId:string,kind:'adult-removal'|'draft-rotation') {
     if(!validId(scope)||!validId(operationId))return fail('MALFORMED');
     try{return await this.run(false,async tx=>{
-      const saved:AdultRemovalPublication|undefined=await tx.get(key('adult-removal-publication',scope,operationId));
+      const saved:AdultRemovalPublication|undefined=await tx.get(key(kind+'-publication',scope,operationId));
       if(saved===undefined)return {ok:true as const,value:null};
       if(!sameRecord(await tx.get(key('pairing-authority','household',scope)),saved.next)||
         !sameRecord(await tx.get(key('projection-document-set',scope,saved.next.acceptedParent)),adultRemovalCatalog(saved)))return corrupt();
