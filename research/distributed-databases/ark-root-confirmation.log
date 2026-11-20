@@ -1,0 +1,204 @@
+
+ RUN  v1.6.1 /workspace/work/capability-repos/automerge-ark
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > creates a protected ID through the correct asynchronous factory
+CC_SECURITY_PROBE={"testId":"protected-factory","expected":"protected-32-byte-id","observed":"protected","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","docIdBytes":32,"idTailZero":false}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > enforces Relay and Read, denying an ungranted household
+CC_SECURITY_PROBE={"testId":"fetch-Relay","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Relay","protected":true}
+CC_SECURITY_PROBE={"testId":"fetch-Read","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Read","protected":true}
+CC_SECURITY_PROBE={"testId":"fetch-Edit","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Edit","protected":true}
+CC_SECURITY_PROBE={"testId":"fetch-Admin","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Admin","protected":true}
+CC_SECURITY_PROBE={"testId":"fetch-cross-household","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","protected":true,"error":"Error: insufficient access to fetch: requires at least Relay"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > enforces Edit and Admin author role on writes
+CC_SECURITY_PROBE={"testId":"put-Relay","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Relay","protected":true,"verifiedAuthor":"simulated policy input only; no signed-wire test","error":"Error: insufficient access to put: requires at least Edit"}
+CC_SECURITY_PROBE={"testId":"put-Read","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Read","protected":true,"verifiedAuthor":"simulated policy input only; no signed-wire test","error":"Error: insufficient access to put: requires at least Edit"}
+CC_SECURITY_PROBE={"testId":"put-Edit","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Edit","protected":true,"verifiedAuthor":"simulated policy input only; no signed-wire test"}
+CC_SECURITY_PROBE={"testId":"put-Admin","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","role":"Admin","protected":true,"verifiedAuthor":"simulated policy input only; no signed-wire test"}
+CC_SECURITY_PROBE={"testId":"put-cross-household","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","protected":true,"error":"Error: insufficient access to put: requires at least Edit"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > authenticates synthetic cooking bytes under a REAL Keyhive-produced envelope
+CC_SECURITY_PROBE={"testId":"authentic-keyhive-ciphertext","expected":"owner-decrypts / ciphertext-not-plaintext","observed":"owner-decrypts / ciphertext-not-plaintext","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","plaintextBytes":57,"ciphertextBytes":286,"digest":"eab1970f543f8180c5f73d5007d12e157be0cf3ee92dfce165c7242e55dfa45d","caveat":"not a relay server or second-device decryption proof"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects tampered signed contact-card pairing (verify admission, not just no exception)
+CC_SECURITY_PROBE={"testId":"forged-contact-card-admission","expected":"deny","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","returnedWithoutThrow":true,"bytes":509,"signatureTamper":"first Ed25519 signature byte flipped","scope":"Keyhive accepted agent in live graph, not just contact-card parser"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > delivers genuine signed Keyhive membership to separate reader and relay identities
+CC_SECURITY_PROBE={"testId":"signed-membership-propagation","expected":"separate identities ingest archive","observed":"separate identities ingest archive","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","archiveBytes":14294,"format":"Keyhive WASM Archive; *not* a network sync session"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > verifies a second device can decrypt but a no-key relay and outsider cannot
+CC_SECURITY_PROBE={"testId":"cross-device-read","expected":"reader decrypts","observed":"reader cannot decrypt","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","plaintextBytes":56,"ciphertextBytes":285,"archiveSync":true,"postEncryptionKeyEventsBytes":14294,"readerDocumentKnown":true}
+CC_SECURITY_PROBE={"testId":"no-key-relay","expected":"relay cannot decrypt","observed":"relay cannot decrypt","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","ciphertextBytes":285}
+CC_SECURITY_PROBE={"testId":"cross-household-decrypt","expected":"outsider cannot decrypt","observed":"outsider cannot decrypt","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rotates a role from Read -> Edit -> revoked -> Read without residual Edit
+CC_SECURITY_PROBE={"testId":"upgrade-start-read","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","error":"Error: insufficient access to put: requires at least Edit"}
+CC_SECURITY_PROBE={"testId":"upgrade-edit","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rotates a role from Read -> Edit -> revoked -> Read without residual Edit
+CC_SECURITY_PROBE={"testId":"downgrade-revoked","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","error":"Error: insufficient access to put: requires at least Edit"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rotates a role from Read -> Edit -> revoked -> Read without residual Edit
+CC_SECURITY_PROBE={"testId":"downgrade-read","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","error":"Error: insufficient access to put: requires at least Edit"}
+CC_SECURITY_PROBE={"testId":"downgrade-fetch","expected":"grant","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > revokes Read from an authorized identity at the policy boundary
+CC_SECURITY_PROBE={"testId":"read-revoked","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","error":"Error: insufficient access to fetch: requires at least Relay"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > probes revoked reader's fresh-key access after real Keyhive archive propagation
+CC_SECURITY_PROBE={"testId":"revoked-reader-future-key","expected":"deny","observed":"deny","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","archiveBytes":20452,"ciphertextBytes":271,"note":"archived historical plaintext is not remotely erasable"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects forwarding of an editor's signed write by an ungranted requester (KNOWN UPSTREAM GAP)
+CC_SECURITY_PROBE={"testId":"put-unauthorized-forwarder","expected":"deny","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","protected":true,"authorRole":"Edit","requesterRole":"none","boundary":"ARK JS buildServerSubductionPolicy; no signed-wire attestation"}
+
+stdout | test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects a legacy document-ID bypass, rather than silently granting anonymous access (KNOWN GAP)
+CC_SECURITY_PROBE={"testId":"legacy-id-fetch","expected":"deny","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","idTailZero":true}
+CC_SECURITY_PROBE={"testId":"legacy-id-put","expected":"deny","observed":"grant","runtime":"Node 24.19.0 / current pinned ARK Keyhive WASM","idTailZero":true}
+
+ ❯ test/creative-cooking-current-security.test.ts  (12 tests | 4 failed) 475ms
+   ❯ test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects tampered signed contact-card pairing (verify admission, not just no exception)
+     → tampered signed contact card must not become a trusted identity: expected 'grant' to be 'deny' // Object.is equality
+   ❯ test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > verifies a second device can decrypt but a no-key relay and outsider cannot
+     → an authorized separate reader still needs the correct Keyhive key epoch and prekey delivery: expected null to deeply equal [ 115, 121, 110, 116, 104, 101, …(50) ]
+   ❯ test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects forwarding of an editor's signed write by an ungranted requester (KNOWN UPSTREAM GAP)
+     → SECURITY INVARIANT put-unauthorized-forwarder (): expected 'grant' to be 'deny' // Object.is equality
+   ❯ test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects a legacy document-ID bypass, rather than silently granting anonymous access (KNOWN GAP)
+     → legacy ID denied neither unauthorised operation
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects tampered signed contact-card pairing (verify admission, not just no exception)
+AssertionError: tampered signed contact card must not become a trusted identity: expected 'grant' to be 'deny' // Object.is equality
+
+- Expected
++ Received
+
+- deny
++ grant
+
+ ❯ test/creative-cooking-current-security.test.ts:217:87
+    215|         signatureTamper: "first Ed25519 signature byte flipped", 
+    216|         scope: "Keyhive accepted agent in live graph, not just contact…
+    217|     expect(actual, "tampered signed contact card must not become a tru…
+       |                                                                                       ^
+    218|   });
+    219| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > verifies a second device can decrypt but a no-key relay and outsider cannot
+AssertionError: an authorized separate reader still needs the correct Keyhive key epoch and prekey delivery: expected null to deeply equal [ 115, 121, 110, 116, 104, 101, …(50) ]
+
+- Expected: 
+Array [
+  115,
+  121,
+  110,
+  116,
+  104,
+  101,
+  116,
+  105,
+  99,
+  32,
+  102,
+  97,
+  109,
+  105,
+  108,
+  121,
+  32,
+  99,
+  111,
+  111,
+  107,
+  105,
+  110,
+  103,
+  32,
+  115,
+  101,
+  99,
+  114,
+  101,
+  116,
+  32,
+  45,
+  32,
+  112,
+  114,
+  111,
+  116,
+  101,
+  99,
+  116,
+  101,
+  100,
+  32,
+  99,
+  114,
+  111,
+  115,
+  115,
+  45,
+  99,
+  108,
+  105,
+  101,
+  110,
+  116,
+]
+
++ Received: 
+null
+
+ ❯ test/creative-cooking-current-security.test.ts:265:102
+    263|     previouslyEncrypted = { commitId, plaintext: payload, ciphertext: …
+    264|     expect(readerValue && bytes(readerValue),
+    265|       "an authorized separate reader still needs the correct Keyhive k…
+       |                                                                                                      ^
+    266|   });
+    267| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects forwarding of an editor's signed write by an ungranted requester (KNOWN UPSTREAM GAP)
+AssertionError: SECURITY INVARIANT put-unauthorized-forwarder (): expected 'grant' to be 'deny' // Object.is equality
+
+- Expected
++ Received
+
+- deny
++ grant
+
+ ❯ assertPermission test/creative-cooking-current-security.test.ts:75:75
+     73|   try { await operation(); } catch(e) { actual = "deny"; error = Strin…
+     74|   record(id, expected, actual, { ...detail, error });
+     75|   expect(actual, "SECURITY INVARIANT " + id + " (" + (error ?? "") + "…
+       |                                                                           ^
+     76| }
+     77| 
+ ❯ test/creative-cooking-current-security.test.ts:323:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  test/creative-cooking-current-security.test.ts > Creative Cooking: actual ARK/Keyhive policy invariants > rejects a legacy document-ID bypass, rather than silently granting anonymous access (KNOWN GAP)
+AggregateError: legacy ID denied neither unauthorised operation
+ ❯ test/creative-cooking-current-security.test.ts:345:32
+    343|     ]);
+    344|     const failures = outcomes.filter((outcome) => outcome.status === "…
+    345|     if (failures.length) throw new AggregateError(failures, "legacy ID…
+       |                                ^
+    346|   });
+    347| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { errors: [ { status: 'rejected', reason: { name: 'AssertionError', message: 'SECURITY INVARIANT legacy-id-fetch (): expected \'grant\' to be \'deny\' // Object.is equality', showDiff: true, actual: 'grant', expected: 'deny', operator: 'strictEqual', stack: 'AssertionError: SECURITY INVARIANT legacy-id-fetch (): expected \'grant\' to be \'deny\' // Object.is equality\n    at assertPermission (/workspace/work/capability-repos/automerge-ark/test/creative-cooking-current-security.test.ts:75:75)\n    at async Promise.allSettled (index 0)\n    at /workspace/work/capability-repos/automerge-ark/test/creative-cooking-current-security.test.ts:335:22\n    at runTest (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:781:11)\n    at runSuite (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:909:15)\n    at runSuite (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:909:15)\n    at runFiles (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:958:5)\n    at startTests (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:967:3)\n    at file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/vitest@1.6.1/node_modules/vitest/dist/chunks/runtime-runBaseTests.oAvMKtQC.js:116:7\n    at withEnv (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/vitest@1.6.1/node_modules/vitest/dist/chunks/runtime-runBaseTests.oAvMKtQC.js:83:5)' } }, { status: 'rejected', reason: { name: 'AssertionError', message: 'SECURITY INVARIANT legacy-id-put (): expected \'grant\' to be \'deny\' // Object.is equality', showDiff: true, actual: 'grant', expected: 'deny', operator: 'strictEqual', stack: 'AssertionError: SECURITY INVARIANT legacy-id-put (): expected \'grant\' to be \'deny\' // Object.is equality\n    at assertPermission (/workspace/work/capability-repos/automerge-ark/test/creative-cooking-current-security.test.ts:75:75)\n    at async Promise.allSettled (index 1)\n    at /workspace/work/capability-repos/automerge-ark/test/creative-cooking-current-security.test.ts:335:22\n    at runTest (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:781:11)\n    at runSuite (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:909:15)\n    at runSuite (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:909:15)\n    at runFiles (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:958:5)\n    at startTests (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/@vitest+runner@1.6.1/node_modules/@vitest/runner/dist/index.js:967:3)\n    at file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/vitest@1.6.1/node_modules/vitest/dist/chunks/runtime-runBaseTests.oAvMKtQC.js:116:7\n    at withEnv (file:///workspace/work/capability-repos/automerge-ark/node_modules/.pnpm/vitest@1.6.1/node_modules/vitest/dist/chunks/runtime-runBaseTests.oAvMKtQC.js:83:5)' } } ] }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 8 passed (12)
+   Start at  00:50:35
+   Duration  1.20s (transform 229ms, setup 0ms, collect 437ms, tests 475ms, environment 0ms, prepare 74ms)
+
