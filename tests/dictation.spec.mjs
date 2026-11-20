@@ -1,4 +1,4 @@
-import { expect, test } from './legacy-fixture.mjs';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 test('on-device dictation stays active across browser ends until the user presses Stop', async ({ page }) => {
   await page.addInitScript(() => {
@@ -57,7 +57,7 @@ test('on-device dictation stays active across browser ends until the user presse
     });
   });
 
-  await page.goto('./chef');
+  await startLocalWorkspace(page,'./chef');
   const composer = page.getByLabel('Message Chef');
 
   await page.getByLabel('Start dictation').click();
@@ -87,7 +87,7 @@ test('compact mic stays beside the composer and explains unavailable dictation',
     });
   });
 
-  await page.goto('./chef');
+  await startLocalWorkspace(page,'./chef');
 
   const plus = page.getByLabel('Edit meal context', { exact: true });
   const mic = page.getByLabel('Start dictation');

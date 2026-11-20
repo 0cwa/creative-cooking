@@ -1,4 +1,4 @@
-import { expect, test } from './legacy-fixture.mjs';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 test('downloaded Whisper fallback keeps Start/Stop UX and never enables remote model loading', async ({ page }) => {
   await page.addInitScript(() => {
@@ -112,7 +112,7 @@ test('downloaded Whisper fallback keeps Start/Stop UX and never enables remote m
     });
   });
 
-  await page.goto('./chef');
+  await startLocalWorkspace(page,'./chef');
   await page.getByLabel('Open settings').click();
 
   await expect(page.getByLabel('Use browser dictation engine')).toHaveAttribute('aria-checked', 'true');

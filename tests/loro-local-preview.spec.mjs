@@ -19,16 +19,22 @@ test('fresh preview keeps cooking and private data separate and reports failed s
  await page.goto('./');await expect(page.getByText('Golden beet',{exact:true})).toBeVisible();await expect(page.getByText('Unsaved carrot',{exact:true})).toHaveCount(0);expect(external).toEqual([]);
 });
 
-test('creating a fresh preview preserves existing workspace data',async({page})=>{
- await page.goto('./');await page.getByRole('button',{name:'Open existing workspace',exact:true}).click();
+test('starting Loro preserves archived workspace data on the device',async({page})=>{
+ await page.addInitScript(()=>{
+  if(!localStorage.getItem('creative-cooking-storage-choice-v1'))localStorage.setItem('creative-cooking-storage-choice-v1','legacy');
+  if(!localStorage.getItem('creative-cooking-state-v1'))localStorage.setItem('creative-cooking-state-v1',JSON.stringify({pantry:[{name:'Archived parsnip'}]}));
+ });
+ await page.goto('./');
+ const archived=await page.evaluate(()=>localStorage.getItem('creative-cooking-state-v1'));
+ await expect(page.getByText(/Data from the former PowerSync workspace stays on this device/)).toBeVisible();
+ await page.getByRole('button',{name:'Start fresh local preview'}).click();
+ await page.getByRole('button',{name:'Review household policy'}).click();
+ await page.getByRole('button',{name:'Accept this household policy'}).click();
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
- await page.getByLabel('Ingredient and details').fill('Legacy proof parsnip');await page.getByLabel('Add ingredient').click();
- await expect(page.getByText('Legacy proof parsnip',{exact:true})).toBeVisible();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
- await page.getByLabel('Open settings').first().click();await page.getByLabel('Open fresh local preview').click();
- await page.getByRole('button',{name:'Start fresh local preview'}).click();await expect(page.getByText('Household processing preferences',{exact:true})).toBeVisible();await page.getByRole('button',{name:'Review household policy'}).click();await page.getByRole('button',{name:'Accept this household policy'}).click();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
- await expect(page.getByText('Legacy proof parsnip',{exact:true})).toHaveCount(0);
- await page.getByLabel('Open settings').first().click();await page.getByLabel('Open existing workspace').click();
- await expect(page.getByText('Legacy proof parsnip',{exact:true})).toBeVisible();
+ await expect(page.getByText('Archived parsnip',{exact:true})).toHaveCount(0);
+ await page.reload();
+ await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+ expect(await page.evaluate(()=>localStorage.getItem('creative-cooking-state-v1'))).toBe(archived);
 });
 
 test.fixme('review every shared Chef request and keep private chat out of provider bodies (pending security recheck)',async({page})=>{

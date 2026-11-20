@@ -15,9 +15,9 @@ export default function PantryScreen() {
   const router = useRouter();
   const {
     pantry, addPantryItems, removePantryItem, setPantryPreference,
-    contentWorkspaceName, contentWorkspaceRole, contentSyncStatus, localPersistenceStatus
+    contentWorkspaceName, localPersistenceStatus, canEditSharedContent
   } = useAppState();
-  const readOnly = contentWorkspaceRole === 'viewer';
+  const readOnly = !canEditSharedContent;
   const [input, setInput] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -43,7 +43,7 @@ export default function PantryScreen() {
 
       <View style={styles.workspaceStatusWrap}>
         <Text testID="pantry-workspace-status" style={styles.workspaceStatus}>
-          Cooking in {contentWorkspaceName} · {contentWorkspaceRole ?? 'local'} · {contentSyncStatus.replaceAll('-', ' ')}
+          Cooking in {contentWorkspaceName}
         </Text>
         <Text testID="pantry-local-persistence-status" accessibilityLiveRegion="polite" style={styles.localPersistenceStatus}>
           {localPersistenceStatus === 'saving' ? 'Saving locally' : localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}

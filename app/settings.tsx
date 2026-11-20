@@ -51,17 +51,13 @@ import {
   type WhisperCapabilityResult,
   type WhisperDownloadProgress
 } from '@/speech/whisperModel';
-import { freshDefaultState, parseBackup, serializeBackup } from '@/storage/backup';
 import {
   clearProviderKey,
   getOpenRouterKey,
   getProviderKey,
   setProviderKey
 } from '@/storage/credentialVault';
-import { pickNativeBackup, shareNativeBackup } from '@/storage/backupTransfer';
-import { getPersistenceInfo, requestPersistentStorage, type PersistenceInfo } from '@/storage/persistence';
 import { useAppState } from '@/state/AppState';
-import { AccountSharingSection } from '@/components/AccountSharingSection';
 
 function formatBytes(value?: number): string {
   if (!value || value < 1) return '0 B';
@@ -85,7 +81,6 @@ export default function SettingsScreen() {
   const [apiKey, setApiKey] = useState('');
   const [hasKey, setHasKey] = useState(false);
   const [shareLink, setShareLink] = useState('');
-  const [persistence, setPersistence] = useState<PersistenceInfo | null>(null);
   const [localCapability, setLocalCapability] = useState<LocalCapabilityResult | null>(null);
   const [localModelCached, setLocalModelCached] = useState<boolean | null>(null);
   const [localModelBusy, setLocalModelBusy] = useState(false);
@@ -138,7 +133,6 @@ export default function SettingsScreen() {
   };
 
   useEffect(() => {
-    void getPersistenceInfo().then(setPersistence);
     void refreshLocalState();
 
     return () => {
@@ -389,98 +383,6 @@ export default function SettingsScreen() {
     Alert.alert('Copied', 'Share link copied to the clipboard.');
   };
 
-  const requestDurableStorage = async () => {
-    try {
-      const info = await requestPersistentStorage();
-      setPersistence(info);
-      Alert.alert(
-        info.persistent ? 'Durable storage enabled' : 'Browser kept best-effort storage',
-        info.persistent
-          ? 'Creative Cooking data should only be removed when you explicitly clear site data.'
-          : 'This browser did not grant durable storage. Exported backups are still available.'
-      );
-    } catch (error) {
-      Alert.alert('Storage request failed', error instanceof Error ? error.message : 'Unknown error');
-    }
-  };
-
-  const retryLocalStorage = async () => {
-    const ok = await app.retryStorage();
-    if (ok) {
-      setPersistence(await getPersistenceInfo());
-      Alert.alert('Local storage working', 'Creative Cooking can save changes on this device again.');
-    } else {
-      Alert.alert('Storage retry failed', app.storageError ?? 'Creative Cooking still cannot save local data.');
-    }
-  };
-
-  const exportData = async () => {
-    try {
-      const json = serializeBackup(snapshot());
-
-      if (Platform.OS !== 'web') {
-        await shareNativeBackup(json);
-        return;
-      }
-
-      if (typeof document === 'undefined') throw new Error('Browser download APIs are unavailable.');
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `creative-cooking-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      Alert.alert('Could not export backup', error instanceof Error ? error.message : 'Unknown error');
-    }
-  };
-
-  const importData = async () => {
-    try {
-      if (Platform.OS !== 'web') {
-        const raw = await pickNativeBackup();
-        if (raw === null) return;
-        app.restoreState(parseBackup(raw));
-        Alert.alert('Backup restored', 'Pantry, shopping lists, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
-        return;
-      }
-
-      if (typeof document === 'undefined') throw new Error('Browser file picker APIs are unavailable.');
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.json,application/json';
-      input.onchange = () => {
-        void (async () => {
-          try {
-            const file = input.files?.[0];
-            if (!file) return;
-            app.restoreState(parseBackup(await file.text()));
-            Alert.alert('Backup restored', 'Pantry, shopping lists, recipes, chats, meal context, and settings were restored. Provider API keys are never included in backups.');
-          } catch (error) {
-            Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
-          }
-        })();
-      };
-      input.click();
-    } catch (error) {
-      Alert.alert('Could not restore backup', error instanceof Error ? error.message : 'Unknown error');
-    }
-  };
-
-  const resetData = () => {
-    Alert.alert(
-      'Reset Creative Cooking data?',
-      'This clears pantry, recipes, chats, and settings on this device. Provider API keys stay connected.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: () => app.restoreState(freshDefaultState()) }
-      ]
-    );
-  };
-
   const resetMasterInstructions = () => {
     Alert.alert(
       'Reset master instructions?',
@@ -495,14 +397,6 @@ export default function SettingsScreen() {
       ]
     );
   };
-
-  const persistenceLabel = Platform.OS !== 'web'
-    ? 'Device managed'
-    : persistence?.persistent
-      ? 'Durable'
-      : persistence?.supported
-        ? 'Best effort'
-        : 'Browser managed';
 
   return (
     <Screen>
@@ -545,11 +439,7 @@ export default function SettingsScreen() {
           <Text style={styles.help}>City is enough; the app does not need precise GPS location.</Text>
         </Section>
 
-        {app.storageMode === 'existing' ? <AccountSharingSection /> : null}
-
-        {(Platform.OS === 'web' || Platform.OS === 'android' && app.storageMode === 'fresh-local') ? <Section title="Cooking workspace" subtitle="Your existing workspace and fresh local preview use separate data.">
-          <Text style={styles.help}>The fresh local preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported. Changes waiting to save must finish before switching.</Text>
-          {app.storageMode === 'fresh-local' && <>
+        <Section title="Cooking workspace" subtitle="Cooking data is saved on this device. Use verified household pairing to exchange encrypted updates.">
             <LoroWorkspaceStatus revision={app.localPersistenceStatus} />
             {Platform.OS === 'web' && <RecoveryReminder />}
             <PersonalDevicePairing />
@@ -571,52 +461,14 @@ export default function SettingsScreen() {
             <CookingDirect />
             <CookingExchange quarantineChanged={quarantineChanged} />
             {Platform.OS === 'web' && <DisclosureControls items={app.pantry} />}
-          </>}
-          {Platform.OS === 'web' && <Pressable accessibilityRole="button" accessibilityLabel={app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'} style={styles.smallButton} onPress={() => { void (async () => { let release: (() => void) | undefined; try { release=app.beginWorkspaceTransition(); if (app.localPersistenceStatus !== 'saved') throw new Error('Finish or retry local saving before switching.'); await app.flushCurrentWorkspace(); if (app.storageMode === 'fresh-local') globalThis.localStorage.setItem('creative-cooking-storage-choice-v1','legacy'); else { const name=globalThis.localStorage.getItem('creative-cooking-local-workspace-v1'); if(name)globalThis.localStorage.setItem('creative-cooking-storage-choice-v1',`local:${name}`);else { globalThis.localStorage.removeItem('creative-cooking-legacy-preference-v1'); globalThis.localStorage.removeItem('creative-cooking-storage-choice-v1'); } } globalThis.location.assign(`${(process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/$/,'')}/`); } catch(e) { release?.(); Alert.alert('Could not switch workspace',e instanceof Error?e.message:'Unknown error'); } })(); }}><Text style={styles.smallButtonText}>{app.storageMode === 'fresh-local' ? 'Open existing workspace' : 'Open fresh local preview'}</Text></Pressable>}
-        </Section> : null}
+        </Section>
 
-        {app.storageMode === 'existing' ? <Section title="Data & Storage" subtitle="Keep local state durable and make portable backups. API keys are intentionally excluded from backups.">
-          <View style={styles.statusRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>{Platform.OS === 'web' ? 'Browser storage · IndexedDB' : 'Device storage'}</Text>
-              {Platform.OS === 'web' && persistence && (
-                <Text style={styles.help}>{formatBytes(persistence.usage)} used · {formatBytes(persistence.quota)} quota</Text>
-              )}
-            </View>
-            <Text style={[styles.status, persistence?.persistent && styles.statusConnected]}>{persistenceLabel}</Text>
-          </View>
-          <Text accessibilityLiveRegion="polite" style={styles.help}>
-            {app.localPersistenceStatus === 'saving'
-              ? 'Saving local cooking changes…'
-              : app.localPersistenceStatus === 'error'
-                ? 'Local save needs attention.'
-                : 'Local cooking changes are saved on this device.'}
+        <Section title="Data & Storage" subtitle="Your local workspace is stored on this device.">
+          <Text testID="settings-local-persistence-status" accessibilityLiveRegion="polite" style={styles.help}>
+            {app.localPersistenceStatus === 'saved' ? 'Saved locally' : app.localPersistenceStatus === 'saving' ? 'Saving locally' : 'Local save failed'}
           </Text>
-          {!!app.storageError && (
-            <View style={styles.storageErrorBox}>
-              <Text style={styles.storageErrorTitle}>Local data is not being saved</Text>
-              <Text style={styles.warning}>{app.storageError}</Text>
-              <Pressable accessibilityRole="button" onPress={() => void retryLocalStorage()} style={styles.smallButton}>
-                <Text style={styles.smallButtonText}>Retry local storage</Text>
-              </Pressable>
-            </View>
-          )}
-          {Platform.OS === 'web' && persistence?.supported && !persistence.persistent && (
-            <Pressable accessibilityRole="button" onPress={() => void requestDurableStorage()} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Request durable storage</Text>
-            </Pressable>
-          )}
-          <Text style={styles.help}>
-            {Platform.OS === 'web'
-              ? 'Browsers may approve or deny durable storage silently. The app also requests it once automatically; backups remain the safest portable copy.'
-              : 'Backups use the system file picker and share sheet, and can be moved between native and web builds.'}
-          </Text>
-          <View style={styles.buttonRow}>
-            <Pressable accessibilityRole="button" onPress={() => void exportData()} style={styles.smallButton}><Text style={styles.smallButtonText}>Export backup</Text></Pressable>
-            <Pressable accessibilityRole="button" onPress={() => void importData()} style={styles.smallButton}><Text style={styles.smallButtonText}>Restore backup</Text></Pressable>
-          </View>
-          <Pressable accessibilityRole="button" onPress={resetData} style={styles.textButton}><Text style={styles.dangerLink}>Reset cooking data on this device</Text></Pressable>
-        </Section> : <Section title="Data & Storage" subtitle="The fresh local preview stores data on this device."><Text style={styles.help}>Your existing workspace remains separate.</Text>{app.localPersistenceStatus === 'error' ? <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable> : null}</Section>}
+          {app.localPersistenceStatus === 'error' && <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable>}
+        </Section>
 
         <Section title="Master instructions" subtitle="Customize Chef’s style and priorities. Tool behavior, safety constraints, and app mechanics are managed separately and cannot be edited here.">
           <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />

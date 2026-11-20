@@ -5,7 +5,6 @@ import { chatConversationFromMessages, sortChatHistory } from '@/domain/conversa
 import { DEFAULT_STATE, migrateLegacySystemPrompt } from '@/domain/defaults';
 import { createPantryItem, normalizeIngredientName, updatePantryItemName } from '@/domain/pantry';
 import { normalizeRecipes } from '@/domain/recipeIdentity';
-import { recipeCopyFromConflict, sameRecipeConflictCopy } from '@/domain/recipeConflict';
 import {
   appendShoppingItems,
   applyShoppingPurchase,
@@ -33,8 +32,6 @@ import type {
   PersistedState,
   Recipe
 } from '@/domain/types';
-import { loadState } from '@/storage/appStorage';
-import { useContentRuntime } from '@/content/useContentRuntime';
 import { useLoroContentRuntime } from '@/loro/app/useLoroContentRuntime';
 import { LoroWorkspaceContext } from '@/loro/app/WorkspaceStatus';
 import { planChefProposalEffect } from '@/chef/proposalEffect';
@@ -104,32 +101,16 @@ type AppStateApi = PersistedState & {
   storageMode: 'fresh-local' | 'existing';
   hydrated: boolean;
   storageError: string | null;
-  contentWorkspaceId: string;
   contentWorkspaceName: string;
-  contentWorkspaceRole: 'owner' | 'editor' | 'viewer' | null;
-  contentSyncStatus: import('@/content/useContentRuntime').ContentSyncStatus;
-  contentSyncError: string | null;
-  localPersistenceStatus: import('@/content/useContentRuntime').LocalPersistenceStatus;
+  localPersistenceStatus: import('@/loro/app/content-runtime-types').LocalPersistenceStatus;
   canEditSharedContent: boolean;
-  guestContentAvailable: boolean;
-  guestContentDecision: 'merge' | 'keep' | 'in-progress' | null;
-  localRecipeConflicts: import('@/content/useContentRuntime').LocalRecipeConflict[];
-  saveAttemptedRecipeAsCopy(conflictId: string): Recipe;
-  keepWorkspaceRecipeVersion(conflictId: string): Promise<void>;
-  readRecipeHistory?: import('@/content/useContentRuntime').ContentRuntimeSnapshot['readRecipeHistory'];
-  restoreRecipeEdit?(recipeId: string, entry: import('@/content/useContentRuntime').RecipeHistoryEntry): Promise<{refreshed: boolean}>;
-  personalContentConflicts: import('@/content/contentStore').PersonalContentConflict[];
-  recoveryArchives: import('@/content/contentStore').ArchivedWorkspace[];
+  readRecipeHistory?: import('@/loro/app/content-runtime-types').ContentRuntimeSnapshot['readRecipeHistory'];
+  restoreRecipeEdit?(recipeId: string, entry: import('@/loro/app/content-runtime-types').RecipeHistoryEntry): Promise<{refreshed: boolean}>;
   retryStorage(): Promise<boolean>;
-  selectContentWorkspace(spaceId: string): Promise<void>;
-  mergeGuestContent(): Promise<void>;
-  keepGuestContent(): Promise<void>;
-  prepareAccountExit(): Promise<void>;
   flushCurrentWorkspace(): Promise<void>;
   sharedCookingRefreshPending: boolean;
   refreshSharedCooking?(): Promise<void>;
   beginWorkspaceTransition(): () => void;
-  exportWorkspaceRecovery(): Promise<string>;
   reportContentEditDenied(): void;
   addPantryItems(names: string[], preference?: IngredientPreference): void;
   updatePantryByName(name: string, newName: string): boolean;
@@ -166,21 +147,12 @@ type AppStateApi = PersistedState & {
 
 const AppStateContext = createContext<AppStateApi | null>(null);
 
-export function AppStateProvider({children,localWorkspace}:PropsWithChildren<{localWorkspace?:any}>) {
-  return localWorkspace ? <LocalAppStateProvider workspace={localWorkspace}>{children}</LocalAppStateProvider> : <LegacyAppStateProvider>{children}</LegacyAppStateProvider>;
-}
-function LegacyAppStateProvider({children}:PropsWithChildren) {
-  const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
-  const readLegacy=useCallback(async()=>{const saved=await loadState();return {state:saved?mergeState(saved):null,hadData:saved!==null}},[]);
-  const content=useContentRuntime(state,setState,readLegacy);
-  return <AppStateBody state={state} setState={setState} content={content} storageMode="existing">{children}</AppStateBody>;
-}
-function LocalAppStateProvider({children,workspace}:PropsWithChildren<{workspace:any}>) {
+export function AppStateProvider({children,localWorkspace:workspace}:PropsWithChildren<{localWorkspace:any}>) {
   const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
   const content=useLoroContentRuntime(state,setState,workspace);
   return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local" installedRecipeIds={workspace.installedRecipeIds}>{children}</AppStateBody></LoroWorkspaceContext>;
 }
-function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/content/useContentRuntime').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
+function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/loro/app/content-runtime-types').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
   const transitionInProgress=useRef(false);
   const shoppingCopy=useRef<{key:string;attempt:{actionId:string;at:string;commands:unknown[]|null};
     before:PersistedState;after:PersistedState['shopping']}|null>(null);
@@ -232,7 +204,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
     return await content.readRecipeHistory?.(recipeId) ?? [];
   }, [content.readRecipeHistory, flushCurrentWorkspace]);
 
-  const restoreRecipeEdit = useCallback(async (recipeId: string, entry: import('@/content/useContentRuntime').RecipeHistoryEntry) => {
+  const restoreRecipeEdit = useCallback(async (recipeId: string, entry: import('@/loro/app/content-runtime-types').RecipeHistoryEntry) => {
     if (!ensureSharedEditAllowed() || !content.restoreRecipeEdit) throw Error('Recipe editing is unavailable.');
     if (entry.kind === 'recipe-ingredient-field' && entry.field === 'name' && typeof entry.value === 'string') {
       const validation = validateRecipeAllergies([{name:entry.value}],state.settings.allergies);
@@ -422,34 +394,6 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
     updateAppState((current) => ({ ...current, recipes: current.recipes.filter((recipe) => recipe.id !== id) }));
   }, [ensureSharedEditAllowed, updateAppState]);
 
-  const saveAttemptedRecipeAsCopy = useCallback((conflictId: string): Recipe => {
-    if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
-    const conflict = content.recipeConflicts.find((item) => item.id === conflictId);
-    if (!conflict) throw new Error('This recipe conflict is no longer available. Export recovery data before continuing.');
-    const copy = recipeCopyFromConflict(conflict);
-    if (!copy) throw new Error('This attempted operation cannot be copied as a recipe. Its full details remain in the recovery export.');
-
-    const existing = appStateRef.current.recipes.find((recipe) => recipe.id === copy.id);
-    if (existing) {
-      if (!sameRecipeConflictCopy(existing, copy)) {
-        throw new Error('A different recipe already uses this recovery identity. The conflict remains available for export.');
-      }
-      return existing;
-    }
-
-    const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...input } = copy;
-    validateRecipe(input);
-    updateAppState((current) => current.recipes.some((recipe) => recipe.id === copy.id)
-      ? current
-      : { ...current, recipes: [copy, ...current.recipes] });
-    return copy;
-  }, [content.recipeConflicts, ensureSharedEditAllowed, updateAppState, validateRecipe]);
-
-  const keepWorkspaceRecipeVersion = useCallback(async (conflictId: string) => {
-    await content.flushCurrentWorkspace();
-    await content.keepWorkspaceRecipeVersion(conflictId);
-  }, [content.keepWorkspaceRecipeVersion, content.flushCurrentWorkspace]);
-
   const createShoppingList = useCallback((input: NewShoppingList) => {
     if (!ensureSharedEditAllowed()) return;
     updateAppState((current) => ({ ...current, shopping: createShoppingListCommand(current.shopping, input) }));
@@ -616,9 +560,9 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
 
   const applyChefProposalEffect = useCallback(async (conversationId: string, proposal: ChefToolProposal) => {
     if (!ensureSharedEditAllowed()) throw new Error(content.sharedEditDeniedMessage);
-    const planned = planChefProposalEffect(state, content.scope.spaceId, conversationId, proposal);
+    const planned = planChefProposalEffect(state, content.scopeId, conversationId, proposal);
     return content.applyProposalEffect(conversationId, proposal, state, planned.state);
-  }, [content.applyProposalEffect, content.scope.spaceId, content.sharedEditDeniedMessage, ensureSharedEditAllowed, state]);
+  }, [content.applyProposalEffect, content.scopeId, content.sharedEditDeniedMessage, ensureSharedEditAllowed, state]);
 
   const newChat = useCallback(() => {
     updateAppState((current) => ({
@@ -681,32 +625,16 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       storageMode,
       hydrated,
       storageError,
-      contentWorkspaceId: content.scope.spaceId,
       contentWorkspaceName: content.workspaceName,
-      contentWorkspaceRole: content.role,
-      contentSyncStatus: content.syncStatus,
-      contentSyncError: content.syncError,
       localPersistenceStatus: content.localPersistenceStatus,
       canEditSharedContent: content.canEditShared&&!mutationsPaused&&!sharedCookingRefreshPending,
-      guestContentAvailable: content.guestAdoption.available,
-      guestContentDecision: content.guestAdoption.decision,
-      localRecipeConflicts: content.recipeConflicts,
-      saveAttemptedRecipeAsCopy,
-      keepWorkspaceRecipeVersion,
       readRecipeHistory: content.readRecipeHistory && readRecipeHistory,
       restoreRecipeEdit: content.restoreRecipeEdit && restoreRecipeEdit,
-      personalContentConflicts: content.personalConflicts,
-      recoveryArchives: content.archives,
       retryStorage,
-      selectContentWorkspace: content.selectWorkspace,
-      mergeGuestContent: content.mergeGuestContent,
-      keepGuestContent: content.keepGuestContent,
-      prepareAccountExit: content.prepareAccountExit,
       flushCurrentWorkspace,
       sharedCookingRefreshPending,
       refreshSharedCooking,
       beginWorkspaceTransition,
-      exportWorkspaceRecovery: content.exportWorkspaceRecovery,
       reportContentEditDenied: content.reportEditDenied,
       addPantryItems,
       updatePantryByName,
@@ -751,8 +679,6 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       flushCurrentWorkspace,
       sharedCookingRefreshPending,
       refreshSharedCooking,
-      saveAttemptedRecipeAsCopy,
-      keepWorkspaceRecipeVersion,
       readRecipeHistory,
       restoreRecipeEdit,
       retryStorage,

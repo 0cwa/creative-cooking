@@ -1,20 +1,10 @@
-import { expect, test } from './legacy-fixture.mjs';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 test('New chat archives the current conversation and previous chats can be reopened', async ({ page }) => {
-  const state = {
-    chatMessages: [{
-      id: 'chat-message-1',
-      role: 'user',
-      content: 'Keep this conversation for later.',
-      createdAt: '2026-09-23T12:00:00.000Z'
-    }]
-  };
-
-  await page.addInitScript((savedState) => {
-    window.localStorage.setItem('creative-cooking-state-v1', JSON.stringify(savedState));
-  }, state);
-
-  await page.goto('./chef');
+  await startLocalWorkspace(page,'./chef');
+  await page.getByLabel('Message Chef').fill('Keep this conversation for later.');
+  await page.getByLabel('Save private message').click();
+  await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();
   await expect(page.getByText('Keep this conversation for later.', { exact: true })).toBeVisible();
 
   await page.getByLabel('Start a new chat').click();
@@ -32,24 +22,14 @@ test('New chat archives the current conversation and previous chats can be reope
 });
 
 test('previous chats support swipe-to-delete with confirmation', async ({ page }) => {
-  const state = {
-    chatMessages: [{
-      id: 'swipe-message-1',
-      role: 'user',
-      content: 'Conversation to remove',
-      createdAt: '2026-09-23T13:00:00.000Z'
-    }]
-  };
-
-  await page.addInitScript((savedState) => {
-    window.localStorage.setItem('creative-cooking-state-v1', JSON.stringify(savedState));
-  }, state);
-
-  await page.goto('./chef');
+  await startLocalWorkspace(page,'./chef');
+  await page.getByLabel('Message Chef').fill('Conversation to remove');
+  await page.getByLabel('Save private message').click();
+  await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();
   await page.getByLabel('Start a new chat').click();
   await page.getByLabel('Open previous chats').click();
 
-  const row = page.getByTestId('conversation-row-chat-swipe-message-1');
+  const row = page.getByTestId(/^conversation-row-/).filter({hasText:'Conversation to remove'});
   await expect(row).toBeVisible();
 
   page.once('dialog', async (dialog) => {

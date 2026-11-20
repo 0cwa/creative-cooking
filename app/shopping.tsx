@@ -32,9 +32,6 @@ export default function ShoppingScreen() {
     startNewPurchaseCycle,
     purchaseCheckedShoppingItems,
     canEditSharedContent,
-    contentWorkspaceName,
-    contentSyncStatus,
-    contentSyncError,
     localPersistenceStatus,
     storageError
   } = useAppState();
@@ -97,17 +94,7 @@ export default function ShoppingScreen() {
       ? 'Saving changes on this device…'
     : localPersistenceStatus === 'error'
       ? 'Local save needs attention.'
-    : contentSyncStatus === 'local-only'
-      ? 'Saved on this device only.'
-      : contentSyncStatus === 'offline-unverified'
-        ? 'Saved on this device. Membership and current sync status are unverified while offline.'
-        : contentSyncStatus === 'unconfigured'
-          ? `Saved locally in ${contentWorkspaceName}; this app build has no sync service configured.`
-          : contentSyncStatus === 'synced'
-            ? `Saved in ${contentWorkspaceName}; the server has confirmed the current upload and download queue.`
-            : contentSyncStatus === 'attention' || contentSyncStatus === 'error'
-              ? `Saved locally in ${contentWorkspaceName}; sync needs attention.${contentSyncError ? ` ${contentSyncError}` : ''}`
-              : `Saved locally in ${contentWorkspaceName}; waiting for the server to confirm sync.`;
+    : 'Saved on this device only.';
 
   const createList = () => {
     const name = listName.trim();

@@ -1,5 +1,0 @@
-DROP TABLE IF EXISTS space_invitations;
-DROP TABLE IF EXISTS auth_sessions;
-DROP TABLE IF EXISTS space_members;
-DROP TABLE IF EXISTS spaces;
-DROP TABLE IF EXISTS users;

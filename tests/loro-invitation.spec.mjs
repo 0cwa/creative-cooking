@@ -1,8 +1,19 @@
 import {test,expect} from './browser-fixture.mjs';
 import {readFile} from 'node:fs/promises';
-import sodium from 'libsodium-wrappers';
-import {domain} from '../src/loro/authority/validator.mjs';
-import {ceremonyBytes} from '../src/loro/pairing/candidate-v2.mjs';
+import {execFileSync} from 'node:child_process';
+
+function fixtureDigest(kind,value) {
+ return execFileSync(process.execPath,['--disable-warning=ExperimentalWarning','--experimental-strip-types','--input-type=module','-e',`
+  import sodium from 'libsodium-wrappers';
+  import {readFileSync} from 'node:fs';
+  import {domain} from ${JSON.stringify(new URL('../src/loro/authority/validator.mjs',import.meta.url).href)};
+  import {ceremonyBytes} from ${JSON.stringify(new URL('../src/loro/pairing/candidate-v2.mjs',import.meta.url).href)};
+  const [kind,input]=JSON.parse(readFileSync(0,'utf8'),(_key,value)=>value?.__bytes?Uint8Array.from(value.__bytes):value);
+  await sodium.ready;
+  const bytes=kind==='ceremony'?ceremonyBytes(input.transcript,input.guard):domain('projection-source-snapshot',input);
+  process.stdout.write(sodium.to_hex(sodium.crypto_generichash(32,bytes)));
+ `],{input:JSON.stringify([kind,value]),encoding:'utf8'});
+}
 for(const adultRemoval of [false,true]){
 const decision=adultRemoval?'adult removal':'device revocation';
 test(`three enrolled devices preserve and explicitly reopen household admissions and ${decision}`,async({browser,baseURL})=>{
@@ -68,8 +79,7 @@ test(`three enrolled devices preserve and explicitly reopen household admissions
 
  const {scope,selectedHead:oldHead}=laterParent,oldDocument=laterParent.state.events.at(-1).event.subject.documentId;
  const beforePublish=await readRetained(a,scope.id,oldDocument,oldHead);
- await sodium.ready;
- const sourceDigest=sodium.to_hex(sodium.crypto_generichash(32,domain('projection-source-snapshot',Buffer.from(beforePublish.document.bytes).toString('hex'))));
+ const sourceDigest=fixtureDigest('snapshot',Buffer.from(beforePublish.document.bytes).toString('hex'));
  expect(JSON.parse(collectedText).prepared.manifest.sourceCheckpointHash).toBe(sourceDigest);
  await a.getByRole('button',{name:'Publish verified household generation'}).click();
  await expect(a.getByText('Collect completed verification evidence for every existing device.')).toBeVisible();
@@ -96,7 +106,7 @@ test(`three enrolled devices preserve and explicitly reopen household admissions
  try {
   await a.getByRole('button',{name:'Publish verified household generation'}).click();
   await expect.poll(()=>a.evaluate(async name=>(await navigator.locks.query()).pending.some(lock=>lock.name===name),publicationLock)).toBe(true);
-  await a.getByRole('button',{name:'Open existing workspace',exact:true}).click();
+  await expect(a.getByRole('button',{name:'Open existing workspace',exact:true})).toHaveCount(0);
   expect(await a.evaluate(()=>localStorage.getItem('creative-cooking-storage-choice-v1'))).toMatch(/^local:/);
  } finally {
   await a.evaluate(()=>window.releaseAdmissionTestLock?.());
@@ -227,9 +237,7 @@ test(`three enrolled devices preserve and explicitly reopen household admissions
  await c.getByRole('button',{name:'Join invitation'}).click();
  const changedOffer=JSON.parse(laterOffer);
  changedOffer.ceremony.transcript.responder.nonce.__bytes[0]^=1;
- const parsedCeremony=JSON.parse(JSON.stringify(changedOffer.ceremony),(_key,value)=>
-  value?.__bytes?Uint8Array.from(value.__bytes):value);
- const changedCode=sodium.to_hex(sodium.crypto_generichash(32,ceremonyBytes(parsedCeremony.transcript,parsedCeremony.guard)));
+ const changedCode=fixtureDigest('ceremony',changedOffer.ceremony);
  await c.getByLabel('Public invitation message input').fill(JSON.stringify(changedOffer));
  await c.getByLabel('Confirmed invitation code').fill(changedCode);
  await c.getByRole('button',{name:'Start or resume device verification'}).click();

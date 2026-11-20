@@ -2,7 +2,7 @@ import {randomUUID} from 'expo-crypto';
 import {useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction} from 'react';
 import {DEFAULT_STATE} from '@/domain/defaults';
 import type {PersistedState,Recipe} from '@/domain/types';
-import type {ContentRuntimeSnapshot,RecipeHistoryEntry} from '@/content/useContentRuntime';
+import type {ContentRuntimeSnapshot,RecipeHistoryEntry} from '@/loro/app/content-runtime-types';
 import {projectCooking} from '../domain/app-projection.mjs';
 import {planRecipeRestore,readRecipeHistory as recipeHistory} from '../domain/recipe-history.mjs';
 import {projectPersonal} from '../domain/personal-codec.mjs';
@@ -12,7 +12,7 @@ import {planRecipeAction} from './recipe-actions.mjs';
 import {planShoppingAction} from './shopping-actions.mjs';
 import {executeAction} from './action.mjs';
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
-const unavailable=async()=>{throw Error('This action is not available in the fresh local preview. Your existing workspace remains available separately.');};
+const unavailable=async()=>{throw Error('This action is unavailable in the local workspace.');};
 function historyContext(scope:any) {
  const {scopeId,branchHead,documentId,documentGeneration,epochId}=scope;
  return JSON.stringify([scopeId,branchHead,documentId,documentGeneration,epochId]);
@@ -129,5 +129,5 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
  const createRecipe=useCallback(async(actionId:string,recipe:Recipe,beforeNewCommit:()=>void)=>{
   await workspace.householdContent.createRecipe(actionId,recipe,beforeNewCommit);
  },[workspace]);
- return {hydrated,storageError:error,scope:{kind:'guest',profileId:'guest',spaceId:workspace.household.scope.scopeId},workspaceName:'Fresh local workspace',role:null,syncStatus:'local-only',syncError:null,localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current&&!workspace.readOnly,sharedEditDeniedMessage:workspace.readOnly?'This household is read-only.':'The local workspace is opening.',guestAdoption:{available:false,migrationId:null,decision:null},recipeConflicts:[],personalConflicts:[],archives:[],localProfileId:'fresh-local',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},selectWorkspace:unavailable,keepWorkspaceRecipeVersion:unavailable,readRecipeHistory,restoreRecipeEdit,mergeGuestContent:unavailable,keepGuestContent:unavailable,prepareAccountExit:unavailable,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},separateRecipeIds,recoverShoppingCopy:workspace.householdContent?.recoverShoppingCopy,saveShoppingCopy:workspace.householdContent?.saveShoppingCopy,createRecipe,refreshSharedCooking,retryStorage,exportWorkspaceRecovery:unavailable,reportEditDenied:()=>setError(workspace.readOnly?'This household is read-only.':'The local workspace is opening.')};
+ return {hydrated,storageError:error,scopeId:workspace.household.scope.scopeId,workspaceName:'Fresh local workspace',localPersistenceStatus:status,canEditShared:hydrated&&!!committed.current&&!workspace.readOnly,sharedEditDeniedMessage:workspace.readOnly?'This household is read-only.':'The local workspace is opening.',markLocalStateChange:()=>{setStatus('saving');return revision.current+1},readRecipeHistory,restoreRecipeEdit,applyProposalEffect:unavailable,flushCurrentWorkspace:async(target=current.current)=>{await schedule(target)},separateRecipeIds,recoverShoppingCopy:workspace.householdContent?.recoverShoppingCopy,saveShoppingCopy:workspace.householdContent?.saveShoppingCopy,createRecipe,refreshSharedCooking,retryStorage,reportEditDenied:()=>setError(workspace.readOnly?'This household is read-only.':'The local workspace is opening.')};
 }

@@ -12,10 +12,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppStateProvider, useAppState } from '@/state/AppState';
 import { FirstOpenLoadingAnimation } from '@/components/FirstOpenLoadingAnimation';
 import { InstallAppPrompt } from '@/components/InstallAppPrompt';
+
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
 import { requestPersistentStorageOnce } from '@/storage/persistence';
-import { initializeAccountWorkspace } from '@/account/accountWorkspace';
 
 function StorageFailureAlert() {
   const { storageError, storageMode } = useAppState();
@@ -77,15 +77,7 @@ function BootTasks() {
   return null;
 }
 
-function AccountWorkspaceBootstrap() {
-  useEffect(() => {
-    void initializeAccountWorkspace();
-  }, []);
-  return null;
-}
-
 const webChoiceKey = 'creative-cooking-storage-choice-v1';
-const webLegacyPreferenceKey = 'creative-cooking-legacy-preference-v1';
 const webChoiceLock = 'creative-cooking/web-workspace-choice/v1';
 const webWorkspaceKey = 'creative-cooking-local-workspace-v1';
 const branchReopenKey = 'creative-cooking-branch-reopen-v1';
@@ -118,7 +110,7 @@ function readPendingWebChoice(mode: string) {
 }
 
 export default function RootLayout() {
-  const [choice,setChoice]=useState<'loading'|'choose'|'locked'|'legacy'|'local'|'policy'>('loading');
+  const [choice,setChoice]=useState<'loading'|'choose'|'locked'|'local'|'policy'>('loading');
   const [workspace,setWorkspace]=useState<any>(null);
   const [openAttempt,setOpenAttempt]=useState(0);
   const [error,setError]=useState<string|null>(null);
@@ -165,12 +157,11 @@ export default function RootLayout() {
     try{
       try{confirmation=globalThis.sessionStorage?.getItem(branchReopenKey)??null}catch{/* Ordinary startup also works without session storage. */}
       if(!expected&&confirmation!==null)expected=JSON.parse(confirmation);
-      const mode=globalThis.localStorage.getItem(webChoiceKey);
-      if(expected&&!mode?.startsWith('local:'))await verifyBranchReopen(null,expected);
-      if(mode==='legacy'||(mode===null&&globalThis.localStorage.getItem(webLegacyPreferenceKey)==='legacy')){
-        if(active)setChoice('legacy');
-        return;
-      }
+      const storedMode=globalThis.localStorage.getItem(webChoiceKey);
+      if(expected&&!storedMode?.startsWith('local:'))await verifyBranchReopen(null,expected);
+      const previousLocal=globalThis.localStorage.getItem(webWorkspaceKey);
+      const mode=storedMode==='legacy'&&previousLocal&&/^cooking-[a-f0-9-]{36}$/.test(previousLocal)
+        ? `local:${previousLocal}` : storedMode;
       if(mode&&(mode.startsWith('local:')||mode.startsWith(pendingPrefix))){
         const pending=mode.startsWith(pendingPrefix)?readPendingWebChoice(mode):null;
         const name=pending?.name??mode.slice(6);
@@ -179,9 +170,9 @@ export default function RootLayout() {
         await verifyBranchReopen(opened,expected);
         if(active){
           const ready=`local:${name}`,current=globalThis.localStorage.getItem(webChoiceKey);
-          if(current!==mode&&current!==ready)throw Error('Workspace choice changed while opening.');
+          if(current!==storedMode&&current!==ready)throw Error('Workspace choice changed while opening.');
           globalThis.localStorage.setItem(webWorkspaceKey,name);
-          if(pending&&current!==ready)globalThis.localStorage.setItem(webChoiceKey,ready);
+          if((pending||mode!==storedMode)&&current!==ready)globalThis.localStorage.setItem(webChoiceKey,ready);
           if(confirmation!==null)globalThis.sessionStorage.removeItem(branchReopenKey);
           pendingReopen.current=null;
           setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;
@@ -192,19 +183,6 @@ export default function RootLayout() {
     }catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
-  const legacy=async()=>{
-    try{
-      if(Platform.OS==='web'){
-        const locks=globalThis.navigator?.locks;
-        if(!locks)globalThis.localStorage.setItem(webLegacyPreferenceKey,'legacy');
-        else await locks.request(webChoiceLock,()=>{
-          const mode=globalThis.localStorage.getItem(webChoiceKey);
-          if(!mode?.startsWith(pendingPrefix)&&!mode?.startsWith('local:'))globalThis.localStorage.setItem(webChoiceKey,'legacy');
-        });
-      }
-    }catch{Alert.alert('Workspace choice was not saved','Your existing workspace will open for this session. This browser could not remember your selection.')}
-    setChoice('legacy');
-  };
   const fresh=async()=>{
     setChoice('loading');setError(null);
     try{
@@ -242,13 +220,13 @@ export default function RootLayout() {
     if(pendingReopen.current){setChoice('loading');setOpenAttempt(attempt=>attempt+1)}
     else if(Platform.OS==='web')globalThis.location.reload();
     else reopenWorkspace();
-  }} onLegacy={()=>setChoice('legacy')} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
+  }} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
   if(choice==='policy')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text>Your household policy applies to new cooking changes. Existing items are not automatically approved for external processing.</Text><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></ScrollView></SafeAreaProvider>;
-  if(choice==='choose')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Your existing workspace remains available. A fresh local preview starts empty and keeps its data separately. The preview saves recipes, pantry, shopping and personal settings. Chef requests are not yet supported.</Text>{error?<Text>{error}</Text>:null}<Button title="Open existing workspace" onPress={legacy}/>{Platform.OS==='web'?<RecoveryStart/>:null}{(Platform.OS==='web'||Platform.OS==='android')?<><AdmissionRulePicker draft={admissionRule} onChange={setAdmissionRule} adults={1}/><Button title="Start fresh local preview" disabled={!validAdmissionPolicy(admissionPolicy,1)} onPress={()=>void fresh()}/></>:<Text>The fresh local preview is not available on this platform.</Text>}</ScrollView></SafeAreaProvider>;
+  if(choice==='choose')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Start a local workspace for pantry, recipes, shopping, and private notes. Data from the former PowerSync workspace stays on this device and can be opened with the archived PowerSync app.</Text>{error?<Text>{error}</Text>:null}{Platform.OS==='web'?<RecoveryStart/>:null}{(Platform.OS==='web'||Platform.OS==='android')?<><AdmissionRulePicker draft={admissionRule} onChange={setAdmissionRule} adults={1}/><Button title="Start fresh local preview" disabled={!validAdmissionPolicy(admissionPolicy,1)} onPress={()=>void fresh()}/></>:<Text>The fresh local preview is not available on this platform.</Text>}</ScrollView></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
       <AppStateProvider key={choice} localWorkspace={workspace}>
-        {choice==='legacy'?<><BootTasks /><AccountWorkspaceBootstrap /></>:null}
+        <BootTasks />
         <StorageFailureAlert />
         <StatusBar style="auto" />
         <Stack screenOptions={{ headerShown: false }}>

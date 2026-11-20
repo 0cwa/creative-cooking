@@ -424,7 +424,7 @@ export default function ChefScreen() {
             <Text style={styles.contextChipText}>{app.mealContext.portions} portions · {app.mealContext.cooks.length} cook{app.mealContext.cooks.length === 1 ? '' : 's'}</Text>
           </Pressable>
           <Text testID="chef-workspace-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
-            Cooking in {app.contentWorkspaceName} · {app.contentWorkspaceRole ?? 'local'} · {app.contentSyncStatus.replaceAll('-', ' ')}
+            Cooking in {app.contentWorkspaceName}
           </Text>
           <Text testID="chef-local-persistence-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
             {app.localPersistenceStatus === 'saving' ? 'Saving locally' : app.localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}

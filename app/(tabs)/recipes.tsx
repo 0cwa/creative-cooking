@@ -13,7 +13,7 @@ import {
   missingPantryIngredients
 } from '@/domain/recipeEditing';
 import type { Recipe } from '@/domain/types';
-import type { RecipeHistoryEntry } from '@/content/useContentRuntime';
+import type { RecipeHistoryEntry } from '@/loro/app/content-runtime-types';
 import { useAppState } from '@/state/AppState';
 
 type RecipeDraft = Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>;

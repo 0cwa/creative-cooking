@@ -1,4 +1,4 @@
-import { expect, test } from './legacy-fixture.mjs';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 test('voice model download shows overall percent and MB progress', async ({ page }) => {
   await page.addInitScript(() => {
@@ -68,7 +68,7 @@ test('voice model download shows overall percent and MB progress', async ({ page
     });
   });
 
-  await page.goto('./settings');
+  await startLocalWorkspace(page,'./settings');
   await page.getByLabel('Download local voice model').click();
 
   const progress = page.getByRole('progressbar');

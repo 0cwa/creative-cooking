@@ -1,4 +1,4 @@
-const CACHE = 'creative-cooking-v1';
+const CACHE = 'creative-cooking-v2';
 const scopePath = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 const appRoot = `${scopePath}/`;
 const TRANSFORMERS_RUNTIME = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
@@ -8,7 +8,7 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
+  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE && /^creative-cooking-v[0-9]+$/.test(key)).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (event) => {
