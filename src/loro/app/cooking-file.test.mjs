@@ -195,7 +195,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const [a,b]=await household(t,{onDisk:true}),keys=a.storage.localKeys(testMaster(),sodium);
  await keys.provision('retention-master');
  const policy=await prepareInitialPolicy({service:a.service,enforcement:'block'});
- await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
+ const acceptedPolicy=await acceptInitialPolicy({service:a.service,provider:a.provider,deviceId:a.deviceId,policy,explicit:true});
  const at='2026-01-01T00:00:00Z',child=await a.runtime.forRecipe('retention-recipe');let seq=0;
  const sequences={reserve:async()=>++seq},save=(runtime,id,commands)=>executeAction(runtime,sequences,id,commands,a.service);
  const beforeRecipe={id:'retention-recipe',title:'Soup',portions:2,ingredients:[{id:'carrot',name:'Carrot',amount:'1 cup',needsShopping:true}],steps:[],stepIds:[],createdAt:at,updatedAt:at};
@@ -305,6 +305,36 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,{...binding,suspectDevice:a.deviceId}),/INVALID_DRAFT_SOURCE/);
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,{...binding,sourceHead:'wrong'}),/INVALID_DRAFT_SOURCE/);
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,{...binding,documents:[...binding.documents].reverse()}),/INVALID_DRAFT_SOURCE/);
+ const {prepareDraftRotationProjection}=await import('../compromise/project-draft-rotation.mjs');
+ const destination={parentHead:binding.sourceHead,documentId:'retention-rotation-root',epochId:'retention-rotation-epoch',generation:2};
+ const allocateSeed=documentId=>documentId===runtime.scope.documentId?
+  {seedId:'00000000-0000-4000-8000-000000000001',peerId:'100'}:
+  {seedId:'00000000-0000-4000-8000-000000000002',peerId:'101'};
+ const projectionArgs={runtime:reopenedRuntime,binding,destination,allocateSeed};
+ const projection=await prepareDraftRotationProjection(projectionArgs);
+ assert.deepEqual(projection.documents.map(doc=>doc.sourceDocumentId),binding.documents.map(doc=>doc.documentId));
+ assert.deepEqual(projection.removed,[]);
+ const [freshRoot,freshRecipe]=projection.documents.map(({seed})=>{const doc=new LoroDoc();doc.import(seed.snapshot);return doc;});
+ assert.equal(freshRoot.getMap('pantry:retention-pantry').get('name'),'Beans');
+ assert.equal(freshRoot.getMap('pantry:retention-suspect').get('name'),undefined);
+ assert.equal(freshRoot.getMap('shopping-item:retention-item').get('value'),undefined);
+ assert.equal(freshRecipe.getMap('recipe-ingredient:'+encodeURIComponent(JSON.stringify(['retention-recipe','carrot']))).get('amount'),'3 cups');
+ assert.ok(projection.documents.every(doc=>doc.policyBundle.entries.every(entry=>entry.incomplete&&entry.policyHashes.includes(acceptedPolicy.policyHash))));
+ assert.ok(projection.documents.every(doc=>doc.policyBundle.policies.some(row=>row.policyHash===acceptedPolicy.policyHash)));
+ assert.deepEqual(await prepareDraftRotationProjection(projectionArgs),projection);
+ await assert.rejects(()=>prepareDraftRotationProjection({...projectionArgs,destination:{...destination,epochId:a.root.epochId}}),/INVALID_DOCUMENT_SET/);
+ const readSource=reopenedStorage.readDisclosureSource.bind(reopenedStorage);
+ reopenedStorage.readDisclosureSource=(scopeId,effect)=>effect==='retention-pantry'?Promise.resolve({ok:true,value:null}):readSource(scopeId,effect);
+ try {
+  await assert.rejects(()=>prepareDraftRotationProjection(projectionArgs),/SOURCE_PROVENANCE_REQUIRED/);
+  reopenedStorage.readDisclosureSource=async (scopeId,effect)=>{
+   const result=await readSource(scopeId,effect);
+   return effect==='retention-pantry'&&result.ok&&result.value?
+    {ok:true,value:{...result.value,policyHashes:[]}}:result;
+  };
+  await assert.rejects(()=>prepareDraftRotationProjection(projectionArgs),/INVALID_SOURCE_PROOF/);
+ }
+ finally {reopenedStorage.readDisclosureSource=readSource;}
  assert.deepEqual(a.rows(),savedRows);
  assert.deepEqual(reopened.rows,draft.rows);
  const reopenedReports=householdCompromise({runtime:reopenedRuntime,withCurrent:use=>use(0)}).selected;
@@ -358,6 +388,7 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  assert.deepEqual(a.rows(),afterEdit);
  await assert.rejects(()=>reopenSelectedRetention(reopenedRuntime,saved.draftId));
  await assert.rejects(()=>checkedDraftSource(reopenedRuntime,binding));
+ await assert.rejects(()=>prepareDraftRotationProjection(projectionArgs));
  assert.deepEqual(a.rows(),afterEdit);
 });
 
@@ -2242,7 +2273,7 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.deepEqual(opened.header.disclosurePolicyHashes,[accepted.policyHash]);
   const {buildSelectedOperationReport}=await import('../compromise/selected-report.mjs');
   const {selectedOperationReportService}=await import('../compromise/selected-report-service.mjs');
-  const {reconstructSelectedRetention}=await import('../compromise/selected-reconstruction.mjs');
+  const {reconstructSelectedRetention,saveSelectedRetention}=await import('../compromise/selected-reconstruction.mjs');
   const candidates=objects.map(object=>({sourceId:'outbound',documentId:sponsor.runtime.scope.documentId,objectId:object.id,bytes:object.bytes}));
   const report=await buildSelectedOperationReport(sponsor.runtime,{candidates,
    suspectDevice:newcomer.runtime.scope.authorDevice,boundary:{documentId:candidates[0].documentId,objectId:copy.id}});
@@ -2254,6 +2285,19 @@ test('selected recipe shopping copies and current-only admission survive durable
   assert.equal(rootDraft.getMap('shopping-item-fields:admitted-copy').get('displayQuantity'),ingredient.amount);
   assert.ok(draft.documents.find(row=>row.recipeId===recipeId).identities.some(row=>row.incomplete&&row.policyHashes.includes(accepted.policyHash)));
   assert.deepEqual(a.rows(),beforeDraft);
+  const {draftId}=await saveSelectedRetention(sponsor.runtime,{reportHash,selectedEffectIds:[command.effectId]});
+  const {prepareDraftRotationProjection}=await import('../compromise/project-draft-rotation.mjs');
+  const binding={draftId,reportHash,suspectDevice:newcomer.runtime.scope.authorDevice,sourceHead:eventHash,
+   documents:draft.documents.map(({recipeId,documentId})=>({recipeId,documentId}))};
+  const beforeProjection=a.rows();
+  let seedCount=0;
+  const projected=await prepareDraftRotationProjection({runtime:sponsor.runtime,binding,
+   destination:{parentHead:eventHash,documentId:'admitted-rotation-root',epochId:'admitted-rotation-epoch',generation:3},
+   allocateSeed:()=>({seedId:`10000000-0000-4000-8000-${String(++seedCount).padStart(12,'0')}`,peerId:String(150+seedCount)})});
+  const projectedRoot=new LoroDoc();projectedRoot.import(projected.documents[0].seed.snapshot);
+  assert.equal(projectedRoot.getMap('shopping-item-fields:admitted-copy').get('displayQuantity'),ingredient.amount);
+  assert.ok(projected.documents.every(doc=>doc.policyBundle.entries.some(entry=>entry.incomplete&&entry.policyHashes.includes(accepted.policyHash))));
+  assert.deepEqual(a.rows(),beforeProjection);
   await assert.rejects(()=>newcomer.files.verify(copy.bytes,copy.id,a.deviceId),/UNSUPPORTED_VERSION/);
   assert.ok(!(await sponsor.files.directBatch(newcomer.runtime.scope.authorDevice,256,new Map()))
    .objects.some(row=>row.objectId===copy.id));

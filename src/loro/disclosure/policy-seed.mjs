@@ -25,9 +25,14 @@ export async function preparePolicyProjection({runtime,service,provider,seedId,p
    selectedSeedEffects.set(effectId,{seedId:marker.seedId,policies,incomplete:true,sourceDependencies:[]});
   }
  }
- const projected=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:selectedSource?.bytes??doc.export({mode:'snapshot'}),seedId,peerId,includeLocalMapping:true,schemaVersion:version===4?4:1,omittedRecipeIds,childRecipeIngredients}),verify=createSourceVerifier({runtime,service,context,allowIncomplete:version>=3,selectedDocument:selectedSource&&runtime.recipeId!==null?doc:null,selectedSeedEffects}),policies=new Map(),entries=[];
+ const projected=projectCurrentSeed({LoroDoc:runtime.LoroDoc,source:selectedSource?.bytes??doc.export({mode:'snapshot'}),seedId,peerId,includeLocalMapping:true,schemaVersion:version===4?4:1,omittedRecipeIds,childRecipeIngredients}),verify=createSourceVerifier({runtime,service,context,allowIncomplete:version>=3,selectedDocument:selectedSource&&runtime.recipeId!==null?doc:null,selectedSeedEffects});
+ return assemblePolicyProjection({scope:runtime.scope,revision,projected,verify,service,context,provider,version});
+}
+/** Assemble a bundle from the caller's authenticated mapping and proof lookup. */
+export async function assemblePolicyProjection({scope,revision,projected,verify,service,context,provider,version}){
+ const {seedId,peerId}=projected,policies=new Map(),entries=[];
  for(const mapping of projected.localMapping){const proof=await verify(mapping.oldEffectId);entries.push({effectId:mapping.effectId,policyHashes:[...proof.policies],...(version>=3?{incomplete:!!proof.incomplete}:{})});for(const id of proof.policies){let record=await service.validateStored(id,context);while(record){if(policies.has(record.policyHash))break;policies.set(record.policyHash,record);record=record.policy.predecessor?await service.validateStored(record.policy.predecessor,context):null}}}
- entries.sort((a,b)=>cmp(a.effectId,b.effectId));const {localMapping,...seed}=projected;const bundle={version,scopeId:runtime.scope.scopeId,sourceHead:runtime.scope.branchHead,sourceDocumentId:runtime.scope.documentId,sourceRevision:revision,seedId,peerId,snapshotHash:await hash(provider,'seed-snapshot',Array.from(seed.snapshot)),entries,policies:[...policies.values()].sort((a,b)=>cmp(a.policyHash,b.policyHash))};return {seed,bundle,bundleHash:await hash(provider,'projection-policy-bundle',bundle)};
+ entries.sort((a,b)=>cmp(a.effectId,b.effectId));const {localMapping,...seed}=projected;const bundle={version,scopeId:scope.scopeId,sourceHead:scope.branchHead,sourceDocumentId:scope.documentId,sourceRevision:revision,seedId,peerId,snapshotHash:await hash(provider,'seed-snapshot',Array.from(seed.snapshot)),entries,policies:[...policies.values()].sort((a,b)=>cmp(a.policyHash,b.policyHash))};return {seed,bundle,bundleHash:await hash(provider,'projection-policy-bundle',bundle)};
 }
 /** Validates signed acceptance artifacts against the independently pinned parent
  * authority. Grant/manifest binding and atomic installation are still separate. */
