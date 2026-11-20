@@ -29,11 +29,9 @@ export async function verifyDraftRotationFileAddress({scope,provider,sodium,pare
  return body;
 }
 
-/** Verify an addressed release and derive, but do not install, the local successor. */
-export async function withOpenedDraftRotationRelease({storage,scope,pin,provider,sodium,LoroDoc,release,recipientDeviceId,recipientAdultId,wrappingSecret,signSelection,localSelection,confirmedHead,confirmedGrantHash,expectedRevision},callback) {
- if(typeof callback!=='function')throw Error('MALFORMED');
- ({scope,release,localSelection}=structuredClone({scope,release,localSelection}));
- const {proposal,publisherRecord,bytes}=release, {item,grant,manifest,recipientBindings}=proposal;
+/** Verify the public release and its exact local parent before asking for confirmation. */
+export async function verifyDraftRotationRelease({storage,scope,pin,provider,sodium,LoroDoc,release,recipientDeviceId,recipientAdultId,expectedRevision}) {
+ const {proposal,publisherRecord}=release, {item,grant,manifest,recipientBindings}=proposal;
  const local=await verifyPublicParent(storage,scope,pin,provider);
  if(local.record.revision!==expectedRevision || !Number.isSafeInteger(expectedRevision) || expectedRevision<0 || expectedRevision>=Number.MAX_SAFE_INTEGER)throw Error('STALE_AUTHORITY');
  if(local.state.events.length>=MAX_AUTHORITY_HISTORY||local.state.selections.length>=MAX_AUTHORITY_HISTORY)throw Error('AUTHORITY_HISTORY_FULL');
@@ -51,6 +49,15 @@ export async function withOpenedDraftRotationRelease({storage,scope,pin,provider
  const evidence=await verifyDraftRotationFileAddress({scope,provider,sodium,parent,release,recipientDeviceId});
  const options={provider,pin,parent,state:publisher.state,nodes:publisher.nodes,item,grant,manifest,recipientBindings,LoroDoc};
  const checked=await verifyDraftRotationGrant(options);
+ return {local,parentRecord,parent,localParent,recipient,evidence,options,checked};
+}
+
+/** Verify an addressed release and derive, but do not install, the local successor. */
+export async function withOpenedDraftRotationRelease({storage,scope,pin,provider,sodium,LoroDoc,release,recipientDeviceId,recipientAdultId,wrappingSecret,signSelection,localSelection,confirmedHead,confirmedGrantHash,expectedRevision},callback) {
+ if(typeof callback!=='function')throw Error('MALFORMED');
+ ({scope,release,localSelection}=structuredClone({scope,release,localSelection}));
+ const {proposal,publisherRecord,bytes}=release, {item,grant,manifest,recipientBindings}=proposal;
+ const {local,parentRecord,parent,localParent,recipient,evidence,options,checked}=await verifyDraftRotationRelease({storage,scope,pin,provider,sodium,LoroDoc,release,recipientDeviceId,recipientAdultId,expectedRevision});
  if(checked.eventHash!==confirmedHead || checked.grantHash!==confirmedGrantHash)throw Error('REVIEW_CHANGED');
  return withOpenedDraftRotationFile({...options,sodium,file:bytes,wrappingSecret,recipientId:recipientDeviceId},async opened=>{
   if(!Array.isArray(evidence.documents)||!Array.isArray(evidence.keyCommitments)||evidence.documents.length!==opened.documents.length||evidence.keyCommitments.length!==opened.keys.length)throw Error('INVALID_PROOF');
