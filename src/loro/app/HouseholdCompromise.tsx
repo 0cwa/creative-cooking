@@ -4,6 +4,7 @@ import {REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
 import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 import type {householdCompromise} from './household-compromise.mjs';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
+import {SelectedIncident} from './SelectedIncident';
 
 type Reports = ReturnType<typeof householdCompromise>;
 type Session = Awaited<ReturnType<Reports['open']>>;
@@ -163,6 +164,7 @@ export function HouseholdCompromise() {
       <Text>{session?'Close household incident reports':'Open household incident reports'}</Text>
     </Pressable>
     {session&&<>
+      <SelectedIncident service={reports}/>
       <Text>Sign a judgment about a household device from a verified checkpoint or signed operation. Local quarantine has a separate confirmation.</Text>
       {devices.map(id=><Pressable key={id} accessibilityRole="button" disabled={busy} onPress={()=>run(async active=>{
         const prepared = await reports.prepare(session.confirmation,id);
