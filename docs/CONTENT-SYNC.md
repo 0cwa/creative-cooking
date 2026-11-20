@@ -1,5 +1,7 @@
 # Content sync, recovery, and support limits
 
+> Historical PowerSync runbook. The runnable implementation and deployment rules are on [`archive/powersync-2026-11-15`](https://github.com/0cwa/creative-cooking/tree/archive/powersync-2026-11-15).
+
 PowerSync is the app's provisional content engine. Domain commands and the account/workspace subscription seam live in `src/content/`; there is no interchangeable engine adapter. A local-only install remains usable without an account or service URL. Account and shared-workspace content is saved in a profile-scoped PowerSync database. A local database commit means **saved on this device**; the app reports synced only after the service confirms the upload/download queue and there are no pending mutations or recovery issues.
 
 ## Where data lives

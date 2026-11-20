@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { expect, test } from '@playwright/test';
+import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 async function offerInstall(page, outcome = 'accepted') {
   await page.evaluate((choice) => {
@@ -25,7 +25,7 @@ async function waitForKitchenReady(page) {
 
 test('offers installation only after engagement and captures the CTA screenshot', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('./');
+  await startLocalWorkspace(page);
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
   await waitForKitchenReady(page);
 
@@ -53,7 +53,7 @@ test('offers installation only after engagement and captures the CTA screenshot'
 });
 
 test('remembers when the user dismisses the install tip', async ({ page }) => {
-  await page.goto('./');
+  await startLocalWorkspace(page);
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();
   await waitForKitchenReady(page);
   await offerInstall(page);

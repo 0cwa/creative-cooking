@@ -1,0 +1,17 @@
+import {readAuthority,verifyAuthority} from '../authority/chain.mjs';
+import {domain,validateSuccessor} from '../authority/validator.mjs';
+const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
+async function verifiedProposal({storage,scope,pin,provider,adultId,deviceId,item}){
+ const sc=structuredClone(scope),proposal=structuredClone(item),current=await readAuthority(storage,sc,pin,provider),verified=await verifyAuthority(current.state,pin,provider),parent=verified.nodes.get(current.activeHead),device=parent?.devices.find(d=>d.active&&d.deviceId===deviceId&&d.adultId===adultId);if(!device||proposal?.event?.kind!=='inviteAdult'||proposal.event.version!==2||proposal.event.parentHead!==current.activeHead)throw Error('INVALID_AUTHORITY');const check=await validateSuccessor(parent,proposal.event,proposal.authorSignature,proposal.approvals,provider);if(!['QUORUM_REQUIRED','ADMISSION_AND_PROJECTION_REQUIRED'].includes(check.reason))throw Error(check.reason||'INVALID_PROOF');return {sc,proposal,parent,device,check};
+}
+/** The review describes the exact signed event and separately identifies its
+ * parent and threshold. Displaying it grants no authority or key access. */
+export async function reviewHouseholdInvite(args){const {proposal,parent,check}=await verifiedProposal(args);return {item:proposal,eventHash:check.eventHash,parentHead:parent.head,adultElectorate:[...parent.roster],approvals:check.approvals,required:check.required};}
+/** Each adult signs only an independently verified proposal under the locally
+ * selected pinned parent; this does not release keys or admit the recipient. */
+export async function approveHouseholdInvite(args){
+ const {provider,adultId,deviceId,confirmedEventHash,explicit}=args;if(explicit!==true)throw Error('CONFIRMATION_REQUIRED');const {sc,proposal,parent,device,check}=await verifiedProposal(args);if(check.eventHash!==confirmedEventHash)throw Error('REVIEW_CHANGED');if(proposal.approvals.some(x=>x.adultId===adultId))throw Error('ALREADY_APPROVED');const body={version:1,householdId:sc.id,eventHash:check.eventHash,parentHead:parent.head,policyHash:parent.policyHash,generation:parent.generation,epochId:parent.epochId,adultId,deviceId},signature=hex(await provider.sign(device.signingKeyRef,domain('approval-signature',body))),approval={...body,signature};const result=await validateSuccessor(parent,proposal.event,proposal.authorSignature,[...proposal.approvals,approval],provider);if(!['QUORUM_REQUIRED','ADMISSION_AND_PROJECTION_REQUIRED'].includes(result.reason))throw Error(result.reason||'INVALID_PROOF');return {approval,eventHash:check.eventHash,approvals:result.approvals,required:result.required};
+}
+/** Verify a collected approval against the same selected parent before it is
+ * added to a proposal; no quorum or key release is inferred from receipt. */
+export async function collectHouseholdInviteApproval(args){const approval=structuredClone(args.approval),provider=args.provider,{proposal,parent,check}=await verifiedProposal(args);if(proposal.approvals.some(x=>x.adultId===approval?.adultId))throw Error('ALREADY_APPROVED');const approvals=[...proposal.approvals,approval],result=await validateSuccessor(parent,proposal.event,proposal.authorSignature,approvals,provider);if(!['QUORUM_REQUIRED','ADMISSION_AND_PROJECTION_REQUIRED'].includes(result.reason)||result.eventHash!==check.eventHash)throw Error(result.reason||'INVALID_PROOF');return {item:{...proposal,approvals},eventHash:result.eventHash,approvals:result.approvals,required:result.required};}

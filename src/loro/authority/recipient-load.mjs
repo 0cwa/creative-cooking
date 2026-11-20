@@ -1,0 +1,55 @@
+// Validate a recipient installation and its public authority prefix on reopen.
+import {verifyAuthority} from './chain.mjs';
+import {domain} from './validator.mjs';
+import {verifyStoredKeyPackage} from '../pairing/key-package.mjs';
+import {verifyCurrentSeed} from '../compromise/current-seed.mjs';
+import {verifyPolicyProjection} from '../disclosure/policy-seed.mjs';
+import {loadLoroDoc} from '../app/loro-document.mjs';
+import {verifyRotationPayload} from '../pairing/household-revocation-package.mjs';
+import {admissionPackage} from '../pairing/household-admission-package.mjs';
+const e=new TextEncoder(),d=new TextDecoder('utf-8',{fatal:true});
+const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
+const unhex=s=>typeof s==='string'&&/^[0-9a-f]{64}$/.test(s)?Uint8Array.from(s.match(/../g),x=>parseInt(x,16)):null;
+const canon=x=>x instanceof Uint8Array?Array.from(x):Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
+const eq=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
+const digest=async(p,k,v)=>{const x=await p.hash(domain(k,canon(v)));if(!(x instanceof Uint8Array)||x.length!==32)throw Error('INVALID_AUTHORITY');return hex(x)};
+export async function verifyRecipientInstallation({storage,scope,pin,provider,sodium,state,eventHash}){
+ const r=await storage.householdRecipient?.findByEvent(scope.id,eventHash);if(!r?.ok)throw Error('INVALID_AUTHORITY');if(!r.value)return null;const p=r.value,checked=await storage.householdRecipient.check(p);if(!checked.ok)throw Error('INVALID_AUTHORITY');
+ let parent,next;try{parent=JSON.parse(d.decode(p.expectedAuthority.authorityState));next=JSON.parse(d.decode(p.nextAuthority.authorityState))}catch{throw Error('INVALID_AUTHORITY')}
+ const prefix=(a,b)=>Array.isArray(a)&&Array.isArray(b)&&a.length<=b.length&&a.every((x,i)=>eq(x,b[i]));
+ if(!eq(next.root,state.root)||!prefix(next.events,state.events)||!prefix(next.selections,state.selections)||!prefix(next.agreements??[],state.agreements??[])||hex(p.expectedAuthority.authorityState)!==hex(e.encode(JSON.stringify(canon(parent))))||hex(p.nextAuthority.authorityState)!==hex(e.encode(JSON.stringify(canon(next))))||parent.activeHead!==p.expectedAuthority.acceptedParent||next.activeHead!==eventHash||await digest(provider,'authority-state',parent)!==p.expectedAuthority.authorizationSnapshot||await digest(provider,'authority-state',next)!==p.nextAuthority.authorizationSnapshot||!eq(parent.root,next.root))throw Error('INVALID_AUTHORITY');
+ await verifyAuthority(parent,pin,provider);const verified=await verifyAuthority(next,pin,provider),item=next.events.at(-1),selection=next.selections.at(-1),a=item?.admission,grant=a?.grant,manifest=a?.manifest;
+ if(p.ownDevice){
+  const {verifyInstalledOwnDevice}=await import('../pairing/household-own-device.mjs');
+  return verifyInstalledOwnDevice({sodium,provider,pin,LoroDoc:await loadLoroDoc(),p});
+ }
+ if(item?.rotation?.grant?.version===2) {
+  const selectionMatches=selection?.from===parent.activeHead&&selection.to===eventHash&&[item.event.authorDeviceId,p.localKey.record.identity.deviceId].includes(selection.deviceId);
+  if(!selectionMatches||item.event.parentHead!==parent.activeHead||await digest(provider,'event',item.event)!==eventHash||
+     p.policySeed!==null||!eq(next,{...parent,events:[...parent.events,item],selections:[...parent.selections,selection],activeHead:eventHash}))throw Error('INVALID_AUTHORITY');
+  const {context,guardId}=await verifyRotationPayload({sodium,provider,LoroDoc:await loadLoroDoc(),parent:verified.nodes.get(parent.activeHead),item,
+    recipientDevice:p.localKey.record.identity.deviceId,documentId:p.documentId,generation:p.generation,manifest:p.manifest,seed:p.seed,snapshot:p.snapshot,packet:p.packet});
+  const publisherSelectionHash=p.receiptBody.publisherSelectionHash;
+  if(publisherSelectionHash!==undefined&&!unhex(publisherSelectionHash))throw Error('INVALID_AUTHORITY');
+  return verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash:null,publisherSelectionHash});
+ }
+ if(!item||!grant||!manifest||!eq(next,{...parent,events:[...parent.events,item],selections:[...parent.selections,selection],activeHead:selection.to})||item.event.parentHead!==parent.activeHead||selection.from!==parent.activeHead||selection.to!==eventHash||await digest(provider,'event',item.event)!==eventHash||![1,2,3,4].includes(manifest.version)||await digest(provider,'projection-manifest',manifest)!==grant.projectionManifestHash||p.manifest.id!==grant.projectionManifestHash||hex(p.manifest.bytes)!==hex(e.encode(JSON.stringify(canon(manifest))))||await digest(provider,'projection-snapshot',hex(p.snapshot))!==manifest.projectedStateHash||p.documentId!==manifest.newDocumentId||p.generation!==manifest.newGeneration||(manifest.version===1?p.policySeed!==null:(!p.policySeed||p.policySeed.bundle.version!==manifest.version||p.policySeed.bundleHash!==manifest.policyBundleHash||p.seed.seedId!==p.policySeed.bundle.seedId)))throw Error('INVALID_AUTHORITY');
+ const LoroDoc=await loadLoroDoc(),parts=manifest.schemaVersion.split('|'),peerId=parts[2],doc=new LoroDoc();if(parts.length!==3||parts[0]!==`registry-seed-v${manifest.version}`||parts[1]!==p.seed.seedId||(manifest.version!==1&&peerId!==p.policySeed.bundle.peerId))throw Error('INVALID_AUTHORITY');try{doc.import(p.snapshot)}catch{throw Error('INVALID_AUTHORITY')}
+ const seed={version:1,seedId:p.seed.seedId,peerId,snapshot:p.snapshot,identities:p.seed.identities,purchaseIds:Object.keys(doc.toJSON().purchases??{}).sort()},sp=verifyCurrentSeed({LoroDoc,snapshot:p.snapshot,seed,schemaVersion:manifest.version===4?4:1}),old=verified.nodes.get(parent.activeHead);if(sp.peers.length!==1||sp.peers[0]!==peerId||[...Object.values(old.runtime.authorPeers),...item.event.subject.devices.map(x=>x.peerId)].includes(peerId))throw Error('INVALID_AUTHORITY');
+ if(manifest.version!==1)await verifyPolicyProjection({provider,pin,state:parent,seed,bundle:p.policySeed.bundle,expectedBundleHash:manifest.policyBundleHash,expectedSourceHead:parent.activeHead,expectedSourceDocument:manifest.sourceDocument,expectedSourceRevision:manifest.sourceRevision,LoroDoc});
+ const recipient=p.localKey.record.identity.deviceId,{context,guardId}=await admissionPackage({sodium,provider,parent:old,authorizationSnapshot:p.expectedAuthority.authorizationSnapshot,item,recipientDevice:recipient});
+ return verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash:manifest.version===1?null:manifest.policyBundleHash});
+}
+
+async function verifyReceipt({p,scope,sodium,provider,parent,eventHash,context,guardId,policyBundleHash,publisherSelectionHash}) {
+ const recipient=p.localKey.record.identity.deviceId;
+ if(p.localKey.record.identity.scope.id!==scope.id||p.localKey.record.identity.scope.kind!=='household'||p.localKey.record.identity.purpose!=='data'||p.localKey.record.identity.epochId!==context.epochId||p.guardId!==guardId)throw Error('INVALID_AUTHORITY');
+ verifyStoredKeyPackage(sodium,p.packet,context);
+ const body={version:1,scopeId:scope.id,operationId:p.operationId,keyOperationId:p.localKey.record.operationId,guardId,recipientDevice:recipient,
+  parentHead:parent.activeHead,acceptedHead:eventHash,documentId:p.documentId,epochId:context.epochId,manifestHash:context.manifestHash,
+  grantHash:context.grantHash,policyBundleHash,packetHash:await digest(provider,'household-recipient-packet',Array.from(p.packet)),
+  ...(publisherSelectionHash===undefined?{}:{publisherSelectionHash})};
+ const key=unhex(context.recipientSigningKey);
+ if(!key||!eq(body,p.receiptBody)||!sodium.crypto_sign_verify_detached(p.receipt,domain('household-recipient-receipt',body),key))throw Error('INVALID_AUTHORITY');
+ return {parent,installation:p,transcriptHash:context.transcriptHash};
+}

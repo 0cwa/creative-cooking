@@ -1,3 +1,5 @@
+import { SharedChefRequest } from '@/loro/app/SharedChefRequest';
+import { allowsFreshLocalInference } from '@/loro/app/inference-gate.mjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -107,6 +109,7 @@ export default function ChefScreen() {
   const discardCancelledRef = useRef(false);
   const dictationControllerRef = useRef<DictationController | null>(null);
   const dictationBaseRef = useRef('');
+  const chatMessage = (role:ChatMessage['role'],content:string,proposals?:ChefToolProposal[]) => { const message=makeChatMessage(role,content,proposals);return app.storageMode === 'fresh-local' ? {...message,id:`message-${crypto.randomUUID()}`} : message; };
   const activeProvider = providerMetadata(app.settings.providerId);
   const dictationEngine = app.settings.dictationEngine;
   const dictationSupport = useMemo(() => getOnDeviceDictationSupport(dictationEngine), [dictationEngine]);
@@ -233,6 +236,7 @@ export default function ChefScreen() {
   };
 
   const runChef = async (messages: ChatMessage[]) => {
+    if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;
     setQuestion(null);
     setRunError(null);
     setStreamingText('');
@@ -251,7 +255,7 @@ export default function ChefScreen() {
       const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
 
       if (capabilities.location === 'local' && app.settings.allergies.length > 0) {
-        app.appendChatMessage(makeChatMessage(
+        app.appendChatMessage(chatMessage(
           'assistant',
           'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'
         ));
@@ -262,7 +266,7 @@ export default function ChefScreen() {
         ? await getProviderKey(app.settings.providerId)
         : '';
       if (activeProvider.credentialRequired && !apiKey) {
-        app.appendChatMessage(makeChatMessage(
+        app.appendChatMessage(chatMessage(
           'assistant',
           `Connect ${activeProvider.name} or paste an API key in Settings, then I can cook with you.`
         ));
@@ -303,7 +307,7 @@ export default function ChefScreen() {
 
       const responseText = result.text.trim();
       if (responseText || proposedChanges.length) {
-        app.appendChatMessage(makeChatMessage(
+        app.appendChatMessage(chatMessage(
           'assistant',
           responseText || 'I have a suggested change for you.',
           proposedChanges
@@ -316,7 +320,7 @@ export default function ChefScreen() {
 
       if (normalized.kind === 'cancelled') {
         if (!discardCancelledRef.current && partialText) {
-          app.appendChatMessage(makeChatMessage('assistant', partialText));
+          app.appendChatMessage(chatMessage('assistant', partialText));
         }
       } else {
         setRunError({ error: normalized, messages, partialText });
@@ -342,9 +346,10 @@ export default function ChefScreen() {
     if (!text || busy || dictationActive) return;
 
     setInput('');
-    const userMessage = makeChatMessage('user', text);
+    const userMessage = chatMessage('user', text);
     const messages = [...app.chatMessages, userMessage];
     app.appendChatMessage(userMessage);
+    if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;
     await runChef(messages);
   };
 
@@ -383,6 +388,10 @@ export default function ChefScreen() {
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
 
+  if (Platform.OS !== 'web' && app.storageMode === 'fresh-local') {
+    return <Screen><Text style={styles.title}>Chef</Text><Text>Chef requests and shared ingredient review are not yet available in this native workspace.</Text></Screen>;
+  }
+
   return (
     <Screen>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -400,6 +409,7 @@ export default function ChefScreen() {
           </View>
         </View>
 
+        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Messages stay private. You can separately review a shared-ingredient request, or use the downloaded on-device model locally.</Text><SharedChefRequest items={app.pantry} providerId={app.settings.providerId} model={app.settings.model} onComplete={(text,proposals)=>app.appendChatMessage(chatMessage('assistant',text,proposals))}/><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
         <View style={styles.contextStrip}>
           <Pressable
             accessibilityRole="button"
@@ -414,7 +424,7 @@ export default function ChefScreen() {
             <Text style={styles.contextChipText}>{app.mealContext.portions} portions · {app.mealContext.cooks.length} cook{app.mealContext.cooks.length === 1 ? '' : 's'}</Text>
           </Pressable>
           <Text testID="chef-workspace-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
-            Cooking in {app.contentWorkspaceName} · {app.contentWorkspaceRole ?? 'local'} · {app.contentSyncStatus.replaceAll('-', ' ')}
+            Cooking in {app.contentWorkspaceName}
           </Text>
           <Text testID="chef-local-persistence-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
             {app.localPersistenceStatus === 'saving' ? 'Saving locally' : app.localPersistenceStatus === 'error' ? 'Local save failed' : 'Saved locally'}
@@ -522,7 +532,7 @@ export default function ChefScreen() {
               editable={!dictationActive}
               value={input}
               onChangeText={setInput}
-              placeholder="Type or dictate to Chef…"
+              placeholder={app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Write a private message…' : 'Type or dictate to Chef…'}
               placeholderTextColor="#94a3b8"
               style={[styles.composer, dictationActive && styles.composerDictating]}
               multiline
@@ -532,7 +542,7 @@ export default function ChefScreen() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={busy ? 'Stop Chef response' : 'Send message'}
+              accessibilityLabel={busy ? 'Stop Chef response' : app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Save private message' : 'Send message'}
               disabled={!busy && (!input.trim() || dictationActive)}
               onPress={busy ? stop : () => void send()}
               style={[styles.send, (!busy && (!input.trim() || dictationActive)) && styles.sendDisabled]}

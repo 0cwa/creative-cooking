@@ -1,0 +1,35 @@
+// Candidate v1. The authority resolver validates a separately pinned personal root.
+import {resolveHistoricalPersonalAuthority} from '../authority/personal.mjs';
+import {reconstructGuardians,holderContribution,guardianWrappingFingerprint} from './recovery.mjs';
+const e=new TextEncoder(), h=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
+const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
+const bytes=x=>e.encode(JSON.stringify(canonical(x)));
+const exact=(x,k)=>x&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===k.length&&k.every(n=>Object.hasOwn(x,n));
+const dense=(x,max)=>Array.isArray(x)&&x.length<=max&&Array.from({length:x.length},(_,i)=>Object.hasOwn(x,i)).every(Boolean);
+const id=x=>typeof x==='string'&&x.length>0&&e.encode(x).length<=256;
+const unhex=(s,n)=>{if(typeof s!=='string'||!new RegExp(`^[0-9a-f]{${n*2}}$`).test(s))throw Error('INVALID_PROOF');return Uint8Array.from(s.match(/../g),x=>parseInt(x,16))};
+const digest=(s,x)=>h(s.crypto_generichash(32,bytes(x)));
+export const enrollmentBytes=manifest=>bytes([manifest.version===2?'creative-cooking/recovery-enrollment/v2':'creative-cooking/recovery-enrollment/v1',manifest]);
+export const recoveryHash=(s,x)=>digest(s,x);
+function check(sodium,m){const base=['version','owner','scopeId','authorityPin','signerDevice','generation','catalogHash','roster','threshold','purpose','packageHash', 'personalKitHash'];
+ if(!(m?.version===1?exact(m,base):m?.version===2&&exact(m,[...base,'epochId','authoritySnapshot'])&&
+  id(m.epochId)&&/^[0-9a-f]{64}$/.test(m.authoritySnapshot))||![m.owner,m.scopeId,m.authorityPin,m.signerDevice].every(id)||!Number.isSafeInteger(m.generation)||m.generation<0||!/^[0-9a-f]{64}$/.test(m.catalogHash)||!/^[0-9a-f]{64}$/.test(m.packageHash)||!/^[0-9a-f]{64}$/.test(m.personalKitHash)||m.purpose!=='personal-recovery'||!dense(m.roster,255)||m.roster.length<1||m.roster.length>255||!Number.isInteger(m.threshold)||m.threshold<1||m.threshold>m.roster.length||!m.roster.every(x=>exact(x,['holder','signingKey','wrappingKey','shareHash'])&&id(x.holder)&&/^[0-9a-f]{64}$/.test(x.signingKey)&&/^[0-9a-f]{64}$/.test(x.wrappingKey)&&/^[0-9a-f]{64}$/.test(x.shareHash))||new Set(m.roster.map(x=>x.holder)).size!==m.roster.length||new Set(m.roster.map(x=>x.signingKey)).size!==m.roster.length||new Set(m.roster.map(x=>x.wrappingKey)).size!==m.roster.length)throw Error('INVALID_ENROLLMENT');if(new Set(m.roster.map(x=>guardianWrappingFingerprint(sodium,unhex(x.wrappingKey,32)))).size!==m.roster.length)throw Error('INVALID_ENROLLMENT')}
+/** Pins are independently obtained holder public keys, never keys trusted merely because a manifest names them. */
+export async function verifyEnrollment({sodium,storage,authorityProvider,pin,holderPins,manifest,signature,catalog,guardianPackage,envelopes}){({manifest,holderPins,catalog,guardianPackage,envelopes}=structuredClone({manifest,holderPins,catalog,guardianPackage,envelopes}));check(sodium,manifest);if(pin!==manifest.authorityPin||!holderPins||typeof holderPins!=='object'||Object.keys(holderPins).length!==manifest.roster.length)throw Error('INVALID_ENROLLMENT');for(const x of manifest.roster)if(!Object.hasOwn(holderPins,x.holder)||!exact(holderPins[x.holder],['signingKey','wrappingKey'])||holderPins[x.holder].signingKey!==x.signingKey||holderPins[x.holder].wrappingKey!==x.wrappingKey)throw Error('INVALID_HOLDER_PIN');if(!dense(envelopes,255)||envelopes.length!==manifest.roster.length||envelopes.some((x,i)=>!exact(x,['holder','sealed'])||x.holder!==manifest.roster[i].holder||digest(sodium,x)!==manifest.roster[i].shareHash))throw Error('INVALID_SHARE');const resolved=await resolveHistoricalPersonalAuthority(storage,{kind:'personal',id:manifest.scopeId},
+ pin,authorityProvider,manifest.signerDevice,manifest.authoritySnapshot??null);
+ if(manifest.version===2&&(!resolved.rotation||resolved.scope.epochId!==manifest.epochId||
+   !exactEpochCatalog(catalog,manifest.epochId,resolved.scope.branchHead)))throw Error('INVALID_ENROLLMENT');if(resolved.scope.ownerId!==manifest.owner||catalog.owner!==manifest.owner||catalog.generation!==manifest.generation||digest(sodium,catalog)!==manifest.catalogHash||digest(sodium,guardianPackage)!==manifest.packageHash)throw Error('INVALID_ENROLLMENT');const p=guardianPackage?.header;if(!p||p.owner!==manifest.owner||p.scope!=='personal'||p.generation!==manifest.generation||p.catalogHash!==manifest.catalogHash||p.grant!==null||p.threshold!==manifest.threshold||JSON.stringify(p.roster)!==JSON.stringify(manifest.roster.map(x=>x.holder)))throw Error('INVALID_ENROLLMENT');const ref=resolved.signingKeyRefs[manifest.signerDevice];if(!ref||!await authorityProvider.verify(ref,enrollmentBytes(manifest),unhex(signature,64)))throw Error('INVALID_PROOF');return Object.freeze({manifest,authority:resolved.expectedAuthority,holderKeys:Object.freeze(Object.fromEntries(manifest.roster.map(x=>[x.holder,x.signingKey])))});
+}
+function exactEpochCatalog(catalog,epoch,head){
+ return Array.isArray(catalog?.keyRefs)&&catalog.keyRefs.length===1&&catalog.keyRefs[0]===epoch&&
+  Array.isArray(catalog.trustedCheckpoints)&&catalog.trustedCheckpoints.length===1&&catalog.trustedCheckpoints[0]===head;
+}
+/** Verification uses the pinned public keys from verifyEnrollment, not contribution-supplied keys. */
+export function holderVerifier(sodium,verified){return async(holder,message,signature)=>{const key=verified.holderKeys[holder];return typeof key==='string'&&sodium.crypto_sign_verify_detached(signature,message,unhex(key,32))}}
+
+/** Authenticate owner, exact package and independently pinned holders before reconstruction. */
+export async function reconstructEnrolled(input,contributions){const snapshot=structuredClone({manifest:input.manifest,signature:input.signature,catalog:input.catalog,guardianPackage:input.guardianPackage,holderPins:input.holderPins,envelopes:input.envelopes});const verified=await verifyEnrollment({...input,...snapshot});const kit=await reconstructGuardians(input.sodium,snapshot.guardianPackage,structuredClone(contributions),snapshot.guardianPackage.header,holderVerifier(input.sodium,verified));if(digest(input.sodium,kit)!==snapshot.manifest.personalKitHash)throw Error('INVALID_PACKAGE');return kit}
+
+/** Verify enrollment before the named holder opens its share and signs its return. */
+export async function makeEnrolledContribution(input,holder,publicKey,privateKey,sign){const snapshot=structuredClone({manifest:input.manifest,signature:input.signature,catalog:input.catalog,guardianPackage:input.guardianPackage,holderPins:input.holderPins,envelopes:input.envelopes});await verifyEnrollment({...input,...snapshot});const item=snapshot.manifest.roster.find(x=>x.holder===holder),envelope=snapshot.envelopes.find(x=>x.holder===holder);if(!item||!envelope||hexKey(publicKey)!==item.wrappingKey)throw Error('INVALID_HOLDER_KEY');return holderContribution(input.sodium,envelope,publicKey,privateKey,sign)}
+function hexKey(key){return key instanceof Uint8Array&&key.length===32?h(key):null}

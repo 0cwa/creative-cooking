@@ -1,0 +1,20 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import sodium from 'libsodium-wrappers';
+import {LoroDoc} from 'loro-crdt';
+import {domain} from '../authority/validator.mjs';
+import {checkProjectionSource} from './source.mjs';
+await sodium.ready;
+const hex=b=>Buffer.from(b).toString('hex');
+const provider={hash:async b=>sodium.crypto_generichash(32,b)};
+test('source snapshot and projected operation history are checked against durable live state',async()=>{
+ const old=new LoroDoc();old.getMap('recipe').set('title','DELETED_CANARY');old.commit();old.getMap('recipe').set('title','soup');old.getMap('purchases').set('buy','rice');old.getMap('private').set('chat','PRIVATE_CANARY');old.commit();
+ const source=old.export({mode:'snapshot'}), storage={reopenBranchDocument:async()=>({ok:true,value:{bytes:source,revision:7}})}, manifest={schemaVersion:'legacy-v1',sourceDocument:'old',sourceCheckpointHash:hex(await provider.hash(domain('projection-source-snapshot',hex(source))))},grant={contentClasses:['recipe','shopping']};
+ const fresh=new LoroDoc();fresh.getMap('recipe').set('title','soup');fresh.getMap('purchases').set('buy','rice');
+ assert.deepEqual((await checkProjectionSource(storage,{},manifest,grant,fresh.export({mode:'snapshot'}),provider)).sourceDocument,{documentId:'old',revision:7});
+ await assert.rejects(checkProjectionSource(storage,{}, {...manifest,sourceCheckpointHash:'wrong'},grant,fresh.export({mode:'snapshot'}),provider),/SOURCE_MISMATCH/);
+ const leaked=new LoroDoc();leaked.getMap('recipe').set('title','DELETED_CANARY');leaked.commit();leaked.getMap('recipe').set('title','soup');leaked.getMap('purchases').set('buy','rice');
+ await assert.rejects(checkProjectionSource(storage,{},manifest,grant,leaked.export({mode:'snapshot'}),provider),/PROJECTION_MISMATCH/);
+ await assert.rejects(checkProjectionSource(storage,{},manifest,grant,new Uint8Array([...fresh.export({mode:'snapshot'}),99]),provider),/PROJECTION_MISMATCH|Error/);
+ await assert.rejects(checkProjectionSource(storage,{},manifest,{contentClasses:['recipe']},fresh.export({mode:'snapshot'}),provider),/SOURCE_MISMATCH/);
+});

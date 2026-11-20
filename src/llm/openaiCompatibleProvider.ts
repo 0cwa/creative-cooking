@@ -1,7 +1,8 @@
+import { dispatchProviderRequest } from '@/llm/request-boundary.mjs';
 import { CHEF_TOOLS } from '@/chef/tools';
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { executeChefTool } from '@/llm/toolExecution';
-import type { ChefRunResult, LlmProvider, ToolExecutor } from '@/llm/types';
+import type { ChefRunResult, LlmProvider, ToolExecutor, ProviderRequestReview } from '@/llm/types';
 import { OpenRouterStreamAccumulator, SseDataParser } from '@/llm/openrouter/streaming';
 
 type CompatibleToolCall = {
@@ -118,25 +119,14 @@ async function completionOnce(
   options: {
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
+    reviewRequest?: ProviderRequestReview;
     onStreamActivity?: () => void;
   }
 ): Promise<CompatibleMessage> {
   let response: Response;
   try {
-    response = await fetch(config.endpoint, {
-      method: 'POST',
-      headers: {
-        ...config.headers(apiKey),
-        'Content-Type': 'application/json'
-      },
-      signal: options.signal,
-      body: JSON.stringify({
-        model,
-        messages,
-        ...(toolsEnabled ? { tools: CHEF_TOOLS, tool_choice: 'auto' } : {}),
-        stream: true
-      })
-    });
+    const body=JSON.stringify({model,messages,...(toolsEnabled ? {tools:CHEF_TOOLS,tool_choice:'auto'} : {}),stream:true});
+    response = await dispatchProviderRequest({endpoint:config.endpoint,model,body,headers:{...config.headers(apiKey),'Content-Type':'application/json'},signal:options.signal,dispatch:options.reviewRequest});
   } catch (error) {
     throw normalizeLlmError(error);
   }
@@ -228,6 +218,7 @@ async function completion(
   options: {
     signal?: AbortSignal;
     onTextDelta?: (delta: string) => void;
+    reviewRequest?: ProviderRequestReview;
   }
 ): Promise<CompatibleMessage> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -243,6 +234,7 @@ async function completion(
     } catch (error) {
       const normalized = normalizeLlmError(error);
       const canRetry =
+        !options.reviewRequest &&
         normalized.retryable &&
         !streamStarted &&
         !options.signal?.aborted &&
@@ -268,7 +260,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
   return {
     id: config.id,
     name: config.name,
-    async run({ apiKey, model, systemPrompt, messages, tools, signal, onTextDelta }): Promise<ChefRunResult> {
+    async run({ apiKey, model, systemPrompt, messages, tools, signal, onTextDelta, reviewRequest }): Promise<ChefRunResult> {
       const toolsEnabled = Boolean(tools);
       const working: CompatibleMessage[] = [
         { role: 'system', content: systemPrompt },
@@ -283,6 +275,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
           let roundTextStarted = false;
           const assistant = await completion(config, apiKey, model, working, toolsEnabled, {
             signal,
+            reviewRequest,
             onTextDelta: (delta) => {
               if (!roundTextStarted && collectedText) onTextDelta?.('\n\n');
               roundTextStarted = true;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,7 @@ import {
   missingPantryIngredients
 } from '@/domain/recipeEditing';
 import type { Recipe } from '@/domain/types';
+import type { RecipeHistoryEntry } from '@/loro/app/content-runtime-types';
 import { useAppState } from '@/state/AppState';
 
 type RecipeDraft = Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>;
@@ -59,16 +60,95 @@ function cleanRecipeEditDraft(recipe: Recipe, draft: RecipeEditDraft): RecipeDra
   };
 }
 
+function historyField(recipe: Recipe, entry: RecipeHistoryEntry) {
+  if (entry.kind === 'recipe-step-field') return `Step ${(recipe.stepIds?.indexOf(entry.id ?? '') ?? -1) + 1}`;
+  if (entry.kind === 'recipe-ingredient-field') {
+    const ingredient = recipe.ingredients.find(item => item.id === entry.id);
+    return entry.field === 'name' ? `Ingredient name · ${ingredient?.name ?? ''}` : `Ingredient amount · ${ingredient?.name ?? ''}`;
+  }
+  return entry.field[0].toUpperCase() + entry.field.slice(1);
+}
+
 export default function RecipesScreen() {
   const router = useRouter();
   const {
     pantry,
     recipes,
+    storageMode,
+    pendingRecipeTitle,
+    createRecipe,
     updateRecipe,
-    deleteRecipe
+    deleteRecipe,
+    canEditSharedContent,
+    readRecipeHistory,
+    restoreRecipeEdit,
+    beginWorkspaceTransition,
+    flushCurrentWorkspace,
+    refreshSharedCooking,
+    sharedCookingRefreshPending
   } = useAppState();
+  const [creating,setCreating]=useState(false);
+  const [newTitle,setNewTitle]=useState('');
+  const [newIngredients,setNewIngredients]=useState('');
+  const [newSteps,setNewSteps]=useState('');
+  const [creationError,setCreationError]=useState<string|null>(null);
+  const [creationSaved,setCreationSaved]=useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
+  const [history, setHistory] = useState<RecipeHistoryEntry[] | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [restoreSaved, setRestoreSaved] = useState(false);
+  const historyRequest = useRef<symbol | null>(null);
+
+  const startCreating = () => {
+    setCreationError(null);
+    setCreationSaved(false);
+    setCreating(true);
+  };
+
+  const saveNewRecipe = async () => {
+    if (!canEditSharedContent) return;
+    let submission: RecipeDraft | undefined;
+    if (pendingRecipeTitle===null) {
+      const title = newTitle.trim();
+      const ingredients = parseRecipeIngredientsText(newIngredients);
+      const steps = parseRecipeTextList(newSteps);
+      if (!title || !ingredients.length || !steps.length) {
+        setCreationError('Add a title, ingredient and cooking step.');
+        return;
+      }
+      submission={title,portions:2,ingredients,steps};
+    }
+
+    setCreationError(null);
+    try {
+      const {refreshed}=await createRecipe(submission);
+      setCreationSaved(!refreshed);
+      setCreating(false);
+      setNewTitle('');
+      setNewIngredients('');
+      setNewSteps('');
+    } catch (error) {
+      setCreationError(error instanceof Error ? error.message : 'Could not save recipe.');
+    }
+  };
+
+  const retryCookingRefresh = async () => {
+    if (!refreshSharedCooking) return;
+    setCreationError(null);
+    try {
+      const release=beginWorkspaceTransition();
+      try {
+        await flushCurrentWorkspace();
+        await refreshSharedCooking();
+      } finally {
+        release();
+      }
+    } catch (error) {
+      setCreationError(error instanceof Error ? error.message : 'Could not refresh recipes.');
+    }
+  };
 
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? null;
   const missingShoppingIngredients = selected
@@ -82,14 +162,57 @@ export default function RecipesScreen() {
       })()
     : [];
 
-  const openRecipe = (recipe: Recipe) => {
-    setSelectedId(recipe.id);
-    setDraft(null);
+  const resetHistory = () => {
+    historyRequest.current = null;
+    setHistory(null);
+    setHistoryBusy(false);
+    setHistoryError(null);
+    setRestoreSaved(false);
   };
 
-  const closeRecipe = () => {
-    setSelectedId(null);
+  const selectRecipe = (id: string | null) => {
+    resetHistory();
+    setSelectedId(id);
     setDraft(null);
+  };
+  const openRecipe = (recipe: Recipe) => selectRecipe(recipe.id);
+  const closeRecipe = () => selectRecipe(null);
+
+  const loadHistory = async (entry?: RecipeHistoryEntry) => {
+    if (!selected || !readRecipeHistory || historyRequest.current) return;
+    const request = Symbol(), recipeId = selected.id;
+    const stillSelected = () => historyRequest.current === request;
+    historyRequest.current = request;
+    setHistoryBusy(true);
+    setHistoryError(null);
+    if (entry) setRestoreSaved(false);
+    try {
+      if (entry && restoreRecipeEdit) {
+        const result = await restoreRecipeEdit(recipeId, entry);
+        if (!stillSelected()) return;
+        setHistory(null);
+        setRestoreSaved(true);
+        if (!result.refreshed) return;
+      } else if (sharedCookingRefreshPending && refreshSharedCooking) {
+        const release = beginWorkspaceTransition();
+        try {
+          await flushCurrentWorkspace();
+          await refreshSharedCooking();
+        } finally {
+          release();
+        }
+      }
+      if (!stillSelected()) return;
+      const rows = await readRecipeHistory(recipeId);
+      if (stillSelected()) setHistory(rows);
+    } catch (error) {
+      if (stillSelected()) setHistoryError(error instanceof Error ? error.message : 'Recipe history is unavailable.');
+    } finally {
+      if (stillSelected()) {
+        historyRequest.current = null;
+        setHistoryBusy(false);
+      }
+    }
   };
 
   const startEditing = () => {
@@ -141,10 +264,16 @@ export default function RecipesScreen() {
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
         <View style={styles.headerActions}>
+          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" disabled={!canEditSharedContent} onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
           <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
         </View>
       </View>
+      {creationSaved && <Text accessibilityLiveRegion="polite" style={styles.line}>{sharedCookingRefreshPending ? 'Recipe saved. Refresh cooking to see it.' : 'Recipe saved.'}</Text>}
+      {sharedCookingRefreshPending && <Pressable accessibilityRole="button" onPress={() => void retryCookingRefresh()} style={styles.shoppingLink}>
+        <Text style={styles.shoppingLinkText}>Retry cooking refresh</Text>
+      </Pressable>}
+      {!creating && sharedCookingRefreshPending && creationError && <Text accessibilityRole="alert" style={styles.line}>{creationError}</Text>}
 
       <FlashList
         data={recipes}
@@ -163,7 +292,26 @@ export default function RecipesScreen() {
         contentContainerStyle={{ paddingBottom: 30 }}
       />
 
-      <Modal visible={Boolean(selected)} animationType="slide" onRequestClose={closeRecipe}>
+      <Modal visible={creating} animationType="slide" onRequestClose={()=>{if(canEditSharedContent)setCreating(false);}}>
+        <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.recipeDetail}>
+          <View style={styles.detailHeader}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Cancel new recipe" disabled={!canEditSharedContent} onPress={()=>setCreating(false)} style={styles.detailAction}>
+              <Text style={styles.close}>Cancel</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel={pendingRecipeTitle===null?'Save new recipe':'Retry new recipe save'} disabled={!canEditSharedContent} onPress={saveNewRecipe} style={styles.primaryAction}>
+              <Text style={styles.primaryActionText}>{pendingRecipeTitle===null?'Save recipe':'Retry save'}</Text>
+            </Pressable>
+          </View>
+          {creationError && <Text accessibilityRole="alert" style={styles.line}>{creationError}</Text>}
+          {pendingRecipeTitle!==null && <Text style={styles.line}>Resolve the save for {pendingRecipeTitle} before submitting another recipe.</Text>}
+          <Text style={styles.editorIntroTitle}>New recipe</Text>
+          <TextInput accessibilityLabel="New recipe title" editable={canEditSharedContent&&pendingRecipeTitle===null} placeholder="Recipe title" value={newTitle} onChangeText={setNewTitle} style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe ingredients" editable={canEditSharedContent&&pendingRecipeTitle===null} placeholder="One ingredient per line" value={newIngredients} onChangeText={setNewIngredients} multiline style={styles.editorTitleInput}/>
+          <TextInput accessibilityLabel="New recipe steps" editable={canEditSharedContent&&pendingRecipeTitle===null} placeholder="One step per line" value={newSteps} onChangeText={setNewSteps} multiline style={styles.editorTitleInput}/>
+        </ScrollView>
+      </Modal>
+
+      <Modal visible={Boolean(selected)} animationType="slide" onRequestClose={() => { if (!historyBusy) closeRecipe(); }}>
         {selected && (
           <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.recipeDetail}>
             {draft ? (
@@ -249,12 +397,14 @@ export default function RecipesScreen() {
             ) : (
               <>
                 <View style={styles.detailHeader}>
-                  <Pressable accessibilityRole="button" accessibilityLabel="Close recipe" onPress={closeRecipe} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
+                  <Pressable accessibilityRole="button" accessibilityLabel="Close recipe" disabled={historyBusy} onPress={closeRecipe} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
                   <View style={styles.headerActions}>
-                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit recipe ${selected.title}`} onPress={startEditing} style={styles.detailAction}><Text style={styles.edit}>Edit</Text></Pressable>
+          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
+                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit recipe ${selected.title}`} disabled={historyBusy} onPress={startEditing} style={styles.detailAction}><Text style={styles.edit}>Edit</Text></Pressable>
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Delete recipe ${selected.title}`}
+                      disabled={historyBusy}
                       onPress={() => Alert.alert(
                         'Delete saved recipe?',
                         selected.title,
@@ -326,6 +476,34 @@ export default function RecipesScreen() {
                 <Text style={styles.sectionTitle}>Method</Text>
                 {selected.steps.map((step, index) => <Text key={index} style={styles.step}><Text style={styles.stepNumber}>{index + 1}. </Text>{step}</Text>)}
                 {!!selected.notes?.length && <><Text style={styles.sectionTitle}>Notes</Text>{selected.notes.map((note, index) => <Text key={index} style={styles.line}>• {note}</Text>)}</>}
+                {readRecipeHistory && (
+                  <View style={styles.shoppingSection}>
+                    <Pressable accessibilityRole="button" disabled={historyBusy} onPress={() => void loadHistory()} style={styles.shoppingLink}>
+                      <Text style={styles.shoppingLinkText}>{sharedCookingRefreshPending ? 'Retry recipe refresh' : history === null ? 'Show recipe edit history' : 'Refresh recipe edit history'}</Text>
+                    </Pressable>
+                    {restoreSaved && <Text accessibilityLiveRegion="polite" style={styles.line}>{sharedCookingRefreshPending ? 'Recipe edit saved. Refresh the recipe to see it.' : 'Recipe edit saved.'}</Text>}
+                    {historyError && <Text accessibilityRole="alert" style={styles.delete}>{historyError}</Text>}
+                    {history?.length === 0 && <Text style={styles.line}>No text edits recorded for this recipe.</Text>}
+                    {history?.map(entry => (
+                      <View key={entry.effectId}>
+                        <Text style={styles.sectionTitle}>{historyField(selected, entry)}</Text>
+                        <Text style={styles.line}>{(Array.isArray(entry.value) ? entry.value.join('\n') : entry.value) || 'Empty text'}</Text>
+                        <Text style={styles.cardMeta}>{entry.status === 'current' ? 'Current edit' : entry.status === 'competing' ? 'Competing edit' : 'Earlier edit'}</Text>
+                        {entry.status !== 'current' && restoreRecipeEdit && (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Restore ${historyField(selected, entry).toLowerCase()} edit`}
+                            disabled={historyBusy || !canEditSharedContent}
+                            onPress={() => void loadHistory(entry)}
+                            style={styles.detailAction}
+                          >
+                            <Text style={styles.edit}>Restore this edit</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                )}
               </>
             )}
           </ScrollView>

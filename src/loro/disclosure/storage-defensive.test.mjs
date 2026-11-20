@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {TransactionalStorage} from '../storage/core.ts';
+test('policy and review reads detach nested values even when the transaction returns live references',async()=>{
+ const records=new Map(),run=async(_write,fn)=>fn({get:async k=>records.get(k),put:async(k,v)=>records.set(k,v),keys:async()=>[...records.keys()]}),storage=new TransactionalStorage(run);
+ records.set(JSON.stringify(['disclosure-policy','s','p']),{policy:{nested:{value:'original'}},policyHash:'p',approvals:[]});records.set(JSON.stringify(['disclosure-review','s','r']),{record:{nested:{value:'original'}},state:'reviewed',context:{nested:{value:'original'}}});
+ const policy=(await storage.readDisclosurePolicy('s','p')).value,review=(await storage.readDisclosureReview('s','r')).value;policy.policy.nested.value='changed';review.record.nested.value='changed';review.context.nested.value='changed';assert.equal(records.get(JSON.stringify(['disclosure-policy','s','p'])).policy.nested.value,'original');assert.equal(records.get(JSON.stringify(['disclosure-review','s','r'])).record.nested.value,'original');assert.equal(records.get(JSON.stringify(['disclosure-review','s','r'])).context.nested.value,'original');
+});
