@@ -603,6 +603,11 @@ test('frozen selected retention holds a shopping copy when its recipe field is e
  const recipientRecord=must(await c.storage.readPairingAuthority(scope));
  const recipientService=pairRotation(c,c.runtime,recipientKeys,otherWrap.privateKey,otherRecipient.wrappingKey).draftRotation;
  const reviewedFile=await recipientService.reviewFile({file:frame});
+ const alteredSuccessor=structuredClone(exported);
+ const nextState=JSON.parse(new TextDecoder().decode(alteredSuccessor.publisherRecord.authorityState));
+ nextState.selections.at(-1).signature='0'.repeat(128);
+ alteredSuccessor.publisherRecord.authorityState=authorityBytes(nextState);
+ await assert.rejects(()=>recipientService.reviewFile({file:encodeDraftRotationRelease(alteredSuccessor)}),/INVALID_AUTHORITY/);
  assert.equal(reviewedFile.eventHash,eventHash);
  assert.equal(reviewedFile.sourceRevision,recipientRecord.revision);
  const installInput={file:frame,confirmed:reviewedFile.confirmation,sourceRevision:reviewedFile.sourceRevision,explicit:true};

@@ -37,7 +37,11 @@ export async function verifyDraftRotationRelease({storage,scope,pin,provider,sod
  if(local.state.events.length>=MAX_AUTHORITY_HISTORY||local.state.selections.length>=MAX_AUTHORITY_HISTORY)throw Error('AUTHORITY_HISTORY_FULL');
  let published;
  try {published=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(publisherRecord.authorityState));} catch {throw Error('INVALID_AUTHORITY');}
- if(!Array.isArray(published.events)||!published.events.length||!Array.isArray(published.selections)||!published.selections.length||!Number.isSafeInteger(publisherRecord.revision)||publisherRecord.revision<1)throw Error('INVALID_AUTHORITY');
+ if(!published||!Array.isArray(published.events)||!published.events.length||!Array.isArray(published.selections)||!published.selections.length||
+    !same(publisherRecord.scope,scope)||!same(publisherRecord.authorityState,authorityBytes(published))||
+    publisherRecord.acceptedParent!==grant.eventHash||published.activeHead!==publisherRecord.acceptedParent||
+    publisherRecord.authorizationSnapshot!==await snapshotId(provider,published)||
+    !Number.isSafeInteger(publisherRecord.revision)||publisherRecord.revision<1)throw Error('INVALID_AUTHORITY');
  const prior=structuredClone(published);
  prior.events.pop(); prior.selections.pop(); prior.activeHead=manifest.parentHead;
  const parentRecord={scope,revision:publisherRecord.revision-1,acceptedParent:manifest.parentHead,authorizationSnapshot:manifest.authorizationSnapshot,authorityState:authorityBytes(prior)};
