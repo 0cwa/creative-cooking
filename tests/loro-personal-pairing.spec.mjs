@@ -25,8 +25,8 @@ async function start(page){
 }
 async function saveMessage(page,message){
  await page.goto('./chef');
- await label(page,'Message Chef').fill(message);
- await label(page,'Save private message').click();
+ await label(page,'Private cooking note').fill(message);
+ await label(page,'Save note').click();
  await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();
  await button(page,'Open settings').last().click();
 }
@@ -230,7 +230,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
     }finally{db.close()}
    },next);
    await click(source,'Back');
-   await expect(label(source,'Message Chef')).toBeVisible();
+   await expect(label(source,'Private cooking note')).toBeVisible();
    const original=await swapInitiator(null);
    await button(source,'Open settings').last().click();
    await expect(label(source,'My personal pairing proof')).toHaveCount(0);
@@ -291,8 +291,8 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(originalPin);
    const selected=await databaseState(receiver);
    await click(receiver,'Back');
-   await label(receiver,'Message Chef').fill('This edit must wait for the selected workspace');
-   await label(receiver,'Save private message').click();
+   await label(receiver,'Private cooking note').fill('This edit must wait for the selected workspace');
+   await label(receiver,'Save note').click();
    await expect(receiver.getByText('This edit must wait for the selected workspace',{exact:true})).toHaveCount(0);
    expect(await databaseState(receiver)).toEqual(selected);
    await button(receiver,'Open settings').last().click();

@@ -703,9 +703,9 @@ const personalRevision=page=>page.evaluate(async()=>{
 async function registerRecovery(a,b,c){
  await c.goto('./chef');
  await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();
- await c.getByLabel('Message Chef').fill('Private continuity dinner');
+ await c.getByLabel('Private cooking note').fill('Private continuity dinner');
  const before=await personalRevision(c);
- await c.getByLabel('Save private message').click();
+ await c.getByLabel('Save note').click();
  await expect(c.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
  await expect.poll(()=>personalRevision(c),{timeout:15_000}).toBeGreaterThan(before);
  await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();

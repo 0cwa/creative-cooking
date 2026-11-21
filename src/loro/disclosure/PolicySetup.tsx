@@ -71,7 +71,7 @@ export function PolicySetup({ service, provider, deviceId, onAccepted }: {
         placeholderTextColor={colors.muted} value={endpoint} editable={!busy} autoCapitalize="none" autoCorrect={false}
         onChangeText={value => { setEndpoint(value); setDraft(null); setError(''); }}
         style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surface }]} />
-      <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: block, disabled: busy }} disabled={busy}
+      <Pressable accessibilityRole="checkbox" aria-checked={block} accessibilityState={{ checked: block, disabled: busy }} disabled={busy}
         onPress={() => { setBlock(value => !value); setDraft(null); setError(''); }} style={styles.checkbox}>
         <Text style={[styles.body, { color: colors.text }]}>{block ? '☑' : '☐'}</Text>
         <Text style={[styles.body, { flex: 1, color: colors.text }]}>Block external processing instead of allowing a reviewed preference override</Text>

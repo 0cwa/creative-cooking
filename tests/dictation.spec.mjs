@@ -58,7 +58,7 @@ test('on-device dictation stays active across browser ends until the user presse
   });
 
   await startLocalWorkspace(page,'./chef');
-  const composer = page.getByLabel('Message Chef');
+  const composer = page.getByLabel('Private cooking note');
 
   await page.getByLabel('Start dictation').click();
   await expect(page.getByLabel('Stop dictation')).toBeVisible();
@@ -91,7 +91,7 @@ test('compact mic stays beside the composer and explains unavailable dictation',
   await startLocalWorkspace(page,'./chef');
 
   const mic = page.getByLabel('Start dictation');
-  const composer = page.getByLabel('Message Chef');
+  const composer = page.getByLabel('Private cooking note');
   await expect(page.getByLabel('Edit meal context', { exact: true })).toHaveCount(0);
   await expect(mic).toBeVisible();
   await expect(page.getByLabel('Use browser dictation engine')).toHaveCount(0);

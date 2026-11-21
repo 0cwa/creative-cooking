@@ -22,8 +22,8 @@ async function start(page){
 }
 async function savedMessage(page,message){
  await page.goto('./chef');
- await label(page,'Message Chef').fill(message);
- await label(page,'Save private message').click();
+ await label(page,'Private cooking note').fill(message);
+ await label(page,'Save note').click();
  await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();
 }
 async function download(page,path,locator){

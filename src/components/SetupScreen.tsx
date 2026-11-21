@@ -49,7 +49,7 @@ export function SetupDisclosure({ title, preserveContent = false, children }: Pr
   const [opened, setOpened] = useState(false);
   return (
     <View style={{ gap: 12 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ expanded: open }}
+      <Pressable accessibilityRole="button" accessibilityLabel={title} aria-expanded={open} accessibilityState={{ expanded: open }}
         onPress={() => { setOpened(true); setOpen(value => !value); }} style={[setupStyles.disclosure, { borderColor: colors.border }]}>
         <Text style={[setupStyles.disclosureText, { color: colors.text }]}>{title}</Text>
         <Text aria-hidden style={{ color: colors.muted, fontSize: 20 }}>{open ? '−' : '+'}</Text>

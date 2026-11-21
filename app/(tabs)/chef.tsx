@@ -437,10 +437,10 @@ export default function ChefScreen() {
             <Text style={styles.title}>Chef</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Open previous chats" onPress={() => setHistoryOpen(true)} style={styles.historyButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel={privateNotes ? 'Open previous notes' : 'Open previous chats'} onPress={() => setHistoryOpen(true)} style={styles.historyButton}>
               <Text style={styles.historyText}>{privateNotes ? 'Notes' : 'Chats'}{app.chatHistory.length ? ` ${app.chatHistory.length}` : ''}</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={startNewChat} style={styles.newChatButton}><Text style={styles.newChatText}>{privateNotes ? 'New notes' : 'New chat'}</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel={privateNotes ? 'Start new notes' : 'Start a new chat'} onPress={startNewChat} style={styles.newChatButton}><Text style={styles.newChatText}>{privateNotes ? 'New notes' : 'New chat'}</Text></Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.iconButton}><SettingsGlyph /></Pressable>
           </View>
         </View>
@@ -485,7 +485,7 @@ export default function ChefScreen() {
                 </Pressable>
               </View>
               <Text style={styles.modeHelp}>On compatible browsers, you can optionally download an experimental on-device Chef in Settings.</Text>
-              <Pressable accessibilityRole="button" accessibilityState={{ expanded: cloudDetailsOpen }} onPress={() => setCloudDetailsOpen(!cloudDetailsOpen)} style={styles.modeDetailsButton}>
+              <Pressable accessibilityRole="button" aria-expanded={cloudDetailsOpen} accessibilityState={{ expanded: cloudDetailsOpen }} onPress={() => setCloudDetailsOpen(!cloudDetailsOpen)} style={styles.modeDetailsButton}>
                 <Text style={styles.modeDetailsText}>{cloudDetailsOpen ? 'Hide cloud Chef details' : 'Why is cloud Chef unavailable?'}</Text>
               </Pressable>
               {cloudDetailsOpen && <SharedChefRequest items={app.pantry} providerId={app.settings.providerId} model={app.settings.model} onComplete={(text,proposals)=>app.appendChatMessage(chatMessage('assistant',text,proposals))}/>}
@@ -615,7 +615,7 @@ export default function ChefScreen() {
               </Pressable>
             )}
             <TextInput
-              accessibilityLabel="Message Chef"
+              accessibilityLabel={privateNotes ? 'Private cooking note' : 'Message Chef'}
               accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : privateNotes ? 'Save a private cooking note. No AI reply will be requested.' : undefined}
               editable={!dictationActive}
               value={input}
@@ -630,7 +630,7 @@ export default function ChefScreen() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={busy ? 'Stop Chef response' : privateNotes ? 'Save private message' : 'Send message'}
+              accessibilityLabel={busy ? 'Stop Chef response' : privateNotes ? 'Save note' : 'Send message'}
               disabled={!busy && (!input.trim() || dictationActive || localChefUnavailable)}
               onPress={busy ? stop : () => void send()}
               style={[styles.send, privateNotes && styles.saveNote, (!busy && (!input.trim() || dictationActive || localChefUnavailable)) && styles.sendDisabled]}
@@ -660,6 +660,7 @@ export default function ChefScreen() {
 
       <ConversationHistoryModal
         visible={historyOpen}
+        mode={privateNotes ? 'notes' : 'chats'}
         conversations={app.chatHistory}
         onClose={() => setHistoryOpen(false)}
         onOpen={openConversation}

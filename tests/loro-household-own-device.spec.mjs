@@ -115,8 +115,8 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
   }
   await addIngredient(receiver,'Original receiver thyme');
   await receiver.goto('./chef');
-  await label(receiver,'Message Chef').fill('Receiver private cooking notes');
-  await label(receiver,'Save private message').click();
+  await label(receiver,'Private cooking note').fill('Receiver private cooking notes');
+  await label(receiver,'Save note').click();
   await notice(receiver,'Saved on this device');
   await settings(sponsor);
   await settings(receiver);

@@ -92,6 +92,9 @@ test('a first pantry ingredient stays saved when a new cook returns without an a
   await page.setViewportSize({width:390, height:844});
   await startLocalWorkspace(page);
 
+  await button(page, 'Use example rice').click();
+  await expect(page.getByLabel('Ingredient and details')).toHaveValue('rice');
+  await expect(page.getByTestId(/^pantry-item-/)).toHaveCount(0);
   await page.getByLabel('Ingredient and details').fill('First kitchen carrots');
   await page.getByLabel('Add ingredient', {exact:true}).click();
   await expect(page.getByText('First kitchen carrots', {exact:true})).toBeVisible();

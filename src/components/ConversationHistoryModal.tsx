@@ -3,13 +3,13 @@ import { Alert, Animated, Modal, PanResponder, Platform, Pressable, ScrollView, 
 import { StyleSheet } from '@/theme/StyleSheet';
 import type { ChatConversation } from '@/domain/types';
 
-function metaText(conversation: ChatConversation): string {
+function metaText(conversation: ChatConversation, notes: boolean): string {
   const count = conversation.messages.length;
   const date = new Date(conversation.updatedAt);
   const formatted = Number.isNaN(date.getTime())
     ? ''
     : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  return `${count} message${count === 1 ? '' : 's'}${formatted ? ` · ${formatted}` : ''}`;
+  return `${count} ${notes ? 'note' : 'message'}${count === 1 ? '' : 's'}${formatted ? ` · ${formatted}` : ''}`;
 }
 
 function previewText(conversation: ChatConversation): string {
@@ -20,10 +20,12 @@ function previewText(conversation: ChatConversation): string {
 
 function ConversationRow({
   conversation,
+  notes,
   onOpen,
   onDelete
 }: {
   conversation: ChatConversation;
+  notes: boolean;
   onOpen(): void;
   onDelete(): void;
 }) {
@@ -51,19 +53,19 @@ function ConversationRow({
       <Animated.View style={[styles.row, { transform: [{ translateX: x }] }]} {...responder.panHandlers}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open conversation ${conversation.title}`}
+          accessibilityLabel={`${notes ? 'Open notes' : 'Open conversation'} ${conversation.title}`}
           onPress={onOpen}
           style={({ pressed }) => [styles.rowMain, pressed && styles.pressed]}
         >
           <Text numberOfLines={1} style={styles.rowTitle}>{conversation.title}</Text>
-          <Text style={styles.rowMeta}>{metaText(conversation)}</Text>
+          <Text style={styles.rowMeta}>{metaText(conversation, notes)}</Text>
           {previewText(conversation) ? (
             <Text numberOfLines={2} style={styles.rowPreview}>{previewText(conversation)}</Text>
           ) : null}
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Delete conversation ${conversation.title}`}
+          accessibilityLabel={`${notes ? 'Delete notes' : 'Delete conversation'} ${conversation.title}`}
           onPress={onDelete}
           style={({ pressed }) => [styles.deleteButton, pressed && styles.pressed]}
         >
@@ -76,26 +78,30 @@ function ConversationRow({
 
 export function ConversationHistoryModal({
   visible,
+  mode = 'chats',
   conversations,
   onClose,
   onOpen,
   onDelete
 }: {
   visible: boolean;
+  mode?: 'chats' | 'notes';
   conversations: ChatConversation[];
   onClose(): void;
   onOpen(id: string): void;
   onDelete(id: string): void;
 }) {
+  const notes = mode === 'notes';
+  const closeLabel = notes ? 'Close previous notes' : 'Close previous conversations';
   const requestDelete = (conversation: ChatConversation) => {
-    const message = `Delete “${conversation.title}”? This conversation cannot be recovered.`;
+    const message = `Delete “${conversation.title}”? ${notes ? 'These notes' : 'This conversation'} cannot be recovered.`;
 
     if (Platform.OS === 'web') {
       if (typeof window !== 'undefined' && window.confirm(message)) onDelete(conversation.id);
       return;
     }
 
-    Alert.alert('Delete conversation?', message, [
+    Alert.alert(notes ? 'Delete notes?' : 'Delete conversation?', message, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -115,20 +121,22 @@ export function ConversationHistoryModal({
       <View style={styles.backdrop}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Close previous conversations"
+          accessibilityLabel={closeLabel}
           onPress={onClose}
           style={styles.dismissArea}
         />
         <View accessibilityViewIsModal style={styles.card}>
           <View style={styles.header}>
             <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>CHEF HISTORY</Text>
-              <Text style={styles.title}>Previous chats</Text>
-              <Text style={styles.subtitle}>Tap a chat to continue it. Swipe left or use × to delete.</Text>
+              <Text style={styles.eyebrow}>{notes ? 'COOKING NOTES' : 'CHEF HISTORY'}</Text>
+              <Text accessibilityRole="header" style={styles.title}>{notes ? 'Previous notes' : 'Previous chats'}</Text>
+              <Text style={styles.subtitle}>{notes
+                ? 'Open saved notes to keep writing. Swipe left or use × to delete.'
+                : 'Tap a chat to continue it. Swipe left or use × to delete.'}</Text>
             </View>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close previous conversations"
+              accessibilityLabel={closeLabel}
               onPress={onClose}
               style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
             >
@@ -142,6 +150,7 @@ export function ConversationHistoryModal({
                 <ConversationRow
                   key={conversation.id}
                   conversation={conversation}
+                  notes={notes}
                   onOpen={() => onOpen(conversation.id)}
                   onDelete={() => requestDelete(conversation)}
                 />
@@ -149,8 +158,10 @@ export function ConversationHistoryModal({
             </ScrollView>
           ) : (
             <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No previous chats yet</Text>
-              <Text style={styles.emptyText}>Starting a new chat will keep the current conversation here automatically.</Text>
+              <Text style={styles.emptyTitle}>{notes ? 'No previous notes yet' : 'No previous chats yet'}</Text>
+              <Text style={styles.emptyText}>{notes
+                ? 'Starting new notes will keep your current notes here automatically.'
+                : 'Starting a new chat will keep the current conversation here automatically.'}</Text>
             </View>
           )}
         </View>
