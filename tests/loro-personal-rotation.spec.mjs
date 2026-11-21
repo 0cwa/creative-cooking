@@ -14,9 +14,9 @@ const newer='Private message under the rotated key';
 
 async function start(page){
  await page.goto('./');
- await click(page,'Start fresh local preview');
- await click(page,'Review household policy');
- await click(page,'Accept this household policy');
+ await click(page,'Set up my kitchen');
+ await click(page,'Review privacy settings');
+ await click(page,'Accept settings and open my kitchen');
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto('./settings');
 }
@@ -73,7 +73,7 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await start(owner);
    await owner.getByPlaceholder('API key',{exact:true}).fill(credential);
    await owner.getByRole('button',{name:/^Save .+ API key$/}).click();
-   await expect(owner.getByText('Connected',{exact:true})).toBeVisible();
+   await expect(owner.getByText('Key saved',{exact:true})).toBeVisible();
    await savedMessage(owner,original);
    await start(guardian);
    await openRecovery(guardian);
@@ -82,7 +82,7 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await click(guardian,'Export my holder key');
    bundle=JSON.parse(await output(guardian).inputValue());
    await owner.getByLabel('Open settings').last().click();
-   await expect(owner.getByText('Connected',{exact:true})).toBeVisible();
+   await expect(owner.getByText('Key saved',{exact:true})).toBeVisible();
    const encrypted=owner.getByText(/^\d+ encrypted updates? retained for exchange\.$/);
    await expect(encrypted).toBeVisible();
    const previousCount=await encrypted.textContent();
@@ -175,7 +175,7 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await recipient.goto('./settings');
    await expect(label(recipient,'Personal document generation')).toHaveText('Personal generation 2');
    await expect(label(recipient,'City')).toHaveValue('Fixturetown');
-   await expect(recipient.getByText('Not connected',{exact:true})).toBeVisible();
+   await expect(recipient.getByText('No key saved',{exact:true})).toBeVisible();
    await openRecovery(recipient);
    await label(recipient,'Guardian names').fill(bundle.holder);
    await label(recipient,'Required guardians').fill('1');
@@ -254,10 +254,11 @@ test('Settings rotates personal authority and the guardian catalog across indepe
     localStorage.removeItem('creative-cooking-storage-choice-v1');
    });
    await offline.goto('./');
-   await expect(offline.getByText('Choose a cooking workspace',{exact:true})).toBeVisible();
+   await expect(offline.getByText('Welcome to Creative Cooking',{exact:true})).toBeVisible();
    await offline.context().setOffline(true);
    await offline.reload();
-   await expect(offline.getByText('Choose a cooking workspace',{exact:true})).toBeVisible();
+   await expect(offline.getByText('Welcome to Creative Cooking',{exact:true})).toBeVisible();
+   await click(offline,'Recover an existing kitchen');
    await restorePersonal(offline,newArchive,code);
    await expect(offline.getByText('Private data copy available to read.')).toBeVisible();
    await expect(offline.getByText('city: Fixturetown',{exact:true})).toBeVisible();

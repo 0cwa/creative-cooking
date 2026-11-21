@@ -35,9 +35,9 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   for(const page of [sponsor,newcomer]){
    page.setDefaultTimeout(12_000);
    await page.goto(app);
-   await button(page,'Start fresh local preview').click();
-   await button(page,'Review household policy').click();
-   await button(page,'Accept this household policy').click();
+   await button(page,'Set up my kitchen').click();
+   await button(page,'Review privacy settings').click();
+   await button(page,'Accept settings and open my kitchen').click();
    await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   }
   await label(newcomer,'Ingredient and details').fill(originalPantry);
@@ -480,9 +480,9 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   // two-adult document set, using the normal Settings controls on every peer.
   const third=await thirdContext.newPage();third.setDefaultTimeout(20_000);
   await third.goto(app);
-  await button(third,'Start fresh local preview').click();
-  await button(third,'Review household policy').click();
-  await button(third,'Accept this household policy').click();
+  await button(third,'Set up my kitchen').click();
+  await button(third,'Review privacy settings').click();
+  await button(third,'Accept settings and open my kitchen').click();
   await expect(third.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await settings(third);
   const thirdIdentity=await text(third,'Public device identity');
@@ -677,9 +677,9 @@ test('Settings transfers and reopens a verified recipe document set and new reci
 test('Recipe creation preserves the original submission and retries a saved recipe refresh without writing again',async({page})=>{
  const title='Retry market soup';
  await page.goto(app);
- await button(page,'Start fresh local preview').click();
- await button(page,'Review household policy').click();
- await button(page,'Accept this household policy').click();
+ await button(page,'Set up my kitchen').click();
+ await button(page,'Review privacy settings').click();
+ await button(page,'Accept settings and open my kitchen').click();
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto(app+'recipes');
  await expect(label(page,'Add recipe')).toBeEnabled();
@@ -733,9 +733,9 @@ test('Recipe creation preserves the original submission and retries a saved reci
 
 test('Recipe retry checks new allergies only when the recipe has not committed',async({page})=>{
  await page.goto(app);
- await button(page,'Start fresh local preview').click();
- await button(page,'Review household policy').click();
- await button(page,'Accept this household policy').click();
+ await button(page,'Set up my kitchen').click();
+ await button(page,'Review privacy settings').click();
+ await button(page,'Accept settings and open my kitchen').click();
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto(app+'recipes');
 

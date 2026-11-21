@@ -31,7 +31,7 @@ test('OpenRouter friend links activate OpenRouter after persisted provider setti
 
   await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
   await expect(page.getByText('OpenRouter connection', { exact: true })).toBeVisible();
-  await expect(page.getByText('Connected', { exact: true })).toBeVisible();
+  await expect(page.getByText('Key saved', { exact: true })).toBeVisible();
   expect(page.url()).not.toContain('ort=');
 
   await expect.poll(async () => page.evaluate(() => (

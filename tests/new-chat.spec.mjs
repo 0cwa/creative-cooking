@@ -10,7 +10,7 @@ test('New chat archives the current conversation and previous chats can be reope
   await page.getByLabel('Start a new chat').click();
 
   await expect(page.getByText('Keep this conversation for later.', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('What sounds good?', { exact: true })).toBeVisible();
+  await expect(page.getByText('Keep a cooking idea', { exact: true })).toBeVisible();
 
   await page.getByLabel('Open previous chats').click();
   await expect(page.getByText('Previous chats', { exact: true })).toBeVisible();

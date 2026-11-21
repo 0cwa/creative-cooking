@@ -8,11 +8,12 @@ const notice = (page, value) => page.getByRole('alert').filter({hasText:value});
 
 async function start(page, selectRule = async () => {}) {
   await page.goto('./');
+  await button(page, 'Household options').click();
   await expect(page.getByText(/with the default, one adult can approve an invitation/i)).toBeVisible();
   await selectRule(page);
-  await button(page, 'Start fresh local preview').click();
-  await button(page, 'Review household policy').click();
-  await button(page, 'Accept this household policy').click();
+  await button(page, 'Set up my kitchen').click();
+  await button(page, 'Review privacy settings').click();
+  await button(page, 'Accept settings and open my kitchen').click();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
 
@@ -172,8 +173,14 @@ test('fresh setup bounds fixed quorum by the actual electorate and preserves the
     await page.getByRole('radio', {name:/Fixed number of adults/}).click();
     const count = page.getByLabel('Number of required adult approvals');
     await count.fill('2');
-    await expect(button(page, 'Start fresh local preview')).toBeDisabled();
+    await expect(button(page, 'Set up my kitchen')).toBeDisabled();
     await expect(page.getByText('Enter a whole number from 1 to 1, the size of the current electorate.')).toBeVisible();
+    await button(page, 'Household options').click();
+    await expect(count).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveText('Open Household options and choose a valid invitation rule before continuing.');
+    await expect(button(page, 'Set up my kitchen')).toBeDisabled();
+    await button(page, 'Household options').click();
+    await expect(count).toHaveValue('2');
     await count.fill('1');
   });
   await page.reload();
@@ -188,8 +195,9 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
   const [pendingChooser,readyChooser]=await Promise.all([context.newPage(),context.newPage()]);
   for(const chooser of [pendingChooser,readyChooser]){
     await chooser.goto(page.url());
-    await expect(button(chooser,'Start fresh local preview')).toBeVisible();
+    await expect(button(chooser,'Set up my kitchen')).toBeVisible();
   }
+  await button(page, 'Household options').click();
   await page.getByRole('radio', {name:/Every adult/}).click();
   await page.evaluate(key=>{
     const save=Storage.prototype.setItem;
@@ -198,22 +206,22 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
       return save.call(this,name,value);
     };
   },key);
-  await button(page,'Start fresh local preview').click();
+  await button(page,'Set up my kitchen').click();
   await expect(page.getByText('test: ready write failed')).toBeVisible();
   const saved=await page.evaluate(key=>localStorage.getItem(key),key);
   expect(saved).toMatch(/^pending:/);
   const {name,policy}=JSON.parse(saved.slice('pending:'.length));
   expect(policy).toEqual({kind:'unanimous',fixedCount:null});
   expect(await pendingChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(saved);
-  await button(pendingChooser,'Start fresh local preview').click();
-  await expect(button(pendingChooser,'Start fresh local preview')).toHaveCount(0);
+  await button(pendingChooser,'Set up my kitchen').click();
+  await expect(button(pendingChooser,'Set up my kitchen')).toHaveCount(0);
   await expect.poll(()=>pendingChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await page.reload();
-  await button(page,'Review household policy').click();
-  await button(page,'Accept this household policy').click();
+  await button(page,'Review privacy settings').click();
+  await button(page,'Accept settings and open my kitchen').click();
   expect(await page.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await readyChooser.reload();
-  await expect(button(readyChooser,'Start fresh local preview')).toHaveCount(0);
+  await expect(button(readyChooser,'Set up my kitchen')).toHaveCount(0);
   expect(await readyChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await button(page,'Open settings').click();
   await button(page,'Manage adult admission rules').click();

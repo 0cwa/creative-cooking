@@ -1,17 +1,18 @@
 import {LockedWorkspace} from '@/loro/app/LockedWorkspace';
-import {RecoveryStart} from '@/loro/app/RecoveryStart';
 import {PolicySetup} from '@/loro/disclosure/PolicySetup';
-import {AdmissionRulePicker, admissionPolicyFromDraft, type AdmissionRuleDraft} from '@/loro/app/AdmissionRulePicker';
+import {admissionPolicyFromDraft, type AdmissionRuleDraft} from '@/loro/app/AdmissionRulePicker';
 import {validAdmissionPolicy} from '@/loro/authority/validator.mjs';
 import {initialAdmissionPolicy} from '@/loro/app/admission-rule.mjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Platform, ScrollView, Text, View } from 'react-native';
+import { Alert, Platform, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppStateProvider, useAppState } from '@/state/AppState';
 import { FirstOpenLoadingAnimation } from '@/components/FirstOpenLoadingAnimation';
 import { InstallAppPrompt } from '@/components/InstallAppPrompt';
+import { KitchenWelcome } from '@/components/KitchenWelcome';
+import { SetupScreen } from '@/components/SetupScreen';
 
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
@@ -51,7 +52,7 @@ function BootTasks() {
           app.updateSettings({ providerId: 'openrouter', model: 'openrouter/free' });
           Alert.alert(
             'Shared OpenRouter key connected',
-            'This browser can now use the shared provider key. Anyone with the complete share link can use that key until it is revoked.'
+            `${app.storageMode === 'fresh-local' ? 'The shared provider key is saved on this device. Cloud Chef is currently unavailable for this kitchen.' : 'This browser can now use the shared provider key.'} Anyone with the complete share link can use that key until it is revoked.`
           );
         }
       } catch (error) {
@@ -62,7 +63,9 @@ function BootTasks() {
         const connected = await finishOpenRouterOAuthFromLocation();
         if (connected) {
           app.updateSettings({ providerId: 'openrouter', model: 'openrouter/free' });
-          Alert.alert('OpenRouter connected', 'The Chef can now use your OpenRouter account.');
+          Alert.alert('OpenRouter connected', app.storageMode === 'fresh-local'
+            ? 'Your provider key is saved on this device. Cloud Chef is currently unavailable for this kitchen.'
+            : 'The Chef can now use your OpenRouter account.');
         }
       } catch (error) {
         Alert.alert('OpenRouter sign-in failed', error instanceof Error ? error.message : 'Unknown error');
@@ -246,8 +249,8 @@ export default function RootLayout() {
     else if(Platform.OS==='web')globalThis.location.reload();
     else reopenWorkspace();
   }} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
-  if(choice==='policy')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text>Your household policy applies to new cooking changes. Existing items are not automatically approved for external processing.</Text><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></ScrollView></SafeAreaProvider>;
-  if(choice==='choose')return <SafeAreaProvider><ScrollView contentContainerStyle={{padding:24,gap:16}}><Text accessibilityRole="header" style={{fontSize:24}}>Choose a cooking workspace</Text><Text>Start a local workspace for pantry, recipes, shopping, and private notes. Data from the former PowerSync workspace stays on this device and can be opened with the archived PowerSync app.</Text>{error?<Text>{error}</Text>:null}{Platform.OS==='web'?<RecoveryStart/>:null}{(Platform.OS==='web'||Platform.OS==='android')?<><AdmissionRulePicker draft={admissionRule} onChange={setAdmissionRule} adults={1}/><Button title="Start fresh local preview" disabled={!validAdmissionPolicy(admissionPolicy,1)} onPress={()=>void fresh()}/></>:<Text>The fresh local preview is not available on this platform.</Text>}</ScrollView></SafeAreaProvider>;
+  if(choice==='policy')return <SafeAreaProvider><SetupScreen><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></SetupScreen></SafeAreaProvider>;
+  if(choice==='choose')return <SafeAreaProvider><KitchenWelcome admissionRule={admissionRule} onAdmissionRuleChange={setAdmissionRule} onStart={()=>void fresh()} canStart={validAdmissionPolicy(admissionPolicy,1)} error={error}/></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
       <AppStateProvider key={choice} localWorkspace={workspace}>

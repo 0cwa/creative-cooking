@@ -16,9 +16,9 @@ const credential='fixture-pairing-credential-it-stays-local';
 
 async function start(page){
  await page.goto('./');
- await click(page,'Start fresh local preview');
- await click(page,'Review household policy');
- await click(page,'Accept this household policy');
+ await click(page,'Set up my kitchen');
+ await click(page,'Review privacy settings');
+ await click(page,'Accept settings and open my kitchen');
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto('./settings');
  await expect(label(page,'This personal device')).toBeVisible();
@@ -117,7 +117,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await start(source);await start(receiver);await start(other);
    await source.getByPlaceholder('API key',{exact:true}).fill(credential);
    await source.getByRole('button',{name:/^Save .+ API key$/}).click();
-   await expect(source.getByText('Connected',{exact:true})).toBeVisible();
+   await expect(source.getByText('Key saved',{exact:true})).toBeVisible();
    await saveMessage(source,privateMessage);
    await saveMessage(receiver,recipientOriginal);
   });
@@ -319,7 +319,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(sourcePin);
    expect(await receiver.evaluate(()=>sessionStorage.getItem('creative-cooking-branch-reopen-v1'))).toBe(null);
    await expect(label(receiver,'Open household')).toHaveText(originalHousehold);
-   await expect(receiver.getByText('Not connected',{exact:true})).toBeVisible();
+   await expect(receiver.getByText('No key saved',{exact:true})).toBeVisible();
    const installed=new LoroDoc();
    installed.import(Uint8Array.from(await installedSnapshot(receiver,scopeId)));
    const operations=JSON.stringify(installed.exportJsonUpdates(undefined,undefined,false));

@@ -97,6 +97,7 @@ export default function SettingsScreen() {
   const whisperDownloadController = useRef<AbortController | null>(null);
   const settingsScrollRef = useRef<ScrollView>(null);
   const dictationFocusHandledRef = useRef(false);
+  const localChefFocusHandledRef = useRef(false);
 
   useEffect(() => {
     const localTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -514,7 +515,9 @@ export default function SettingsScreen() {
           )}
         </Section>
 
-        <Section title="Chef provider" subtitle="Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.">
+        <Section title="Chef provider" subtitle={app.storageMode === 'fresh-local'
+          ? 'Cloud Chef is temporarily unavailable for this kitchen. Saving a provider key does not enable cloud replies. You can browse recipe ideas without a key.'
+          : 'Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.'}>
           <Text style={styles.label}>Provider</Text>
           <View style={styles.providerGrid}>
             {CLOUD_PROVIDER_IDS.map((providerId) => {
@@ -539,7 +542,7 @@ export default function SettingsScreen() {
             <>
           <View style={styles.statusRow}>
             <Text style={styles.label}>{provider.name} connection</Text>
-            <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Connected' : 'Not connected'}</Text>
+            <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Key saved' : 'No key saved'}</Text>
           </View>
 
           {app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
@@ -628,7 +631,9 @@ export default function SettingsScreen() {
           ) : (
             <View style={styles.capabilityBox}>
               <Text style={styles.capabilityTitle}>Experimental local Chef is active</Text>
-              <Text style={styles.help}>Select a cloud provider above to switch back to a hosted model.</Text>
+              <Text style={styles.help}>{app.storageMode === 'fresh-local'
+                ? 'Local Chef uses a downloaded model in this browser. Cloud replies remain unavailable for this kitchen.'
+                : 'Select a cloud provider above to switch back to a hosted model.'}</Text>
             </View>
           )}
         </Section>
@@ -641,9 +646,9 @@ export default function SettingsScreen() {
             setTimeout(() => settingsScrollRef.current?.scrollTo({ y, animated: false }), 0);
           }}
         >
-        <Section title="Local models" subtitle="Experimental in-browser inference. Downloaded models run on this device and do not require an API key.">
+        <Section title="Dictation" subtitle="Turn speech into text on this device. Voice input is separate from Chef’s recipe suggestions.">
           <View style={styles.capabilityBox}>
-            <Text style={styles.capabilityTitle}>Dictation</Text>
+            <Text style={styles.capabilityTitle}>Voice input</Text>
             <Text style={styles.help}>Choose what the microphone button beside the Chef text field uses. You can change this any time.</Text>
             <View accessibilityRole="radiogroup" style={styles.providerGrid}>
               <Pressable
@@ -807,6 +812,20 @@ export default function SettingsScreen() {
             <Text style={styles.help}>Checking local voice-model compatibility…</Text>
           )}
 
+        </Section>
+        </View>
+
+        <View
+          testID="local-chef-settings"
+          onLayout={(event) => {
+            if (params.focus !== 'local-chef' || localChefFocusHandledRef.current
+              || !localCapability || !whisperCapability || localModelCached === null || whisperModelCached === null) return;
+            localChefFocusHandledRef.current = true;
+            const y = Math.max(0, event.nativeEvent.layout.y - 12);
+            setTimeout(() => settingsScrollRef.current?.scrollTo({ y, animated: false }), 0);
+          }}
+        >
+        <Section title="Local Chef" subtitle="Optional, experimental recipe suggestions in a compatible web browser. Downloading the model is your choice; no API key is needed.">
           <View style={styles.capabilityBox}>
             <Text style={styles.capabilityTitle}>WebLLM · Llama 3.2 1B</Text>
             <Text style={styles.help}>Model: {WEBLLM_MODEL_ID}</Text>
