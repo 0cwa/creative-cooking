@@ -15,16 +15,16 @@ export function KitchenWelcome({ admissionRule, onAdmissionRuleChange, onStart, 
   return (
     <SetupScreen>
       <View style={{ gap: 12 }}>
-        <Text style={[styles.eyebrow, { color: colors.accent }]}>A LITTLE INSPIRATION FOR EVERYDAY COOKING</Text>
+        <Text style={[styles.eyebrow, { color: colors.accent }]}>EVERYDAY INGREDIENTS, FRESH IDEAS</Text>
         <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>Welcome to Creative Cooking</Text>
         <Text style={[styles.subtitle, { color: colors.muted }]}>Find new ways to enjoy what’s already in your kitchen.</Text>
       </View>
 
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>Start with something simple</Text>
-        <Text style={[styles.body, { color: colors.muted }]}><Text style={{ fontWeight: '700', color: colors.text }}>Your pantry.</Text> Add a few ingredients you have. A name is enough; there’s no inventory to maintain.</Text>
-        <Text style={[styles.body, { color: colors.muted }]}><Text style={{ fontWeight: '700', color: colors.text }}>Your recipes.</Text> Browse built-in recipe ideas, save a copy, and make it your own. Adapt the portions and collect what you need in Shopping.</Text>
-        <Text style={[styles.small, { color: colors.accent }]}>No account needed. Pantry, saved recipes, and shopping work offline.</Text>
+        <Text style={[styles.body, { color: colors.muted }]}><Text style={{ fontWeight: '700', color: colors.text }}>Your pantry.</Text> Add a few ingredients you have. A name is enough.</Text>
+        <Text style={[styles.body, { color: colors.muted }]}><Text style={{ fontWeight: '700', color: colors.text }}>Your recipes.</Text> Try a built-in idea, save a copy, and make it your own. Plan a shop for anything missing.</Text>
+        <Text style={[styles.small, { color: colors.accent }]}>No account needed. Your kitchen works offline.</Text>
       </View>
 
       <View style={{ gap: 10 }}>
