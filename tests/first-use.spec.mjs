@@ -243,3 +243,72 @@ test('a first pantry ingredient stays saved when a new cook returns without an a
   await expect(button(page, 'Review privacy settings')).toHaveCount(0);
   expect(externalRequests).toEqual([]);
 });
+
+test('a second setup tab can reopen a kitchen whose privacy was already accepted elsewhere', async ({page, context}) => {
+  await openPrivacyStep(page);
+  const namespace = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
+  const other = await context.newPage();
+  try {
+    await other.goto(page.url());
+    await expect(other.getByTestId('privacy-summary')).toBeVisible();
+    await button(other, 'Advanced privacy options').click();
+    await other.getByRole('checkbox').check();
+    await expect(other.getByTestId('privacy-summary')).toContainText('blocked');
+    await expect(button(other, 'Accept settings and open my kitchen')).toBeEnabled();
+
+    await button(page, 'Accept settings and open my kitchen').click();
+    await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    await button(other, 'Accept settings and open my kitchen').click();
+    await expect(button(other, 'Open kitchen again')).toBeVisible();
+    const beforeReopen = await acceptedPolicies(other);
+    expect(beforeReopen).toHaveLength(1);
+    expect(beforeReopen[0].policy.rules[0].enforcement).toBe('preference');
+
+    await button(other, 'Open kitchen again').click();
+    await expect(other.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    await expect(other.getByLabel('Ingredient and details')).toBeEditable();
+    expect(await other.evaluate(key => localStorage.getItem(key), workspaceKey)).toBe(namespace);
+    expect(await acceptedPolicies(other)).toEqual(beforeReopen);
+  } finally {
+    await other.close();
+  }
+});
+
+test('a browser missing workspace locks receives useful guidance without creating a kitchen', async ({page}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'locks', {configurable:true, value:undefined});
+  });
+  await page.goto('./');
+  await button(page, 'Set up my kitchen').click();
+  await expect(page.getByRole('alert')).toContainText('browser is missing a feature');
+  await expect(page.getByRole('alert')).toContainText('updated browser');
+  await expect(button(page, 'Set up my kitchen')).toBeEnabled();
+  expect(await page.evaluate(key => localStorage.getItem(key), choiceKey)).toBeNull();
+  expect(await page.evaluate(key => localStorage.getItem(key), workspaceKey)).toBeNull();
+});
+
+test('blocked site storage explains the problem and can retry without resetting data', async ({page}) => {
+  await page.addInitScript(() => {
+    const get = Storage.prototype.getItem;
+    Storage.prototype.getItem = function (key) {
+      if (this === localStorage && key === 'creative-cooking-storage-choice-v1' &&
+        !get.call(sessionStorage, 'test-kitchen-storage-allowed')) {
+        throw new DOMException('Site storage access denied.', 'SecurityError');
+      }
+      return get.call(this, key);
+    };
+  });
+  await page.goto('./');
+  await expect(page.getByRole('heading', {name:'Could not open your kitchen', exact:true})).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('browser is blocking the storage');
+  await expect(page.getByRole('alert')).toContainText('Allow site storage');
+  await expect(button(page, 'Try again')).toBeEnabled();
+  await page.evaluate(() => {
+    localStorage.setItem('creative-cooking-state-v1', 'archived kitchen marker');
+    sessionStorage.setItem('test-kitchen-storage-allowed', '1');
+  });
+  await button(page, 'Try again').click();
+  await expect(page.getByRole('heading', {name:'Welcome to Creative Cooking', exact:true})).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('creative-cooking-state-v1'))).toBe('archived kitchen marker');
+  expect(await page.evaluate(key => localStorage.getItem(key), choiceKey)).toBeNull();
+});

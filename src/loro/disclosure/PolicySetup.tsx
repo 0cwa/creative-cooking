@@ -3,8 +3,12 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { SetupDisclosure, setupStyles as styles, useSetupColors } from '@/components/SetupScreen';
 import { acceptInitialPolicy, prepareInitialPolicy } from './setup.mjs';
 
-export function PolicySetup({ service, provider, deviceId, onAccepted, onBack }: {
-  service: any; provider: any; deviceId: string; onAccepted: () => void; onBack?: () => void;
+function needsKitchenReopen(failure: unknown) {
+  return failure instanceof Error && ['INVALID_AUTHORITY', 'INVALID_PREDECESSOR', 'INITIAL_POLICY_REQUIRES_SOLE_ADULT', 'CONFLICT'].includes(failure.message);
+}
+
+export function PolicySetup({ service, provider, deviceId, onAccepted, onBack, onReopen }: {
+  service: any; provider: any; deviceId: string; onAccepted: () => void; onBack?: () => void; onReopen: () => void;
 }) {
   const colors = useSetupColors();
   const [endpoint, setEndpoint] = useState('');
@@ -14,6 +18,7 @@ export function PolicySetup({ service, provider, deviceId, onAccepted, onBack }:
   const [preparing, setPreparing] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const [prepareAttempt, setPrepareAttempt] = useState(0);
+  const [reopenNeeded, setReopenNeeded] = useState(false);
   const inFlight = useRef(false);
 
   // Preparing only reads the verified authority. Nothing is signed or published
@@ -26,16 +31,22 @@ export function PolicySetup({ service, provider, deviceId, onAccepted, onBack }:
     void prepareInitialPolicy({ service, endpoint: endpoint.trim() || null, enforcement: block ? 'block' : 'preference' })
       .then(policy => { if (active) setDraft(policy); })
       .catch(failure => {
-        if (active) setError(failure instanceof Error && failure.message === 'MALFORMED'
-          ? 'Enter a complete http:// or https:// recipient URL without a password, fragment, or unsupported query, or leave it blank.'
-          : 'Your privacy settings could not be prepared. Try again; your kitchen has been kept.');
+        if (!active) return;
+        if (needsKitchenReopen(failure)) {
+          setReopenNeeded(true);
+          setError('Your kitchen changed while this screen was open. Open it again to use its current settings.');
+        } else {
+          setError(failure instanceof Error && failure.message === 'MALFORMED'
+            ? 'Enter a complete http:// or https:// recipient URL without a password, fragment, or unsupported query, or leave it blank.'
+            : 'Your privacy settings could not be prepared. Try again; your kitchen has been kept.');
+        }
       })
       .finally(() => { if (active) setPreparing(false); });
     return () => { active = false; };
   }, [service, endpoint, block, prepareAttempt]);
 
   const accept = async () => {
-    if (!draft || preparing || inFlight.current) return;
+    if (!draft || preparing || reopenNeeded || inFlight.current) return;
     inFlight.current = true;
     setAccepting(true);
     setError('');
@@ -43,7 +54,12 @@ export function PolicySetup({ service, provider, deviceId, onAccepted, onBack }:
       await acceptInitialPolicy({ service, provider, deviceId, policy: draft, explicit: true });
       onAccepted();
     } catch (failure) {
-      setError('Your privacy settings could not be saved. Please try again. Your kitchen has been kept.');
+      if (needsKitchenReopen(failure)) {
+        setReopenNeeded(true);
+        setError('Your kitchen changed while this screen was open. Open it again to use its current settings.');
+      } else {
+        setError('Your privacy settings could not be saved. Please try again. Your kitchen has been kept.');
+      }
     } finally {
       inFlight.current = false;
       setAccepting(false);
@@ -71,16 +87,18 @@ export function PolicySetup({ service, provider, deviceId, onAccepted, onBack }:
 
     <View style={{ gap: 10 }}>
       {error ? <Text accessibilityRole="alert" style={[styles.body, { color: colors.error }]}>{error}</Text> : null}
-      {draft ? <>
-        <Pressable accessibilityRole="button" accessibilityLabel="Accept settings and open my kitchen" accessibilityState={{ disabled: accepting, busy: accepting }} disabled={accepting}
-          onPress={() => void accept()} style={[styles.button, { backgroundColor: colors.primary }, accepting && styles.disabled]}>
+      {reopenNeeded ? <Pressable accessibilityRole="button" onPress={onReopen} style={[styles.button, { backgroundColor: colors.primary }]}>
+        <Text style={styles.buttonText}>Open kitchen again</Text>
+      </Pressable> : draft ? <>
+        <Pressable accessibilityRole="button" accessibilityLabel="Accept settings and open my kitchen" accessibilityState={{ disabled: accepting || preparing, busy: accepting || preparing }} disabled={accepting || preparing}
+          onPress={() => void accept()} style={[styles.button, { backgroundColor: colors.primary }, (accepting || preparing) && styles.disabled]}>
           <Text style={styles.buttonText}>{accepting ? 'Saving settings…' : 'Accept settings and open my kitchen'}</Text>
         </Pressable>
         <Text style={[styles.small, { color: colors.muted }]}>Next: add an ingredient in Pantry or explore the recipe ideas. You can change privacy settings later in Settings.</Text>
       </> : !preparing ? <Pressable accessibilityRole="button" onPress={() => setPrepareAttempt(value => value + 1)} style={[styles.button, { backgroundColor: colors.primary }]}>
         <Text style={styles.buttonText}>Try preparing settings again</Text>
       </Pressable> : null}
-      {onBack ? <Pressable accessibilityRole="button" disabled={accepting} onPress={onBack} style={styles.disclosure}>
+      {onBack && !reopenNeeded ? <Pressable accessibilityRole="button" disabled={accepting} onPress={onBack} style={styles.disclosure}>
         <Text style={[styles.disclosureText, { color: colors.muted, textAlign: 'center' }]}>Back to welcome</Text>
       </Pressable> : null}
     </View>
@@ -88,10 +106,10 @@ export function PolicySetup({ service, provider, deviceId, onAccepted, onBack }:
     <SetupDisclosure title="Advanced privacy options">
       <Text style={[styles.body, { color: colors.muted }]}>You can leave the recipient blank. A permitted recipient is an exact service endpoint, not an API key. Adding one does not enable Cloud Chef.</Text>
       <TextInput accessibilityLabel="Optional permitted recipient endpoint" placeholder="Optional permitted recipient endpoint"
-        placeholderTextColor={colors.muted} value={endpoint} editable={!accepting} autoCapitalize="none" autoCorrect={false}
+        placeholderTextColor={colors.muted} value={endpoint} editable={!accepting && !reopenNeeded} autoCapitalize="none" autoCorrect={false}
         onChangeText={value => { setEndpoint(value); setDraft(null); setError(''); }}
         style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surface }]} />
-      <Pressable accessibilityRole="checkbox" aria-checked={block} accessibilityState={{ checked: block, disabled: accepting }} disabled={accepting}
+      <Pressable accessibilityRole="checkbox" aria-checked={block} accessibilityState={{ checked: block, disabled: accepting || reopenNeeded }} disabled={accepting || reopenNeeded}
         onPress={() => { setBlock(value => !value); setDraft(null); setError(''); }} style={styles.checkbox}>
         <Text style={[styles.body, { color: colors.text }]}>{block ? '☑' : '☐'}</Text>
         <Text style={[styles.body, { flex: 1, color: colors.text }]}>Block external processing instead of allowing a reviewed preference override</Text>

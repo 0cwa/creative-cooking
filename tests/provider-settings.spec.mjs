@@ -110,5 +110,6 @@ test('everyday settings stay accessible while household tools and unavailable cl
   await openSavedCloudConnections(page);
   await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
   await expect(page.getByRole('button', {name:'Connect OpenRouter', exact:true})).toHaveCount(0);
-  await expect(page.getByLabel('OpenRouter API key', {exact:true})).toHaveCount(0);
+  await expect(page.getByPlaceholder('API key', {exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button', {name:/^Save .+ API key$/})).toHaveCount(0);
 });

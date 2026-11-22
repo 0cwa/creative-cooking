@@ -254,7 +254,7 @@ export default function RootLayout() {
     else if(Platform.OS==='web')globalThis.location.reload();
     else reopenWorkspace();
   }} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
-  if(choice==='policy')return <SafeAreaProvider><SetupScreen><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')} onBack={()=>setChoice('choose')}/></SetupScreen></SafeAreaProvider>;
+  if(choice==='policy')return <SafeAreaProvider><SetupScreen><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')} onBack={()=>setChoice('choose')} onReopen={()=>reopenWorkspace()}/></SetupScreen></SafeAreaProvider>;
   if(choice==='choose')return <SafeAreaProvider><KitchenWelcome admissionRule={admissionRule} onAdmissionRuleChange={setAdmissionRule} onStart={()=>void fresh()} canStart={!!workspace||validAdmissionPolicy(admissionPolicy,1)} error={error} resuming={!!workspace}/></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
