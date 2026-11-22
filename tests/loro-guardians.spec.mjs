@@ -1,4 +1,5 @@
 import {test,expect} from './browser-fixture.mjs';
+import {openHouseholdTools} from './settings-navigation.mjs';
 import {unlink} from 'node:fs/promises';
 test('two independent guardians enforce their fixed threshold and reopen the archive',async({browser,baseURL},testInfo)=>{
  const archive=testInfo.outputPath('guardian-browser-archive.json');
@@ -16,6 +17,7 @@ test('two independent guardians enforce their fixed threshold and reopen the arc
  await test.step('import the same registered guardian archive in a fresh workspace and preserve personal-only access',async()=>{
   const codeText=await owner.getByText(/^Recovery code \(keep separately from the archive\): /).textContent();
   const code=codeText.match(/[a-f0-9]{64}$/)[0];
+  await openHouseholdTools(owner);
   await button(owner,'Set up household recovery continuity').click();
   await owner.getByLabel('Code for continuity registration').fill(code);
   await owner.getByLabel('Choose encrypted archive file').last().setInputFiles(archive);
@@ -28,6 +30,7 @@ test('two independent guardians enforce their fixed threshold and reopen the arc
   const household=JSON.parse(householdBundle);
 
   await setup(restore);
+  await openHouseholdTools(restore);
   await button(restore,'Recover personal data and request readmission').click();
   await button(restore,'Open guardian recovery').click();
   await restore.getByLabel('Guardian recovery archive file').setInputFiles(archive);

@@ -488,17 +488,21 @@ test('two adults retain competing rules and open isolated cooking branches expli
       };
     });
     await button(first,'Open this cooking branch').click();
+    // The settings disclosure can still be visible while checkout is pending.
+    // Wait for the denied write itself before checking the in-place reopen.
+    await expect.poll(()=>first.evaluate(()=>window.checkoutSessionWriteDenied),{timeout:30_000}).toBe(true);
+    await expect(button(first,'Close adult admission rules')).toHaveCount(0);
     const manageRules=button(first,'Manage adult admission rules'), openSettings=button(first,'Open settings');
     const advancedTools=button(first,'Household and advanced tools');
     await expect(advancedTools.or(openSettings)).toBeVisible().catch(async error=>{
       console.error('In-place checkout reopen',await first.locator('body').innerText());
       throw error;
     });
-    expect(await first.evaluate(()=>window.checkoutSessionWriteDenied)).toBe(true);
     if(await openSettings.isVisible())await openSettings.click();
     await openHouseholdTools(first);
     await manageRules.click();
     await expect(first.getByText(`Current household head: ${sibling.head}`,{exact:true})).toBeVisible();
+    expect(await first.evaluate(()=>window.checkoutSessionWriteDenied)).toBe(true);
     await first.goto('./');
     await expect(first.getByText('Sibling-only parsley', {exact:true})).toBeVisible();
   } finally {
