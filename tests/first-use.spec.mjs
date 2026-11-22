@@ -47,7 +47,7 @@ async function openPrivacyStep(page) {
   await expect(button(page, 'Accept settings and open my kitchen')).toBeEnabled();
 }
 
-test('welcome puts the start button on screen and keeps technical setup optional', async ({page}) => {
+test('welcome puts the start button on screen and keeps technical setup optional', async ({page}, testInfo) => {
   await page.setViewportSize({width:320, height:740});
   await page.goto('./');
 
@@ -60,6 +60,10 @@ test('welcome puts the start button on screen and keeps technical setup optional
   await expect(page.getByRole('radio', {name:/Every adult/})).toHaveCount(0);
   await expect(page.getByLabel('Recovery code', {exact:true})).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
+  await testInfo.attach('Welcome on a small phone', {
+    body: await page.screenshot({type:'png', fullPage:false}),
+    contentType:'image/png'
+  });
 
   await button(page, 'More setup options').click();
   await button(page, 'Household options').click();
@@ -81,7 +85,7 @@ test('welcome puts the start button on screen and keeps technical setup optional
   await expect(button(page, 'Set up my kitchen')).toBeEnabled();
 });
 
-test('privacy prepares automatically but is signed only after explicit acceptance, including after reload', async ({page, baseURL}) => {
+test('privacy prepares automatically but is signed only after explicit acceptance, including after reload', async ({page, baseURL}, testInfo) => {
   const externalRequests = recordExternalRequests(page, baseURL);
   await page.setViewportSize({width:390, height:844});
   await openPrivacyStep(page);
@@ -93,6 +97,10 @@ test('privacy prepares automatically but is signed only after explicit acceptanc
   expect(await acceptedPolicies(page)).toEqual([]);
   const reserved = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
   await expectNoHorizontalOverflow(page);
+  await testInfo.attach('Privacy review on a phone', {
+    body: await page.screenshot({type:'png', fullPage:false}),
+    contentType:'image/png'
+  });
 
   await page.reload();
   await expect(page.getByTestId('privacy-summary')).toBeVisible();
@@ -114,6 +122,10 @@ test('privacy prepares automatically but is signed only after explicit acceptanc
   await button(page, 'Accept settings and open my kitchen').click();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await expect(page.getByLabel('Ingredient and details')).toBeEditable();
+  await testInfo.attach('Pantry ready to use', {
+    body: await page.screenshot({type:'png', fullPage:false}),
+    contentType:'image/png'
+  });
   const records = await acceptedPolicies(page);
   expect(records).toHaveLength(1);
   expect(records[0].policy.version).toBe(2);

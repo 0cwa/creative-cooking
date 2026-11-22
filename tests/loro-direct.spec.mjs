@@ -251,10 +251,14 @@ test('admitted browser workspaces exchange offline recipe edits and explicitly r
     await expect(b.getByRole('alert').filter({hasText:'Update not applied'})).toBeVisible();
     for (const [page,files] of [[a,fromB],[b,fromA]]) {
       for (const [index,file] of files.entries()) {
-        if (index) await button(page,'Exchange encrypted cooking files').click();
+        if (index) {
+          await openHouseholdTools(page);
+          await button(page,'Exchange encrypted cooking files').click();
+        }
         await receiveRecipeUpdate(page,file,true);
       }
     }
+    await openHouseholdTools(b);
     await button(b,'Exchange encrypted cooking files').click();
     await receiveRecipeUpdate(b,fromA[0],false);
     await visible(b,'This exact update was already applied. No new changes were made.');

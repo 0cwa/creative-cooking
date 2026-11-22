@@ -50,6 +50,12 @@ For a local production-like GitHub Pages subpath build:
 EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web
 ```
 
+The **First-use browser checks** PR workflow exercises new-kitchen setup, recovery from startup errors, shared start links, and Chef settings alongside the full CI suite. Its `first-use-browser-report` artifact includes the browser report, mobile setup screenshots, and failure traces. To run the same checks locally after exporting the app:
+
+```bash
+npx playwright test tests/first-use.spec.mjs tests/provider-settings.spec.mjs tests/chef-notes.spec.mjs --project=web
+```
+
 ## GitHub Pages
 
 The production workflow builds the app at the project subpath `/creative-cooking` and deploys a PWA artifact.

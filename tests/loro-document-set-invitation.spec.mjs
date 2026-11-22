@@ -293,6 +293,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   files.sort((a,b)=>JSON.parse(a).header.deviceSequence-JSON.parse(b).header.deviceSequence);
   await sponsor.goto(app+'settings');await openHouseholdTools(sponsor);
   for(const buffer of files){
+   await openHouseholdTools(sponsor);
    await button(sponsor,'Exchange encrypted cooking files').click();
    const pending=sponsor.waitForEvent('filechooser',{timeout:12_000});
    const loaded=sponsor.waitForEvent('load',{timeout:12_000});

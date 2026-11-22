@@ -113,3 +113,27 @@ test('everyday settings stay accessible while household tools and unavailable cl
   await expect(page.getByPlaceholder('API key', {exact:true})).toHaveCount(0);
   await expect(page.getByRole('button', {name:/^Save .+ API key$/})).toHaveCount(0);
 });
+
+
+test('a first-time friend link shows its saved default provider connection after setup', async ({page, baseURL}) => {
+  const external = [];
+  page.on('request', request => {
+    if (new URL(request.url()).origin !== new URL(baseURL).origin) external.push(request.url());
+  });
+  page.on('dialog', dialog => void dialog.accept());
+  const compactPayload = `x${'A'.repeat(43)}`;
+  await startLocalWorkspace(page, `./settings?ort=${compactPayload}`);
+  expect(page.url()).not.toContain('ort=');
+  await openSavedCloudConnections(page);
+  await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
+  await expect(page.getByText('OpenRouter connection', {exact:true})).toBeVisible();
+  await expect(page.getByText('Key saved', {exact:true})).toBeVisible();
+  const saved = await page.evaluate(() => localStorage.getItem('creative-cooking-openrouter-key'));
+  expect(saved).toMatch(/^sk-or-v1-/);
+  await expect(page.getByRole('button', {name:'Connect OpenRouter', exact:true})).toHaveCount(0);
+  await page.reload();
+  await openSavedCloudConnections(page);
+  await expect(page.getByText('Key saved', {exact:true})).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('creative-cooking-openrouter-key'))).toBe(saved);
+  expect(external).toEqual([]);
+});
