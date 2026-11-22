@@ -104,6 +104,7 @@ function archiveActiveChat(current: PersistedState): PersistedState['chatHistory
 
 type AppStateApi = PersistedState & {
   storageMode: 'fresh-local' | 'existing';
+  /** Successful initial content loading; later save failures do not reset it. */
   hydrated: boolean;
   storageError: string | null;
   contentWorkspaceName: string;

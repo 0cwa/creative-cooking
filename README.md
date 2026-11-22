@@ -4,13 +4,17 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 
 ## Getting started
 
-1. Choose **Set up my kitchen**, review the privacy summary, and explicitly accept the settings. Household invitation rules and recovery tools are optional sections on the welcome screen.
+1. Open [Creative Cooking](https://0cwa.github.io/creative-cooking/) and choose **Set up my kitchen**. The next screen prepares your privacy summary automatically. Read it and choose **Accept settings and open my kitchen**. There is no account, payment, or API key to set up. Nothing is accepted on your behalf, and reloading before acceptance returns you to the privacy check.
 2. Add a few real ingredients in **Pantry**. A name is enough; quantities are not required. Stars describe how much you feel like eating an ingredient. Example chips only fill the input until you press **Add**.
 3. Open **Recipes** to browse three built-in ideas without an account, provider key, or network connection. Previewing changes nothing. **Save a copy** adds a normal recipe you can edit, scale, and use to plan a shopping list. You can also add your own recipe.
 4. On web, **Chef** currently saves private cooking notes by default. **Save note** does not request an AI reply. Cloud Chef requests remain disabled while disclosure storage is being verified; saving a cloud provider key does not enable them.
-5. If you want to try the experimental on-device Chef in a compatible web browser, open **Local Chef settings**. Model downloads are explicit. The current local model provides text suggestions and cannot change Pantry or save recipes; it remains disabled when allergies are configured. Native Chef is not available yet.
+5. If you want to try the experimental on-device Chef in a compatible web browser, open **Local Chef settings**. Model downloads are explicit. The current local model provides text suggestions and cannot change Pantry or save recipes; it remains disabled when allergies are configured. Native Chef is not available yet. Settings puts this optional setup before **Household and advanced tools**. **Saved cloud connections** lets you manage existing credentials, but new cloud connections are unavailable while cloud replies are disabled.
 
 Built-in recipes are starting points, not personalized or allergy-safe recommendations. They remain separate from saved recipes until you choose to save a copy. Pantry, saved recipes, and shopping work offline after the app is loaded; the PWA also caches previously visited routes for offline reopening.
+
+### If your kitchen does not open
+
+The app waits for your pantry, recipes, and preferences to load before showing editing controls. If opening fails, **Try again** reopens the same saved kitchen. It does not delete your data or create a replacement. Follow the message for blocked browser storage, insufficient space, or an unsupported browser; **Show technical details** contains the original error for troubleshooting. Use **Recover an existing kitchen** if you have an encrypted recovery archive. Household invitation rules are optional under **More setup options** and can be managed later in Settings.
 
 ## MVP
 

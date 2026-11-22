@@ -4,15 +4,16 @@ import {admissionPolicyFromDraft, type AdmissionRuleDraft} from '@/loro/app/Admi
 import {validAdmissionPolicy} from '@/loro/authority/validator.mjs';
 import {initialAdmissionPolicy} from '@/loro/app/admission-rule.mjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Platform, Text, View } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppStateProvider, useAppState } from '@/state/AppState';
-import { FirstOpenLoadingAnimation } from '@/components/FirstOpenLoadingAnimation';
 import { InstallAppPrompt } from '@/components/InstallAppPrompt';
 import { KitchenWelcome } from '@/components/KitchenWelcome';
 import { SetupScreen } from '@/components/SetupScreen';
+import { KitchenContentGate } from '@/components/KitchenContentGate';
+import { KitchenStartupStatus } from '@/components/KitchenStartupStatus';
 
 import { finishOpenRouterOAuthFromLocation } from '@/llm/openrouter/oauth';
 import { importSharedOpenRouterKey } from '@/llm/openrouter/share';
@@ -132,7 +133,6 @@ function AppShell() {
         <Stack.Screen name="shopping" />
       </Stack>
       <InstallAppPrompt />
-      <FirstOpenLoadingAnimation />
     </>
   );
 }
@@ -144,6 +144,7 @@ export default function RootLayout() {
   const [error,setError]=useState<string|null>(null);
   const [admissionRule,setAdmissionRule]=useState<AdmissionRuleDraft>({kind:'allMinusOne',count:'1'});
   const pendingReopen=useRef<BranchReopen|null>(null);
+  const creatingWorkspace=useRef(false);
   const admissionPolicy=admissionPolicyFromDraft(admissionRule);
   const reopenWorkspace=useCallback((expected?:BranchReopen)=>{
     if(Platform.OS==='web'){
@@ -212,6 +213,9 @@ export default function RootLayout() {
     finally{if(opened&&!adopted)opened.close()}
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
   const fresh=async()=>{
+    if(creatingWorkspace.current)return;
+    if(workspace){setError(null);setChoice('policy');return;}
+    creatingWorkspace.current=true;
     setChoice('loading');setError(null);
     try{
       if(Platform.OS==='android'){
@@ -222,7 +226,7 @@ export default function RootLayout() {
       }
       const policy=initialAdmissionPolicy(admissionPolicy);
       const locks=globalThis.navigator?.locks;
-      if(!locks)throw Error('LOCK_UNAVAILABLE');
+      if(!locks||typeof locks.request!=='function')throw Error('LOCK_UNAVAILABLE');
       await locks.request(webChoiceLock,()=>{
         const mode=globalThis.localStorage.getItem(webChoiceKey);
         if(mode?.startsWith(pendingPrefix)||mode?.startsWith('local:'))return;
@@ -231,6 +235,7 @@ export default function RootLayout() {
       });
       setOpenAttempt(attempt=>attempt+1);
     }catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}
+    finally{creatingWorkspace.current=false}
   };
   const returnToOriginal=async()=>{
     setChoice('loading');
@@ -243,18 +248,18 @@ export default function RootLayout() {
       setChoice('locked');
     }
   };
-  if(choice==='loading')return <View><Text>Opening your cooking workspace…</Text></View>;
+  if(choice==='loading')return <SafeAreaProvider><KitchenStartupStatus loadingDetail="Getting your saved kitchen ready on this device." onRetry={Platform.OS==='web'?()=>globalThis.location.reload():undefined}/></SafeAreaProvider>;
   if(choice==='locked')return <SafeAreaProvider><LockedWorkspace error={error} onRetry={()=>{
     if(pendingReopen.current){setChoice('loading');setOpenAttempt(attempt=>attempt+1)}
     else if(Platform.OS==='web')globalThis.location.reload();
     else reopenWorkspace();
   }} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
-  if(choice==='policy')return <SafeAreaProvider><SetupScreen><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')}/></SetupScreen></SafeAreaProvider>;
-  if(choice==='choose')return <SafeAreaProvider><KitchenWelcome admissionRule={admissionRule} onAdmissionRuleChange={setAdmissionRule} onStart={()=>void fresh()} canStart={validAdmissionPolicy(admissionPolicy,1)} error={error}/></SafeAreaProvider>;
+  if(choice==='policy')return <SafeAreaProvider><SetupScreen><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')} onBack={()=>setChoice('choose')}/></SetupScreen></SafeAreaProvider>;
+  if(choice==='choose')return <SafeAreaProvider><KitchenWelcome admissionRule={admissionRule} onAdmissionRuleChange={setAdmissionRule} onStart={()=>void fresh()} canStart={!!workspace||validAdmissionPolicy(admissionPolicy,1)} error={error} resuming={!!workspace}/></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
       <AppStateProvider key={choice} localWorkspace={workspace}>
-        <AppShell />
+        <KitchenContentGate><AppShell /></KitchenContentGate>
       </AppStateProvider>
     </SafeAreaProvider>
   );

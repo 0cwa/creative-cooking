@@ -34,7 +34,6 @@ import { CLOUD_PROVIDER_IDS, modelCapabilities, providerMetadata } from '@/llm/r
 import { getLocalInferenceCapabilities } from '@/llm/webllm/capabilities';
 import {
   WEBLLM_MODEL_ID,
-  WEBLLM_MODEL_VRAM_MB,
   type LocalCapabilityResult
 } from '@/llm/webllm/capabilityPolicy';
 import {
@@ -70,6 +69,13 @@ function formatBytes(value?: number): string {
 
 function supportLabel(value: boolean | 'unknown'): string {
   return value === 'unknown' ? 'Unknown' : value ? 'Yes' : 'No';
+}
+
+function localChefCompatibilityMessage(reason: string): string {
+  if (reason === 'Local WebLLM is currently available only in the PWA.') return 'Open Creative Cooking in a compatible web browser to try Local Chef.';
+  if (reason === 'WebGPU is unavailable in this browser.') return 'This browser does not provide the graphics support Local Chef needs. Try an up-to-date browser or another device.';
+  if (reason === 'Web Workers are unavailable in this browser.') return 'This browser cannot run Local Chef in the background. Try another browser.';
+  return reason;
 }
 
 export default function SettingsScreen() {
@@ -108,6 +114,7 @@ export default function SettingsScreen() {
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
+  const cloudChefUnavailable = app.storageMode === 'fresh-local';
   const browserDictationAvailable = browserDictationSupport?.available === true;
   const whisperDictationReady = whisperCapability?.available === true && whisperModelCached === true;
 
@@ -190,7 +197,7 @@ export default function SettingsScreen() {
   const deleteDownloadedModel = () => {
     Alert.alert(
       'Delete downloaded local model?',
-      'This frees the WebLLM model cache. Your pantry, recipes, chats, and provider credentials are not affected.',
+      'This frees the space used by the local Chef download. Your pantry, recipes, notes, and saved provider keys are kept.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -475,36 +482,115 @@ export default function SettingsScreen() {
           </View>
         </Section>
 
-        <Section title="Cooking workspace" subtitle="Cooking data is saved on this device. Use verified household pairing to exchange encrypted updates.">
-            <LoroWorkspaceStatus revision={app.localPersistenceStatus} />
-            {Platform.OS === 'web' && <RecoveryReminder />}
-            <PersonalDevicePairing />
-            <PersonalAuthority />
-            <HouseholdIdentity />
-            <HouseholdOwnDevice />
-            <HouseholdInvitation />
-            <HouseholdApproval />
-            <HouseholdAdmissionRule />
-            <HouseholdDelegation />
-            <HouseholdGrantReview />
-            <HouseholdExistingDevice />
-            <HouseholdLocalTrust onQuarantine={() => setQuarantineChanged(changed => changed + 1)} />
-            <HouseholdCompromise />
-            <HouseholdAdultRemoval />
-            <HouseholdDraftRotation />
-            <HouseholdRevocation />
-            {Platform.OS === 'web' && <HouseholdReadmission />}
-            <CookingDirect />
-            <CookingExchange quarantineChanged={quarantineChanged} />
-            {Platform.OS === 'web' && <DisclosureControls items={app.pantry} />}
-        </Section>
+        <View
+          testID="local-chef-settings"
+          onLayout={(event) => {
+            if (params.focus !== 'local-chef' || localChefFocusHandledRef.current
+              || !localCapability || !whisperCapability || localModelCached === null || whisperModelCached === null) return;
+            localChefFocusHandledRef.current = true;
+            const y = Math.max(0, event.nativeEvent.layout.y - 12);
+            setTimeout(() => settingsScrollRef.current?.scrollTo({ y, animated: false }), 0);
+          }}
+        >
+        <Section title="Local Chef" subtitle="Optional cooking suggestions that run on this device. You need a compatible web browser and one download; no account or API key is needed.">
+          <View style={styles.capabilityBox}>
+            <Text style={styles.capabilityTitle}>Download once, then ask for ideas</Text>
+            <Text style={styles.help}>Keep at least 1.5 GB of free browser storage for the download. Once it is ready, choose Use local Chef below.</Text>
+            <Text style={styles.warning}>Local Chef is experimental and gives text suggestions only. Add ingredients and save recipes yourself.</Text>
+            {app.settings.allergies.length > 0 && (
+              <Text style={styles.warning}>Local Chef is unavailable while allergies are set because it cannot reliably check its suggestions against them.</Text>
+            )}
+          </View>
 
-        <Section title="Data & Storage" subtitle="Your local workspace is stored on this device.">
-          <Text testID="settings-local-persistence-status" accessibilityLiveRegion="polite" style={styles.help}>
-            {app.localPersistenceStatus === 'saved' ? 'Saved locally' : app.localPersistenceStatus === 'saving' ? 'Saving locally' : 'Local save failed'}
-          </Text>
-          {app.localPersistenceStatus === 'error' && <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable>}
+          {localCapability ? (
+            <>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Browser compatibility</Text>
+                <Text style={[styles.status, localCapability.available && styles.statusConnected]}>{localCapability.available ? 'Available' : 'Unavailable'}</Text>
+              </View>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Free browser storage</Text>
+                <Text style={[styles.status, localCapability.available && styles.statusConnected]}>
+                  {localCapability.freeBytes === undefined ? 'Unknown' : formatBytes(localCapability.freeBytes)}
+                </Text>
+              </View>
+              {Platform.OS === 'web' && !localCapability.persistent && (
+                <Text style={styles.help}>If your browser clears the download to free space, you can download it again.</Text>
+              )}
+              {localCapability.reasons.map((reason) => (
+                <Text key={reason} style={styles.warning}>• {localChefCompatibilityMessage(reason)}</Text>
+              ))}
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Model cache</Text>
+                <Text style={[styles.status, localModelCached && styles.statusConnected]}>
+                  {localModelCached === null ? 'Checking…' : localModelCached ? 'Downloaded' : 'Not downloaded'}
+                </Text>
+              </View>
+              {!!localModelStatus && <Text accessibilityLiveRegion="polite" style={styles.help}>{localModelStatus}</Text>}
+              {localModelCached === false && (
+                <Text style={styles.help}>The download starts only when you choose Download model. Chef will not start a hidden download from the chat screen.</Text>
+              )}
+              <View style={styles.buttonRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh local model compatibility"
+                  disabled={localModelBusy}
+                  onPress={() => void refreshLocalState()}
+                  style={[styles.smallButton, localModelBusy && styles.disabledButton]}
+                >
+                  <Text style={styles.smallButtonText}>Refresh compatibility</Text>
+                </Pressable>
+                {localModelCached === false && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={localModelBusy ? 'Cancel local model download' : 'Download local model'}
+                    disabled={!localCapability.available && !localModelBusy}
+                    onPress={localModelBusy ? cancelModelDownload : () => void downloadModel()}
+                    style={[
+                      styles.smallButton,
+                      (!localCapability.available && !localModelBusy) && styles.disabledButton
+                    ]}
+                  >
+                    <Text style={styles.smallButtonText}>{localModelBusy ? 'Cancel download' : 'Download model'}</Text>
+                  </Pressable>
+                )}
+                {localModelCached === true && !localModelBusy && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete downloaded local model"
+                    onPress={deleteDownloadedModel}
+                    style={styles.textButton}
+                  >
+                    <Text style={styles.dangerLink}>Delete downloaded model</Text>
+                  </Pressable>
+                )}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Use experimental local Chef"
+                  accessibilityState={{
+                    selected: app.settings.providerId === 'webllm',
+                    disabled: !localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0
+                  }}
+                  disabled={!localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0}
+                  onPress={() => selectProvider('webllm')}
+                  style={[
+                    styles.primaryButton,
+                    (!localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0) && styles.disabledButton
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {app.settings.providerId === 'webllm' ? 'Using local Chef' : 'Use local Chef'}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <Text style={styles.help}>Checking whether this browser can run Local Chef…</Text>
+          )}
         </Section>
+        </View>
+
+
 
         <Section title="Master instructions" subtitle="Customize Chef’s style and priorities. Tool behavior, safety constraints, and app mechanics are managed separately and cannot be edited here.">
           <TextInput accessibilityLabel="Master instructions" value={app.settings.systemPrompt} onChangeText={(systemPrompt) => app.updateSettings({ systemPrompt })} multiline style={[styles.input, styles.prompt]} textAlignVertical="top" />
@@ -512,129 +598,6 @@ export default function SettingsScreen() {
             <Pressable accessibilityRole="button" accessibilityLabel="Reset master instructions to default" onPress={resetMasterInstructions} style={styles.textButton}>
               <Text style={styles.resetLink}>Reset to default instructions</Text>
             </Pressable>
-          )}
-        </Section>
-
-        <Section title="Chef provider" subtitle={app.storageMode === 'fresh-local'
-          ? 'Cloud Chef is temporarily unavailable for this kitchen. Saving a provider key does not enable cloud replies. You can browse recipe ideas without a key.'
-          : 'Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.'}>
-          <Text style={styles.label}>Provider</Text>
-          <View style={styles.providerGrid}>
-            {CLOUD_PROVIDER_IDS.map((providerId) => {
-              const option = providerMetadata(providerId);
-              const selected = app.settings.providerId === providerId;
-              return (
-                <Pressable
-                  key={providerId}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Use ${option.name} provider`}
-                  accessibilityState={{ selected }}
-                  onPress={() => selectProvider(providerId)}
-                  style={[styles.providerButton, selected && styles.providerButtonActive]}
-                >
-                  <Text style={[styles.providerButtonText, selected && styles.providerButtonTextActive]}>{option.name}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {provider.credentialRequired ? (
-            <>
-          <View style={styles.statusRow}>
-            <Text style={styles.label}>{provider.name} connection</Text>
-            <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Key saved' : 'No key saved'}</Text>
-          </View>
-
-          {app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
-            <Pressable accessibilityRole="button" onPress={() => void beginOpenRouterOAuth().catch((error) => Alert.alert('Could not connect', String(error)))} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Connect OpenRouter</Text>
-            </Pressable>
-          )}
-
-          <Text style={styles.or}>
-            {app.settings.providerId === 'openrouter' && Platform.OS === 'web'
-              ? 'or paste an API key'
-              : `Paste your ${provider.name} API key`}
-          </Text>
-          <View style={styles.inline}>
-            <TextInput
-              accessibilityLabel={provider.apiKeyLabel}
-              secureTextEntry
-              value={apiKey}
-              onChangeText={setApiKey}
-              placeholder="API key"
-              placeholderTextColor={themeColor('#94a3b8')}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.input}
-            />
-            <Pressable accessibilityRole="button" accessibilityLabel={`Save ${provider.name} API key`} onPress={() => void saveKey()} style={styles.smallButton}>
-              <Text style={styles.smallButtonText}>Save</Text>
-            </Pressable>
-          </View>
-
-          {hasKey && (
-            <>
-              {app.settings.providerId === 'openrouter' && (
-                <Pressable accessibilityRole="button" onPress={() => void makeShareLink()} style={styles.shareButton}>
-                  <Text style={styles.shareButtonText}>{Platform.OS === 'web' ? '🔗 Create friend link' : '🔗 Share friend link'}</Text>
-                </Pressable>
-              )}
-              {!!shareLink && app.settings.providerId === 'openrouter' && (
-                <View style={styles.shareBox}>
-                  <Text style={styles.label}>Friend link</Text>
-                  <TextInput accessibilityLabel="Friend link" value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
-                  <Pressable accessibilityRole="button" onPress={() => void copyShareLink()} style={styles.smallButton}><Text style={styles.smallButtonText}>Copy link</Text></Pressable>
-                  <Text style={styles.warning}>
-                    Anyone with this link can spend through this key until you revoke it. Prefer a dedicated OpenRouter key with a spending limit. The ?ort= value packs the standard 64-character hexadecimal key body into 32 raw bytes and base64url, making the shared value about one-third shorter while hiding the obvious sk-or-v1- prefix from dumb scrapers. It is not encryption.
-                  </Text>
-                </View>
-              )}
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => void clearProviderKey(app.settings.providerId).then(() => {
-                  setHasKey(false);
-                  setShareLink('');
-                })}
-                style={styles.textButton}
-              >
-                <Text style={styles.dangerLink}>Disconnect {provider.name}</Text>
-              </Pressable>
-            </>
-          )}
-
-          <Text style={styles.label}>Model</Text>
-          <TextInput
-            accessibilityLabel={`${provider.name} model`}
-            value={app.settings.model}
-            onChangeText={(model) => app.updateSettings({ model })}
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={styles.input}
-            placeholder={provider.defaultModel}
-          />
-          <Text style={styles.help}>
-            Default: {provider.defaultModel}. You can paste another model ID; unknown models are allowed without guessing their capabilities.
-          </Text>
-
-          <View style={styles.capabilityBox}>
-            <Text style={styles.capabilityTitle}>Model capabilities</Text>
-            <Text style={styles.help}>Tool calling: {supportLabel(capabilities.toolCalling)} · Streaming: {supportLabel(capabilities.streaming)} · Structured output: {supportLabel(capabilities.structuredOutput)} · Free/free-tier: {supportLabel(capabilities.freeTier)}</Text>
-            {capabilities.toolCalling === false && (
-              <Text style={styles.warning}>Chef will use this model for text only and will not claim to change Pantry or save recipes.</Text>
-            )}
-            {capabilities.toolCalling === 'unknown' && (
-              <Text style={styles.help}>Tool support is unknown for this custom model ID. Chef will attempt the standard provider tool protocol.</Text>
-            )}
-          </View>
-            </>
-          ) : (
-            <View style={styles.capabilityBox}>
-              <Text style={styles.capabilityTitle}>Experimental local Chef is active</Text>
-              <Text style={styles.help}>{app.storageMode === 'fresh-local'
-                ? 'Local Chef uses a downloaded model in this browser. Cloud replies remain unavailable for this kitchen.'
-                : 'Select a cloud provider above to switch back to a hosted model.'}</Text>
-            </View>
           )}
         </Section>
 
@@ -815,118 +778,162 @@ export default function SettingsScreen() {
         </Section>
         </View>
 
-        <View
-          testID="local-chef-settings"
-          onLayout={(event) => {
-            if (params.focus !== 'local-chef' || localChefFocusHandledRef.current
-              || !localCapability || !whisperCapability || localModelCached === null || whisperModelCached === null) return;
-            localChefFocusHandledRef.current = true;
-            const y = Math.max(0, event.nativeEvent.layout.y - 12);
-            setTimeout(() => settingsScrollRef.current?.scrollTo({ y, animated: false }), 0);
-          }}
-        >
-        <Section title="Local Chef" subtitle="Optional, experimental recipe suggestions in a compatible web browser. Downloading the model is your choice; no API key is needed.">
-          <View style={styles.capabilityBox}>
-            <Text style={styles.capabilityTitle}>WebLLM · Llama 3.2 1B</Text>
-            <Text style={styles.help}>Model: {WEBLLM_MODEL_ID}</Text>
-            <Text style={styles.help}>Estimated model VRAM requirement: about {Math.round(WEBLLM_MODEL_VRAM_MB)} MB. At least 1.5 GB of free browser storage is recommended before the first download.</Text>
-            <Text style={styles.warning}>Experimental local mode is text-only for now. It cannot change Pantry or save recipes until the deterministic local tool pipeline is finished and benchmarked.</Text>
-            {app.settings.allergies.length > 0 && (
-              <Text style={styles.warning}>Local Chef is disabled while allergies are configured. Deterministic local allergy validation is not finished yet.</Text>
-            )}
+        <Section title="Data & Storage" subtitle="Your local workspace is stored on this device.">
+          <Text testID="settings-local-persistence-status" accessibilityLiveRegion="polite" style={styles.help}>
+            {app.localPersistenceStatus === 'saved' ? 'Saved locally' : app.localPersistenceStatus === 'saving' ? 'Saving locally' : 'Local save failed'}
+          </Text>
+          {app.localPersistenceStatus === 'error' && <Pressable accessibilityRole="button" onPress={() => void app.retryStorage()} style={styles.smallButton}><Text style={styles.smallButtonText}>Retry local storage</Text></Pressable>}
+          {Platform.OS === 'web' && <RecoveryReminder />}
+        </Section>
+
+        <SettingsDisclosure title="Household and advanced tools" subtitle="Optional sharing, device pairing, privacy rules, and recovery tools for a shared kitchen. You do not need these to cook on this device.">
+            <LoroWorkspaceStatus revision={app.localPersistenceStatus} />
+            <PersonalDevicePairing />
+            <PersonalAuthority />
+            <HouseholdIdentity />
+            <HouseholdOwnDevice />
+            <HouseholdInvitation />
+            <HouseholdApproval />
+            <HouseholdAdmissionRule />
+            <HouseholdDelegation />
+            <HouseholdGrantReview />
+            <HouseholdExistingDevice />
+            <HouseholdLocalTrust onQuarantine={() => setQuarantineChanged(changed => changed + 1)} />
+            <HouseholdCompromise />
+            <HouseholdAdultRemoval />
+            <HouseholdDraftRotation />
+            <HouseholdRevocation />
+            {Platform.OS === 'web' && <HouseholdReadmission />}
+            <CookingDirect />
+            <CookingExchange quarantineChanged={quarantineChanged} />
+            {Platform.OS === 'web' && <DisclosureControls items={app.pantry} />}
+        </SettingsDisclosure>
+
+        <SettingsDisclosure title={cloudChefUnavailable ? "Saved cloud connections" : "Chef provider"} initiallyOpen={!cloudChefUnavailable} subtitle={cloudChefUnavailable
+          ? 'Cloud Chef is temporarily unavailable. You can manage previously saved keys here. New connections are unavailable while cloud replies are disabled. Recipe ideas and Local Chef do not need a key.'
+          : 'Choose a cloud provider and bring your own API key. Credentials stay outside ordinary app state and backups.'}>
+          <Text style={styles.label}>{cloudChefUnavailable ? 'Saved provider preference' : 'Provider'}</Text>
+          {cloudChefUnavailable && <Text style={styles.help}>Choose which provider’s settings and saved key to manage. This changes your saved provider preference; it does not enable cloud replies.</Text>}
+          <View style={styles.providerGrid}>
+            {CLOUD_PROVIDER_IDS.map((providerId) => {
+              const option = providerMetadata(providerId);
+              const selected = app.settings.providerId === providerId;
+              return (
+                <Pressable
+                  key={providerId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${option.name} provider`}
+                  accessibilityState={{ selected }}
+                  onPress={() => selectProvider(providerId)}
+                  style={[styles.providerButton, selected && styles.providerButtonActive]}
+                >
+                  <Text style={[styles.providerButtonText, selected && styles.providerButtonTextActive]}>{option.name}</Text>
+                </Pressable>
+              );
+            })}
           </View>
 
-          {localCapability ? (
+          {provider.credentialRequired ? (
             <>
-              <View style={styles.statusRow}>
-                <Text style={styles.label}>WebGPU</Text>
-                <Text style={[styles.status, localCapability.webGpu && styles.statusConnected]}>{localCapability.webGpu ? 'Available' : 'Unavailable'}</Text>
-              </View>
-              <View style={styles.statusRow}>
-                <Text style={styles.label}>Web Worker</Text>
-                <Text style={[styles.status, localCapability.worker && styles.statusConnected]}>{localCapability.worker ? 'Available' : 'Unavailable'}</Text>
-              </View>
-              <View style={styles.statusRow}>
-                <Text style={styles.label}>Free browser storage</Text>
-                <Text style={[styles.status, localCapability.available && styles.statusConnected]}>
-                  {localCapability.freeBytes === undefined ? 'Unknown' : formatBytes(localCapability.freeBytes)}
-                </Text>
-              </View>
-              {Platform.OS === 'web' && (
-                <Text style={styles.help}>Durable browser storage: {localCapability.persistent ? 'enabled' : 'not guaranteed'}</Text>
-              )}
-              {localCapability.reasons.map((reason) => (
-                <Text key={reason} style={styles.warning}>• {reason}</Text>
-              ))}
-              <View style={styles.statusRow}>
-                <Text style={styles.label}>Model cache</Text>
-                <Text style={[styles.status, localModelCached && styles.statusConnected]}>
-                  {localModelCached === null ? 'Checking…' : localModelCached ? 'Downloaded' : 'Not downloaded'}
-                </Text>
-              </View>
-              {!!localModelStatus && <Text accessibilityLiveRegion="polite" style={styles.help}>{localModelStatus}</Text>}
-              {localModelCached === false && (
-                <Text style={styles.help}>Download the model explicitly here before selecting local Chef. Chef will not start a hidden download from the chat screen.</Text>
-              )}
-              <View style={styles.buttonRow}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Refresh local model compatibility"
-                  disabled={localModelBusy}
-                  onPress={() => void refreshLocalState()}
-                  style={[styles.smallButton, localModelBusy && styles.disabledButton]}
-                >
-                  <Text style={styles.smallButtonText}>Refresh compatibility</Text>
+          <View style={styles.statusRow}>
+            <Text style={styles.label}>{provider.name} connection</Text>
+            <Text style={[styles.status, hasKey && styles.statusConnected]}>{hasKey ? 'Key saved' : 'No key saved'}</Text>
+          </View>
+
+          {!cloudChefUnavailable && <>
+          {app.settings.providerId === 'openrouter' && Platform.OS === 'web' && (
+            <Pressable accessibilityRole="button" onPress={() => void beginOpenRouterOAuth().catch((error) => Alert.alert('Could not connect', String(error)))} style={styles.primaryButton}>
+              <Text style={styles.primaryButtonText}>Connect OpenRouter</Text>
+            </Pressable>
+          )}
+
+          <Text style={styles.or}>
+            {app.settings.providerId === 'openrouter' && Platform.OS === 'web'
+              ? 'or paste an API key'
+              : `Paste your ${provider.name} API key`}
+          </Text>
+          <View style={styles.inline}>
+            <TextInput
+              accessibilityLabel={provider.apiKeyLabel}
+              secureTextEntry
+              value={apiKey}
+              onChangeText={setApiKey}
+              placeholder="API key"
+              placeholderTextColor={themeColor('#94a3b8')}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.input}
+            />
+            <Pressable accessibilityRole="button" accessibilityLabel={`Save ${provider.name} API key`} onPress={() => void saveKey()} style={styles.smallButton}>
+              <Text style={styles.smallButtonText}>Save</Text>
+            </Pressable>
+          </View>
+          </>}
+
+          {hasKey && (
+            <>
+              {app.settings.providerId === 'openrouter' && (
+                <Pressable accessibilityRole="button" onPress={() => void makeShareLink()} style={styles.shareButton}>
+                  <Text style={styles.shareButtonText}>{Platform.OS === 'web' ? '🔗 Create friend link' : '🔗 Share friend link'}</Text>
                 </Pressable>
-                {localModelCached === false && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={localModelBusy ? 'Cancel local model download' : 'Download local model'}
-                    disabled={!localCapability.available && !localModelBusy}
-                    onPress={localModelBusy ? cancelModelDownload : () => void downloadModel()}
-                    style={[
-                      styles.smallButton,
-                      (!localCapability.available && !localModelBusy) && styles.disabledButton
-                    ]}
-                  >
-                    <Text style={styles.smallButtonText}>{localModelBusy ? 'Cancel download' : 'Download model'}</Text>
-                  </Pressable>
-                )}
-                {localModelCached === true && !localModelBusy && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Delete downloaded local model"
-                    onPress={deleteDownloadedModel}
-                    style={styles.textButton}
-                  >
-                    <Text style={styles.dangerLink}>Delete downloaded model</Text>
-                  </Pressable>
-                )}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Use experimental local Chef"
-                  accessibilityState={{
-                    selected: app.settings.providerId === 'webllm',
-                    disabled: !localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0
-                  }}
-                  disabled={!localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0}
-                  onPress={() => selectProvider('webllm')}
-                  style={[
-                    styles.primaryButton,
-                    (!localCapability.available || !localModelCached || localModelBusy || app.settings.allergies.length > 0) && styles.disabledButton
-                  ]}
-                >
-                  <Text style={styles.primaryButtonText}>
-                    {app.settings.providerId === 'webllm' ? 'Using local Chef' : 'Use local Chef'}
+              )}
+              {!!shareLink && app.settings.providerId === 'openrouter' && (
+                <View style={styles.shareBox}>
+                  <Text style={styles.label}>Friend link</Text>
+                  <TextInput accessibilityLabel="Friend link" value={shareLink} editable={false} multiline selectTextOnFocus style={[styles.input, styles.shareLink]} />
+                  <Pressable accessibilityRole="button" onPress={() => void copyShareLink()} style={styles.smallButton}><Text style={styles.smallButtonText}>Copy link</Text></Pressable>
+                  <Text style={styles.warning}>
+                    Anyone with the complete link can use this key until you revoke it. Share it only with someone you trust, and use a dedicated OpenRouter key with a spending limit. The link hides the key from plain view but does not encrypt it.
                   </Text>
-                </Pressable>
-              </View>
+                </View>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void clearProviderKey(app.settings.providerId).then(() => {
+                  setHasKey(false);
+                  setShareLink('');
+                })}
+                style={styles.textButton}
+              >
+                <Text style={styles.dangerLink}>Disconnect {provider.name}</Text>
+              </Pressable>
+            </>
+          )}
+
+          <Text style={styles.label}>Model</Text>
+          <TextInput
+            accessibilityLabel={`${provider.name} model`}
+            value={app.settings.model}
+            onChangeText={(model) => app.updateSettings({ model })}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.input}
+            placeholder={provider.defaultModel}
+          />
+          <Text style={styles.help}>
+            Default: {provider.defaultModel}. You can paste another model ID; unknown models are allowed without guessing their capabilities.
+          </Text>
+
+          <View style={styles.capabilityBox}>
+            <Text style={styles.capabilityTitle}>{cloudChefUnavailable ? 'Saved model settings · cloud replies unavailable' : 'Model capabilities'}</Text>
+            <Text style={styles.help}>Tool calling: {supportLabel(capabilities.toolCalling)} · Streaming: {supportLabel(capabilities.streaming)} · Structured output: {supportLabel(capabilities.structuredOutput)} · Free/free-tier: {supportLabel(capabilities.freeTier)}</Text>
+            {capabilities.toolCalling === false && (
+              <Text style={styles.warning}>This model supports text suggestions only. It cannot change Pantry or save recipes.</Text>
+            )}
+            {capabilities.toolCalling === 'unknown' && (
+              <Text style={styles.help}>Tool support is unknown for this custom model ID.</Text>
+            )}
+          </View>
             </>
           ) : (
-            <Text style={styles.help}>Checking WebGPU and browser storage…</Text>
+            <View style={styles.capabilityBox}>
+              <Text style={styles.capabilityTitle}>Experimental local Chef is active</Text>
+              <Text style={styles.help}>{app.storageMode === 'fresh-local'
+                ? 'Local Chef uses a downloaded model in this browser. Cloud replies remain unavailable for this kitchen.'
+                : 'Select a cloud provider above to switch back to a hosted model.'}</Text>
+            </View>
           )}
-        </Section>
-        </View>
+        </SettingsDisclosure>
       </ScrollView>
     </Screen>
   );
@@ -934,6 +941,26 @@ export default function SettingsScreen() {
 
 function Section({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return <View style={styles.section}><Text accessibilityRole="header" style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionSubtitle}>{subtitle}</Text><View style={styles.sectionBody}>{children}</View></View>;
+}
+
+function SettingsDisclosure({ title, subtitle, initiallyOpen = false, children }: {
+  title: string; subtitle: string; initiallyOpen?: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(initiallyOpen);
+  const [opened, setOpened] = useState(initiallyOpen);
+  return (
+    <View style={styles.section}>
+      <Pressable accessibilityRole="button" accessibilityLabel={title} aria-expanded={open}
+        accessibilityState={{ expanded: open }} onPress={() => { setOpened(true); setOpen(value => !value); }}
+        style={styles.disclosureHeading}>
+        <Text style={[styles.sectionTitle, { flex: 1 }]}>{title}</Text>
+        <Text aria-hidden style={styles.disclosureIndicator}>{open ? '−' : '+'}</Text>
+      </Pressable>
+      <Text style={styles.sectionSubtitle}>{subtitle}</Text>
+      {opened && <View accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+        style={[styles.sectionBody, !open && { display: 'none' }]}>{children}</View>}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -949,6 +976,8 @@ const styles = StyleSheet.create({
   sectionTitle: { color: '#172033', fontSize: 19, fontWeight: '800' },
   sectionSubtitle: { color: '#64748b', lineHeight: 19, marginTop: 4 },
   sectionBody: { gap: 12, marginTop: 16 },
+  disclosureHeading: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  disclosureIndicator: { color: '#64748b', fontSize: 24 },
   label: { color: '#334155', fontWeight: '700' },
   help: { color: '#64748b', fontSize: 12.5, lineHeight: 18 },
   warning: { color: '#92400e', fontSize: 12.5, lineHeight: 18 },

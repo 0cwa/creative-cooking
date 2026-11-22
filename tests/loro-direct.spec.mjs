@@ -1,3 +1,4 @@
+import {openHouseholdTools} from './settings-navigation.mjs';
 import {test, expect} from './browser-fixture.mjs';
 import {chromium} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
@@ -18,7 +19,7 @@ const text = async (page, name) => {
 async function prepare(page, baseURL, seed, prepareRecipes) {
   await page.goto(baseURL);
   await button(page, 'Set up my kitchen').click();
-  await button(page, 'Review privacy settings').click();
+
   await button(page, 'Accept settings and open my kitchen').click();
   await saved(page);
   if (seed) {
@@ -26,7 +27,7 @@ async function prepare(page, baseURL, seed, prepareRecipes) {
     await saved(page);
   }
   if (prepareRecipes) await prepareRecipes();
-  else await button(page, 'Open settings').click();
+  else await button(page, 'Open settings').click();await openHouseholdTools(page);
   await button(page, 'Show device identity').click();
   await button(page, 'Invite or join a household').click();
 }
@@ -168,7 +169,7 @@ async function editRecipe(page,title,after,description) {
 }
 
 async function exchange(page) {
-  await page.goto('./settings');
+  await page.goto('./settings');await openHouseholdTools(page);
   await button(page,'Exchange encrypted cooking files').click();
   await expect(button(page,'Choose encrypted cooking update')).toBeEnabled();
 }
@@ -423,7 +424,7 @@ test('admitted browser devices independently verify their direct connection, ret
     await add(b,'Direct pending rosemary');
     await expect(b.getByTestId('pantry-local-persistence-status')).toHaveText('Local save failed');
     for (const page of [a,b]) {
-      await button(page, 'Open settings').click();
+      await button(page, 'Open settings').click();await openHouseholdTools(page);
       await button(page, 'Exchange cooking updates directly').click();
     }
     const aHousehold = (await text(a, 'Open household')).split(' · ')[1];
@@ -557,7 +558,7 @@ test('admitted browser devices independently verify their direct connection, ret
 
     await b.goBack();
     await expect(b.getByText('Direct proof tarragon',{exact:true})).toHaveCount(0);
-    await button(b,'Open settings').click();
+    await button(b,'Open settings').click();await openHouseholdTools(b);
     await expect(refreshError).toBeVisible();
     await button(b,'Retry cooking refresh').click();
     await expect(refreshError).toHaveCount(0);
@@ -645,9 +646,9 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await admit(a,b,baseURL);
     await add(a,'Already applied shallot');
     await saved(a);
-    await button(a,'Open settings').click();
+    await button(a,'Open settings').click();await openHouseholdTools(a);
     const [prior] = await downloadCooking(a);
-    await button(b,'Open settings').click();
+    await button(b,'Open settings').click();await openHouseholdTools(b);
     await button(b,'Exchange encrypted cooking files').click();
     const loaded = b.waitForEvent('load');
     await uploadCooking(b,prior.bytes);
@@ -655,7 +656,7 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await b.goto(baseURL);
     await visible(b,'Already applied shallot');
 
-    await button(b,'Open settings').click();
+    await button(b,'Open settings').click();await openHouseholdTools(b);
     const scope = (await text(b,'Open household')).split(' · ')[1];
     const review = () => button(b,`Review local quarantine for ${organizer}`);
     const confirm = () => button(b,'Quarantine on this device');
@@ -667,7 +668,7 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await visible(staleEditor,'Already applied shallot');
     const beforeStaleEdit = await scopeFingerprint(staleEditor,scope);
     const otherTab = await openPage(contexts[1],baseURL);
-    await button(otherTab,'Open settings').click();
+    await button(otherTab,'Open settings').click();await openHouseholdTools(otherTab);
     await button(otherTab,'Show device identity').click();
     await button(otherTab,'Return to original local household').click();
     await saved(otherTab);
@@ -675,7 +676,7 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await expect(staleEditor.getByTestId('pantry-local-persistence-status')).toHaveText('Local save failed');
     expect(await scopeFingerprint(staleEditor,scope)).toEqual(beforeStaleEdit);
     await staleEditor.close();
-    await button(otherTab,'Open settings').click();
+    await button(otherTab,'Open settings').click();await openHouseholdTools(otherTab);
     await button(otherTab,'Show device identity').click();
     await button(otherTab,'Open this shared household').click();
     await visible(otherTab,'Already applied shallot');
@@ -688,7 +689,7 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await a.goBack();
     await add(a,'Retained direct scallion');
     await saved(a);
-    await button(a,'Open settings').click();
+    await button(a,'Open settings').click();await openHouseholdTools(a);
     for (const page of [a,b]) await button(page,'Exchange cooking updates directly').click();
     await button(a,'Create connection offer').click();
     await button(b,'Answer a connection').click();
@@ -737,7 +738,7 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await a.goBack();
     await add(a,'Blocked fresh chives');
     await saved(a);
-    await button(a,'Open settings').click();
+    await button(a,'Open settings').click();await openHouseholdTools(a);
     const files = await downloadCooking(a);
     expect(files).toHaveLength(3);
     await button(b,'Exchange encrypted cooking files').click();
@@ -766,7 +767,7 @@ test('local quarantine survives reopen, preserves direct receipts and rejects ne
     await visible(reopened,'Already applied shallot');
     await visible(reopened,'Local dill after quarantine');
     await expect(reopened.getByText('Blocked fresh chives',{exact:true})).toHaveCount(0);
-    await button(reopened,'Open settings').click();
+    await button(reopened,'Open settings').click();await openHouseholdTools(reopened);
     await button(reopened,'Review household devices').click();
     await expect(label(reopened,`Household device ${organizer}`)).toContainText('Quarantined on this device');
     await button(reopened,'Exchange encrypted cooking files').click();
@@ -798,9 +799,9 @@ test('enrolled Settings devices share frozen signed incident evidence without ap
     await admit(organizer,recipient,baseURL);
     await add(organizer,'Suspect-authored marjoram');
     await saved(organizer);
-    await button(organizer,'Open settings').click();
+    await button(organizer,'Open settings').click();await openHouseholdTools(organizer);
     const [earlier] = await downloadCooking(organizer);
-    await button(recipient,'Open settings').click();
+    await button(recipient,'Open settings').click();await openHouseholdTools(recipient);
     await button(recipient,'Exchange encrypted cooking files').click();
     const loaded = recipient.waitForEvent('load');
     await uploadCooking(recipient,earlier.bytes);
@@ -810,7 +811,7 @@ test('enrolled Settings devices share frozen signed incident evidence without ap
     const pantryRow = recipient.getByTestId(/^pantry-item-/).filter({hasText:'Suspect-authored marjoram'});
     await pantryRow.getByRole('button',{name:'Set preference to 5 out of 5',exact:true}).click();
     await saved(recipient);
-    await button(recipient,'Open settings').click();
+    await button(recipient,'Open settings').click();await openHouseholdTools(recipient);
     const scope = (await text(recipient,'Open household')).split(' · ')[1];
     const normal = page=>scopeFingerprint(page,scope,true,true);
     const beforeReporter = await normal(recipient);
@@ -883,7 +884,7 @@ test('enrolled Settings devices share frozen signed incident evidence without ap
     await organizer.goto(baseURL);
     await add(organizer,'Later signed tarragon');
     await saved(organizer);
-    await button(organizer,'Open settings').click();
+    await button(organizer,'Open settings').click();await openHouseholdTools(organizer);
     await button(organizer,'Open household incident reports').click();
     await organizer.getByRole('button',{name:/^Review incident report /}).click();
     await visible(organizer,'Frozen evidence · 3 signed operations');
