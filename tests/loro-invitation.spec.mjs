@@ -18,7 +18,7 @@ for(const adultRemoval of [false,true]){
 const decision=adultRemoval?'adult removal':'device revocation';
 test(`three enrolled devices preserve and explicitly reopen household admissions and ${decision}`,async({browser,baseURL})=>{
  test.setTimeout(240000);const aCtx=await browser.newContext({baseURL,acceptDownloads:true}),bCtx=await browser.newContext({baseURL,acceptDownloads:true}),cCtx=await browser.newContext({baseURL,acceptDownloads:true});const a=await aCtx.newPage(),b=await bCtx.newPage(),c=await cCtx.newPage(),errors=[];a.setDefaultTimeout(12000);b.setDefaultTimeout(12000);for(const p of [a,b,c]){p.on('pageerror',e=>errors.push(String(e)));p.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text())});p.on('requestfailed',r=>console.error('REQUEST',r.url(),r.failure()))}try{
- const setup=async p=>{await p.goto('./');await p.getByRole('button',{name:'Start fresh local preview'}).click().catch(async e=>{console.error('SETUP PAGE',p.url(),(await p.locator('body').innerText()).slice(0,2500),errors);throw e});await p.getByRole('button',{name:'Review household policy'}).click();await p.getByRole('button',{name:'Accept this household policy'}).click();await expect(p.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally')};
+ const setup=async p=>{await p.goto('./');await p.getByRole('button',{name:'Set up my kitchen'}).click().catch(async e=>{console.error('SETUP PAGE',p.url(),(await p.locator('body').innerText()).slice(0,2500),errors);throw e});await p.getByRole('button',{name:'Review privacy settings'}).click();await p.getByRole('button',{name:'Accept settings and open my kitchen'}).click();await expect(p.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally')};
  await setup(a);await setup(b);await setup(c);await addPantry(b,'Original household bay leaf');await addPantry(c,'Newcomer local basil');await c.getByRole('button',{name:'Open settings'}).click();await c.getByRole('button',{name:'Show device identity'}).click();const thirdIdentity=await c.getByLabel('Public device identity',{exact:true}).textContent();await a.getByLabel('Ingredient and details').fill('Invitation proof onion');await a.getByLabel('Add ingredient').click();await expect(a.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await a.goto('./shopping');
  await a.getByLabel('New shopping list name').fill('Revocation market');
@@ -703,9 +703,9 @@ const personalRevision=page=>page.evaluate(async()=>{
 async function registerRecovery(a,b,c){
  await c.goto('./chef');
  await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();
- await c.getByLabel('Message Chef').fill('Private continuity dinner');
+ await c.getByLabel('Private cooking note').fill('Private continuity dinner');
  const before=await personalRevision(c);
- await c.getByLabel('Save private message').click();
+ await c.getByLabel('Save note').click();
  await expect(c.getByText('Private continuity dinner',{exact:true}).last()).toBeVisible();
  await expect.poll(()=>personalRevision(c),{timeout:15_000}).toBeGreaterThan(before);
  await expect(c.getByText('Saved on this device',{exact:true})).toBeVisible();

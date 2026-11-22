@@ -8,9 +8,9 @@ const notice=(page,text)=>expect(page.getByText(text,{exact:true})).toBeVisible(
 
 async function start(page){
  await page.goto('./');
- await click(page,'Start fresh local preview');
- await click(page,'Review household policy');
- await click(page,'Accept this household policy');
+ await click(page,'Set up my kitchen');
+ await click(page,'Review privacy settings');
+ await click(page,'Accept settings and open my kitchen');
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
 async function addIngredient(page,name){
@@ -115,8 +115,8 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
   }
   await addIngredient(receiver,'Original receiver thyme');
   await receiver.goto('./chef');
-  await label(receiver,'Message Chef').fill('Receiver private cooking notes');
-  await label(receiver,'Save private message').click();
+  await label(receiver,'Private cooking note').fill('Receiver private cooking notes');
+  await label(receiver,'Save note').click();
   await notice(receiver,'Saved on this device');
   await settings(sponsor);
   await settings(receiver);

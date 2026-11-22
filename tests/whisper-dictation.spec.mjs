@@ -121,7 +121,7 @@ test('downloaded Whisper fallback keeps Start/Stop UX and never enables remote m
   await expect(page.getByLabel('Use Whisper dictation engine')).toHaveAttribute('aria-checked', 'true');
 
   await page.getByLabel('Back').click();
-  const composer = page.getByLabel('Message Chef');
+  const composer = page.getByLabel('Private cooking note');
   await expect(page.getByLabel('Start dictation')).toBeEnabled();
   await page.getByLabel('Start dictation').click();
   await expect(page.getByLabel('Stop dictation')).toBeVisible();

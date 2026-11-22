@@ -98,7 +98,7 @@ function darkColor(property: string, value: string): string {
 function makeDarkStyle(style: ViewStyle | TextStyle | ImageStyle): ViewStyle | TextStyle | ImageStyle {
   const result: Record<string, unknown> = { ...style };
   for (const [property, value] of Object.entries(result)) {
-    if (typeof value === 'string' && property.endsWith('Color')) {
+    if (typeof value === 'string' && (property === 'color' || property.endsWith('Color'))) {
       result[property] = darkColor(property, value);
     }
   }

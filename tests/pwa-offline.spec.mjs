@@ -17,11 +17,11 @@ test('Pantry and Recipes survive an offline reload from the exported PWA', async
   });
 
   await page.goto('./recipes');
-  await expect(page.getByText('Saved recipes', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'A little inspiration', exact: true })).toBeVisible();
 
   await context.setOffline(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByText('Saved recipes', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'A little inspiration', exact: true })).toBeVisible();
 
   await page.goto('./');
   await expect(page.getByText('Pantry', { exact: true }).first()).toBeVisible();

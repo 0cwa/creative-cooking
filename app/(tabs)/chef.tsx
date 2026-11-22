@@ -16,6 +16,7 @@ import type { ChatMessage, ChefToolProposal, IngredientPreference, UiQuestion } 
 import { LlmRequestError, normalizeLlmError } from '@/llm/errors';
 import { providerForId } from '@/llm/providers';
 import { modelCapabilities, providerMetadata } from '@/llm/registry';
+import { isLocalModelCached } from '@/llm/webllm/modelCache';
 import { createDictationController, getOnDeviceDictationSupport, getPreferredDictationLanguage } from '@/speech/dictation';
 import { appendDictationToDraft, joinDictation } from '@/speech/transcript';
 import type { DictationController, DictationSnapshot, DictationStatus } from '@/speech/dictationTypes';
@@ -106,6 +107,8 @@ export default function ChefScreen() {
   const [dictationStatus, setDictationStatus] = useState<DictationStatus>('idle');
   const [dictationDialog, setDictationDialog] = useState<DictationDialogState | null>(null);
   const [whisperModelCached, setWhisperModelCached] = useState<boolean | null>(null);
+  const [localModelCached, setLocalModelCached] = useState<boolean | null>(null);
+  const [cloudDetailsOpen, setCloudDetailsOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamingTextRef = useRef('');
@@ -119,6 +122,20 @@ export default function ChefScreen() {
   const dictationLang = useMemo(() => getPreferredDictationLanguage(), []);
   const dictationActive = isDictationActive(dictationStatus);
   const whisperNeedsSetup = dictationEngine === 'whisper' && whisperModelCached !== true;
+  const privateNotes = app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm';
+  const localChefSelected = app.settings.providerId === 'webllm';
+  const localChefUnavailable = localChefSelected && (localModelCached !== true || app.settings.allergies.length > 0);
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    setLocalModelCached(null);
+    if (Platform.OS === 'web' && localChefSelected) {
+      void isLocalModelCached(app.settings.model)
+        .then((cached) => { if (active) setLocalModelCached(cached); })
+        .catch(() => { if (active) setLocalModelCached(false); });
+    }
+    return () => { active = false; };
+  }, [localChefSelected, app.settings.model]));
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -260,7 +277,9 @@ export default function ChefScreen() {
       if (capabilities.location === 'local' && app.settings.allergies.length > 0) {
         app.appendChatMessage(chatMessage(
           'assistant',
-          'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'
+          app.storageMode === 'fresh-local'
+            ? 'Experimental local Chef is disabled while allergies are configured. Browse recipe ideas and review their ingredients; local allergy validation is still being built.'
+            : 'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'
         ));
         return;
       }
@@ -346,7 +365,7 @@ export default function ChefScreen() {
 
   const send = async (override?: string) => {
     const text = (override ?? input).trim();
-    if (!text || busy || dictationActive) return;
+    if (!text || busy || dictationActive || localChefUnavailable) return;
 
     setInput('');
     const userMessage = chatMessage('user', text);
@@ -392,7 +411,21 @@ export default function ChefScreen() {
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
 
   if (Platform.OS !== 'web' && app.storageMode === 'fresh-local') {
-    return <Screen><Text style={styles.title}>Chef</Text><Text>Chef requests and shared ingredient review are not yet available in this native workspace.</Text></Screen>;
+    return <Screen>
+      <View style={styles.header}><Text style={styles.title}>Chef</Text></View>
+      <ScrollView contentContainerStyle={styles.messagesContent}>
+        <View style={styles.modeCard}>
+          <Text style={styles.modeTitle}>Recipe ideas are ready to explore</Text>
+          <Text style={styles.modeText}>AI Chef is not available in this mobile app yet. You can browse recipe ideas, save favorites, and add ingredients to your pantry.</Text>
+          <Pressable accessibilityRole="button" onPress={() => router.push('/recipes')} style={styles.modePrimaryButton}>
+            <Text style={styles.modePrimaryText}>Browse recipe ideas</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => router.push('/')} style={styles.modeSecondaryButton}>
+            <Text style={styles.modeSecondaryText}>Add pantry ingredients</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </Screen>;
   }
 
   return (
@@ -404,16 +437,16 @@ export default function ChefScreen() {
             <Text style={styles.title}>Chef</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Open previous chats" onPress={() => setHistoryOpen(true)} style={styles.historyButton}>
-              <Text style={styles.historyText}>Chats{app.chatHistory.length ? ` ${app.chatHistory.length}` : ''}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={privateNotes ? 'Open previous notes' : 'Open previous chats'} onPress={() => setHistoryOpen(true)} style={styles.historyButton}>
+              <Text style={styles.historyText}>{privateNotes ? 'Notes' : 'Chats'}{app.chatHistory.length ? ` ${app.chatHistory.length}` : ''}</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Start a new chat" onPress={startNewChat} style={styles.newChatButton}><Text style={styles.newChatText}>New chat</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel={privateNotes ? 'Start new notes' : 'Start a new chat'} onPress={startNewChat} style={styles.newChatButton}><Text style={styles.newChatText}>{privateNotes ? 'New notes' : 'New chat'}</Text></Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.iconButton}><SettingsGlyph /></Pressable>
           </View>
         </View>
 
-        {app.storageMode === 'fresh-local' ? <View><Text style={styles.errorText}>Messages stay private. You can separately review a shared-ingredient request, or use the downloaded on-device model locally.</Text><SharedChefRequest items={app.pantry} providerId={app.settings.providerId} model={app.settings.model} onComplete={(text,proposals)=>app.appendChatMessage(chatMessage('assistant',text,proposals))}/><Text accessibilityRole={app.localPersistenceStatus === 'error' ? 'alert' : 'text'} style={styles.errorText}>{app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}</Text></View> : null}
         <View style={styles.contextStrip}>
+          {!privateNotes && <>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={app.mealContext.willingToShop ? 'Shopping allowed' : 'Pantry only'}
@@ -426,6 +459,7 @@ export default function ChefScreen() {
           <Pressable accessibilityRole="button" accessibilityLabel={`Edit meal context, ${app.mealContext.portions} portions, ${app.mealContext.cooks.length} cooks`} onPress={() => setContextOpen(true)} style={styles.contextChip}>
             <Text style={styles.contextChipText}>{app.mealContext.portions} portions · {app.mealContext.cooks.length} cook{app.mealContext.cooks.length === 1 ? '' : 's'}</Text>
           </Pressable>
+          </>}
           <Text testID="chef-workspace-status" accessibilityLiveRegion="polite" style={styles.workspaceStatus}>
             Cooking in {app.contentWorkspaceName}
           </Text>
@@ -434,12 +468,60 @@ export default function ChefScreen() {
           </Text>
         </View>
 
-        <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent} onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
+        <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent} onContentSizeChange={() => {
+          if (app.chatMessages.length > 0 || busy || runError) scrollRef.current?.scrollToEnd({ animated: true });
+        }}>
+          {privateNotes && (
+            <View style={styles.modeCard}>
+              <Text accessibilityRole="header" style={styles.modeTitle}>Private cooking notes</Text>
+              <Text style={styles.modeText}>Messages stay private. Save meal ideas here for later; saving a note does not request an AI reply.</Text>
+              <Text style={styles.modeText}>Cloud Chef is currently unavailable in this workspace. You can browse recipe ideas now, without connecting an AI provider.</Text>
+              <View style={styles.modeActions}>
+                <Pressable accessibilityRole="button" onPress={() => router.push('/recipes')} style={styles.modePrimaryButton}>
+                  <Text style={styles.modePrimaryText}>Browse recipe ideas</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={() => router.push('/settings?focus=local-chef')} style={styles.modeSecondaryButton}>
+                  <Text style={styles.modeSecondaryText}>Local Chef settings</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.modeHelp}>On compatible browsers, you can optionally download an experimental on-device Chef in Settings.</Text>
+              <Pressable accessibilityRole="button" aria-expanded={cloudDetailsOpen} accessibilityState={{ expanded: cloudDetailsOpen }} onPress={() => setCloudDetailsOpen(!cloudDetailsOpen)} style={styles.modeDetailsButton}>
+                <Text style={styles.modeDetailsText}>{cloudDetailsOpen ? 'Hide cloud Chef details' : 'Why is cloud Chef unavailable?'}</Text>
+              </Pressable>
+              {cloudDetailsOpen && <SharedChefRequest items={app.pantry} providerId={app.settings.providerId} model={app.settings.model} onComplete={(text,proposals)=>app.appendChatMessage(chatMessage('assistant',text,proposals))}/>}
+            </View>
+          )}
+          {localChefSelected && (
+            <View style={styles.modeCard}>
+              <Text accessibilityRole="header" style={styles.modeTitle}>On-device Chef · experimental</Text>
+              <Text accessibilityLiveRegion="polite" style={styles.modeText}>
+                {app.settings.allergies.length > 0
+                  ? 'Local Chef is disabled while allergies are configured because its allergy checks are not ready. Your allergy settings stay in place.'
+                  : localModelCached === null
+                    ? 'Checking whether your local model is downloaded…'
+                    : localModelCached
+                      ? 'Replies run on this device. This model gives text suggestions; add pantry items and save recipes yourself.'
+                      : 'The local model is not downloaded on this device. Open Local Chef settings to check compatibility and choose a download. Your draft stays here.'}
+              </Text>
+              <View style={styles.modeActions}>
+                <Pressable accessibilityRole="button" onPress={() => router.push('/recipes')} style={styles.modePrimaryButton}>
+                  <Text style={styles.modePrimaryText}>Browse recipe ideas</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={() => router.push('/settings?focus=local-chef')} style={styles.modeSecondaryButton}>
+                  <Text style={styles.modeSecondaryText}>Local Chef settings</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
           {app.chatMessages.length === 0 && (
             <View style={styles.welcome}>
-              <Text style={styles.welcomeEmoji}>🍳</Text>
-              <Text style={styles.welcomeTitle}>What sounds good?</Text>
-              <Text style={styles.welcomeText}>Ask for dinner ideas, tell me what you’re craving, or dictate pantry changes in plain language.</Text>
+              <Text style={styles.welcomeEmoji}>{privateNotes ? '📝' : '🍳'}</Text>
+              <Text style={styles.welcomeTitle}>{privateNotes ? 'Keep a cooking idea' : 'What sounds good?'}</Text>
+              <Text style={styles.welcomeText}>{privateNotes
+                ? 'Jot down a craving, a recipe tweak, or something you want to try next time.'
+                : localChefSelected
+                  ? 'Ask for dinner ideas or describe what you feel like eating.'
+                  : 'Ask for dinner ideas, tell me what you’re craving, or dictate pantry changes in plain language.'}</Text>
             </View>
           )}
           {app.chatMessages.map((message) => (
@@ -503,8 +585,11 @@ export default function ChefScreen() {
         </ScrollView>
 
         <View style={styles.composerArea}>
+          {app.storageMode === 'fresh-local' && <Text accessibilityLiveRegion="polite" style={styles.composerHelp}>
+            {app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}
+          </Text>}
           <View style={styles.composerWrap}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>
+            {!privateNotes && <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>}
             {Platform.OS === 'web' && (
               <Pressable
                 accessibilityRole="button"
@@ -530,12 +615,12 @@ export default function ChefScreen() {
               </Pressable>
             )}
             <TextInput
-              accessibilityLabel="Message Chef"
-              accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : undefined}
+              accessibilityLabel={privateNotes ? 'Private cooking note' : 'Message Chef'}
+              accessibilityHint={dictationActive ? 'Press Stop dictation to edit the transcript.' : privateNotes ? 'Save a private cooking note. No AI reply will be requested.' : undefined}
               editable={!dictationActive}
               value={input}
               onChangeText={setInput}
-              placeholder={app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Write a private message…' : 'Type or dictate to Chef…'}
+              placeholder={privateNotes ? 'Write a private cooking note…' : 'Type or dictate to Chef…'}
               placeholderTextColor={themeColor('#94a3b8')}
               style={[styles.composer, dictationActive && styles.composerDictating]}
               multiline
@@ -545,13 +630,15 @@ export default function ChefScreen() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={busy ? 'Stop Chef response' : app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm' ? 'Save private message' : 'Send message'}
-              disabled={!busy && (!input.trim() || dictationActive)}
+              accessibilityLabel={busy ? 'Stop Chef response' : privateNotes ? 'Save note' : 'Send message'}
+              disabled={!busy && (!input.trim() || dictationActive || localChefUnavailable)}
               onPress={busy ? stop : () => void send()}
-              style={[styles.send, (!busy && (!input.trim() || dictationActive)) && styles.sendDisabled]}
+              style={[styles.send, privateNotes && styles.saveNote, (!busy && (!input.trim() || dictationActive || localChefUnavailable)) && styles.sendDisabled]}
             >
               {busy ? (
                 <View style={styles.stopGlyph} />
+              ) : privateNotes ? (
+                <Text style={styles.saveNoteText}>Save note</Text>
               ) : (
                 <View style={styles.sendGlyph}>
                   <View style={styles.sendShaft} />
@@ -573,6 +660,7 @@ export default function ChefScreen() {
 
       <ConversationHistoryModal
         visible={historyOpen}
+        mode={privateNotes ? 'notes' : 'chats'}
         conversations={app.chatHistory}
         onClose={() => setHistoryOpen(false)}
         onOpen={openConversation}
@@ -624,7 +712,7 @@ export default function ChefScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between', alignItems: 'center' },
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   headerActions: { flexDirection: 'row', gap: 8 },
@@ -641,9 +729,20 @@ const styles = StyleSheet.create({
   workspaceStatus: { width: '100%', color: '#64748b', fontSize: 12, fontWeight: '700', paddingHorizontal: 4 },
   messages: { flex: 1 },
   messagesContent: { padding: 16, gap: 10, paddingBottom: 28 },
+  modeCard: { padding: 18, gap: 10, borderRadius: 18, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: 'white' },
+  modeTitle: { color: '#172033', fontSize: 19, lineHeight: 25, fontWeight: '800' },
+  modeText: { color: '#475569', fontSize: 14, lineHeight: 21 },
+  modeHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 18 },
+  modeActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 2 },
+  modePrimaryButton: { minHeight: 44, paddingHorizontal: 15, paddingVertical: 12, borderRadius: 12, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
+  modePrimaryText: { color: 'white', fontWeight: '700', textAlign: 'center' },
+  modeSecondaryButton: { minHeight: 44, paddingHorizontal: 15, paddingVertical: 12, borderRadius: 12, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
+  modeSecondaryText: { color: '#172033', fontWeight: '700', textAlign: 'center' },
+  modeDetailsButton: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
+  modeDetailsText: { color: '#64748b', fontSize: 13, textDecorationLine: 'underline' },
   messageGroup: { width: '100%', gap: 8 },
   proposalList: { gap: 8 },
-  welcome: { alignItems: 'center', paddingTop: 46, paddingHorizontal: 24, paddingBottom: 30 },
+  welcome: { alignItems: 'center', paddingTop: 24, paddingHorizontal: 24, paddingBottom: 24 },
   welcomeEmoji: { fontSize: 46 },
   welcomeTitle: { fontSize: 23, fontWeight: '800', color: '#172033', marginTop: 12 },
   welcomeText: { textAlign: 'center', color: '#64748b', lineHeight: 21, marginTop: 7 },
@@ -667,6 +766,7 @@ const styles = StyleSheet.create({
   questionOption: { minHeight: 44, backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: '#fed7aa', justifyContent: 'center' },
   questionOptionText: { color: '#9a3412', fontWeight: '600' },
   composerArea: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingTop: 8 },
+  composerHelp: { color: '#64748b', fontSize: 12, lineHeight: 17, paddingHorizontal: 14, paddingBottom: 7 },
   composerWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingBottom: 10, backgroundColor: 'white', flexWrap: 'wrap' },
   plus: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   plusText: { fontSize: 24, color: '#475569' },
@@ -683,6 +783,8 @@ const styles = StyleSheet.create({
   composer: { flex: 1, minWidth: 140, maxHeight: 160, minHeight: 42, borderRadius: 18, backgroundColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10, color: '#172033', fontSize: 15.5 },
   composerDictating: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0' },
   send: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
+  saveNote: { width: 'auto', minHeight: 44, paddingHorizontal: 14, borderRadius: 14 },
+  saveNoteText: { color: 'white', fontSize: 13, fontWeight: '700' },
   sendDisabled: { opacity: 0.35 },
   sendGlyph: { width: 18, height: 20, position: 'relative' },
   sendShaft: { position: 'absolute', left: 8, top: 4, bottom: 2, width: 2, borderRadius: 1, backgroundColor: 'white' },

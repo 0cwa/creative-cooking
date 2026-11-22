@@ -15,6 +15,7 @@ import {
   missingPantryIngredients
 } from '@/domain/recipeEditing';
 import type { Recipe } from '@/domain/types';
+import { copyStarterRecipe, starterRecipes, type StarterRecipe } from '@/domain/starterRecipes';
 import type { RecipeHistoryEntry } from '@/loro/app/content-runtime-types';
 import { useAppState } from '@/state/AppState';
 
@@ -96,6 +97,12 @@ export default function RecipesScreen() {
   const [newSteps,setNewSteps]=useState('');
   const [creationError,setCreationError]=useState<string|null>(null);
   const [creationSaved,setCreationSaved]=useState(false);
+  const [starter, setStarter] = useState<StarterRecipe | null>(null);
+  const [starterSaving, setStarterSaving] = useState(false);
+  const [starterError, setStarterError] = useState<string | null>(null);
+  const [starterSavedTitle, setStarterSavedTitle] = useState<string | null>(null);
+  const starterSaveInFlight = useRef(false);
+  const pendingStarterId = useRef<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RecipeEditDraft | null>(null);
   const [history, setHistory] = useState<RecipeHistoryEntry[] | null>(null);
@@ -107,7 +114,35 @@ export default function RecipesScreen() {
   const startCreating = () => {
     setCreationError(null);
     setCreationSaved(false);
+    setStarterSavedTitle(null);
     setCreating(true);
+  };
+
+  const previewStarter = (idea: StarterRecipe) => {
+    setStarterError(null);
+    setStarterSavedTitle(null);
+    setStarter(idea);
+  };
+
+  const saveStarter = async () => {
+    if (!starter || !canEditSharedContent || starterSaveInFlight.current) return;
+    if (pendingRecipeTitle !== null && pendingStarterId.current !== starter.id) return;
+    starterSaveInFlight.current = true;
+    setStarterSaving(true);
+    setStarterError(null);
+    try {
+      pendingStarterId.current = starter.id;
+      const { refreshed } = await createRecipe(pendingRecipeTitle === null ? copyStarterRecipe(starter) : undefined);
+      pendingStarterId.current = null;
+      setCreationSaved(!refreshed);
+      setStarterSavedTitle(starter.recipe.title);
+      setStarter(null);
+    } catch (error) {
+      setStarterError(error instanceof Error ? error.message : 'Could not save this recipe. Try again.');
+    } finally {
+      starterSaveInFlight.current = false;
+      setStarterSaving(false);
+    }
   };
 
   const saveNewRecipe = async () => {
@@ -178,7 +213,10 @@ export default function RecipesScreen() {
     setSelectedId(id);
     setDraft(null);
   };
-  const openRecipe = (recipe: Recipe) => selectRecipe(recipe.id);
+  const openRecipe = (recipe: Recipe) => {
+    setStarterSavedTitle(null);
+    selectRecipe(recipe.id);
+  };
   const closeRecipe = () => selectRecipe(null);
 
   const loadHistory = async (entry?: RecipeHistoryEntry) => {
@@ -262,16 +300,41 @@ export default function RecipesScreen() {
     }
   };
 
+  const recipeIdeas = (
+    <View testID="recipe-ideas" style={styles.ideasSection}>
+      <Text accessibilityRole="header" style={styles.ideasTitle}>A little inspiration</Text>
+      <Text style={styles.ideasText}>Three simple ideas you can browse offline. Save a copy to change the portions, make it your own or plan a shop.</Text>
+      <Text style={styles.ideasNote}>These built-in ideas are not tailored to your pantry or dietary needs.</Text>
+      {starterRecipes.map(idea => (
+        <Pressable
+          key={idea.id}
+          accessibilityRole="button"
+          accessibilityLabel={`Preview ${idea.recipe.title}`}
+          onPress={() => previewStarter(idea)}
+          style={styles.ideaCard}
+        >
+          <View style={styles.ideaText}>
+            <Text style={styles.cardTitle}>{idea.recipe.title}</Text>
+            <Text style={styles.cardDescription}>{idea.ingredientSummary}</Text>
+            <Text style={styles.ideaMeta}>{idea.time} · {idea.recipe.portions} portions · Preview recipe</Text>
+          </View>
+          <Text accessible={false} style={styles.chevron}>›</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+
   return (
     <Screen>
       <View style={styles.header}>
-        <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Saved recipes</Text></View>
+        <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Recipes</Text></View>
         <View style={styles.headerActions}>
           {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" disabled={!canEditSharedContent} onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
           <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
         </View>
       </View>
+      {starterSavedTitle && !sharedCookingRefreshPending && <Text accessibilityLiveRegion="polite" style={styles.savedNotice}>Saved {starterSavedTitle}. Open your copy below to cook, edit or plan a shop.</Text>}
       {creationSaved && <Text accessibilityLiveRegion="polite" style={styles.line}>{sharedCookingRefreshPending ? 'Recipe saved. Refresh cooking to see it.' : 'Recipe saved.'}</Text>}
       {sharedCookingRefreshPending && <Pressable accessibilityRole="button" onPress={() => void retryCookingRefresh()} style={styles.shoppingLink}>
         <Text style={styles.shoppingLinkText}>Retry cooking refresh</Text>
@@ -291,12 +354,55 @@ export default function RecipesScreen() {
             <Text accessible={false} style={styles.chevron}>›</Text>
           </Pressable>
         )}
-        ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyEmoji}>📖</Text><Text style={styles.emptyTitle}>No saved recipes yet</Text><Text style={styles.emptyText}>Ask Chef to save one when you find something worth making again.</Text></View>}
+        ListHeaderComponent={recipes.length ? <Text accessibilityRole="header" style={styles.savedHeading}>Your saved recipes</Text> : null}
+        ListEmptyComponent={<>
+          <View style={styles.empty}>
+            <Text style={styles.emptyEmoji}>📖</Text>
+            <Text style={styles.emptyTitle}>Your cookbook starts here</Text>
+            <Text style={styles.emptyText}>Try an idea below, or keep a recipe you already love. No account or AI connection needed.</Text>
+            {storageMode === 'fresh-local' && <Pressable accessibilityRole="button" disabled={!canEditSharedContent} onPress={startCreating} style={[styles.emptyAction, !canEditSharedContent && styles.disabledAction]}><Text style={styles.shoppingLinkText}>Add your own recipe</Text></Pressable>}
+          </View>
+          {recipeIdeas}
+        </>}
+        ListFooterComponent={recipes.length ? recipeIdeas : null}
         contentContainerStyle={{ paddingBottom: 30 }}
       />
 
+      <Modal visible={starter !== null} animationType="slide" onRequestClose={() => { if (!starterSaveInFlight.current) setStarter(null); }}>
+        {starter && <ScrollView accessibilityViewIsModal style={styles.detailSurface} contentContainerStyle={styles.recipeDetail}>
+          <View style={styles.detailHeader}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close recipe idea" disabled={starterSaving} onPress={() => setStarter(null)} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
+            <Text style={styles.ideaMeta}>Recipe idea · {starter.time.toLowerCase()}</Text>
+          </View>
+          <Text accessibilityRole="header" style={styles.detailTitle}>{starter.recipe.title}</Text>
+          <Text style={styles.detailDescription}>{starter.recipe.description}</Text>
+          <View style={styles.starterSaveCard}>
+            <Text style={styles.line}>{starter.recipe.portions} portions. Previewing does not add anything to your kitchen.</Text>
+            {!canEditSharedContent && <Text style={styles.ideasText}>You can read this idea here. Saving a copy needs an editable kitchen.</Text>}
+            {pendingRecipeTitle !== null && pendingStarterId.current !== starter.id ? <>
+              <Text style={styles.ideasText}>Finish saving {pendingRecipeTitle} before adding another recipe.</Text>
+              <Pressable accessibilityRole="button" disabled={!canEditSharedContent || starterSaving} onPress={() => { setStarter(null); startCreating(); }} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Finish recipe save</Text></Pressable>
+            </> : <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={pendingRecipeTitle === null ? 'Save a copy of this recipe' : 'Retry saving this recipe'}
+              accessibilityState={{ disabled: !canEditSharedContent || starterSaving, busy: starterSaving }}
+              disabled={!canEditSharedContent || starterSaving}
+              onPress={() => void saveStarter()}
+              style={[styles.primaryAction, (!canEditSharedContent || starterSaving) && styles.disabledAction]}
+            ><Text style={styles.primaryActionText}>{starterSaving ? 'Saving…' : pendingRecipeTitle === null ? 'Save a copy' : 'Retry save'}</Text></Pressable>}
+            {starterError && <Text accessibilityRole="alert" style={styles.delete}>{starterError}</Text>}
+          </View>
+          <Text style={styles.sectionTitle}>Ingredients</Text>
+          {starter.recipe.ingredients.map(ingredient => <Text key={ingredient.name} style={styles.line}>• {ingredient.amount ? `${ingredient.amount} ` : ''}{ingredient.name}</Text>)}
+          <Text style={styles.sectionTitle}>Method</Text>
+          {starter.recipe.steps.map((step, index) => <Text key={index} style={styles.step}><Text style={styles.stepNumber}>{index + 1}. </Text>{step}</Text>)}
+          <Text style={styles.sectionTitle}>Make it your own</Text>
+          {starter.recipe.notes?.map(note => <Text key={note} style={styles.line}>• {note}</Text>)}
+        </ScrollView>}
+      </Modal>
+
       <Modal visible={creating} animationType="slide" onRequestClose={()=>{if(canEditSharedContent)setCreating(false);}}>
-        <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.recipeDetail}>
+        <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" style={styles.detailSurface} contentContainerStyle={styles.recipeDetail}>
           <View style={styles.detailHeader}>
             <Pressable accessibilityRole="button" accessibilityLabel="Cancel new recipe" disabled={!canEditSharedContent} onPress={()=>setCreating(false)} style={styles.detailAction}>
               <Text style={styles.close}>Cancel</Text>
@@ -316,7 +422,7 @@ export default function RecipesScreen() {
 
       <Modal visible={Boolean(selected)} animationType="slide" onRequestClose={() => { if (!historyBusy) closeRecipe(); }}>
         {selected && (
-          <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.recipeDetail}>
+          <ScrollView accessibilityViewIsModal keyboardShouldPersistTaps="handled" style={styles.detailSurface} contentContainerStyle={styles.recipeDetail}>
             {draft ? (
               <>
                 <View style={styles.detailHeader}>
@@ -517,11 +623,11 @@ export default function RecipesScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 },
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 32, lineHeight: 38, fontWeight: '800', color: '#172033' },
   settings: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   shoppingLink: { minHeight: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   shoppingLinkText: { color: '#172033', fontWeight: '800' },
   card: { marginHorizontal: 16, marginVertical: 6, padding: 17, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72 },
@@ -529,10 +635,23 @@ const styles = StyleSheet.create({
   cardDescription: { color: '#64748b', marginTop: 5, lineHeight: 19 },
   cardMeta: { color: '#94a3b8', fontSize: 12, marginTop: 8, fontWeight: '600' },
   chevron: { color: '#94a3b8', fontSize: 32 },
-  empty: { alignItems: 'center', padding: 54 },
+  savedNotice: { marginHorizontal: 20, marginBottom: 12, color: '#166534', fontSize: 14, lineHeight: 21 },
+  savedHeading: { marginHorizontal: 20, marginTop: 12, marginBottom: 8, fontSize: 20, fontWeight: '800', color: '#334155' },
+  ideasSection: { padding: 20, gap: 10 },
+  ideasTitle: { fontSize: 22, fontWeight: '800', color: '#172033' },
+  ideasText: { color: '#475569', fontSize: 15, lineHeight: 22 },
+  ideasNote: { color: '#64748b', fontSize: 13, lineHeight: 20, marginBottom: 4 },
+  ideaCard: { padding: 16, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 12 },
+  ideaText: { flex: 1, minWidth: 0 },
+  ideaMeta: { color: '#475569', fontSize: 13, lineHeight: 19, marginTop: 8 },
+  starterSaveCard: { backgroundColor: '#f0fdf4', borderRadius: 16, padding: 16, gap: 10, marginTop: 20 },
+  disabledAction: { opacity: 0.45 },
+  empty: { alignItems: 'center', paddingHorizontal: 28, paddingTop: 26, paddingBottom: 16 },
   emptyEmoji: { fontSize: 44 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#334155', marginTop: 13 },
   emptyText: { textAlign: 'center', color: '#64748b', lineHeight: 21, marginTop: 8 },
+  emptyAction: { marginTop: 16, minHeight: 44, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  detailSurface: { backgroundColor: '#f8fafc' },
   recipeDetail: { padding: 22, paddingBottom: 60, maxWidth: 760, width: '100%', alignSelf: 'center' },
   detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28, gap: 12, flexWrap: 'wrap' },
   detailAction: { minHeight: 44, minWidth: 64, justifyContent: 'center' },

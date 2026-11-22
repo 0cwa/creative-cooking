@@ -35,6 +35,7 @@ export default function PantryScreen() {
   const inputRef = useRef<TextInput>(null);
 
   const add = () => {
+    if (readOnly) return;
     const name = normalizeIngredientName(input);
     if (!name) return;
     addPantryItems([name], 3);
@@ -81,11 +82,40 @@ export default function PantryScreen() {
               onPreference={(preference) => setPantryPreference(item.id, preference)}
             />
           )}
+          ListHeaderComponent={pantry.length > 0 ? (
+            <View style={styles.nextStep}>
+              <Text style={styles.preferenceHelp}>Stars are your appetite: 1 = not today, 5 = love to eat it.</Text>
+              <Pressable accessibilityRole="button" onPress={() => router.push('/recipes')} style={styles.browseButton}>
+                <Text style={styles.browseButtonText}>Browse recipe ideas</Text>
+              </Pressable>
+            </View>
+          ) : null}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🧺</Text>
               <Text style={styles.emptyTitle}>What’s in the kitchen?</Text>
-              <Text style={styles.emptyText}>Add ingredients one at a time below, or tell Chef everything you have in one message.</Text>
+              <Text style={styles.emptyText}>
+                {readOnly
+                  ? 'No ingredients have been added here yet. You can still browse recipe ideas.'
+                  : 'Start with a few ingredients you have. A name is enough — no quantities or full kitchen inventory needed.'}
+              </Text>
+              {!readOnly && <>
+                <Pressable accessibilityRole="button" accessibilityHint="Moves to the ingredient box below." onPress={() => inputRef.current?.focus()} style={styles.firstIngredientButton}>
+                  <Text style={styles.addButtonText}>Add your first ingredient</Text>
+                </Pressable>
+                <Text style={styles.exampleHelp}>Try an example in the box, then add it if you have it.</Text>
+                <View style={styles.examples}>
+                  {['rice', 'eggs', 'peas (frozen)'].map((name) => (
+                    <Pressable key={name} accessibilityRole="button" accessibilityLabel={`Use example ${name}`} onPress={() => { setInput(name); inputRef.current?.focus(); }} style={styles.exampleButton}>
+                      <Text style={styles.exampleText}>{name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>}
+              <Pressable accessibilityRole="button" onPress={() => router.push('/recipes')} style={styles.browseButton}>
+                <Text style={styles.browseButtonText}>Browse recipe ideas</Text>
+              </Pressable>
+              <Text style={styles.exampleHelp}>You can explore recipes before filling your pantry.</Text>
             </View>
           }
           contentContainerStyle={{ paddingBottom: 16 }}
@@ -96,7 +126,7 @@ export default function PantryScreen() {
         <Text style={styles.composerHelp}>
           {readOnly
             ? 'This household is read-only for viewers. Choose an editor workspace to change pantry records.'
-            : 'Add an ingredient with any useful detail — for example mint (dried) or okra (frozen). To dictate many at once, tell Chef.'}
+            : 'Add one ingredient at a time. Details like “mint (dried)” are optional.'}
         </Text>
         <View style={styles.composerRow}>
           <TextInput
@@ -106,7 +136,7 @@ export default function PantryScreen() {
             onChangeText={setInput}
             onSubmitEditing={add}
             editable={!readOnly}
-            placeholder="e.g. mint (dried)"
+            placeholder="e.g. tomatoes"
             placeholderTextColor={themeColor('#94a3b8')}
             returnKeyType="done"
             submitBehavior="submit"
@@ -123,7 +153,7 @@ export default function PantryScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' },
   eyebrow: { fontSize: 11, letterSpacing: 1.5, fontWeight: '800', color: '#94a3b8' },
   title: { fontSize: 34, lineHeight: 39, fontWeight: '800', color: '#172033' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -135,6 +165,15 @@ const styles = StyleSheet.create({
   workspaceStatus: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   localPersistenceStatus: { color: '#64748b', fontSize: 11.5 },
   listWrap: { flex: 1 },
+  nextStep: { paddingHorizontal: 20, paddingVertical: 10, gap: 8, alignItems: 'flex-start' },
+  preferenceHelp: { color: '#64748b', fontSize: 13, lineHeight: 19 },
+  browseButton: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 13, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
+  browseButtonText: { color: '#172033', fontWeight: '700', textAlign: 'center' },
+  firstIngredientButton: { minHeight: 44, paddingHorizontal: 18, paddingVertical: 12, marginTop: 18, borderRadius: 13, backgroundColor: '#172033', alignItems: 'center', justifyContent: 'center' },
+  exampleHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 18, textAlign: 'center', marginTop: 10 },
+  examples: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 8, marginBottom: 20 },
+  exampleButton: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 22, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: 'white', justifyContent: 'center' },
+  exampleText: { color: '#475569', fontSize: 14 },
   composer: { borderTopWidth: 1, borderTopColor: '#e2e8f0', backgroundColor: 'white', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12, gap: 8 },
   composerHelp: { color: '#64748b', fontSize: 12.5, lineHeight: 17, textAlign: 'center' },
   composerRow: { flexDirection: 'row', gap: 9, alignItems: 'center', flexWrap: 'wrap' },
@@ -143,7 +182,7 @@ const styles = StyleSheet.create({
   addButton: { minWidth: 68, minHeight: 44, backgroundColor: '#172033', borderRadius: 13, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   addButtonDisabled: { opacity: 0.4 },
   addButtonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
-  empty: { alignItems: 'center', paddingHorizontal: 38, paddingTop: 64 },
+  empty: { width: '100%', maxWidth: 460, alignSelf: 'center', alignItems: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 18 },
   emptyEmoji: { fontSize: 44 },
   emptyTitle: { marginTop: 14, fontSize: 20, fontWeight: '700', color: '#334155', textAlign: 'center' },
   emptyText: { marginTop: 8, color: '#64748b', textAlign: 'center', lineHeight: 21 }

@@ -58,7 +58,7 @@ test('on-device dictation stays active across browser ends until the user presse
   });
 
   await startLocalWorkspace(page,'./chef');
-  const composer = page.getByLabel('Message Chef');
+  const composer = page.getByLabel('Private cooking note');
 
   await page.getByLabel('Start dictation').click();
   await expect(page.getByLabel('Stop dictation')).toBeVisible();
@@ -80,6 +80,7 @@ test('on-device dictation stays active across browser ends until the user presse
 
 
 test('compact mic stays beside the composer and explains unavailable dictation', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
     Object.defineProperty(window, 'SpeechRecognition', {
       configurable: true,
@@ -89,21 +90,18 @@ test('compact mic stays beside the composer and explains unavailable dictation',
 
   await startLocalWorkspace(page,'./chef');
 
-  const plus = page.getByLabel('Edit meal context', { exact: true });
   const mic = page.getByLabel('Start dictation');
-  const composer = page.getByLabel('Message Chef');
+  const composer = page.getByLabel('Private cooking note');
+  await expect(page.getByLabel('Edit meal context', { exact: true })).toHaveCount(0);
   await expect(mic).toBeVisible();
   await expect(page.getByLabel('Use browser dictation engine')).toHaveCount(0);
 
-  const [plusBox, micBox, composerBox] = await Promise.all([
-    plus.boundingBox(),
+  const [micBox, composerBox] = await Promise.all([
     mic.boundingBox(),
     composer.boundingBox()
   ]);
-  expect(plusBox).not.toBeNull();
   expect(micBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
-  expect(plusBox.x + plusBox.width).toBeLessThan(micBox.x);
   expect(micBox.x + micBox.width).toBeLessThan(composerBox.x);
 
   await mic.click();
@@ -113,5 +111,5 @@ test('compact mic stays beside the composer and explains unavailable dictation',
   await page.getByLabel('Open dictation settings').click();
   await expect(page.getByLabel('Use browser dictation engine')).toBeVisible();
   await expect(page.getByLabel('Use Whisper dictation engine')).toBeVisible();
-  await expect(page.getByText('Dictation', { exact: true })).toBeInViewport();
+  await expect(page.getByRole('heading', { name: 'Dictation', exact: true })).toBeInViewport();
 });

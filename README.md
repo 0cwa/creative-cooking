@@ -2,12 +2,22 @@
 
 A local-first Expo / React Native cooking assistant built around the ingredients you already have and what you actually feel like eating.
 
+## Getting started
+
+1. Choose **Set up my kitchen**, review the privacy summary, and explicitly accept the settings. Household invitation rules and recovery tools are optional sections on the welcome screen.
+2. Add a few real ingredients in **Pantry**. A name is enough; quantities are not required. Stars describe how much you feel like eating an ingredient. Example chips only fill the input until you press **Add**.
+3. Open **Recipes** to browse three built-in ideas without an account, provider key, or network connection. Previewing changes nothing. **Save a copy** adds a normal recipe you can edit, scale, and use to plan a shopping list. You can also add your own recipe.
+4. On web, **Chef** currently saves private cooking notes by default. **Save note** does not request an AI reply. Cloud Chef requests remain disabled while disclosure storage is being verified; saving a cloud provider key does not enable them.
+5. If you want to try the experimental on-device Chef in a compatible web browser, open **Local Chef settings**. Model downloads are explicit. The current local model provides text suggestions and cannot change Pantry or save recipes; it remains disabled when allergies are configured. Native Chef is not available yet.
+
+Built-in recipes are starting points, not personalized or allergy-safe recommendations. They remain separate from saved recipes until you choose to save a copy. Pantry, saved recipes, and shopping work offline after the app is loaded; the PWA also caches previously visited routes for offline reopening.
+
 ## MVP
 
-- Pantry powered by FlashList: manually add concise ingredient descriptions one at a time from a bottom composer, rate each 1–5 stars, swipe to remove; optional details such as `mint (dried)` or `okra (frozen)` stay plain text, and bulk dictation goes through Chef.
+- Pantry powered by FlashList: manually add concise ingredient descriptions one at a time from a bottom composer, rate each 1–5 stars, swipe to remove; optional details such as `mint (dried)` or `okra (frozen)` stay plain text.
 - Chef chat: pantry preferences, allergies, shopping willingness, portions, cooks, energy, optional city/time context.
 - Chef can add/update/remove/rate pantry items and save structured recipes via tool calls.
-- Saved recipe collection with recipe-like natural-text editing over structured data, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
+- Saved recipe collection with offline starter ideas, recipe-like natural-text editing over structured data, safe portion scaling, and a shopping checklist that can add purchased ingredients back to Pantry.
 - OpenRouter OAuth PKCE plus direct BYOK connections for OpenAI, Anthropic, Gemini, and Mistral, all behind the same Chef provider interface.
 - Installable GitHub Pages PWA with local-first app state.
 - Experimental WebLLM local Chef on compatible WebGPU browsers, with explicit model download/cache/delete controls and no hidden model download from chat.
