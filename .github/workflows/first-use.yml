@@ -5,6 +5,7 @@ on:
     paths:
       - 'app/**'
       - 'src/**'
+      - 'public/**'
       - 'tests/**'
       - 'scripts/**'
       - 'package*.json'
@@ -38,7 +39,7 @@ jobs:
       - run: npm run verify:pwa
       - run: npx playwright install --with-deps chromium
       - name: Exercise first-use and setup recovery
-        run: npx playwright test tests/first-use.spec.mjs tests/provider-settings.spec.mjs tests/chef-notes.spec.mjs --project=web --reporter=line,html
+        run: npx playwright test tests/first-use.spec.mjs tests/provider-settings.spec.mjs tests/chef-notes.spec.mjs tests/pwa-offline.spec.mjs --project=web --reporter=line,html
         env:
           PLAYWRIGHT_HTML_OPEN: never
       - name: Keep setup screenshots and browser diagnostics

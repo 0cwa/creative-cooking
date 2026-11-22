@@ -14,7 +14,7 @@
     "web": "expo start --web",
     "test": "node --experimental-strip-types --test src/domain/*.test.mjs src/chef/*.test.mjs src/storage/*.test.mjs src/llm/*.test.mjs src/llm/openrouter/*.test.mjs src/llm/webllm/*.test.mjs src/speech/*.test.mjs && npm run test:loro",
     "typecheck": "tsc --noEmit",
-    "build:web": "expo export -p web && node scripts/copy-loro-wasm.mjs",
+    "build:web": "expo export -p web && node scripts/copy-loro-wasm.mjs && node scripts/build-pwa-cache.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "check": "npm run test && npm run typecheck && EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web && npm run verify:pwa",
     "test:e2e": "playwright test",
