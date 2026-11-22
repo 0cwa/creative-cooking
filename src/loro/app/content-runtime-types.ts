@@ -16,6 +16,7 @@ export type RecipeHistoryEntry = {
 };
 
 export type ContentRuntimeSnapshot = {
+  /** True only after cooking and personal content have both opened successfully. */
   hydrated: boolean;
   storageError: string | null;
   workspaceName: string;

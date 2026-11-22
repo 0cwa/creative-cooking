@@ -1,3 +1,4 @@
+import {openHouseholdTools, openSavedCloudConnections} from './settings-navigation.mjs';
 import {test,expect} from './browser-fixture.mjs';
 import {readFile,unlink} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
@@ -15,10 +16,10 @@ const newer='Private message under the rotated key';
 async function start(page){
  await page.goto('./');
  await click(page,'Set up my kitchen');
- await click(page,'Review privacy settings');
+
  await click(page,'Accept settings and open my kitchen');
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
- await page.goto('./settings');
+ await page.goto('./settings');await openHouseholdTools(page);
 }
 async function savedMessage(page,message){
  await page.goto('./chef');
@@ -71,8 +72,11 @@ test('Settings rotates personal authority and the guardian catalog across indepe
   let bundle,legacyAuthority,legacyCode,priorEnrollment;
   await test.step('create private data and a v1 guardian archive',async()=>{
    await start(owner);
-   await owner.getByPlaceholder('API key',{exact:true}).fill(credential);
-   await owner.getByRole('button',{name:/^Save .+ API key$/}).click();
+   // Existing provider credentials remain device-local even while new cloud setup is unavailable.
+   await owner.evaluate(value => localStorage.setItem('creative-cooking-openrouter-key', value), credential);
+   await owner.reload();
+   await openHouseholdTools(owner);
+   await openSavedCloudConnections(owner);
    await expect(owner.getByText('Key saved',{exact:true})).toBeVisible();
    await savedMessage(owner,original);
    await start(guardian);
@@ -81,7 +85,8 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await click(guardian,'Open my guardian keys');
    await click(guardian,'Export my holder key');
    bundle=JSON.parse(await output(guardian).inputValue());
-   await owner.getByLabel('Open settings').last().click();
+   await owner.getByLabel('Open settings').last().click();await openHouseholdTools(owner);
+   await openSavedCloudConnections(owner);
    await expect(owner.getByText('Key saved',{exact:true})).toBeVisible();
    const encrypted=owner.getByText(/^\d+ encrypted updates? retained for exchange\.$/);
    await expect(encrypted).toBeVisible();
@@ -93,6 +98,7 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await click(owner,'Review personal key rotation');
    await expect(owner.getByText(/^Saved copy revision /)).toBeVisible();
    await owner.reload();
+   await openHouseholdTools(owner);
    await expect(label(owner,'City')).toHaveValue('Fixturetown');
    await openRecovery(owner);
    await click(owner,'Export owner authority');
@@ -156,7 +162,7 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await expect(excluded.getByText('This device has no authorization in that personal transfer.')).toBeVisible();
    await expect(label(excluded,'Personal document generation')).toHaveText('Personal generation 1');
    await click(owner,'Reopen personal workspace');
-   await owner.goto('./settings');
+   await owner.goto('./settings');await openHouseholdTools(owner);
    await expect(label(owner,'Personal document generation')).toHaveText('Personal generation 2');
    await expect(label(owner,'City')).toHaveValue('Fixturetown');
    await openPersonal(owner);
@@ -172,9 +178,10 @@ test('Settings rotates personal authority and the guardian catalog across indepe
    await click(recipient,'Install verified personal successor');
    await expect(recipient.getByText(/Personal successor saved/)).toBeVisible();
    await click(recipient,'Reopen personal workspace');
-   await recipient.goto('./settings');
+   await recipient.goto('./settings');await openHouseholdTools(recipient);
    await expect(label(recipient,'Personal document generation')).toHaveText('Personal generation 2');
    await expect(label(recipient,'City')).toHaveValue('Fixturetown');
+   await openSavedCloudConnections(recipient);
    await expect(recipient.getByText('No key saved',{exact:true})).toBeVisible();
    await openRecovery(recipient);
    await label(recipient,'Guardian names').fill(bundle.holder);
@@ -198,7 +205,7 @@ test('Settings rotates personal authority and the guardian catalog across indepe
   });
   let rotated,code;
   await test.step('reissue a guardian share for the verified new epoch and retain the historical share',async()=>{
-   await owner.goto('./settings');
+   await owner.goto('./settings');await openHouseholdTools(owner);
    await openRecovery(owner);
    await click(owner,'Export owner authority');
    const authority=JSON.parse(await output(owner).inputValue());

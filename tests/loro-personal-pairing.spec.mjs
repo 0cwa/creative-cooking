@@ -1,3 +1,4 @@
+import {openHouseholdTools, openSavedCloudConnections} from './settings-navigation.mjs';
 import {test,expect} from './browser-fixture.mjs';
 import {readFile} from 'node:fs/promises';
 import {LoroDoc} from 'loro-crdt/nodejs';
@@ -17,10 +18,10 @@ const credential='fixture-pairing-credential-it-stays-local';
 async function start(page){
  await page.goto('./');
  await click(page,'Set up my kitchen');
- await click(page,'Review privacy settings');
+
  await click(page,'Accept settings and open my kitchen');
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
- await page.goto('./settings');
+ await page.goto('./settings');await openHouseholdTools(page);
  await expect(label(page,'This personal device')).toBeVisible();
 }
 async function saveMessage(page,message){
@@ -28,7 +29,7 @@ async function saveMessage(page,message){
  await label(page,'Private cooking note').fill(message);
  await label(page,'Save note').click();
  await expect(page.getByText('Saved on this device',{exact:true})).toBeVisible();
- await button(page,'Open settings').last().click();
+ await button(page,'Open settings').last().click();await openHouseholdTools(page);
 }
 async function transferProof(from,to){
  await label(to,'Incoming personal pairing proof').fill(await label(from,'My personal pairing proof').inputValue());
@@ -115,8 +116,11 @@ test('Settings pairs independently provisioned personal devices and reopens the 
   for(const page of [source,receiver,other])page.setDefaultTimeout(10000);
   await test.step('create independent devices, private messages and a configured provider credential',async()=>{
    await start(source);await start(receiver);await start(other);
-   await source.getByPlaceholder('API key',{exact:true}).fill(credential);
-   await source.getByRole('button',{name:/^Save .+ API key$/}).click();
+   // Existing provider credentials remain device-local even while new cloud setup is unavailable.
+   await source.evaluate(value => localStorage.setItem('creative-cooking-openrouter-key', value), credential);
+   await source.reload();
+   await openHouseholdTools(source);
+   await openSavedCloudConnections(source);
    await expect(source.getByText('Key saved',{exact:true})).toBeVisible();
    await saveMessage(source,privateMessage);
    await saveMessage(receiver,recipientOriginal);
@@ -173,6 +177,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await transferProof(receiver,source);
 
    await source.reload();
+   await openHouseholdTools(source);
    await click(source,'Pair from this device');
    await expect(source.getByText(/^Response ready/)).toBeVisible();
    await transferProof(source,receiver);
@@ -181,7 +186,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await transferProof(receiver,source);
    for(const page of [source,receiver])await expect(page.getByText(/^Both devices proved/)).toBeVisible();
    await source.goto('./chef');
-   await button(source,'Open settings').last().click();
+   await button(source,'Open settings').last().click();await openHouseholdTools(source);
    await click(source,'Pair from this device');
    await expect(source.getByText(/^Both devices proved/)).toBeVisible();
   });
@@ -232,7 +237,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await click(source,'Back');
    await expect(label(source,'Private cooking note')).toBeVisible();
    const original=await swapInitiator(null);
-   await button(source,'Open settings').last().click();
+   await button(source,'Open settings').last().click();await openHouseholdTools(source);
    await expect(label(source,'My personal pairing proof')).toHaveCount(0);
    await expect(source.getByText(`Saved pairing file for device ${receiverId}.`)).toBeVisible();
    const [download]=await Promise.all([source.waitForEvent('download'),click(source,buttonLabel)]);
@@ -246,7 +251,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    expect(encrypted.includes(privateMessage)).toBe(false);
    expect(encrypted.includes(credential)).toBe(false);
    await reopenFromSettings(source,'Reopen paired personal workspace');
-   await source.goto('./settings');
+   await source.goto('./settings');await openHouseholdTools(source);
    await click(source,'Show verified personal device history');
    await expect(source.getByText(`Paired ${receiverId} by ${sourceId}`)).toBeVisible();
    await click(source,'Pair from this device');
@@ -284,7 +289,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await click(receiver,select);
    await expect.poll(()=>receiver.evaluate(()=>typeof window.releasePairingInstall)).toBe('function');
    await click(receiver,'Back');
-   await button(receiver,'Open settings').last().click();
+   await button(receiver,'Open settings').last().click();await openHouseholdTools(receiver);
    await expect(button(receiver,'Reopen paired personal workspace')).toHaveCount(0);
    await receiver.evaluate(()=>window.releasePairingInstall());
    await expect(button(receiver,'Reopen paired personal workspace')).toBeVisible();
@@ -295,7 +300,7 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await label(receiver,'Save note').click();
    await expect(receiver.getByText('This edit must wait for the selected workspace',{exact:true})).toHaveCount(0);
    expect(await databaseState(receiver)).toEqual(selected);
-   await button(receiver,'Open settings').last().click();
+   await button(receiver,'Open settings').last().click();await openHouseholdTools(receiver);
    await receiver.evaluate(()=>{
     const write=Storage.prototype.setItem,key='creative-cooking-branch-reopen-v1';
     Storage.prototype.setItem=function(name,value){
@@ -315,10 +320,11 @@ test('Settings pairs independently provisioned personal devices and reopens the 
     sessionStorage.removeItem('pairing-test-correct-reopen');
    });
    await receiver.reload();
-   await receiver.goto('./settings');
+   await receiver.goto('./settings');await openHouseholdTools(receiver);
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(sourcePin);
    expect(await receiver.evaluate(()=>sessionStorage.getItem('creative-cooking-branch-reopen-v1'))).toBe(null);
    await expect(label(receiver,'Open household')).toHaveText(originalHousehold);
+   await openSavedCloudConnections(receiver);
    await expect(receiver.getByText('No key saved',{exact:true})).toBeVisible();
    const installed=new LoroDoc();
    installed.import(Uint8Array.from(await installedSnapshot(receiver,scopeId)));
@@ -346,9 +352,9 @@ test('Settings pairs independently provisioned personal devices and reopens the 
    await reopenFromSettings(receiver,'Reopen paired personal workspace');
    await receiver.goto('./chef');
    await expect(receiver.getByText(recipientEdit,{exact:true})).toBeVisible();
-   await receiver.goto('./settings');
+   await receiver.goto('./settings');await openHouseholdTools(receiver);
    await reopenFromSettings(receiver,'Return to original personal workspace');
-   await receiver.goto('./settings');
+   await receiver.goto('./settings');await openHouseholdTools(receiver);
    await expect(label(receiver,'This workspace personal root pin')).toHaveText(originalPin);
    await expect(label(receiver,'Open household')).toHaveText(originalHousehold);
    await receiver.goto('./chef');

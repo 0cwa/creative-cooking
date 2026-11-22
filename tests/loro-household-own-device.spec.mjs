@@ -1,3 +1,4 @@
+import {openHouseholdTools} from './settings-navigation.mjs';
 import {test,expect} from './browser-fixture.mjs';
 import {readFile} from 'node:fs/promises';
 
@@ -9,7 +10,7 @@ const notice=(page,text)=>expect(page.getByText(text,{exact:true})).toBeVisible(
 async function start(page){
  await page.goto('./');
  await click(page,'Set up my kitchen');
- await click(page,'Review privacy settings');
+
  await click(page,'Accept settings and open my kitchen');
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
@@ -34,7 +35,7 @@ async function proof(from,to){
  await expect(label(to,'Incoming household pairing proof')).toHaveValue('');
 }
 async function settings(page){
- await page.goto('./settings');
+ await page.goto('./settings');await openHouseholdTools(page);
  await click(page,'Pair my household devices');
 }
 async function history(page){
@@ -154,6 +155,7 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
   }
   await proof(sponsor,receiver);
   await receiver.reload();
+  await openHouseholdTools(receiver);
   await click(receiver,'Pair my household devices');
   await click(receiver,'Receive my household access');
   await proof(receiver,sponsor);
@@ -179,6 +181,7 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
   await notice(receiver,'The same household pairing is already installed.');
   expect(await authority(receiver,scope)).toEqual(installed);
   await receiver.reload();
+  await openHouseholdTools(receiver);
   await click(receiver,'Pair my household devices');
   await click(receiver,'Receive my household access');
   await click(receiver,'Open paired household');
@@ -223,7 +226,7 @@ for(const copiesRecipes of [false,true])test(`same-adult household Settings veri
   }
   await receiver.goto('./chef');
   await notice(receiver,'Receiver private cooking notes');
-  await receiver.goto('./settings');
+  await receiver.goto('./settings');await openHouseholdTools(receiver);
   await click(receiver,'Show device identity');
   await click(receiver,'Return to original local household');
   try{await notice(receiver,'Original receiver thyme')}

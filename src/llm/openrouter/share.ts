@@ -24,8 +24,22 @@ export async function importSharedOpenRouterKey(): Promise<boolean> {
 
   const payload = window.sessionStorage.getItem(SHARE_SESSION_KEY);
   if (!payload) return false;
-  window.sessionStorage.removeItem(SHARE_SESSION_KEY);
 
-  await setOpenRouterKey(deobfuscateOpenRouterKey(payload));
+  const consumeCapturedLink = () => {
+    if (window.sessionStorage.getItem(SHARE_SESSION_KEY) === payload) {
+      window.sessionStorage.removeItem(SHARE_SESSION_KEY);
+    }
+  };
+  let key: string;
+  try {
+    key = deobfuscateOpenRouterKey(payload);
+  } catch (error) {
+    // Invalid links cannot be retried; report them once without discarding a newer link.
+    consumeCapturedLink();
+    throw error;
+  }
+  // Keep a valid captured link available if saving fails.
+  await setOpenRouterKey(key);
+  consumeCapturedLink();
   return true;
 }

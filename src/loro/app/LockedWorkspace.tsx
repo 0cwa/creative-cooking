@@ -1,6 +1,12 @@
-import React from 'react';
-import {Button,Platform,Text,View} from 'react-native';
+import {Button,Platform,View} from 'react-native';
+import {KitchenStartupStatus} from '@/components/KitchenStartupStatus';
+import {SetupDisclosure} from '@/components/SetupScreen';
 import {RecoveryStart} from './RecoveryStart';
 export function LockedWorkspace({error,onRetry,onOriginal}:{error:string|null;onRetry:()=>void;onOriginal?:()=>void}){
- return <View style={{padding:24,gap:16}}><Text accessibilityRole="header">Could not open the fresh local workspace</Text><Text>{error}</Text><Text>Your workspace has been kept. Retry after resolving the storage error.</Text><Button title="Retry" onPress={onRetry}/>{onOriginal?<Button title="Return to original local household" onPress={onOriginal}/>:null}{Platform.OS==='web'?<RecoveryStart/>:null}</View>;
+ return <KitchenStartupStatus error={error??'Could not open saved kitchen'} onRetry={onRetry}>
+  {onOriginal?<Button title="Return to original local household" onPress={onOriginal}/>:null}
+  {Platform.OS==='web'?<SetupDisclosure title="Recover an existing kitchen" preserveContent>
+   <View style={{backgroundColor:'#ffffff',padding:16,borderRadius:16}}><RecoveryStart/></View>
+  </SetupDisclosure>:null}
+ </KitchenStartupStatus>;
 }

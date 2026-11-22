@@ -4,13 +4,17 @@ A local-first Expo / React Native cooking assistant built around the ingredients
 
 ## Getting started
 
-1. Choose **Set up my kitchen**, review the privacy summary, and explicitly accept the settings. Household invitation rules and recovery tools are optional sections on the welcome screen.
+1. Open [Creative Cooking](https://0cwa.github.io/creative-cooking/) and choose **Set up my kitchen**. The next screen prepares your privacy summary automatically. Read it and choose **Accept settings and open my kitchen**. There is no account, payment, or API key to set up. Nothing is accepted on your behalf, and reloading before acceptance returns you to the privacy check.
 2. Add a few real ingredients in **Pantry**. A name is enough; quantities are not required. Stars describe how much you feel like eating an ingredient. Example chips only fill the input until you press **Add**.
 3. Open **Recipes** to browse three built-in ideas without an account, provider key, or network connection. Previewing changes nothing. **Save a copy** adds a normal recipe you can edit, scale, and use to plan a shopping list. You can also add your own recipe.
 4. On web, **Chef** currently saves private cooking notes by default. **Save note** does not request an AI reply. Cloud Chef requests remain disabled while disclosure storage is being verified; saving a cloud provider key does not enable them.
-5. If you want to try the experimental on-device Chef in a compatible web browser, open **Local Chef settings**. Model downloads are explicit. The current local model provides text suggestions and cannot change Pantry or save recipes; it remains disabled when allergies are configured. Native Chef is not available yet.
+5. If you want to try the experimental on-device Chef in a compatible web browser, open **Local Chef settings**. Model downloads are explicit. The current local model provides text suggestions and cannot change Pantry or save recipes; it remains disabled when allergies are configured. Native Chef is not available yet. Settings puts this optional setup before **Household and advanced tools**. **Saved cloud connections** lets you manage existing credentials, but new cloud connections are unavailable while cloud replies are disabled.
 
-Built-in recipes are starting points, not personalized or allergy-safe recommendations. They remain separate from saved recipes until you choose to save a copy. Pantry, saved recipes, and shopping work offline after the app is loaded; the PWA also caches previously visited routes for offline reopening.
+Built-in recipes are starting points, not personalized or allergy-safe recommendations. They remain separate from saved recipes until you choose to save a copy. The first online visit prepares an offline cache of the app's local runtime. Once that finishes, Pantry, saved recipes, and shopping can reopen and keep saving offline without an extra online reload. Optional Chef and speech models still require their own explicit downloads.
+
+### If your kitchen does not open
+
+The app waits for your pantry, recipes, and preferences to load before showing editing controls. If opening fails, **Try again** reopens the same saved kitchen. It does not delete your data or create a replacement. Follow the message for blocked browser storage, insufficient space, or an unsupported browser; **Show technical details** contains the original error for troubleshooting. Use **Recover an existing kitchen** if you have an encrypted recovery archive. Household invitation rules are optional under **More setup options** and can be managed later in Settings.
 
 ## MVP
 
@@ -46,6 +50,12 @@ For a local production-like GitHub Pages subpath build:
 EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web
 ```
 
+The **First-use browser checks** PR workflow exercises new-kitchen setup, recovery from startup errors, shared start links, Chef settings, and the first offline reopen alongside the full CI suite. Its `first-use-browser-report` artifact includes the browser report, mobile setup screenshots, and failure traces. To run the same checks locally after exporting the app:
+
+```bash
+npx playwright test tests/first-use.spec.mjs tests/provider-settings.spec.mjs tests/chef-notes.spec.mjs tests/pwa-offline.spec.mjs --project=web
+```
+
 ## GitHub Pages
 
 The production workflow builds the app at the project subpath `/creative-cooking` and deploys a PWA artifact.
@@ -58,7 +68,7 @@ One repository setting must be enabled once by a repository administrator:
 
 After that, production is served from `https://0cwa.github.io/creative-cooking/`.
 
-The app manifest, 192/512 icons, service worker, and generated static navigation are all emitted with the correct project base path.
+The app manifest, 192/512 icons, service worker, and generated static navigation are all emitted with the correct project base path. The production build embeds the exported runtime assets, including the exact versioned Loro WASM URL, in the worker's initial cache list. Temporary host errors fall back to the last successful cached page instead of replacing it with an error page.
 
 ## Sharing a provider key
 

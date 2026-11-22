@@ -1,10 +1,18 @@
-const CACHE = 'creative-cooking-v2';
+const CACHE = 'creative-cooking-v3';
+// Replaced with this export's local runtime assets by scripts/build-pwa-cache.mjs.
+const PRECACHE_ASSETS = [];
 const scopePath = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 const appRoot = `${scopePath}/`;
 const TRANSFORMERS_RUNTIME = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([appRoot, `${scopePath}/manifest.json`])).then(() => self.skipWaiting()));
+  // Let updates wait for older tabs to close. Those tabs can still need their
+  // previous runtime chunks until activation safely retires the older cache.
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([
+    appRoot,
+    `${scopePath}/manifest.json`,
+    ...PRECACHE_ASSETS.map((path) => `${scopePath}/${path}`)
+  ])));
 });
 
 self.addEventListener('activate', (event) => {
@@ -26,11 +34,19 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (event.request.mode === 'navigate') {
-    event.respondWith(fetch(event.request).then((response) => {
+    const savedPage = async () => {
+      const page = await caches.match(event.request);
+      if (page?.ok) return page;
+      const home = await caches.match(appRoot);
+      return home?.ok ? home : undefined;
+    };
+    event.respondWith(fetch(event.request).then(async (response) => {
+      // A temporary host error must not replace the last working app page.
+      if (!response.ok) return (await savedPage()) || response;
       const copy = response.clone();
       caches.open(CACHE).then((cache) => cache.put(event.request, copy));
       return response;
-    }).catch(async () => (await caches.match(event.request)) || (await caches.match(appRoot))));
+    }).catch(savedPage));
     return;
   }
 

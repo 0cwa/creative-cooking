@@ -43,7 +43,31 @@ export function useLoroContentRuntime(state:PersistedState,setState:Dispatch<Set
   : workspace.executeHouseholdAction
   ? workspace.executeHouseholdAction(actionId,commands)
   : executeAction(workspace.household,workspace.sequences,actionId,commands,workspace.disclosure),[workspace]);
- useEffect(()=>{let active=true;const open=async()=>{if(!active)return false;setStatus('saving');setError(null);try{const {separateRecipeIds=[],...cooking}=await readCooking(workspace);const personal=projectPersonal((await workspace.personal.document()).doc);const {mealContext,activeConversationId,recoveryReminderDismissed: _recoveryReminderDismissed,...settings}=personal.preferences;const selectedConversation=personal.conversations.find((c:any)=>c.id===activeConversationId);const initial={...DEFAULT_STATE,...cooking,settings:{...DEFAULT_STATE.settings,...settings},mealContext:mealContext??DEFAULT_STATE.mealContext,activeConversationId:selectedConversation?.id??null,chatMessages:selectedConversation?.messages??[],chatHistory:personal.conversations.filter((c:any)=>c.id!==selectedConversation?.id)};if(active){committed.current=initial;current.current=initial;setSeparateRecipeIds(separateRecipeIds);setState(initial);setStatus('saved');setHydrated(true);return true}return false}catch(e){if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error');setHydrated(true)}return false}};initialize.current=open;void open();return()=>{active=false;if(initialize.current===open)initialize.current=null}},[workspace,setState]);
+ useEffect(()=>{
+  let active=true;
+  const open=async()=>{
+   if(!active)return false;
+   setHydrated(false);setStatus('saving');setError(null);
+   try{
+    const {separateRecipeIds=[],...cooking}=await readCooking(workspace);
+    const personal=projectPersonal((await workspace.personal.document()).doc);
+    const {mealContext,activeConversationId,recoveryReminderDismissed: _recoveryReminderDismissed,...settings}=personal.preferences;
+    const selectedConversation=personal.conversations.find((c:any)=>c.id===activeConversationId);
+    const initial={...DEFAULT_STATE,...cooking,settings:{...DEFAULT_STATE.settings,...settings},mealContext:mealContext??DEFAULT_STATE.mealContext,activeConversationId:selectedConversation?.id??null,chatMessages:selectedConversation?.messages??[],chatHistory:personal.conversations.filter((c:any)=>c.id!==selectedConversation?.id)};
+    if(!active)return false;
+    committed.current=initial;current.current=initial;setSeparateRecipeIds(separateRecipeIds);
+    setState(initial);setStatus('saved');setHydrated(true);
+    return true;
+   }catch(e){
+    // An unsuccessful read is not an empty or read-only kitchen. Keep the
+    // startup gate visible so retry can reopen this same workspace safely.
+    if(active){setError(e instanceof Error?e.message:'Could not open local workspace');setStatus('error')}
+    return false;
+   }
+  };
+  initialize.current=open;void open();
+  return()=>{active=false;if(initialize.current===open)initialize.current=null};
+ },[workspace,setState]);
  const save=useCallback(async(target:PersistedState)=>{
   // Resolve the exact earlier action before deriving a later target from disk.
   if(unresolved.current){await unresolved.current();unresolved.current=null;}

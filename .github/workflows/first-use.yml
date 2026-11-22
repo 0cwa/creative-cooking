@@ -1,0 +1,54 @@
+name: First-use browser checks
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'src/**'
+      - 'public/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - 'app.config.*'
+      - 'metro.config.*'
+      - 'playwright.config.mjs'
+      - '.github/workflows/first-use.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: first-use-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  first-use:
+    name: Fresh kitchen and setup recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm run prepare:native
+      - run: EXPO_PUBLIC_BASE_URL=/creative-cooking npm run build:web
+      - run: npm run verify:pwa
+      - run: npx playwright install --with-deps chromium
+      - name: Exercise first-use and setup recovery
+        run: npx playwright test tests/first-use.spec.mjs tests/provider-settings.spec.mjs tests/chef-notes.spec.mjs tests/pwa-offline.spec.mjs --project=web --reporter=line,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+      - name: Keep setup screenshots and browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: first-use-browser-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7

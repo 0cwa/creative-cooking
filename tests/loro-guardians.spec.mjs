@@ -1,9 +1,10 @@
 import {test,expect} from './browser-fixture.mjs';
+import {openHouseholdTools} from './settings-navigation.mjs';
 import {unlink} from 'node:fs/promises';
 test('two independent guardians enforce their fixed threshold and reopen the archive',async({browser,baseURL},testInfo)=>{
  const archive=testInfo.outputPath('guardian-browser-archive.json');
  test.setTimeout(240000);const contexts=[];const make=async()=>{const c=await browser.newContext({baseURL});contexts.push(c);return c.newPage()};
- const setup=async page=>{await page.goto('./');await page.getByRole('button',{name:'Set up my kitchen'}).click();await page.getByRole('button',{name:'Review privacy settings'}).click();await page.getByRole('button',{name:'Accept settings and open my kitchen'}).click();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');await page.getByLabel('Open settings').first().click();await page.getByRole('button',{name:'Set up personal recovery'}).click()};
+ const setup=async page=>{await page.goto('./');await page.getByRole('button',{name:'Set up my kitchen'}).click();await page.getByRole('button',{name:'Accept settings and open my kitchen'}).click();await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');await page.getByLabel('Open settings').first().click();await page.getByRole('button',{name:'Set up personal recovery'}).click()};
  const button=(page,name)=>page.getByRole('button',{name,exact:true});
  const pin=async(page,bundle,labels)=>{await page.getByLabel(labels.name,{exact:true}).fill(bundle.holder);await page.getByLabel(labels.sign,{exact:true}).fill(bundle.signingKey);await page.getByLabel(labels.wrap,{exact:true}).fill(bundle.wrappingKey);await page.getByRole('button',{name:labels.calc,exact:true}).click();const text=await page.getByText(/^Fingerprint: /).last().textContent();await page.getByLabel(labels.confirm,{exact:true}).fill(text.replace('Fingerprint: ',''));await page.getByRole('button',{name:labels.save,exact:true}).click()};
  const ownerLabels={name:'Guardian name',sign:'Guardian signing public key',wrap:'Guardian wrapping public key',calc:'Calculate guardian fingerprint',confirm:'Confirmed guardian fingerprint',save:'Save verified guardian'},holderLabels={name:'Holder name',sign:'Holder signing public key',wrap:'Holder wrapping public key',calc:'Calculate holder fingerprint',confirm:'Confirmed holder fingerprint',save:'Save verified holder'};
@@ -16,6 +17,7 @@ test('two independent guardians enforce their fixed threshold and reopen the arc
  await test.step('import the same registered guardian archive in a fresh workspace and preserve personal-only access',async()=>{
   const codeText=await owner.getByText(/^Recovery code \(keep separately from the archive\): /).textContent();
   const code=codeText.match(/[a-f0-9]{64}$/)[0];
+  await openHouseholdTools(owner);
   await button(owner,'Set up household recovery continuity').click();
   await owner.getByLabel('Code for continuity registration').fill(code);
   await owner.getByLabel('Choose encrypted archive file').last().setInputFiles(archive);
@@ -28,6 +30,7 @@ test('two independent guardians enforce their fixed threshold and reopen the arc
   const household=JSON.parse(householdBundle);
 
   await setup(restore);
+  await openHouseholdTools(restore);
   await button(restore,'Recover personal data and request readmission').click();
   await button(restore,'Open guardian recovery').click();
   await restore.getByLabel('Guardian recovery archive file').setInputFiles(archive);

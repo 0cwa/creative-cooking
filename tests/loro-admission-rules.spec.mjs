@@ -1,3 +1,4 @@
+import {openHouseholdTools} from './settings-navigation.mjs';
 import {readFile} from 'node:fs/promises';
 import {test, expect} from './browser-fixture.mjs';
 
@@ -8,18 +9,19 @@ const notice = (page, value) => page.getByRole('alert').filter({hasText:value});
 
 async function start(page, selectRule = async () => {}) {
   await page.goto('./');
+  await button(page, 'More setup options').click();
   await button(page, 'Household options').click();
   await expect(page.getByText(/with the default, one adult can approve an invitation/i)).toBeVisible();
   await selectRule(page);
   await button(page, 'Set up my kitchen').click();
-  await button(page, 'Review privacy settings').click();
+
   await button(page, 'Accept settings and open my kitchen').click();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
 
 async function enroll(first, second) {
   for (const page of [first, second]) {
-    await button(page, 'Open settings').click();
+    await button(page, 'Open settings').click();await openHouseholdTools(page);
     await button(page, 'Show device identity').click();
     await button(page, 'Invite or join a household').click();
   }
@@ -62,7 +64,7 @@ async function enroll(first, second) {
   for (const page of [first, second]) {
     await page.goto('./');
     await expect(page.getByText('Policy proof ginger', {exact:true})).toBeVisible();
-    await button(page, 'Open settings').click();
+    await button(page, 'Open settings').click();await openHouseholdTools(page);
     await button(page, 'Manage adult admission rules').click();
     await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 2 of 2 existing adults.');
   }
@@ -81,7 +83,7 @@ async function addIngredient(page, ingredient) {
 }
 
 async function openRules(page) {
-  await button(page, 'Open settings').click();
+  await button(page, 'Open settings').click();await openHouseholdTools(page);
   await button(page, 'Manage adult admission rules').click();
   await expect(page.getByLabel('Active adult admission rule')).toBeVisible();
 }
@@ -95,7 +97,7 @@ async function downloadUpdate(page, objectId) {
 }
 
 async function importUpdate(page, bytes, expectedError) {
-  await button(page, 'Open settings').click();
+  await button(page, 'Open settings').click();await openHouseholdTools(page);
   await button(page, 'Exchange encrypted cooking files').click();
   const transfer = page.waitForEvent('filechooser');
   await button(page, 'Choose encrypted cooking update').click();
@@ -176,7 +178,7 @@ test('fresh setup bounds fixed quorum by the actual electorate and preserves the
     await expect(button(page, 'Set up my kitchen')).toBeDisabled();
     await expect(page.getByText('Enter a whole number from 1 to 1, the size of the current electorate.')).toBeVisible();
     await button(page, 'Household options').click();
-    await expect(count).toHaveCount(0);
+    await expect(count).toBeHidden();
     await expect(page.getByRole('alert')).toHaveText('Open Household options and choose a valid invitation rule before continuing.');
     await expect(button(page, 'Set up my kitchen')).toBeDisabled();
     await button(page, 'Household options').click();
@@ -184,7 +186,7 @@ test('fresh setup bounds fixed quorum by the actual electorate and preserves the
     await count.fill('1');
   });
   await page.reload();
-  await button(page, 'Open settings').click();
+  await button(page, 'Open settings').click();await openHouseholdTools(page);
   await button(page, 'Manage adult admission rules').click();
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Fixed quorum of 1. Requires 1 of 1 existing adults.');
 });
@@ -197,6 +199,7 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
     await chooser.goto(page.url());
     await expect(button(chooser,'Set up my kitchen')).toBeVisible();
   }
+  await button(page, 'More setup options').click();
   await button(page, 'Household options').click();
   await page.getByRole('radio', {name:/Every adult/}).click();
   await page.evaluate(key=>{
@@ -207,6 +210,7 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
     };
   },key);
   await button(page,'Set up my kitchen').click();
+  await button(page,'Show technical details').click();
   await expect(page.getByText('test: ready write failed')).toBeVisible();
   const saved=await page.evaluate(key=>localStorage.getItem(key),key);
   expect(saved).toMatch(/^pending:/);
@@ -217,13 +221,13 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
   await expect(button(pendingChooser,'Set up my kitchen')).toHaveCount(0);
   await expect.poll(()=>pendingChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await page.reload();
-  await button(page,'Review privacy settings').click();
+
   await button(page,'Accept settings and open my kitchen').click();
   expect(await page.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await readyChooser.reload();
   await expect(button(readyChooser,'Set up my kitchen')).toHaveCount(0);
   expect(await readyChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
-  await button(page,'Open settings').click();
+  await button(page,'Open settings').click();await openHouseholdTools(page);
   await button(page,'Manage adult admission rules').click();
   await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 1 of 1 existing adults.');
 });
@@ -293,7 +297,7 @@ test('two adults retain competing rules and open isolated cooking branches expli
     for (const page of [first, second]) {
       await page.goto('./');
       await expect(page.getByText('Policy proof ginger', {exact:true})).toBeVisible();
-      await button(page, 'Open settings').click();
+      await button(page, 'Open settings').click();await openHouseholdTools(page);
       await button(page, 'Manage adult admission rules').click();
       await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 2 of 2 existing adults.');
       await expect(page.getByText('All but one (default) · Retained')).toBeVisible();
@@ -484,15 +488,21 @@ test('two adults retain competing rules and open isolated cooking branches expli
       };
     });
     await button(first,'Open this cooking branch').click();
+    // The settings disclosure can still be visible while checkout is pending.
+    // Wait for the denied write itself before checking the in-place reopen.
+    await expect.poll(()=>first.evaluate(()=>window.checkoutSessionWriteDenied),{timeout:30_000}).toBe(true);
+    await expect(button(first,'Close adult admission rules')).toHaveCount(0);
     const manageRules=button(first,'Manage adult admission rules'), openSettings=button(first,'Open settings');
-    await expect(manageRules.or(openSettings)).toBeVisible().catch(async error=>{
+    const advancedTools=button(first,'Household and advanced tools');
+    await expect(advancedTools.or(openSettings)).toBeVisible().catch(async error=>{
       console.error('In-place checkout reopen',await first.locator('body').innerText());
       throw error;
     });
-    expect(await first.evaluate(()=>window.checkoutSessionWriteDenied)).toBe(true);
     if(await openSettings.isVisible())await openSettings.click();
+    await openHouseholdTools(first);
     await manageRules.click();
     await expect(first.getByText(`Current household head: ${sibling.head}`,{exact:true})).toBeVisible();
+    expect(await first.evaluate(()=>window.checkoutSessionWriteDenied)).toBe(true);
     await first.goto('./');
     await expect(first.getByText('Sibling-only parsley', {exact:true})).toBeVisible();
   } finally {

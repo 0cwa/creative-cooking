@@ -1,3 +1,4 @@
+import {openHouseholdTools} from './settings-navigation.mjs';
 import {readFile} from 'node:fs/promises';
 import {test,expect} from './browser-fixture.mjs';
 
@@ -20,7 +21,7 @@ const addRecipe=async (page,title,ingredients='2 cups carrots')=>{
  await label(page,'Save new recipe').click();
 };
 const settings=async page=>{
- await page.goto(app+'settings');
+ await page.goto(app+'settings');await openHouseholdTools(page);
  await button(page,'Show device identity').click();
  await button(page,'Invite or join a household').click();
 };
@@ -36,7 +37,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
    page.setDefaultTimeout(12_000);
    await page.goto(app);
    await button(page,'Set up my kitchen').click();
-   await button(page,'Review privacy settings').click();
+
    await button(page,'Accept settings and open my kitchen').click();
    await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   }
@@ -268,7 +269,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await label(newcomer,'Close recipe').click();
   await newcomer.getByRole('tab',{name:/Pantry/}).click();
   await expect(newcomer.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally').catch(async error=>{
-   await button(newcomer,'Open settings').click();
+   await button(newcomer,'Open settings').click();await openHouseholdTools(newcomer);
    const failure=newcomer.getByText('Local data is not being saved',{exact:true});
    console.error('Recipe save status',await failure.locator('..').innerText({timeout:3000}).catch(()=>'(missing error detail)'));
    throw error;
@@ -277,7 +278,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   const reopened=await newcomerContext.newPage();
   await checkCooking(reopened,editedTitle);
 
-  await reopened.goto(app+'settings');
+  await reopened.goto(app+'settings');await openHouseholdTools(reopened);
   await button(reopened,'Exchange encrypted cooking files').click();
   const updates=reopened.getByRole('button',{name:/^Download encrypted update /});
   await expect(updates).toHaveCount(2);
@@ -290,8 +291,9 @@ test('Settings transfers and reopens a verified recipe document set and new reci
    await downloaded.delete();
   }
   files.sort((a,b)=>JSON.parse(a).header.deviceSequence-JSON.parse(b).header.deviceSequence);
-  await sponsor.goto(app+'settings');
+  await sponsor.goto(app+'settings');await openHouseholdTools(sponsor);
   for(const buffer of files){
+   await openHouseholdTools(sponsor);
    await button(sponsor,'Exchange encrypted cooking files').click();
    const pending=sponsor.waitForEvent('filechooser',{timeout:12_000});
    const loaded=sponsor.waitForEvent('load',{timeout:12_000});
@@ -343,7 +345,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   };
   await copyFrom(editedTitle,'carrots');
   await copyFrom(edited,'Fresh turnips');
-  await reopened.goto(app+'settings');
+  await reopened.goto(app+'settings');await openHouseholdTools(reopened);
   await button(reopened,'Exchange encrypted cooking files').click();
   const downloads=reopened.getByRole('button',{name:/^Download encrypted update /});
   await expect(downloads).toHaveCount(7);
@@ -365,7 +367,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   expect(edits).toHaveLength(2);
   expect(edits[0].envelope.header.deviceSequence).toBeGreaterThan(creation.envelope.header.deviceSequence);
   const openExchange=async()=>{
-   await sponsor.goto(app+'settings');
+   await sponsor.goto(app+'settings');await openHouseholdTools(sponsor);
    await button(sponsor,'Exchange encrypted cooking files').click();
    await expect(button(sponsor,'Choose encrypted cooking update')).toBeEnabled();
   };
@@ -481,7 +483,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   const third=await thirdContext.newPage();third.setDefaultTimeout(20_000);
   await third.goto(app);
   await button(third,'Set up my kitchen').click();
-  await button(third,'Review privacy settings').click();
+
   await button(third,'Accept settings and open my kitchen').click();
   await expect(third.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await settings(third);
@@ -599,7 +601,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await button(reopened,'Install and open household generation').click();
   await (await oldChooser).setFiles({name:'existing.bin',mimeType:'application/octet-stream',buffer:oldFile});
   await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
-  await reopened.goto(app+'settings');
+  await reopened.goto(app+'settings');await openHouseholdTools(reopened);
   await expect(label(reopened,'Household document generation')).toHaveText('Household generation 3',{timeout:60_000});
   const thirdChooser=third.waitForEvent('filechooser');
   await button(third,'Choose encrypted household file').click();
@@ -607,11 +609,11 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await expect(third.getByText(/^Household installed\./)).toBeVisible({timeout:90_000}).catch(async error=>{console.error('Third install:',await third.getByRole('alert').allTextContents());throw error;});
   await button(third,'Open this shared household').click();
   await expect(third.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
-  await third.goto(app+'settings');
+  await third.goto(app+'settings');await openHouseholdTools(third);
   await expect(label(third,'Household document generation')).toHaveText('Household generation 3',{timeout:60_000});
   await button(sponsor,'Reopen household after admission').click();
   await expect(sponsor.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally',{timeout:60_000});
-  await sponsor.goto(app+'settings');
+  await sponsor.goto(app+'settings');await openHouseholdTools(sponsor);
   await expect(label(sponsor,'Household document generation')).toHaveText('Household generation 3',{timeout:60_000});
   for(const page of [sponsor,reopened,third])await checkCooking(page,edited,'Fresh turnips');
   await third.goto(app+'recipes');
@@ -632,7 +634,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   await expect(third.getByTestId('shopping-local-persistence-status')).toHaveText('Saved on this device only.');
   await third.goto(app+'recipes');
   await expect(label(third,'Open recipe '+thirdEdit)).toBeVisible({timeout:60_000});
-  await third.goto(app+'settings');
+  await third.goto(app+'settings');await openHouseholdTools(third);
   await button(third,'Exchange encrypted cooking files').click();
   const thirdUpdates=third.getByRole('button',{name:/^Download encrypted update /});
   await expect(thirdUpdates).not.toHaveCount(0);
@@ -645,7 +647,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
   thirdFiles.sort((a,b)=>a.envelope.header.deviceSequence-b.envelope.header.deviceSequence);
   expect(new Set(thirdFiles.map(file=>file.envelope.header.documentId)).size).toBeGreaterThan(1);
   for(const page of [sponsor,reopened])for(const {buffer} of thirdFiles){
-   await page.goto(app+'settings');await button(page,'Exchange encrypted cooking files').click();
+   await page.goto(app+'settings');await openHouseholdTools(page);await button(page,'Exchange encrypted cooking files').click();
    const pending=page.waitForEvent('filechooser'),loaded=page.waitForEvent('load');
    await button(page,'Choose encrypted cooking update').click();
    await (await pending).setFiles({name:'third-update.bin',mimeType:'application/octet-stream',buffer});
@@ -658,7 +660,7 @@ test('Settings transfers and reopens a verified recipe document set and new reci
 
   await reopened.goto(app);
   await expect(reopened.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
-  await button(reopened,'Open settings').click();
+  await button(reopened,'Open settings').click();await openHouseholdTools(reopened);
   await button(reopened,'Show device identity').click();
   await button(reopened,'Return to original local household').click();
   await expect(reopened.getByText(originalPantry,{exact:true})).toBeVisible().catch(async error=>{
@@ -678,7 +680,7 @@ test('Recipe creation preserves the original submission and retries a saved reci
  const title='Retry market soup';
  await page.goto(app);
  await button(page,'Set up my kitchen').click();
- await button(page,'Review privacy settings').click();
+
  await button(page,'Accept settings and open my kitchen').click();
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto(app+'recipes');
@@ -734,7 +736,7 @@ test('Recipe creation preserves the original submission and retries a saved reci
 test('Recipe retry checks new allergies only when the recipe has not committed',async({page})=>{
  await page.goto(app);
  await button(page,'Set up my kitchen').click();
- await button(page,'Review privacy settings').click();
+
  await button(page,'Accept settings and open my kitchen').click();
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto(app+'recipes');
@@ -760,7 +762,7 @@ test('Recipe retry checks new allergies only when the recipe has not committed',
  const addAllergyAndReturn=async allergy=>{
   await label(page,'Cancel new recipe').click();
   await expect(page.locator('[aria-label="New recipe title"]')).toHaveCount(0);
-  await button(page,'Open settings').click();
+  await button(page,'Open settings').click();await openHouseholdTools(page);
   const input=page.getByRole('textbox',{name:'Add allergies',exact:true});
   await input.fill(allergy);
   await expect(input).toHaveValue(allergy);

@@ -1,9 +1,11 @@
+import {openSavedCloudConnections, openHouseholdTools} from './settings-navigation.mjs';
 import { expect, test, startLocalWorkspace } from './local-workspace-fixture.mjs';
 
 test('provider and model selection persist and defaults follow the selected provider', async ({ page }) => {
   await startLocalWorkspace(page,'./settings');
 
   await expect(page.getByText('Settings', { exact: true })).toBeVisible();
+  await openSavedCloudConnections(page);
   await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
 
   await page.getByLabel('Use OpenAI provider').click();
@@ -13,6 +15,7 @@ test('provider and model selection persist and defaults follow the selected prov
   await expect(page.getByTestId('settings-local-persistence-status')).toHaveText('Saved locally');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await openSavedCloudConnections(page);
   await expect(page.getByLabel('OpenAI model')).toHaveValue('gpt-5.6-terra');
 
   await page.getByLabel('Use OpenRouter provider').click();
@@ -21,13 +24,19 @@ test('provider and model selection persist and defaults follow the selected prov
 });
 
 
-test('OpenRouter friend links activate OpenRouter after persisted provider settings hydrate', async ({ page }) => {
+test('OpenRouter friend links activate saved connections that can still be managed', async ({ page, baseURL }) => {
+  const external = [];
+  page.on('request', request => {
+    if (new URL(request.url()).origin !== new URL(baseURL).origin) external.push(request.url());
+  });
   await startLocalWorkspace(page,'./settings');
+  await openSavedCloudConnections(page);
   await page.getByLabel('Use Anthropic provider').click();
   await expect(page.getByTestId('settings-local-persistence-status')).toHaveText('Saved locally');
   page.on('dialog', (dialog) => void dialog.accept());
   const compactPayload = `x${'A'.repeat(43)}`;
   await page.goto(`./settings?ort=${compactPayload}`);
+  await openSavedCloudConnections(page);
 
   await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
   await expect(page.getByText('OpenRouter connection', { exact: true })).toBeVisible();
@@ -37,6 +46,12 @@ test('OpenRouter friend links activate OpenRouter after persisted provider setti
   await expect.poll(async () => page.evaluate(() => (
     window.localStorage.getItem('creative-cooking-openrouter-key') ?? ''
   ))).toMatch(/^sk-or-v1-/);
+  await page.getByRole('button', {name:/Create friend link/}).click();
+  await expect(page.getByLabel('Friend link', {exact:true})).toHaveValue(/\?ort=/);
+  await page.getByRole('button', {name:'Disconnect OpenRouter', exact:true}).click();
+  await expect(page.getByText('No key saved', {exact:true})).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('creative-cooking-openrouter-key'))).toBeNull();
+  expect(external).toEqual([]);
 });
 
 
@@ -57,7 +72,7 @@ test('local Chef requires an explicit cached model before it can be selected', a
 
   await startLocalWorkspace(page,'./settings');
 
-  await expect(page.getByText('WebGPU', { exact: true })).toBeVisible();
+  await expect(page.getByText('Browser compatibility', { exact: true })).toBeVisible();
   await expect(page.getByText('Available', { exact: true }).first()).toBeVisible();
   await expect(
     page.getByText('Model cache', { exact: true }).locator('..').getByText('Not downloaded', { exact: true })
@@ -68,4 +83,57 @@ test('local Chef requires an explicit cached model before it can be selected', a
   await expect(page.getByLabel('Use experimental local Chef')).toBeDisabled();
 
   await expect(page.getByText(/will not start a hidden download/i)).toBeVisible();
+});
+
+
+test('everyday settings stay accessible while household tools and unavailable cloud setup are optional', async ({page}) => {
+  await startLocalWorkspace(page, './settings');
+  const household = page.getByRole('button', {name:'Household and advanced tools', exact:true});
+  const cloud = page.getByRole('button', {name:'Saved cloud connections', exact:true});
+  await expect(household).toHaveAttribute('aria-expanded', 'false');
+  await expect(cloud).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByLabel('City')).toBeEditable();
+  await expect(page.getByLabel('Download local model')).toBeVisible();
+  await expect(page.getByRole('button', {name:'Set up personal recovery', exact:true})).toBeVisible();
+  await expect(page.getByRole('button', {name:'Show device identity', exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button', {name:'Connect OpenRouter', exact:true})).toHaveCount(0);
+
+  await openHouseholdTools(page);
+  await page.getByRole('button', {name:'Show device identity', exact:true}).click();
+  const authority = page.getByLabel('Household authority bundle', {exact:true});
+  await authority.fill('unfinished household authority draft');
+  await household.click();
+  await expect(authority).toBeHidden();
+  await household.click();
+  await expect(authority).toHaveValue('unfinished household authority draft');
+
+  await openSavedCloudConnections(page);
+  await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
+  await expect(page.getByRole('button', {name:'Connect OpenRouter', exact:true})).toHaveCount(0);
+  await expect(page.getByPlaceholder('API key', {exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button', {name:/^Save .+ API key$/})).toHaveCount(0);
+});
+
+
+test('a first-time friend link shows its saved default provider connection after setup', async ({page, baseURL}) => {
+  const external = [];
+  page.on('request', request => {
+    if (new URL(request.url()).origin !== new URL(baseURL).origin) external.push(request.url());
+  });
+  page.on('dialog', dialog => void dialog.accept());
+  const compactPayload = `x${'A'.repeat(43)}`;
+  await startLocalWorkspace(page, `./settings?ort=${compactPayload}`);
+  expect(page.url()).not.toContain('ort=');
+  await openSavedCloudConnections(page);
+  await expect(page.getByLabel('OpenRouter model')).toHaveValue('openrouter/free');
+  await expect(page.getByText('OpenRouter connection', {exact:true})).toBeVisible();
+  await expect(page.getByText('Key saved', {exact:true})).toBeVisible();
+  const saved = await page.evaluate(() => localStorage.getItem('creative-cooking-openrouter-key'));
+  expect(saved).toMatch(/^sk-or-v1-/);
+  await expect(page.getByRole('button', {name:'Connect OpenRouter', exact:true})).toHaveCount(0);
+  await page.reload();
+  await openSavedCloudConnections(page);
+  await expect(page.getByText('Key saved', {exact:true})).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('creative-cooking-openrouter-key'))).toBe(saved);
+  expect(external).toEqual([]);
 });
