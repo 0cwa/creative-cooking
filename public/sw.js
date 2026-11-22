@@ -6,11 +6,13 @@ const appRoot = `${scopePath}/`;
 const TRANSFORMERS_RUNTIME = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
 
 self.addEventListener('install', (event) => {
+  // Let updates wait for older tabs to close. Those tabs can still need their
+  // previous runtime chunks until activation safely retires the older cache.
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([
     appRoot,
     `${scopePath}/manifest.json`,
     ...PRECACHE_ASSETS.map((path) => `${scopePath}/${path}`)
-  ])).then(() => self.skipWaiting()));
+  ])));
 });
 
 self.addEventListener('activate', (event) => {

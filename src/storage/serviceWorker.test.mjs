@@ -8,12 +8,14 @@ const origin = 'https://cooking.example';
 const appRoot = `${origin}/creative-cooking/`;
 const recipes = `${appRoot}recipes`;
 
-function worker({saved = [], network}) {
+function worker({saved = [], network, precache = async () => {}}) {
   const listeners = new Map();
   const pages = new Map(saved);
   const writes = [];
+  const activationRequests = [];
   const urlOf = request => new URL(typeof request === 'string' ? request : request.url, origin).href;
   const cache = {
+    addAll(requests) { return precache(Array.from(requests, urlOf)); },
     async put(request, response) {
       const url = urlOf(request);
       writes.push(url);
@@ -27,13 +29,20 @@ function worker({saved = [], network}) {
   const self = {
     registration: {scope: appRoot},
     location: {origin},
+    async skipWaiting() { activationRequests.push('skipWaiting'); },
     addEventListener(name, listener) { listeners.set(name, listener); }
   };
   vm.runInNewContext(source, {self, caches, fetch: request => network(request), URL});
 
   return {
     writes,
+    activationRequests,
     cached: url => pages.get(url)?.clone(),
+    install() {
+      let completion;
+      listeners.get('install')({waitUntil(promise) { completion = promise; }});
+      return completion;
+    },
     async navigate(url) {
       let result;
       listeners.get('fetch')({
@@ -44,6 +53,37 @@ function worker({saved = [], network}) {
     }
   };
 }
+
+test('installation waits for startup precaching without forcing an update over open tabs', async () => {
+  let beginPrecache, finishPrecache;
+  const started = new Promise(resolve => { beginPrecache = resolve; });
+  const pending = new Promise(resolve => { finishPrecache = resolve; });
+  let requested;
+  const app = worker({precache: async urls => {
+    requested = urls;
+    beginPrecache();
+    await pending;
+  }});
+  let installed = false;
+  const installation = app.install().then(() => { installed = true; });
+
+  await started;
+  assert.equal(installed, false, 'Installation must remain pending while startup files are being cached.');
+  assert.deepEqual(requested, [appRoot, `${appRoot}manifest.json`]);
+  assert.deepEqual(app.activationRequests, []);
+
+  finishPrecache();
+  await installation;
+  assert.equal(installed, true);
+  assert.deepEqual(app.activationRequests, [], 'A ready update must wait for tabs using the previous worker.');
+});
+
+test('failed startup precaching rejects installation without requesting immediate activation', async () => {
+  const app = worker({precache: async () => { throw new Error('Could not cache startup assets'); }});
+
+  await assert.rejects(app.install(), /Could not cache startup assets/);
+  assert.deepEqual(app.activationRequests, []);
+});
 
 test('a temporary HTTP failure preserves the saved route for this visit and an offline reopen', async () => {
   let offline = false;
