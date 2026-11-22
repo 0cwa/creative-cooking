@@ -24,6 +24,9 @@ export function kitchenStartupErrorMessage(error: string) {
   if (/WebAssembly|wasm|Failed to fetch|Loading.*chunk|dynamically imported module/i.test(error)) {
     return 'A part of the app could not load. Check your connection, then try opening your kitchen again.';
   }
+  if (/HOUSEHOLD_SELECTION_CHANGED|STALE_AUTHORITY/i.test(error)) {
+    return 'Your kitchen changed while it was opening. Open it again to load its current settings.';
+  }
   if (/MISSING_BOOTSTRAP|^LOCKED$|INVALID_PROOF|INVALID_AUTHORITY/i.test(error)) {
     return 'The saved kitchen could not be verified on this device. Try again, or use your recovery options if you have a saved archive.';
   }
