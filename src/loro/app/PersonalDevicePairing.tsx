@@ -41,7 +41,7 @@ export function PersonalDevicePairing(){
  const pendingExport=pairing?.pendingExport;
  if(!service)return null;
  const run=(action:()=>Promise<void>)=>{
-  if(working.current)return;
+  if(!app.hydrated||working.current)return;
   working.current=true;setBusy(true);setStatus('');
   void action().catch(error=>{
    const message=error instanceof Error?error.message:'';
@@ -52,8 +52,11 @@ export function PersonalDevicePairing(){
     'Pairing could not continue. Check that the message or encrypted file came from the verified device and matches this session.');
   }).finally(()=>{working.current=false;setBusy(false)});
  };
- const button=(label:string,action:()=>Promise<void>,disabled=false)=>
-  <Pressable accessibilityRole="button" disabled={busy||disabled} onPress={()=>run(action)}><Text>{label}</Text></Pressable>;
+ const button=(label:string,action:()=>Promise<void>,disabled=false)=>{
+  const unavailable=!app.hydrated||busy||disabled;
+  return <Pressable accessibilityRole="button" accessibilityState={{disabled:unavailable}} disabled={unavailable}
+   onPress={()=>run(action)}><Text>{label}</Text></Pressable>;
+ };
  const field=(label:string,value:string,change:(value:string)=>void,multiline=false)=>
   <TextInput accessibilityLabel={label} value={value} onChangeText={change} editable={!busy} multiline={multiline}
    maxLength={multiline?MAX_PERSONAL_PAIRING_MESSAGE:64} autoCapitalize="none" autoCorrect={false}/>;
@@ -119,6 +122,7 @@ export function PersonalDevicePairing(){
  return <View style={{gap:8}}>
   <Text accessibilityRole="header">Personal devices</Text>
   <Text>Pair your own devices to share the saved private copy, including Chef conversations, proposals and personal preferences. Provider API keys stay on the device where you configured them. Household access and voting stay separate.</Text>
+  {!app.hydrated?<Text accessibilityLiveRegion="polite">Opening your kitchen. Personal device actions will be ready shortly.</Text>:null}
   <Text selectable accessibilityLabel="This personal device">{service.deviceId}</Text>
   <Text selectable accessibilityLabel="This personal device fingerprint">{service.fingerprint}</Text>
   <Text selectable accessibilityLabel="This workspace personal root pin">{service.rootPin}</Text>
