@@ -27,9 +27,6 @@ test('starting Loro preserves archived workspace data on the device',async({page
  });
  await page.goto('./');
  const archived=await page.evaluate(()=>localStorage.getItem('creative-cooking-state-v1'));
- await page.getByRole('button',{name:'More setup options',exact:true}).click();
- await page.getByRole('button',{name:'Looking for an older kitchen?',exact:true}).click();
- await expect(page.getByText(/Data from the former PowerSync workspace stays on this device/)).toBeVisible();
  await page.getByRole('button',{name:'Set up my kitchen'}).click();
 
  await page.getByRole('button',{name:'Accept settings and open my kitchen'}).click();

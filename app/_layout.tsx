@@ -21,7 +21,7 @@ import { requestPersistentStorageOnce } from '@/storage/persistence';
 import { useAppTheme } from '@/theme/theme';
 
 function StorageFailureAlert() {
-  const { storageError, storageMode } = useAppState();
+  const { storageError } = useAppState();
   const shownError = useRef<string | null>(null);
 
   useEffect(() => {
@@ -33,9 +33,9 @@ function StorageFailureAlert() {
     shownError.current = storageError;
     Alert.alert(
       'Local data is not being saved',
-      storageMode === 'fresh-local' ? `${storageError}\n\nYour current changes remain open in this session and are not saved. This preview does not yet provide an export.` : `${storageError}\n\nYour current changes remain open in this session. Open Settings → Data & Storage to retry or export a backup.`
+      `${storageError}\n\nYour current changes remain open in this session and are not saved. This preview does not yet provide an export.`
     );
-  }, [storageError, storageMode]);
+  }, [storageError]);
 
   return null;
 }
@@ -53,7 +53,7 @@ function BootTasks() {
           app.updateSettings({ providerId: 'openrouter', model: 'openrouter/free' });
           Alert.alert(
             'Shared OpenRouter key connected',
-            `${app.storageMode === 'fresh-local' ? 'The shared provider key is saved on this device. Cloud Chef is currently unavailable for this kitchen.' : 'This browser can now use the shared provider key.'} Anyone with the complete share link can use that key until it is revoked.`
+            'The shared provider key is saved on this device. Cloud Chef is currently unavailable for this kitchen. Anyone with the complete share link can use that key until it is revoked.'
           );
         }
       } catch (error) {
@@ -64,9 +64,7 @@ function BootTasks() {
         const connected = await finishOpenRouterOAuthFromLocation();
         if (connected) {
           app.updateSettings({ providerId: 'openrouter', model: 'openrouter/free' });
-          Alert.alert('OpenRouter connected', app.storageMode === 'fresh-local'
-            ? 'Your provider key is saved on this device. Cloud Chef is currently unavailable for this kitchen.'
-            : 'The Chef can now use your OpenRouter account.');
+          Alert.alert('OpenRouter connected', 'Your provider key is saved on this device. Cloud Chef is currently unavailable for this kitchen.');
         }
       } catch (error) {
         Alert.alert('OpenRouter sign-in failed', error instanceof Error ? error.message : 'Unknown error');

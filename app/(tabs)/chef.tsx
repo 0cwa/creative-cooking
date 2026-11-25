@@ -1,6 +1,6 @@
 import {useAppTheme} from '@/theme/theme';
 import { SharedChefRequest } from '@/loro/app/SharedChefRequest';
-import { allowsFreshLocalInference } from '@/loro/app/inference-gate.mjs';
+import { allowsLocalInference } from '@/loro/app/inference-gate.mjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, themeColor } from '@/theme/StyleSheet';
@@ -115,14 +115,14 @@ export default function ChefScreen() {
   const discardCancelledRef = useRef(false);
   const dictationControllerRef = useRef<DictationController | null>(null);
   const dictationBaseRef = useRef('');
-  const chatMessage = (role:ChatMessage['role'],content:string,proposals?:ChefToolProposal[]) => { const message=makeChatMessage(role,content,proposals);return app.storageMode === 'fresh-local' ? {...message,id:`message-${crypto.randomUUID()}`} : message; };
+  const chatMessage = (role:ChatMessage['role'],content:string,proposals?:ChefToolProposal[]) => { const message=makeChatMessage(role,content,proposals);return {...message,id:`message-${crypto.randomUUID()}`}; };
   const activeProvider = providerMetadata(app.settings.providerId);
   const dictationEngine = app.settings.dictationEngine;
   const dictationSupport = useMemo(() => getOnDeviceDictationSupport(dictationEngine), [dictationEngine]);
   const dictationLang = useMemo(() => getPreferredDictationLanguage(), []);
   const dictationActive = isDictationActive(dictationStatus);
   const whisperNeedsSetup = dictationEngine === 'whisper' && whisperModelCached !== true;
-  const privateNotes = app.storageMode === 'fresh-local' && app.settings.providerId !== 'webllm';
+  const privateNotes = app.settings.providerId !== 'webllm';
   const localChefSelected = app.settings.providerId === 'webllm';
   const localChefUnavailable = localChefSelected && (localModelCached !== true || app.settings.allergies.length > 0);
 
@@ -256,7 +256,7 @@ export default function ChefScreen() {
   };
 
   const runChef = async (messages: ChatMessage[]) => {
-    if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;
+    if (!allowsLocalInference(app.settings.providerId)) return;
     setQuestion(null);
     setRunError(null);
     setStreamingText('');
@@ -277,9 +277,7 @@ export default function ChefScreen() {
       if (capabilities.location === 'local' && app.settings.allergies.length > 0) {
         app.appendChatMessage(chatMessage(
           'assistant',
-          app.storageMode === 'fresh-local'
-            ? 'Experimental local Chef is disabled while allergies are configured. Browse recipe ideas and review their ingredients; local allergy validation is still being built.'
-            : 'Experimental local Chef is currently disabled while allergies are configured. Switch to a cloud provider in Settings; local allergy validation is still being built.'
+          'Experimental local Chef is disabled while allergies are configured. Browse recipe ideas and review their ingredients; local allergy validation is still being built.'
         ));
         return;
       }
@@ -371,7 +369,7 @@ export default function ChefScreen() {
     const userMessage = chatMessage('user', text);
     const messages = [...app.chatMessages, userMessage];
     app.appendChatMessage(userMessage);
-    if (!allowsFreshLocalInference(app.storageMode,app.settings.providerId)) return;
+    if (!allowsLocalInference(app.settings.providerId)) return;
     await runChef(messages);
   };
 
@@ -410,7 +408,7 @@ export default function ChefScreen() {
 
   const errorUi = runError ? errorPresentation(runError.error, activeProvider.name) : null;
 
-  if (Platform.OS !== 'web' && app.storageMode === 'fresh-local') {
+  if (Platform.OS !== 'web') {
     return <Screen>
       <View style={styles.header}><Text style={styles.title}>Chef</Text></View>
       <ScrollView contentContainerStyle={styles.messagesContent}>
@@ -430,7 +428,7 @@ export default function ChefScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }}>
         <View style={styles.header}>
           <View>
             <Text style={styles.eyebrow}>CREATIVE COOKING</Text>
@@ -585,9 +583,9 @@ export default function ChefScreen() {
         </ScrollView>
 
         <View style={styles.composerArea}>
-          {app.storageMode === 'fresh-local' && <Text accessibilityLiveRegion="polite" style={styles.composerHelp}>
+          <Text accessibilityLiveRegion="polite" style={styles.composerHelp}>
             {app.localPersistenceStatus === 'saved' ? 'Saved on this device' : app.localPersistenceStatus === 'saving' ? 'Saving on this device…' : 'Local save failed. Your changes are still open.'}
-          </Text>}
+          </Text>
           <View style={styles.composerWrap}>
             {!privateNotes && <Pressable accessibilityRole="button" accessibilityLabel="Edit meal context" onPress={() => setContextOpen(true)} style={styles.plus}><Text style={styles.plusText}>＋</Text></Pressable>}
             {Platform.OS === 'web' && (

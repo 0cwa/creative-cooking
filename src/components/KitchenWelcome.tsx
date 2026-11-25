@@ -62,9 +62,6 @@ export function KitchenWelcome({ admissionRule, onAdmissionRuleChange, onStart, 
             <AdmissionRulePicker draft={admissionRule} onChange={onAdmissionRuleChange} adults={1} />
           </View>
         </SetupDisclosure> : null}
-        <SetupDisclosure title="Looking for an older kitchen?">
-          <Text style={[styles.body, { color: colors.muted }]}>Data from the former PowerSync workspace stays on this device and can be opened with the archived PowerSync app. Setting up a kitchen here does not import or delete that data.</Text>
-        </SetupDisclosure>
       </SetupDisclosure>
     </SetupScreen>
   );
