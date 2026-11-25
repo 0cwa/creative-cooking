@@ -7,15 +7,16 @@ const text = (page, name) => page.getByLabel(name, {exact:true}).textContent();
 const message = page => page.getByLabel('Admission rule proposal message');
 const notice = (page, value) => page.getByRole('alert').filter({hasText:value});
 
-async function start(page, selectRule = async () => {}) {
+// Setup always uses the default rule. A test that needs another initial rule
+// seeds the pending kitchen record that the Start button would otherwise write.
+async function start(page, policy = null) {
   await page.goto('./');
-  await button(page, 'More setup options').click();
-  await button(page, 'Household options').click();
-  await expect(page.getByText(/with the default, one adult can approve an invitation/i)).toBeVisible();
-  await selectRule(page);
-  await button(page, 'Set up my kitchen').click();
-
-  await button(page, 'Accept settings and open my kitchen').click();
+  if (policy) {
+    await page.evaluate(policy => localStorage.setItem('creative-cooking-storage-choice-v1',
+      'pending:' + JSON.stringify({version:1, name:`cooking-${crypto.randomUUID()}`, policy})), policy);
+    await page.reload();
+  }
+  await button(page, 'Start cooking').click();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
 
@@ -170,21 +171,8 @@ async function confirmBranch(page) {
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
 
-test('fresh setup bounds fixed quorum by the actual electorate and preserves the choice on reload', async ({page}) => {
-  await start(page, async () => {
-    await page.getByRole('radio', {name:/Fixed number of adults/}).click();
-    const count = page.getByLabel('Number of required adult approvals');
-    await count.fill('2');
-    await expect(button(page, 'Set up my kitchen')).toBeDisabled();
-    await expect(page.getByText('Enter a whole number from 1 to 1, the size of the current electorate.')).toBeVisible();
-    await button(page, 'Household options').click();
-    await expect(count).toBeHidden();
-    await expect(page.getByRole('alert')).toHaveText('Open Household options and choose a valid invitation rule before continuing.');
-    await expect(button(page, 'Set up my kitchen')).toBeDisabled();
-    await button(page, 'Household options').click();
-    await expect(count).toHaveValue('2');
-    await count.fill('1');
-  });
+test('a pending kitchen keeps its initial fixed quorum rule after reload', async ({page}) => {
+  await start(page, {kind:'fixed', fixedCount:1});
   await page.reload();
   await button(page, 'Open settings').click();await openHouseholdTools(page);
   await button(page, 'Manage adult admission rules').click();
@@ -197,11 +185,8 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
   const [pendingChooser,readyChooser]=await Promise.all([context.newPage(),context.newPage()]);
   for(const chooser of [pendingChooser,readyChooser]){
     await chooser.goto(page.url());
-    await expect(button(chooser,'Set up my kitchen')).toBeVisible();
+    await expect(button(chooser,'Start cooking')).toBeVisible();
   }
-  await button(page, 'More setup options').click();
-  await button(page, 'Household options').click();
-  await page.getByRole('radio', {name:/Every adult/}).click();
   await page.evaluate(key=>{
     const save=Storage.prototype.setItem;
     Storage.prototype.setItem=function(name,value){
@@ -209,27 +194,26 @@ test('stale choosers preserve both pending and ready fresh workspace choices', a
       return save.call(this,name,value);
     };
   },key);
-  await button(page,'Set up my kitchen').click();
+  await button(page,'Start cooking').click();
   await button(page,'Show technical details').click();
   await expect(page.getByText('test: ready write failed')).toBeVisible();
   const saved=await page.evaluate(key=>localStorage.getItem(key),key);
   expect(saved).toMatch(/^pending:/);
   const {name,policy}=JSON.parse(saved.slice('pending:'.length));
-  expect(policy).toEqual({kind:'unanimous',fixedCount:null});
+  expect(policy).toEqual({kind:'allMinusOne',fixedCount:null});
   expect(await pendingChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(saved);
-  await button(pendingChooser,'Set up my kitchen').click();
-  await expect(button(pendingChooser,'Set up my kitchen')).toHaveCount(0);
+  await button(pendingChooser,'Start cooking').click();
+  await expect(button(pendingChooser,'Start cooking')).toHaveCount(0);
   await expect.poll(()=>pendingChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
+  await expect(pendingChooser.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await page.reload();
-
-  await button(page,'Accept settings and open my kitchen').click();
   expect(await page.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await readyChooser.reload();
-  await expect(button(readyChooser,'Set up my kitchen')).toHaveCount(0);
+  await expect(button(readyChooser,'Start cooking')).toHaveCount(0);
   expect(await readyChooser.evaluate(key=>localStorage.getItem(key),key)).toBe(`local:${name}`);
   await button(page,'Open settings').click();await openHouseholdTools(page);
   await button(page,'Manage adult admission rules').click();
-  await expect(page.getByLabel('Active adult admission rule')).toHaveText('Every adult (unanimous). Requires 1 of 1 existing adults.');
+  await expect(page.getByLabel('Active adult admission rule')).toHaveText(/^All but one \(default\)\. Requires 1 of 1 existing adults\.$/);
 });
 
 test('two adults retain competing rules and open isolated cooking branches explicitly', async ({browser, baseURL}) => {
@@ -237,7 +221,7 @@ test('two adults retain competing rules and open isolated cooking branches expli
   const contexts = await Promise.all([0, 1].map(() => browser.newContext({baseURL, acceptDownloads:true})));
   try {
     const [first, second] = await Promise.all(contexts.map(context => context.newPage()));
-    await start(first, page => page.getByRole('radio', {name:/Every adult/}).click());
+    await start(first, {kind:'unanimous', fixedCount:null});
     await start(second);
     await first.getByLabel('Ingredient and details').fill('Policy proof ginger');
     await first.getByLabel('Add ingredient').click();

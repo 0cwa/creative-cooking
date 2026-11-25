@@ -92,4 +92,3 @@ No project-owned LLM secret is committed or bundled. Users connect their own Ope
 
 - [Build plan](docs/BUILD_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
-- [Content sync, recovery, and support limits](docs/CONTENT-SYNC.md)

@@ -15,9 +15,9 @@ const newer='Private message under the rotated key';
 
 async function start(page){
  await page.goto('./');
- await click(page,'Set up my kitchen');
+ await click(page,'Start cooking');
 
- await click(page,'Accept settings and open my kitchen');
+ 
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto('./settings');await openHouseholdTools(page);
 }

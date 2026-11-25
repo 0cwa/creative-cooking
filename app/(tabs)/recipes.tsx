@@ -78,7 +78,6 @@ export default function RecipesScreen() {
   const {
     pantry,
     recipes,
-    storageMode,
     pendingRecipeTitle,
     createRecipe,
     updateRecipe,
@@ -329,7 +328,7 @@ export default function RecipesScreen() {
       <View style={styles.header}>
         <View><Text style={styles.eyebrow}>YOUR COOKBOOK</Text><Text style={styles.title}>Recipes</Text></View>
         <View style={styles.headerActions}>
-          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" disabled={!canEditSharedContent} onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
+          <Pressable accessibilityRole="button" accessibilityLabel="Add recipe" disabled={!canEditSharedContent} onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>
           <Pressable accessibilityRole="button" onPress={() => router.push('/shopping')} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Shopping</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => router.push('/settings')} style={styles.settings}><SettingsGlyph /></Pressable>
         </View>
@@ -360,7 +359,7 @@ export default function RecipesScreen() {
             <Text style={styles.emptyEmoji}>📖</Text>
             <Text style={styles.emptyTitle}>Your cookbook starts here</Text>
             <Text style={styles.emptyText}>Try an idea below, or keep a recipe you already love. No account or AI connection needed.</Text>
-            {storageMode === 'fresh-local' && <Pressable accessibilityRole="button" disabled={!canEditSharedContent} onPress={startCreating} style={[styles.emptyAction, !canEditSharedContent && styles.disabledAction]}><Text style={styles.shoppingLinkText}>Add your own recipe</Text></Pressable>}
+            <Pressable accessibilityRole="button" disabled={!canEditSharedContent} onPress={startCreating} style={[styles.emptyAction, !canEditSharedContent && styles.disabledAction]}><Text style={styles.shoppingLinkText}>Add your own recipe</Text></Pressable>
           </View>
           {recipeIdeas}
         </>}
@@ -508,7 +507,7 @@ export default function RecipesScreen() {
                 <View style={styles.detailHeader}>
                   <Pressable accessibilityRole="button" accessibilityLabel="Close recipe" disabled={historyBusy} onPress={closeRecipe} style={styles.detailAction}><Text style={styles.close}>Close</Text></Pressable>
                   <View style={styles.headerActions}>
-          {storageMode==='fresh-local'?<Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>:null}
+          <Pressable accessibilityRole="button" accessibilityLabel="Add recipe" onPress={startCreating} style={styles.shoppingLink}><Text style={styles.shoppingLinkText}>Add recipe</Text></Pressable>
                     <Pressable accessibilityRole="button" accessibilityLabel={`Edit recipe ${selected.title}`} disabled={historyBusy} onPress={startEditing} style={styles.detailAction}><Text style={styles.edit}>Edit</Text></Pressable>
                     <Pressable
                       accessibilityRole="button"

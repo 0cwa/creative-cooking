@@ -103,7 +103,6 @@ function archiveActiveChat(current: PersistedState): PersistedState['chatHistory
 }
 
 type AppStateApi = PersistedState & {
-  storageMode: 'fresh-local' | 'existing';
   /** Successful initial content loading; later save failures do not reset it. */
   hydrated: boolean;
   storageError: string | null;
@@ -158,9 +157,9 @@ const AppStateContext = createContext<AppStateApi | null>(null);
 export function AppStateProvider({children,localWorkspace:workspace}:PropsWithChildren<{localWorkspace:any}>) {
   const [state,setState]=useState<PersistedState>(DEFAULT_STATE);
   const content=useLoroContentRuntime(state,setState,workspace);
-  return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} storageMode="fresh-local" installedRecipeIds={workspace.installedRecipeIds}>{children}</AppStateBody></LoroWorkspaceContext>;
+  return <LoroWorkspaceContext workspace={workspace}><AppStateBody state={state} setState={setState} content={content} installedRecipeIds={workspace.installedRecipeIds}>{children}</AppStateBody></LoroWorkspaceContext>;
 }
-function AppStateBody({children,state,setState,content,storageMode,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/loro/app/content-runtime-types').ContentRuntimeSnapshot;storageMode:'fresh-local'|'existing';installedRecipeIds?:string[]}>) {
+function AppStateBody({children,state,setState,content,installedRecipeIds}:PropsWithChildren<{state:PersistedState;setState:Dispatch<SetStateAction<PersistedState>>;content:import('@/loro/app/content-runtime-types').ContentRuntimeSnapshot;installedRecipeIds?:string[]}>) {
   const transitionInProgress=useRef(false);
   const shoppingCopy=useRef<{key:string;attempt:{actionId:string;at:string;commands:unknown[]|null};
     before:PersistedState;after:PersistedState['shopping']}|null>(null);
@@ -188,7 +187,7 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
   const hydrated = content.hydrated;
   const storageError = content.storageError;
   const retryStorage = content.retryStorage;
-  const flushCurrentWorkspace=useCallback(()=>content.flushCurrentWorkspace(storageMode==='fresh-local'?appStateRef.current:undefined),[content.flushCurrentWorkspace,storageMode]);
+  const flushCurrentWorkspace=useCallback(()=>content.flushCurrentWorkspace(appStateRef.current),[content.flushCurrentWorkspace]);
   const refreshSharedCooking=useCallback(async()=>{
     try {
       const next=await content.refreshSharedCooking?.();
@@ -246,10 +245,10 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
       .map(normalizeIngredientName)
       .filter(Boolean)
       .filter((name) => !existing.has(name.toLocaleLowerCase()))
-      .map((name) => {const item=createPantryItem(name, preference);return storageMode==='fresh-local'?{...item,id:`pantry-${randomUUID()}`}:item;});
+      .map((name) => {const item=createPantryItem(name, preference);return {...item,id:`pantry-${randomUUID()}`};});
 
     if (additions.length) commitPantry([...additions, ...current]);
-  }, [commitPantry, storageMode]);
+  }, [commitPantry]);
 
   const updatePantryByName = useCallback((name: string, newName: string) => {
     const result = updatePantryItemName(pantryRef.current, name, newName);
@@ -309,11 +308,11 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
     const now = new Date().toISOString();
     return normalizeRecipes([{
       ...input,
-      id: storageMode === 'fresh-local' ? `recipe-${randomUUID()}` : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: `recipe-${randomUUID()}`,
       createdAt: now,
       updatedAt: now
     }])[0];
-  }, [storageMode]);
+  }, []);
 
   const saveRecipe = useCallback((input: Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (!ensureSharedEditAllowed()) throw new Error('This workspace is not available for editing.');
@@ -645,7 +644,6 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
   const value = useMemo<AppStateApi>(
     () => ({
       ...state,
-      storageMode,
       hydrated,
       storageError,
       contentWorkspaceName: content.workspaceName,
@@ -694,7 +692,6 @@ function AppStateBody({children,state,setState,content,storageMode,installedReci
     }),
     [
       state,
-      storageMode,
       hydrated,
       storageError,
       content,

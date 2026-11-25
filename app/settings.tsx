@@ -114,7 +114,8 @@ export default function SettingsScreen() {
 
   const provider = providerMetadata(app.settings.providerId);
   const capabilities = modelCapabilities(app.settings.providerId, app.settings.model);
-  const cloudChefUnavailable = app.storageMode === 'fresh-local';
+  // Cloud Chef stays off until shared Chef requests pass their security review.
+  const cloudChefUnavailable = true;
   const browserDictationAvailable = browserDictationSupport?.available === true;
   const whisperDictationReady = whisperCapability?.available === true && whisperModelCached === true;
 
@@ -928,9 +929,7 @@ export default function SettingsScreen() {
           ) : (
             <View style={styles.capabilityBox}>
               <Text style={styles.capabilityTitle}>Experimental local Chef is active</Text>
-              <Text style={styles.help}>{app.storageMode === 'fresh-local'
-                ? 'Local Chef uses a downloaded model in this browser. Cloud replies remain unavailable for this kitchen.'
-                : 'Select a cloud provider above to switch back to a hosted model.'}</Text>
+              <Text style={styles.help}>Local Chef uses a downloaded model in this browser. Cloud replies remain unavailable for this kitchen.</Text>
             </View>
           )}
         </SettingsDisclosure>

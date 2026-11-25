@@ -40,37 +40,36 @@ async function acceptedPolicies(page) {
   });
 }
 
-async function openPrivacyStep(page) {
+// A kitchen whose creation finished but whose privacy policy was never accepted,
+// as after a reload between creating the kitchen and finishing setup.
+async function openUnacceptedKitchen(page) {
   await page.goto('./');
-  await button(page, 'Set up my kitchen').click();
-  await expect(page.getByTestId('privacy-summary')).toBeVisible();
-  await expect(button(page, 'Accept settings and open my kitchen')).toBeEnabled();
+  await page.evaluate(key => localStorage.setItem(key, 'pending:' + JSON.stringify({
+    version:1, name:`cooking-${crypto.randomUUID()}`, policy:{kind:'allMinusOne', fixedCount:null}
+  })), choiceKey);
+  await page.reload();
+  await expect(page.getByTestId('privacy-summary')).toContainText('Your kitchen is already here');
+  await expect.poll(() => page.evaluate(key => localStorage.getItem(key), choiceKey)).toMatch(/^local:/);
+  await expect(button(page, 'Start cooking')).toBeEnabled();
 }
 
-test('welcome puts the start button on screen and keeps technical setup optional', async ({page}, testInfo) => {
+test('welcome is one screen with the start button on screen and recovery optional', async ({page}, testInfo) => {
   await page.setViewportSize({width:320, height:740});
   await page.goto('./');
 
   await expect(page.getByRole('heading', {name:'Welcome to Creative Cooking', exact:true})).toBeVisible();
-  await expect(button(page, 'Set up my kitchen')).toBeEnabled();
-  await expect(button(page, 'Set up my kitchen')).toBeInViewport({ratio:1});
-  await expect(button(page, 'More setup options')).toHaveAttribute('aria-expanded', 'false');
-  await expect(button(page, 'Household options')).toHaveCount(0);
+  await expect(button(page, 'Start cooking')).toBeEnabled();
+  await expect(button(page, 'Start cooking')).toBeInViewport({ratio:1});
+  await expect(page.getByTestId('privacy-summary')).toContainText('Everything stays on this device');
+  await expect(page.getByRole('radio')).toHaveCount(0);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(button(page, 'Recover an existing kitchen')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByRole('radio', {name:/Every adult/})).toHaveCount(0);
   await expect(page.getByLabel('Recovery code', {exact:true})).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
   await testInfo.attach('Welcome on a small phone', {
     body: await page.screenshot({type:'png', fullPage:false}),
     contentType:'image/png'
   });
-
-  await button(page, 'More setup options').click();
-  await button(page, 'Household options').click();
-  await expect(button(page, 'Household options')).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.getByRole('radio', {name:/Every adult/})).toBeVisible();
-  await button(page, 'Household options').click();
-  await expect(page.getByRole('radio', {name:/Every adult/})).toBeHidden();
 
   await button(page, 'Recover an existing kitchen').click();
   await expect(page.getByLabel('Recovery code', {exact:true})).toBeVisible();
@@ -82,44 +81,14 @@ test('welcome puts the start button on screen and keeps technical setup optional
   await button(page, 'Recover an existing kitchen').click();
   await expect(page.getByLabel('Recovery code', {exact:true})).toBeHidden();
   expect(await page.evaluate(key => localStorage.getItem(key), choiceKey)).toBeNull();
-  await expect(button(page, 'Set up my kitchen')).toBeEnabled();
+  await expect(button(page, 'Start cooking')).toBeEnabled();
 });
 
-test('privacy prepares automatically but is signed only after explicit acceptance, including after reload', async ({page, baseURL}, testInfo) => {
+test('one Start tap creates the kitchen and signs the on-device policy without network requests', async ({page, baseURL}, testInfo) => {
   const externalRequests = recordExternalRequests(page, baseURL);
   await page.setViewportSize({width:390, height:844});
-  await openPrivacyStep(page);
-
-  await expect(button(page, 'Review privacy settings')).toHaveCount(0);
-  await expect(page.getByTestId('pantry-screen')).toHaveCount(0);
-  await expect(button(page, 'Advanced privacy options')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByLabel('Optional permitted recipient endpoint')).toHaveCount(0);
-  expect(await acceptedPolicies(page)).toEqual([]);
-  const reserved = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
-  await expectNoHorizontalOverflow(page);
-  await testInfo.attach('Privacy review on a phone', {
-    body: await page.screenshot({type:'png', fullPage:false}),
-    contentType:'image/png'
-  });
-
-  await page.reload();
-  await expect(page.getByTestId('privacy-summary')).toBeVisible();
-  await expect(button(page, 'Accept settings and open my kitchen')).toBeEnabled();
-  await expect(button(page, 'Set up my kitchen')).toHaveCount(0);
-  await expect(button(page, 'Review privacy settings')).toHaveCount(0);
-  expect(await acceptedPolicies(page)).toEqual([]);
-  expect(await page.evaluate(key => localStorage.getItem(key), workspaceKey)).toBe(reserved);
-
-  await button(page, 'Advanced privacy options').click();
-  await expect(page.getByLabel('Optional permitted recipient endpoint')).toBeVisible();
-  await expect(page.getByRole('checkbox')).not.toBeChecked();
-  await button(page, 'Advanced privacy options').click();
-  await expect(button(page, 'Show policy details')).toBeVisible();
-  await expect(page.getByText(/"version":\s*2/)).toHaveCount(0);
-  await expect(page.getByTestId('pantry-screen')).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
-
-  await button(page, 'Accept settings and open my kitchen').click();
+  await page.goto('./');
+  await button(page, 'Start cooking').click();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   await expect(page.getByLabel('Ingredient and details')).toBeEditable();
   await testInfo.attach('Pantry ready to use', {
@@ -129,51 +98,30 @@ test('privacy prepares automatically but is signed only after explicit acceptanc
   const records = await acceptedPolicies(page);
   expect(records).toHaveLength(1);
   expect(records[0].policy.version).toBe(2);
+  expect(records[0].policy.access.flatMap(access => access.destinations)).not.toContain('external');
+  expect(records[0].policy.rules[0].enforcement).toBe('preference');
   expect(records[0].approvals).toHaveLength(1);
   expect(records[0].approvals[0].signature).toMatch(/^[0-9a-f]{128}$/);
   expect(externalRequests).toEqual([]);
 });
 
-
-test('back to welcome resumes the same kitchen and still requires privacy acceptance', async ({page}) => {
-  await openPrivacyStep(page);
+test('an unfinished kitchen is not signed until Start is pressed, including after reload', async ({page}) => {
+  await openUnacceptedKitchen(page);
   const namespace = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
-  await button(page, 'Back to welcome').click();
-  await expect(page.getByRole('heading', {name:'Welcome to Creative Cooking', exact:true})).toBeVisible();
-  await expect(button(page, 'Household options')).toHaveCount(0);
   expect(await acceptedPolicies(page)).toEqual([]);
-  await button(page, 'Set up my kitchen').click();
-  await expect(page.getByTestId('privacy-summary')).toBeVisible();
-  expect(await page.evaluate(key => localStorage.getItem(key), workspaceKey)).toBe(namespace);
+  await page.reload();
+  await expect(button(page, 'Start cooking')).toBeEnabled();
+  await expect(page.getByTestId('pantry-screen')).toHaveCount(0);
   expect(await acceptedPolicies(page)).toEqual([]);
-  await button(page, 'Accept settings and open my kitchen').click();
+
+  await button(page, 'Start cooking').click();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
   expect(await acceptedPolicies(page)).toHaveLength(1);
   expect(await page.evaluate(key => localStorage.getItem(key), workspaceKey)).toBe(namespace);
 });
 
-test('privacy edits refresh the displayed policy and cannot accept an invalid recipient', async ({page}) => {
-  await openPrivacyStep(page);
-  await button(page, 'Advanced privacy options').click();
-  const endpoint = page.getByLabel('Optional permitted recipient endpoint');
-  await endpoint.fill('not a recipient URL');
-  await expect(page.getByRole('alert')).toContainText('complete http:// or https://');
-  await expect(button(page, 'Accept settings and open my kitchen')).toHaveCount(0);
-  expect(await acceptedPolicies(page)).toEqual([]);
-
-  await endpoint.fill('');
-  await page.getByRole('checkbox').check();
-  await expect(page.getByTestId('privacy-summary')).toContainText('blocked');
-  await expect(button(page, 'Accept settings and open my kitchen')).toBeEnabled();
-  await button(page, 'Accept settings and open my kitchen').click();
-  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
-  const [record] = await acceptedPolicies(page);
-  expect(record.policy.access.flatMap(access => access.destinations)).not.toContain('external');
-  expect(record.policy.rules[0].enforcement).toBe('block');
-});
-
 test('opening kitchen content never presents a new cook as a read-only viewer', async ({page}) => {
-  await openPrivacyStep(page);
+  await openUnacceptedKitchen(page);
   await page.evaluate(() => {
     const request = navigator.locks.request.bind(navigator.locks);
     navigator.locks.request = (name, ...args) => {
@@ -186,7 +134,7 @@ test('opening kitchen content never presents a new cook as a read-only viewer', 
       return request(name, ...args);
     };
   });
-  await button(page, 'Accept settings and open my kitchen').click();
+  await button(page, 'Start cooking').click();
   await expect.poll(() => page.evaluate(() => typeof window.__releaseFirstCookingRead)).toBe('function');
   await expect(page.getByRole('heading', {name:'Opening your kitchen…', exact:true})).toBeVisible();
   await expect(page.getByTestId('pantry-screen')).toHaveCount(0);
@@ -199,7 +147,7 @@ test('opening kitchen content never presents a new cook as a read-only viewer', 
 });
 
 test('an initial content read failure can retry in place without replacing the kitchen', async ({page}) => {
-  await openPrivacyStep(page);
+  await openUnacceptedKitchen(page);
   const namespace = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
   await page.evaluate(() => {
     const get = IDBObjectStore.prototype.get;
@@ -212,7 +160,7 @@ test('an initial content read failure can retry in place without replacing the k
       return get.call(this, key);
     };
   });
-  await button(page, 'Accept settings and open my kitchen').click();
+  await button(page, 'Start cooking').click();
   await expect(page.getByRole('heading', {name:'Your kitchen could not finish opening', exact:true})).toBeVisible();
   expect(await page.evaluate(() => window.__firstCookingReadFailed)).toBe(true);
   await expect(page.getByTestId('pantry-screen')).toHaveCount(0);
@@ -236,7 +184,7 @@ test('an initial content read failure can retry in place without replacing the k
 
 test('persistent content read failures keep personal recovery available without replacing the kitchen', async ({page}, testInfo) => {
   await page.setViewportSize({width:390, height:844});
-  await openPrivacyStep(page);
+  await openUnacceptedKitchen(page);
   const namespace = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
   await page.evaluate(() => {
     const get = IDBObjectStore.prototype.get;
@@ -249,7 +197,7 @@ test('persistent content read failures keep personal recovery available without 
       return get.call(this, key);
     };
   });
-  await button(page, 'Accept settings and open my kitchen').click();
+  await button(page, 'Start cooking').click();
   await expect(page.getByRole('heading', {name:'Your kitchen could not finish opening', exact:true})).toBeVisible();
   const policies = await acceptedPolicies(page);
   expect(policies).toHaveLength(1);
@@ -280,7 +228,7 @@ test('persistent content read failures keep personal recovery available without 
 });
 
 test('a stale content runtime can reopen current saved content after in-place retries fail', async ({page, context}) => {
-  await openPrivacyStep(page);
+  await openUnacceptedKitchen(page);
   const namespace = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
   // A workspace keeps the selection it opened with. Reproduce its persistent
   // stale-selection error at the shared read boundary until the page reopens.
@@ -295,7 +243,7 @@ test('a stale content runtime can reopen current saved content after in-place re
       return request(name, ...args);
     };
   });
-  await button(page, 'Accept settings and open my kitchen').click();
+  await button(page, 'Start cooking').click();
   await expect(page.getByRole('alert')).toContainText('Your kitchen changed while it was opening');
   const policies = await acceptedPolicies(page);
   expect(policies).toHaveLength(1);
@@ -341,36 +289,34 @@ test('a first pantry ingredient stays saved when a new cook returns without an a
   await page.reload({waitUntil:'domcontentloaded'});
   await expect(page.getByText('First kitchen carrots', {exact:true})).toBeVisible();
   await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
-  await expect(button(page, 'Set up my kitchen')).toHaveCount(0);
-  await expect(button(page, 'Review privacy settings')).toHaveCount(0);
+  await expect(button(page, 'Start cooking')).toHaveCount(0);
   expect(externalRequests).toEqual([]);
 });
 
-test('a second setup tab can reopen a kitchen whose privacy was already accepted elsewhere', async ({page, context}) => {
-  await openPrivacyStep(page);
+test('a second setup tab opens a kitchen whose privacy was already accepted elsewhere without signing again', async ({page, context}) => {
+  await openUnacceptedKitchen(page);
   const namespace = await page.evaluate(key => localStorage.getItem(key), workspaceKey);
   const other = await context.newPage();
   try {
     await other.goto(page.url());
-    await expect(other.getByTestId('privacy-summary')).toBeVisible();
-    await button(other, 'Advanced privacy options').click();
-    await other.getByRole('checkbox').check();
-    await expect(other.getByTestId('privacy-summary')).toContainText('blocked');
-    await expect(button(other, 'Accept settings and open my kitchen')).toBeEnabled();
+    await expect(button(other, 'Start cooking')).toBeEnabled();
 
-    await button(page, 'Accept settings and open my kitchen').click();
+    await button(page, 'Start cooking').click();
     await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
-    await button(other, 'Accept settings and open my kitchen').click();
-    await expect(button(other, 'Open kitchen again')).toBeVisible();
-    const beforeReopen = await acceptedPolicies(other);
-    expect(beforeReopen).toHaveLength(1);
-    expect(beforeReopen[0].policy.rules[0].enforcement).toBe('preference');
+    const accepted = await acceptedPolicies(page);
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].policy.rules[0].enforcement).toBe('preference');
 
-    await button(other, 'Open kitchen again').click();
-    await expect(other.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
+    // The other tab either opens directly or offers to reopen; it never adds a second policy.
+    await button(other, 'Start cooking').click();
+    const reopen = button(other, 'Open kitchen again');
+    const saved = other.getByTestId('pantry-local-persistence-status');
+    await expect(reopen.or(saved)).toBeVisible();
+    if (await reopen.isVisible()) await reopen.click();
+    await expect(saved).toHaveText('Saved locally');
     await expect(other.getByLabel('Ingredient and details')).toBeEditable();
     expect(await other.evaluate(key => localStorage.getItem(key), workspaceKey)).toBe(namespace);
-    expect(await acceptedPolicies(other)).toEqual(beforeReopen);
+    expect(await acceptedPolicies(other)).toEqual(accepted);
   } finally {
     await other.close();
   }
@@ -381,10 +327,10 @@ test('a browser missing workspace locks receives useful guidance without creatin
     Object.defineProperty(navigator, 'locks', {configurable:true, value:undefined});
   });
   await page.goto('./');
-  await button(page, 'Set up my kitchen').click();
+  await button(page, 'Start cooking').click();
   await expect(page.getByRole('alert')).toContainText('browser is missing a feature');
   await expect(page.getByRole('alert')).toContainText('updated browser');
-  await expect(button(page, 'Set up my kitchen')).toBeEnabled();
+  await expect(button(page, 'Start cooking')).toBeEnabled();
   expect(await page.evaluate(key => localStorage.getItem(key), choiceKey)).toBeNull();
   expect(await page.evaluate(key => localStorage.getItem(key), workspaceKey)).toBeNull();
 });
