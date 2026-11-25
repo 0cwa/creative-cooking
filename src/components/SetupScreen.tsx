@@ -1,9 +1,10 @@
-import { useState, type PropsWithChildren } from 'react';
+import { useEffect, useState, type PropsWithChildren } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { isThemePreference, type ThemePreference } from '@/domain/types';
 import { resolveColorScheme, useSystemColorScheme } from '@/theme/theme';
+import { palette, setActiveColorScheme } from '@/theme/StyleSheet';
 
 // Setup runs before AppStateProvider exists, so it cannot use useAppTheme.
 export function useSetupColors() {
@@ -16,15 +17,19 @@ export function useSetupColors() {
       return 'system';
     }
   });
-  const dark = resolveColorScheme(preference, system) === 'dark';
+  const scheme = resolveColorScheme(preference, system);
+  const dark = scheme === 'dark';
+  const colors = palette(scheme);
+  // Panels shown during setup read the active scheme for their own colours.
+  useEffect(() => setActiveColorScheme(scheme), [scheme]);
   return {
     dark,
-    background: dark ? '#0b1220' : '#f8fafc',
-    surface: dark ? '#111827' : '#ffffff',
-    text: dark ? '#f8fafc' : '#172033',
-    muted: dark ? '#cbd5e1' : '#475569',
+    background: colors.background,
+    surface: colors.surface,
+    text: colors.text,
+    muted: colors.muted,
     border: dark ? '#334155' : '#e2e8f0',
-    primary: dark ? '#166534' : '#14532d',
+    primary: colors.primary,
     soft: dark ? '#10251a' : '#f0fdf4',
     accent: dark ? '#86efac' : '#166534',
     error: dark ? '#fecaca' : '#991b1b'
@@ -41,6 +46,12 @@ export function SetupScreen({ children }: PropsWithChildren) {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+/** A bordered card for controls embedded in a setup screen, such as recovery. */
+export function SetupPanel({ children }: PropsWithChildren) {
+  const colors = useSetupColors();
+  return <View style={[setupStyles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>{children}</View>;
 }
 
 export function SetupDisclosure({ title, preserveContent = false, children }: PropsWithChildren<{ title: string; preserveContent?: boolean }>) {

@@ -1,5 +1,6 @@
 import {createContext,useContext,useEffect,useState,type PropsWithChildren} from 'react';
-import {Text,View} from 'react-native';
+import {View} from 'react-native';
+import {Text} from '@/theme/primitives';
 import {subscribeActions} from './action.mjs';
 export const LoroWorkspaceValue=createContext<any>(null);
 export function LoroWorkspaceContext({workspace,children}:PropsWithChildren<{workspace:any}>) {return <LoroWorkspaceValue.Provider value={workspace}>{children}</LoroWorkspaceValue.Provider>}

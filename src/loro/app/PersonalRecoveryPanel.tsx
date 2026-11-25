@@ -1,5 +1,6 @@
 import React,{useEffect,useState} from 'react';
-import {Pressable,Text,TextInput,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {ArchiveFile,archiveDownload,releaseArchiveDownload} from './ArchiveFile';
 import {MAX_ARCHIVE_TEXT,parseRecoveryArchiveText,readRecoveryArchiveFile} from './recovery-input.mjs';
 const MAX_PASTE=64*1024;

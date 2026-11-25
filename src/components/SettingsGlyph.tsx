@@ -1,15 +1,17 @@
 import { View } from 'react-native';
-import { StyleSheet } from '@/theme/StyleSheet';
+import { StyleSheet, palette, useColorSchemeValue } from '@/theme/StyleSheet';
 
 export function SettingsGlyph() {
+  const colors = palette(useColorSchemeValue());
+  const ink = { backgroundColor: colors.icon };
   return (
     <View accessible={false} style={styles.glyph}>
-      <View style={[styles.spoke, styles.horizontal]} />
-      <View style={[styles.spoke, styles.vertical]} />
-      <View style={[styles.spoke, styles.diagonalForward]} />
-      <View style={[styles.spoke, styles.diagonalBack]} />
-      <View style={styles.hub} />
-      <View style={styles.center} />
+      <View style={[styles.spoke, styles.horizontal, ink]} />
+      <View style={[styles.spoke, styles.vertical, ink]} />
+      <View style={[styles.spoke, styles.diagonalForward, ink]} />
+      <View style={[styles.spoke, styles.diagonalBack, ink]} />
+      <View style={[styles.hub, { borderColor: colors.icon, backgroundColor: colors.control }]} />
+      <View style={[styles.center, ink]} />
     </View>
   );
 }

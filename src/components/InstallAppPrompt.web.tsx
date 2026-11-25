@@ -261,7 +261,7 @@ const styles = StyleSheet.create({
   installButton: {
     minHeight: 40,
     borderRadius: 12,
-    backgroundColor: '#172033',
+    backgroundColor: '#166534',
     paddingHorizontal: 16,
     paddingVertical: 9,
     alignItems: 'center',

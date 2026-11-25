@@ -1,5 +1,6 @@
 import React,{useState} from 'react';
-import {Pressable,Text,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {GuardianRestore} from './GuardianRestore';
 export function GuardianStart({restoreIntoWorkspace}:{restoreIntoWorkspace?:(archive:unknown,code:string,pkg:unknown)=>Promise<any>}={}){
  const [setup,setSetup]=useState<any>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);

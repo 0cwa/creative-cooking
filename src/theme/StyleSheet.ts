@@ -1,8 +1,51 @@
+import { useSyncExternalStore } from 'react';
 import { StyleSheet as NativeStyleSheet, type ImageStyle, type TextStyle, type ViewStyle } from 'react-native';
 
 export type ResolvedColorScheme = 'light' | 'dark';
 
 let activeColorScheme: ResolvedColorScheme = 'light';
+const schemeListeners = new Set<() => void>();
+
+// Semantic colours for code that styles by role rather than through the
+// light-palette translation below.
+const palettes = {
+  light: {
+    background: '#f8fafc',
+    surface: '#ffffff',
+    text: '#172033',
+    muted: '#475569',
+    subdued: '#94a3b8',
+    border: '#cbd5e1',
+    control: '#f1f5f9',
+    field: '#ffffff',
+    primary: '#166534',
+    primaryText: '#ffffff',
+    placeholder: '#94a3b8',
+    danger: '#991b1b',
+    icon: '#334155'
+  },
+  dark: {
+    background: '#0b1220',
+    surface: '#111827',
+    text: '#f8fafc',
+    muted: '#cbd5e1',
+    subdued: '#94a3b8',
+    border: '#3b4a61',
+    control: '#1e293b',
+    field: '#0f172a',
+    primary: '#15803d',
+    primaryText: '#ffffff',
+    placeholder: '#7c8ba1',
+    danger: '#fecaca',
+    icon: '#cbd5e1'
+  }
+} as const;
+
+export type Palette = { [K in keyof typeof palettes.light]: string };
+
+export function palette(scheme: ResolvedColorScheme): Palette {
+  return palettes[scheme];
+}
 
 type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
 
@@ -51,7 +94,7 @@ const backgroundColors: Record<string, string> = {
   '#334155': '#475569',
   '#14532d': '#166534',
   '#15803d': '#166534',
-  '#166534': '#166534',
+  '#166534': '#15803d',
   '#b91c1c': '#7f1d1d',
   '#d97706': '#b45309',
   '#f59e0b': '#d97706',
@@ -114,8 +157,21 @@ function currentColorScheme(): ResolvedColorScheme {
 }
 
 export function setActiveColorScheme(scheme: ResolvedColorScheme): void {
+  const changed = currentColorScheme() !== scheme;
   activeColorScheme = scheme;
   if (typeof document !== 'undefined') document.documentElement.dataset.theme = scheme;
+  // This runs while the theme owner renders; tell subscribers afterwards.
+  if (changed) queueMicrotask(() => schemeListeners.forEach(listener => listener()));
+}
+
+function subscribeColorScheme(listener: () => void): () => void {
+  schemeListeners.add(listener);
+  return () => schemeListeners.delete(listener);
+}
+
+/** The active scheme, re-rendering when it changes, for components outside the app state. */
+export function useColorSchemeValue(): ResolvedColorScheme {
+  return useSyncExternalStore(subscribeColorScheme, currentColorScheme, currentColorScheme);
 }
 
 export function themeColor(color: string, property = 'color'): string {

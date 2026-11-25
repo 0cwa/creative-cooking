@@ -1,5 +1,6 @@
 import {useContext, useState, useSyncExternalStore} from 'react';
-import {Pressable, Text, TextInput, View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {useAppState} from '@/state/AppState';
 import {admissionThreshold, validAdmissionPolicy} from '../authority/validator.mjs';
 import {AdmissionRulePicker, admissionPolicyFromDraft, admissionRuleLabel, type AdmissionRuleDraft} from './AdmissionRulePicker';

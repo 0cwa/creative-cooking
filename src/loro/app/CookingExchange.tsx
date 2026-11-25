@@ -1,5 +1,6 @@
 import {useContext,useEffect,useState} from 'react';
-import {Platform,Pressable,Text,View} from 'react-native';
+import {Platform,View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {useAppState} from '@/state/AppState';
 import {MAX_OBJECT} from '../transport/adapter.mjs';
 import {chooseExchangeFile,saveExchangeFile} from './exchange-file';

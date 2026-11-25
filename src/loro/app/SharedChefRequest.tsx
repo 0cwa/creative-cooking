@@ -1,5 +1,6 @@
 import {useContext,useEffect,useMemo,useRef,useState} from 'react';
-import {Pressable,Text,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import {disclosureGateway} from '../disclosure/gateway.mjs';
 import {createReviewedProviderSession,sharedChefSystemPrompt} from '../disclosure/provider-session.mjs';

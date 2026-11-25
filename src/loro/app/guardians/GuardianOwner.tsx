@@ -1,5 +1,6 @@
 import React,{useState} from 'react';
-import {Pressable,Text,TextInput,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {RecoveryDownload} from './RecoveryDownload';
 import {parseGuardianTransfer,MAX_GUARDIAN_MESSAGE} from './guardian-workflow.mjs';
 

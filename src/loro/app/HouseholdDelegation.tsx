@@ -1,5 +1,6 @@
 import {useContext,useState} from 'react';
-import {Pressable,Text,TextInput,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import {copyText} from './clipboard';
 

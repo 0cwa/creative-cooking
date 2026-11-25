@@ -1,5 +1,6 @@
 import {useContext,useRef,useState,useSyncExternalStore} from 'react';
-import {Pressable,Text,TextInput,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {useAppState} from '@/state/AppState';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import {PublicMessageFile} from './PublicMessageFile';

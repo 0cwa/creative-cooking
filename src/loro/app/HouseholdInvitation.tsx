@@ -1,5 +1,6 @@
 import {useContext,useEffect,useRef,useState} from 'react';
-import {Platform,Pressable,Text,TextInput,View} from 'react-native';
+import {Platform,View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {copyText} from './clipboard';
 import {useAppState} from '@/state/AppState';
 import {chooseExchangeFile,saveExchangeFile} from './exchange-file';

@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
-import {Pressable,Text,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import type {householdCompromise} from './household-compromise.mjs';
 
 type Service = ReturnType<typeof householdCompromise>;
