@@ -1,4 +1,5 @@
-import {Platform,Pressable,Text} from 'react-native';
+import {Platform} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 
 type Controls = {label:string; limit:number; run:(action:()=>Promise<void>)=>void; disabled?:boolean};

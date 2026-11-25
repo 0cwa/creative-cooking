@@ -1,4 +1,5 @@
-import React,{useState} from 'react';import {Text,View} from 'react-native';
+import React,{useState} from 'react';import {View} from 'react-native';
+import {Text} from '@/theme/primitives';
 import {readRecoveryArchiveFile} from '../recovery-input.mjs';
 import {openRecoveryArchive,restoreOfflineArchive,readRecoveredSnapshot} from '../recovery-archive.mjs';
 import {recoveryHash} from '../../recovery/enrollment.mjs';import {projectPersonal} from '../../domain/personal-codec.mjs';

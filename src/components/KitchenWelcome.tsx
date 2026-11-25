@@ -1,6 +1,6 @@
 import { Platform, Pressable, Text, View } from 'react-native';
 import { RecoveryStart } from '@/loro/app/RecoveryStart';
-import { SetupDisclosure, SetupScreen, setupStyles as styles, useSetupColors } from './SetupScreen';
+import { SetupDisclosure, SetupPanel, SetupScreen, setupStyles as styles, useSetupColors } from './SetupScreen';
 import { kitchenStartupErrorMessage } from './KitchenStartupStatus';
 
 /** The only setup screen. Pressing Start is the explicit acceptance of the on-device privacy policy. */
@@ -33,7 +33,7 @@ export function KitchenWelcome({ onStart, error, resuming = false }: {
 
       {Platform.OS === 'web' ? <SetupDisclosure title="Recover an existing kitchen" preserveContent>
         <Text style={[styles.body, { color: colors.muted }]}>Have an encrypted personal archive or a guardian recovery request? Open the recovery controls below.</Text>
-        <View style={{ backgroundColor: '#ffffff', padding: 16, borderRadius: 16 }}><RecoveryStart /></View>
+        <SetupPanel><RecoveryStart /></SetupPanel>
       </SetupDisclosure> : null}
     </SetupScreen>
   );

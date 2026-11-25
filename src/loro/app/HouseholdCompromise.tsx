@@ -1,5 +1,6 @@
 import {useContext,useEffect,useRef,useState} from 'react';
-import {Platform,Pressable,Text,View} from 'react-native';
+import {Platform,View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {REPORT_FILE_LIMIT} from '../compromise/report-file.mjs';
 import {chooseExchangeFile,saveExchangeFile} from './exchange-file';
 import type {householdCompromise} from './household-compromise.mjs';

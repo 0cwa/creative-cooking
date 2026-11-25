@@ -1,5 +1,6 @@
 import {useContext,useState} from 'react';
-import {Pressable,Text,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import type {householdLocalTrust} from './household-local-trust.mjs';
 

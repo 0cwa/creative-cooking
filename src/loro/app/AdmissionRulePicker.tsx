@@ -1,4 +1,5 @@
-import {Pressable, Text, TextInput, View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {admissionThreshold, validAdmissionPolicy} from '../authority/validator.mjs';
 
 const rules = [

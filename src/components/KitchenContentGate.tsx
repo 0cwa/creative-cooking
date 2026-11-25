@@ -4,7 +4,7 @@ import { useAppState } from '@/state/AppState';
 import { RecoveryStart } from '@/loro/app/RecoveryStart';
 import { LoroWorkspaceValue } from '@/loro/app/WorkspaceStatus';
 import { KitchenStartupStatus } from './KitchenStartupStatus';
-import { SetupDisclosure, setupStyles as styles, useSetupColors } from './SetupScreen';
+import { SetupDisclosure, SetupPanel, setupStyles as styles, useSetupColors } from './SetupScreen';
 
 /** Keep navigation and boot tasks unmounted until real saved content is ready. */
 export function KitchenContentGate({ children }: PropsWithChildren) {
@@ -37,7 +37,7 @@ export function KitchenContentGate({ children }: PropsWithChildren) {
       <Text style={[styles.buttonText, { color: colors.text }]}>Open kitchen again</Text>
     </Pressable> : null}
     {failed && Platform.OS === 'web' ? <SetupDisclosure title="Recover an existing kitchen" preserveContent>
-      <View style={{ backgroundColor: '#ffffff', padding: 16, borderRadius: 16 }}><RecoveryStart /></View>
+      <SetupPanel><RecoveryStart /></SetupPanel>
     </SetupDisclosure> : null}
   </KitchenStartupStatus>;
 }

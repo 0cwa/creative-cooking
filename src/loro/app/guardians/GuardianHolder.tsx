@@ -1,5 +1,6 @@
 import React,{useState} from 'react';
-import {Pressable,Text,TextInput,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {GuardianControls} from './GuardianControls';
 export function GuardianHolder({guardians}:{guardians:any}){
  const [holder,setHolder]=useState(''),[actions,setActions]=useState<any>(null),[error,setError]=useState('');

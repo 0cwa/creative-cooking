@@ -1,5 +1,6 @@
 import {useState} from 'react';
-import {Pressable,Text,TextInput,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 /** Adapter expects a real disclosureGateway backed by pinned authority and
  * source-provenance storage. It never accepts a preapproved caller flag. */
 export function DisclosureReview({gateway,items}:{gateway:any;items:{id:string;name:string}[]}) {

@@ -1,5 +1,6 @@
 import {useContext,useEffect,useState} from 'react';
-import {Pressable,Text,View} from 'react-native';
+import {View} from 'react-native';
+import {Pressable,Text} from '@/theme/primitives';
 import {LoroWorkspaceValue} from './WorkspaceStatus';
 import {PersonalRecoveryPanel} from './PersonalRecoveryPanel';
 import {executeAction} from './action.mjs';

@@ -1,5 +1,6 @@
 import {useContext, useEffect, useRef, useState} from 'react';
-import {Platform, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
+import {Platform,StyleSheet,View} from 'react-native';
+import {Pressable,Text,TextInput} from '@/theme/primitives';
 import {useAppState} from '@/state/AppState';
 import {MAX_SIGNAL} from '../transport/direct-signal.mjs';
 import {copyText} from './clipboard';
@@ -200,7 +201,8 @@ export function CookingDirect() {
 
 const styles = StyleSheet.create({
   group:{gap:8}, actions:{flexDirection:'row', flexWrap:'wrap', gap:8},
-  button:{alignSelf:'flex-start', paddingHorizontal:10, paddingVertical:7, borderWidth:1, borderColor:'#94a3b8', borderRadius:6},
-  disabled:{opacity:0.5}, input:{borderWidth:1, borderColor:'#94a3b8', borderRadius:6, padding:8, maxHeight:110},
+  // Shape and colours come from the themed Pressable and TextInput.
+  button:{alignSelf:'flex-start'},
+  disabled:{opacity:0.5}, input:{maxHeight:110},
   signal:{maxHeight:95, fontFamily:'monospace', fontSize:12, borderWidth:1, borderColor:'#94a3b8', padding:6, overflow:'scroll'},
 });
