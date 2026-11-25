@@ -18,9 +18,9 @@ const text = async (page, name) => {
 
 async function prepare(page, baseURL, seed, prepareRecipes) {
   await page.goto(baseURL);
-  await button(page, 'Set up my kitchen').click();
+  await button(page, 'Start cooking').click();
 
-  await button(page, 'Accept settings and open my kitchen').click();
+  
   await saved(page);
   if (seed) {
     await add(page, 'Direct household seed leek');

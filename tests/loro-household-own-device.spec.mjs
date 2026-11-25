@@ -9,9 +9,9 @@ const notice=(page,text)=>expect(page.getByText(text,{exact:true})).toBeVisible(
 
 async function start(page){
  await page.goto('./');
- await click(page,'Set up my kitchen');
+ await click(page,'Start cooking');
 
- await click(page,'Accept settings and open my kitchen');
+ 
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
 }
 async function addIngredient(page,name){

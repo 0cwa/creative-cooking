@@ -1,6 +1,5 @@
 import {LockedWorkspace} from '@/loro/app/LockedWorkspace';
 import {PolicySetup} from '@/loro/disclosure/PolicySetup';
-import {admissionPolicyFromDraft, type AdmissionRuleDraft} from '@/loro/app/AdmissionRulePicker';
 import {validAdmissionPolicy} from '@/loro/authority/validator.mjs';
 import {initialAdmissionPolicy} from '@/loro/app/admission-rule.mjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,7 +10,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppStateProvider, useAppState } from '@/state/AppState';
 import { InstallAppPrompt } from '@/components/InstallAppPrompt';
 import { KitchenWelcome } from '@/components/KitchenWelcome';
-import { SetupScreen } from '@/components/SetupScreen';
 import { KitchenContentGate } from '@/components/KitchenContentGate';
 import { KitchenStartupStatus } from '@/components/KitchenStartupStatus';
 
@@ -140,10 +138,10 @@ export default function RootLayout() {
   const [workspace,setWorkspace]=useState<any>(null);
   const [openAttempt,setOpenAttempt]=useState(0);
   const [error,setError]=useState<string|null>(null);
-  const [admissionRule,setAdmissionRule]=useState<AdmissionRuleDraft>({kind:'allMinusOne',count:'1'});
   const pendingReopen=useRef<BranchReopen|null>(null);
   const creatingWorkspace=useRef(false);
-  const admissionPolicy=admissionPolicyFromDraft(admissionRule);
+  // Set only by the Start button: that tap is the explicit acceptance of the default privacy policy.
+  const startRequested=useRef(false);
   const reopenWorkspace=useCallback((expected?:BranchReopen)=>{
     if(Platform.OS==='web'){
       try{
@@ -172,7 +170,7 @@ export default function RootLayout() {
         pendingReopen.current=null;
         if(opened){
           setWorkspace({...opened,reopen:reopenWorkspace});
-          setChoice(opened.needsDisclosureSetup?'policy':'local');
+          setChoice(opened.needsDisclosureSetup?(startRequested.current?'policy':'choose'):'local');
           adopted=true;
         }else setChoice('choose');
       }catch(e){if(active){setError(e instanceof Error?e.message:'Could not open this workspace');setChoice('locked')}}
@@ -202,7 +200,7 @@ export default function RootLayout() {
           if((pending||mode!==storedMode)&&current!==ready)globalThis.localStorage.setItem(webChoiceKey,ready);
           if(confirmation!==null)globalThis.sessionStorage.removeItem(branchReopenKey);
           pendingReopen.current=null;
-          setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');adopted=true;
+          setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?(startRequested.current?'policy':'choose'):'local');adopted=true;
         }
         return;
       }
@@ -212,17 +210,18 @@ export default function RootLayout() {
   })();return()=>{active=false}},[openAttempt,reopenWorkspace]);
   const fresh=async()=>{
     if(creatingWorkspace.current)return;
+    startRequested.current=true;
     if(workspace){setError(null);setChoice('policy');return;}
     creatingWorkspace.current=true;
     setChoice('loading');setError(null);
     try{
       if(Platform.OS==='android'){
         const {nativeChoiceStore}=await import('@/loro/native/choice-store');
-        const opened=await nativeChoiceStore.create(admissionPolicy);
+        const opened=await nativeChoiceStore.create(initialAdmissionPolicy());
         setWorkspace({...opened,reopen:reopenWorkspace});setChoice(opened.needsDisclosureSetup?'policy':'local');
         return;
       }
-      const policy=initialAdmissionPolicy(admissionPolicy);
+      const policy=initialAdmissionPolicy();
       const locks=globalThis.navigator?.locks;
       if(!locks||typeof locks.request!=='function')throw Error('LOCK_UNAVAILABLE');
       await locks.request(webChoiceLock,()=>{
@@ -232,7 +231,7 @@ export default function RootLayout() {
         globalThis.localStorage.setItem(webChoiceKey,pendingPrefix+JSON.stringify(record));
       });
       setOpenAttempt(attempt=>attempt+1);
-    }catch(e){setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}
+    }catch(e){startRequested.current=false;setError(e instanceof Error?e.message:'Could not create local workspace');setChoice(Platform.OS==='android'?'locked':'choose')}
     finally{creatingWorkspace.current=false}
   };
   const returnToOriginal=async()=>{
@@ -252,8 +251,8 @@ export default function RootLayout() {
     else if(Platform.OS==='web')globalThis.location.reload();
     else reopenWorkspace();
   }} onOriginal={Platform.OS==='android'?()=>void returnToOriginal():undefined}/></SafeAreaProvider>;
-  if(choice==='policy')return <SafeAreaProvider><SetupScreen><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')} onBack={()=>setChoice('choose')} onReopen={()=>reopenWorkspace()}/></SetupScreen></SafeAreaProvider>;
-  if(choice==='choose')return <SafeAreaProvider><KitchenWelcome admissionRule={admissionRule} onAdmissionRuleChange={setAdmissionRule} onStart={()=>void fresh()} canStart={!!workspace||validAdmissionPolicy(admissionPolicy,1)} error={error} resuming={!!workspace}/></SafeAreaProvider>;
+  if(choice==='policy')return <SafeAreaProvider><PolicySetup service={workspace.disclosure} provider={workspace.disclosureProvider} deviceId={workspace.deviceId} onAccepted={()=>setChoice('local')} onBack={()=>{startRequested.current=false;setChoice('choose')}} onReopen={()=>reopenWorkspace()}/></SafeAreaProvider>;
+  if(choice==='choose')return <SafeAreaProvider><KitchenWelcome onStart={()=>void fresh()} error={error} resuming={!!workspace}/></SafeAreaProvider>;
   return (
     <SafeAreaProvider>
       <AppStateProvider key={choice} localWorkspace={workspace}>

@@ -17,9 +17,9 @@ const credential='fixture-pairing-credential-it-stays-local';
 
 async function start(page){
  await page.goto('./');
- await click(page,'Set up my kitchen');
+ await click(page,'Start cooking');
 
- await click(page,'Accept settings and open my kitchen');
+ 
  await expect(page.getByTestId('pantry-local-persistence-status')).toHaveText('Saved locally');
  await page.goto('./settings');await openHouseholdTools(page);
  await expect(label(page,'This personal device')).toBeVisible();
